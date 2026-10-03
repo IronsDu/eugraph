@@ -19,6 +19,7 @@ BOLT_PORT="${BOLT_PORT:-17687}"
 THRIFT_PORT="${THRIFT_PORT:-19090}"
 WORK_DIR="${WORK_DIR:-$(mktemp -d -t bolt-java-test-XXXX)}"
 LOG_FILE="${WORK_DIR}/bolt-server.log"
+PROBE="$(dirname "$(readlink -f "$0")")/bolt_ready_probe.py"
 
 cleanup() {
     if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -40,7 +41,9 @@ for i in $(seq 1 30); do
         cat "$LOG_FILE" >&2
         exit 1
     fi
-    if echo '' | timeout 1 bash -c "exec 3<>/dev/tcp/localhost/${BOLT_PORT}" 2>/dev/null; then
+    # 就绪判据：Bolt **握手必须被应答**。仅 TCP connect 成功不够 —— 端口已在监听但
+    # Bolt handler 尚未注册完时，客户端连接会被拒（驱动侧 ServiceUnavailableException）。
+    if python3 "$PROBE" "$BOLT_PORT" 2>/dev/null; then
         echo "Server started (PID $SERVER_PID, took ${i}s)"
         break
     fi

@@ -31,9 +31,12 @@ public:
     std::vector<thrift_service::GraphInfo> listGraphs();
 
     // DDL
+    /// pk_props = 主键属性名（有序）；空 = 无主键。
+    /// merge_properties 非空 = 对已存在标签增量加属性（同名跳过、类型冲突报错）。
     thrift_service::LabelInfo createLabel(const std::string& name,
                                           const std::vector<thrift_service::PropertyDefThrift>& properties,
-                                          const std::string& graph_name);
+                                          const std::string& graph_name, const std::vector<std::string>& pk_props = {},
+                                          const std::vector<thrift_service::PropertyDefThrift>& merge_properties = {});
     std::vector<thrift_service::LabelInfo> listLabels(const std::string& graph_name);
 
     thrift_service::EdgeLabelInfo createEdgeLabel(const std::string& name,
@@ -55,8 +58,9 @@ public:
     thrift_service::BatchInsertVerticesResult batchInsertVertices(const std::string& label_name,
                                                                   std::vector<thrift_service::VertexRecord> records,
                                                                   const std::string& graph_name);
-    std::int32_t batchInsertEdges(const std::string& edge_label_name, std::vector<thrift_service::EdgeRecord> records,
-                                  const std::string& graph_name);
+    thrift_service::BatchInsertEdgesResult batchInsertEdges(const std::string& edge_label_name,
+                                                            std::vector<thrift_service::EdgeRecord> records,
+                                                            const std::string& graph_name);
 
 private:
     std::string host_;

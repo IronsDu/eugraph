@@ -92,6 +92,7 @@ struct ForEachField<::eugraph::thrift_service::LabelInfo> {
     f(0, static_cast<T&&>(t).id_ref()...);
     f(1, static_cast<T&&>(t).name_ref()...);
     f(2, static_cast<T&&>(t).properties_ref()...);
+    f(3, static_cast<T&&>(t).pk_props_ref()...);
   }
 };
 
@@ -107,11 +108,30 @@ struct ForEachField<::eugraph::thrift_service::EdgeLabelInfo> {
 };
 
 template <>
+struct ForEachField<::eugraph::thrift_service::PkKey> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).name_ref()...);
+    f(1, static_cast<T&&>(t).value_ref()...);
+  }
+};
+
+template <>
+struct ForEachField<::eugraph::thrift_service::PkRef> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).primary_label_ref()...);
+    f(1, static_cast<T&&>(t).keys_ref()...);
+  }
+};
+
+template <>
 struct ForEachField<::eugraph::thrift_service::VertexRecord> {
   template <typename F, typename... T>
   void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
     f(0, static_cast<T&&>(t).properties_ref()...);
     f(1, static_cast<T&&>(t).labels_ref()...);
+    f(2, static_cast<T&&>(t).pk_ref()...);
   }
 };
 
@@ -119,8 +139,8 @@ template <>
 struct ForEachField<::eugraph::thrift_service::EdgeRecord> {
   template <typename F, typename... T>
   void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
-    f(0, static_cast<T&&>(t).src_vertex_id_ref()...);
-    f(1, static_cast<T&&>(t).dst_vertex_id_ref()...);
+    f(0, static_cast<T&&>(t).src_ref()...);
+    f(1, static_cast<T&&>(t).dst_ref()...);
     f(2, static_cast<T&&>(t).properties_ref()...);
   }
 };
@@ -131,6 +151,17 @@ struct ForEachField<::eugraph::thrift_service::BatchInsertVerticesResult> {
   void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
     f(0, static_cast<T&&>(t).vertex_ids_ref()...);
     f(1, static_cast<T&&>(t).count_ref()...);
+    f(2, static_cast<T&&>(t).inserted_ref()...);
+    f(3, static_cast<T&&>(t).duplicate_pk_ref()...);
+  }
+};
+
+template <>
+struct ForEachField<::eugraph::thrift_service::BatchInsertEdgesResult> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).inserted_ref()...);
+    f(1, static_cast<T&&>(t).skipped_unresolved_ref()...);
   }
 };
 

@@ -781,19 +781,29 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
 
 // ==================== DDL: Label ====================
 
-folly::coro::Task<std::unique_ptr<thrift_service::LabelInfo>>
-EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
-                               std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> properties,
-                               std::unique_ptr<std::string> graph_name) {
+folly::coro::Task<std::unique_ptr<thrift_service::LabelInfo>> EuGraphHandler::co_createLabel(
+    std::unique_ptr<std::string> name, std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> properties,
+    std::unique_ptr<std::string> graph_name, std::unique_ptr<std::vector<std::string>> pk_props,
+    std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> merge_properties) {
     auto t0 = nowMs();
-    spdlog::info("[handler] createLabel start, graph='{}'", *graph_name);
+    const auto& pk = pk_props ? *pk_props : std::vector<std::string>{};
+    spdlog::info("[handler] createLabel start, graph='{}', pk_props={}", *graph_name, pk.size());
 
+    // 属性 id 由元数据服务权威分配（0 基，按声明顺序），这里不再自己编号
     std::vector<PropertyDef> defs;
+    defs.reserve(properties->size());
     for (size_t i = 0; i < properties->size(); i++) {
-        defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
+        defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i)));
     }
 
-    auto label_def = co_await graph_service_.createLabel(*name, defs, *graph_name);
+    std::vector<PropertyDef> merge_defs;
+    if (merge_properties) {
+        merge_defs.reserve(merge_properties->size());
+        for (size_t i = 0; i < merge_properties->size(); i++)
+            merge_defs.push_back(toPropertyDef((*merge_properties)[i], static_cast<uint16_t>(i)));
+    }
+
+    auto label_def = co_await graph_service_.createLabel(*name, defs, *graph_name, pk, merge_defs);
 
     auto resp = std::make_unique<thrift_service::LabelInfo>();
     resp->id() = label_def.id;
@@ -804,6 +814,10 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         pd.type() = static_cast<thrift_service::PropertyType>(static_cast<int>(d.type));
         pd.is_required() = d.required;
         resp->properties()->push_back(std::move(pd));
+    }
+    for (auto pid : label_def.pk_prop_ids) {
+        if (pid < label_def.properties.size())
+            resp->pk_props()->push_back(label_def.properties[pid].name);
     }
 
     spdlog::info("[handler] createLabel '{}' done on graph '{}', id={}, {} properties, took={}ms", *name, *graph_name,
@@ -1143,22 +1157,27 @@ EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
         }
         for (const auto& label : *rec.labels())
             entry.extra_labels.push_back(label);
+        for (const auto& key : rec.pk().value())
+            entry.pk.push_back(thriftToPropertyValue(*key.value()));
         entries.push_back(std::move(entry));
     }
 
-    auto vids = co_await graph_service_.batchInsertVertices(*label_name, std::move(entries), *graph_name);
+    auto outcome = co_await graph_service_.batchInsertVertices(*label_name, std::move(entries), *graph_name);
 
     auto resp = std::make_unique<thrift_service::BatchInsertVerticesResult>();
-    resp->vertex_ids()->reserve(vids.size());
-    for (auto vid : vids) {
+    resp->vertex_ids()->reserve(outcome.vertex_ids.size());
+    for (auto vid : outcome.vertex_ids) {
         resp->vertex_ids()->push_back(static_cast<int64_t>(vid));
     }
-    resp->count() = static_cast<int32_t>(vids.size());
-    spdlog::info("[handler] batchInsertVertices done, count={}, took={}ms", count, nowMs() - t0);
+    resp->count() = count;
+    resp->inserted() = static_cast<int32_t>(outcome.vertex_ids.size());
+    resp->duplicate_pk() = outcome.duplicate_pk;
+    spdlog::info("[handler] batchInsertVertices done, count={}, inserted={}, duplicate_pk={}, took={}ms", count,
+                 outcome.vertex_ids.size(), outcome.duplicate_pk, nowMs() - t0);
     co_return resp;
 }
 
-folly::coro::Task<std::int32_t>
+folly::coro::Task<std::unique_ptr<thrift_service::BatchInsertEdgesResult>>
 EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
                                     std::unique_ptr<std::vector<thrift_service::EdgeRecord>> records,
                                     std::unique_ptr<std::string> graph_name) {
@@ -1167,14 +1186,22 @@ EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name
     spdlog::info("[handler] batchInsertEdges start, graph='{}', edgeLabel='{}', count={}", *graph_name,
                  *edge_label_name, count);
 
+    auto to_endpoint = [](const thrift_service::PkRef& ref) {
+        GraphService::BatchEdgeEndpoint ep;
+        ep.label = ref.primary_label().value();
+        for (const auto& key : ref.keys().value())
+            ep.pk.push_back(thriftToPropertyValue(*key.value()));
+        return ep;
+    };
+
     std::vector<GraphService::BatchEdgeEntry> entries;
     entries.reserve(count);
     for (size_t i = 0; i < count; i++) {
         auto& rec = (*records)[i];
         GraphService::BatchEdgeEntry entry;
         entry.eid = 0; // will be assigned by service
-        entry.src_id = static_cast<VertexId>(rec.src_vertex_id().value());
-        entry.dst_id = static_cast<VertexId>(rec.dst_vertex_id().value());
+        entry.src = to_endpoint(rec.src().value());
+        entry.dst = to_endpoint(rec.dst().value());
         entry.seq = i;
         for (const auto& pv : *rec.properties()) {
             entry.props.push_back(thriftToPropertyValue(pv));
@@ -1182,10 +1209,15 @@ EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name
         entries.push_back(std::move(entry));
     }
 
-    auto result = co_await graph_service_.batchInsertEdges(*edge_label_name, std::move(entries), *graph_name);
+    auto [inserted, skipped] =
+        co_await graph_service_.batchInsertEdges(*edge_label_name, std::move(entries), *graph_name);
 
-    spdlog::info("[handler] batchInsertEdges done, count={}, took={}ms", count, nowMs() - t0);
-    co_return result;
+    auto resp = std::make_unique<thrift_service::BatchInsertEdgesResult>();
+    resp->inserted() = inserted;
+    resp->skipped_unresolved() = skipped;
+    spdlog::info("[handler] batchInsertEdges done, count={}, inserted={}, skipped_unresolved={}, took={}ms", count,
+                 inserted, skipped, nowMs() - t0);
+    co_return resp;
 }
 
 } // namespace thrift

@@ -77,9 +77,12 @@ std::vector<thrift_service::GraphInfo> EuGraphRpcClient::listGraphs() {
 
 thrift_service::LabelInfo
 EuGraphRpcClient::createLabel(const std::string& name, const std::vector<thrift_service::PropertyDefThrift>& properties,
-                              const std::string& graph_name) {
+                              const std::string& graph_name, const std::vector<std::string>& pk_props,
+                              const std::vector<thrift_service::PropertyDefThrift>& merge_properties) {
     std::lock_guard<std::mutex> lock(rpc_mutex_);
-    return client_->semifuture_createLabel(name, properties, graph_name).via(evb_.get()).get();
+    return client_->semifuture_createLabel(name, properties, graph_name, pk_props, merge_properties)
+        .via(evb_.get())
+        .get();
 }
 
 std::vector<thrift_service::LabelInfo> EuGraphRpcClient::listLabels(const std::string& graph_name) {
@@ -130,14 +133,15 @@ EuGraphRpcClient::batchInsertVertices(const std::string& label_name, std::vector
     return resp;
 }
 
-std::int32_t EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_name,
-                                                std::vector<thrift_service::EdgeRecord> records,
-                                                const std::string& graph_name) {
+thrift_service::BatchInsertEdgesResult
+EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_name, std::vector<thrift_service::EdgeRecord> records,
+                                   const std::string& graph_name) {
     std::lock_guard<std::mutex> lock(rpc_mutex_);
     auto t0 = nowMs();
     auto resp =
         client_->semifuture_batchInsertEdges(edge_label_name, std::move(records), graph_name).via(evb_.get()).get();
-    spdlog::info("[rpc_client] batchInsertEdges: {} records, {}ms", resp, nowMs() - t0);
+    spdlog::info("[rpc_client] batchInsertEdges: inserted={}, skipped_unresolved={}, {}ms", *resp.inserted(),
+                 *resp.skipped_unresolved(), nowMs() - t0);
     return resp;
 }
 

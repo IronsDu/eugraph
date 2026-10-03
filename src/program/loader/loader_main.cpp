@@ -6,44 +6,33 @@
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
-// Resolve a --nodes/--relationships file path against --data-dir.
-static std::string resolvePath(const std::string& data_dir, const std::string& file) {
-    std::filesystem::path p(file);
-    if (p.is_absolute()) {
-        return file;
-    }
-    return (std::filesystem::path(data_dir) / p).string();
-}
-
 int main(int argc, char* argv[]) {
     // Parse our args before folly::Init to avoid gflags conflicts
-    args::ArgumentParser parser("EuGraph CSV loader.");
+    args::ArgumentParser parser("EuGraph CSV loader (schema-driven).");
     parser.helpParams.addDefault = true;
     args::HelpFlag help(parser, "help", "Show this help menu", {"help"});
     args::ValueFlag<std::string> host_flag(parser, "host", "Server address", {"host"}, "127.0.0.1");
     args::ValueFlag<int> port_flag(parser, "port", "Server port", {"port"}, 9090);
+    args::ValueFlag<std::string> schema_flag(
+        parser, "path", "Schema config (JSON). Required: the only declaration entry point", {"schema"});
     args::ValueFlag<std::string> data_dir_flag(
-        parser, "path", "CSV data directory; required when scanning, optional with --nodes/--relationships",
-        {"data-dir"});
-    args::ValueFlagList<std::string> nodes_flag(
-        parser, "spec", "Explicit vertex file mapping: Label[:Label...]=file (repeatable)", {"nodes"});
-    args::ValueFlagList<std::string> relationships_flag(
-        parser, "spec", "Explicit edge file mapping: TYPE=file (repeatable)", {"relationships"});
-    args::ValueFlag<std::string> delimiter_flag(parser, "char", "CSV delimiter; only '|' is supported", {"delimiter"},
-                                                "|");
+        parser, "path", "Data directory; schema 'file' paths are resolved against it. Required", {"data-dir"});
     args::ValueFlag<int> batch_size_flag(parser, "n", "Records per RPC batch", {"batch-size"}, 500);
     args::ValueFlag<int> rpc_connections_flag(parser, "n", "Number of concurrent RPC connections", {"rpc-connections"},
                                               1);
     args::ValueFlag<int> parallel_files_flag(parser, "n", "Max number of CSV files loaded in parallel",
                                              {"parallel-files"}, 1);
+    args::Flag no_strict_flag(parser, "no-schema-strict",
+                              "Infer types for columns not declared in the schema (default: error)",
+                              {"no-schema-strict"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -62,29 +51,21 @@ int main(int argc, char* argv[]) {
 
     const std::string host = args::get(host_flag);
     const int port = args::get(port_flag);
+    const std::string schema_path = args::get(schema_flag);
     const std::string data_dir = args::get(data_dir_flag);
-    const std::vector<std::string> node_specs = args::get(nodes_flag);
-    const std::vector<std::string> rel_specs = args::get(relationships_flag);
-    const std::string delimiter = args::get(delimiter_flag);
     const int batch_size = args::get(batch_size_flag);
     const int rpc_connections = args::get(rpc_connections_flag);
     const int parallel_files = args::get(parallel_files_flag);
+    const bool strict_types = !args::get(no_strict_flag);
 
-    // --data-dir is only mandatory as the scan root of directory-scan mode.
-    // In CLI mode it merely anchors relative --nodes/--relationships paths.
-    if (node_specs.empty() && rel_specs.empty() && data_dir.empty()) {
-        std::cerr << "Error: --data-dir is required when neither --nodes nor --relationships is given\n";
-        std::cerr << parser;
-        return 1;
-    }
-    if (delimiter != "|") {
-        std::cerr << "Error: only '|' delimiter is currently supported\n";
+    if (schema_path.empty() || data_dir.empty()) {
+        std::cerr << "Error: --schema and --data-dir are required (the schema file is the only declaration entry "
+                     "point)\n";
         std::cerr << parser;
         return 1;
     }
     if (batch_size <= 0 || rpc_connections <= 0 || parallel_files <= 0) {
         std::cerr << "Error: --batch-size/--rpc-connections/--parallel-files must be positive\n";
-        std::cerr << parser;
         return 1;
     }
 
@@ -94,48 +75,26 @@ int main(int argc, char* argv[]) {
 
     spdlog::set_level(spdlog::level::info);
 
-    std::vector<eugraph::loader::CsvFileInfo> vertex_files, edge_files;
-
-    if (!node_specs.empty() || !rel_specs.empty()) {
-        spdlog::info("[loader] CLI mode: {} node specs, {} relationship specs", node_specs.size(), rel_specs.size());
-        for (const auto& spec : node_specs) {
-            eugraph::loader::CsvFileInfo info;
-            std::string error;
-            if (!eugraph::loader::parseNodeSpec(spec, info, error)) {
-                spdlog::error("[loader] {}", error);
-                return 1;
-            }
-            info.path = resolvePath(data_dir, info.path.string());
-            vertex_files.push_back(std::move(info));
-        }
-        for (const auto& spec : rel_specs) {
-            eugraph::loader::CsvFileInfo info;
-            std::string error;
-            if (!eugraph::loader::parseRelationshipSpec(spec, info, error)) {
-                spdlog::error("[loader] {}", error);
-                return 1;
-            }
-            info.path = resolvePath(data_dir, info.path.string());
-            edge_files.push_back(std::move(info));
-        }
-    } else {
-        spdlog::info("[loader] Scanning CSV files in: {}", data_dir);
-        auto files = eugraph::loader::scanCsvFiles(data_dir);
-        for (const auto& f : files) {
-            if (f.is_vertex) {
-                vertex_files.push_back(f);
-            } else {
-                edge_files.push_back(f);
-            }
-        }
+    eugraph::loader::SchemaConfig config;
+    try {
+        config = eugraph::loader::loadSchemaConfig(schema_path, data_dir, strict_types);
+    } catch (const std::exception& e) {
+        spdlog::error("[loader] schema error: {}", e.what());
+        return 1;
     }
 
-    spdlog::info("[loader] Found {} vertex files, {} edge files", vertex_files.size(), edge_files.size());
-
-    auto label_schemas = eugraph::loader::buildLabelSchemas(vertex_files);
-    auto edge_schemas = eugraph::loader::buildEdgeTypeSchemas(edge_files);
-    auto merged_label_props = eugraph::loader::buildMergedLabelProperties(label_schemas);
-    spdlog::info("[loader] {} vertex files, {} edge types", label_schemas.size(), edge_schemas.size());
+    if (config.undeclared_files == "error") {
+        auto undeclared = eugraph::loader::findUndeclaredCsvFiles(config);
+        if (!undeclared.empty()) {
+            std::string list;
+            for (const auto& f : undeclared)
+                list += "\n  " + f;
+            spdlog::error("[loader] {} CSV file(s) under {} are not declared in the schema (declare them, add them "
+                          "to 'ignore', or set \"undeclared_files\": \"ignore\"):{}",
+                          undeclared.size(), data_dir, list);
+            return 1;
+        }
+    }
 
     eugraph::shell::EuGraphRpcClient client(host, port);
     if (!client.connect()) {
@@ -145,7 +104,7 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::unique_ptr<eugraph::shell::EuGraphRpcClient>> extra_clients;
     std::vector<eugraph::shell::EuGraphRpcClient*> clients;
-    clients.reserve(rpc_connections);
+    clients.reserve(static_cast<size_t>(rpc_connections));
     clients.push_back(&client);
     for (int i = 1; i < rpc_connections; i++) {
         auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port);
@@ -160,22 +119,29 @@ int main(int argc, char* argv[]) {
     spdlog::info("[loader] Connected to {}:{} with {} RPC connection(s), parallel-files={}", host, port, clients.size(),
                  parallel_files);
 
-    spdlog::info("[loader] Creating labels...");
-    eugraph::loader::createLabels(client, label_schemas);
-    spdlog::info("[loader] Creating edge labels...");
-    eugraph::loader::createEdgeLabels(client, edge_schemas);
+    try {
+        spdlog::info("[loader] Creating labels...");
+        eugraph::loader::createLabels(client, config);
+        spdlog::info("[loader] Creating edge labels...");
+        eugraph::loader::createEdgeLabels(client, config);
 
-    spdlog::info("[loader] Loading vertex data...");
-    auto id_maps = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, merged_label_props, batch_size,
-                                                 parallel_files);
-    spdlog::info("[loader] Vertex loading complete. {} groups in ID map", id_maps.group_id_map.size());
+        // 先建主键唯一索引：批量写入会在同一事务内维护它，装载期即可用于解析边端点
+        spdlog::info("[loader] Creating primary key unique indexes...");
+        eugraph::loader::createPrimaryKeyIndexes(client, config);
 
-    spdlog::info("[loader] Creating unique indexes on ID properties...");
-    eugraph::loader::createUniqueIdIndexes(client, label_schemas);
+        spdlog::info("[loader] Loading vertex data...");
+        auto [vertices_written, vertices_dup] =
+            eugraph::loader::loadVertices(clients, config, batch_size, parallel_files);
+        spdlog::info("[loader] Vertices: {} written, {} skipped (duplicate primary key)", vertices_written,
+                     vertices_dup);
 
-    spdlog::info("[loader] Loading edge data...");
-    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_maps, batch_size, parallel_files);
-    spdlog::info("[loader] Edge loading complete.");
+        spdlog::info("[loader] Loading edge data...");
+        auto [edges_written, edges_skipped] = eugraph::loader::loadEdges(clients, config, batch_size, parallel_files);
+        spdlog::info("[loader] Edges: {} written, {} skipped (endpoint unresolved)", edges_written, edges_skipped);
+    } catch (const std::exception& e) {
+        spdlog::error("[loader] load failed: {}", e.what());
+        return 1;
+    }
 
     spdlog::info("[loader] All data loaded successfully.");
     return 0;

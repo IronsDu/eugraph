@@ -3,6 +3,7 @@
 #include "storage/meta/i_sync_graph_meta_store.hpp"
 #include "storage/meta/meta_codec.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <spdlog/spdlog.h>
 
@@ -64,11 +65,86 @@ folly::coro::Task<void> AsyncGraphMetaStore::close() {
 
 // ==================== Label management ====================
 
+namespace {
+
+void persistLabelDef(ISyncGraphMetaStore& store, const LabelDef& def) {
+    auto encoded = MetadataCodec::encodeLabelDef(def);
+    store.metadataPut(std::string("M|label:") + def.name, encoded);
+    store.metadataPut(std::string("M|label_id:") + std::to_string(def.id), encoded);
+}
+
+} // namespace
+
 folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& name,
-                                                            const std::vector<PropertyDef>& properties) {
-    if (schema_.label_name_to_id.count(name)) {
-        spdlog::error("Label '{}' already exists", name);
-        co_return INVALID_LABEL_ID;
+                                                            const std::vector<PropertyDef>& properties,
+                                                            const std::vector<std::string>& pk_props,
+                                                            bool merge_properties) {
+    // 已存在时的两种语义（loader 每次运行都会先 createLabel，这是它的正常路径）：
+    //   merge_properties=true  → 增量加属性：同名必须同类型（否则报错），新属性按声明顺序追加 prop_id。
+    //                            对应 neo4j-admin import：同一标签可由多个文件供给，属性取并集。
+    //   merge_properties=false → 要求「属性 + 主键」声明完全一致（幂等重跑），否则报错。
+    if (auto existing_it = schema_.label_name_to_id.find(name); existing_it != schema_.label_name_to_id.end()) {
+        const LabelId existing_id = existing_it->second;
+        const LabelDef before = schema_.labels.at(existing_id);
+
+        if (merge_properties) {
+            auto& def = schema_.labels[existing_id];
+            uint16_t next_prop_id = static_cast<uint16_t>(def.properties.size());
+            bool changed = false;
+            for (const auto& p : properties) {
+                const PropertyDef* found = nullptr;
+                for (const auto& pd : def.properties) {
+                    if (pd.name == p.name) {
+                        found = &pd;
+                        break;
+                    }
+                }
+                if (found != nullptr) {
+                    if (found->type != p.type) {
+                        throw std::runtime_error("Label '" + name + "' property '" + p.name +
+                                                 "' already exists with a different type");
+                    }
+                    continue;
+                }
+                PropertyDef pd = p;
+                pd.id = next_prop_id++;
+                def.properties.push_back(std::move(pd));
+                changed = true;
+            }
+            if (changed) {
+                auto& s = store_->get();
+                auto& i = io_->get();
+                const LabelDef snapshot = def;
+                co_await i.dispatchVoid([&s, &snapshot]() { persistLabelDef(s, snapshot); });
+                spdlog::info("Merged properties into label '{}' ({} -> {} properties)", name, before.properties.size(),
+                             snapshot.properties.size());
+            }
+            co_return existing_id;
+        }
+
+        if (before.properties.size() != properties.size()) {
+            throw std::runtime_error("Label '" + name + "' already exists with " +
+                                     std::to_string(before.properties.size()) + " properties (requested " +
+                                     std::to_string(properties.size()) +
+                                     "); pass merge_properties to add properties incrementally");
+        }
+        for (size_t i = 0; i < properties.size(); ++i) {
+            if (before.properties[i].name != properties[i].name || before.properties[i].type != properties[i].type) {
+                throw std::runtime_error("Label '" + name + "' already exists; property #" + std::to_string(i) +
+                                         " differs (existing '" + before.properties[i].name + "', requested '" +
+                                         properties[i].name + "')");
+            }
+        }
+        std::vector<std::string> existing_pk;
+        existing_pk.reserve(before.pk_prop_ids.size());
+        for (auto pid : before.pk_prop_ids) {
+            if (pid < before.properties.size())
+                existing_pk.push_back(before.properties[pid].name);
+        }
+        if (existing_pk != pk_props) {
+            throw std::runtime_error("Label '" + name + "' already exists with a different primary key declaration");
+        }
+        co_return existing_id;
     }
 
     LabelId id = schema_.next_label_id++;
@@ -83,6 +159,22 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
         PropertyDef pd = p;
         pd.id = prop_id++;
         def.properties.push_back(std::move(pd));
+    }
+
+    // 主键属性名 → prop_id（**有序**，顺序即主键元组顺序）；名字必须已在 properties 中声明
+    for (const auto& pk_name : pk_props) {
+        uint16_t pid = UINT16_MAX;
+        for (const auto& pd : def.properties) {
+            if (pd.name == pk_name) {
+                pid = pd.id;
+                break;
+            }
+        }
+        if (pid == UINT16_MAX)
+            throw std::runtime_error("Primary key property '" + pk_name + "' is not declared on label '" + name + "'");
+        if (std::find(def.pk_prop_ids.begin(), def.pk_prop_ids.end(), pid) != def.pk_prop_ids.end())
+            throw std::runtime_error("Duplicate primary key property '" + pk_name + "' on label '" + name + "'");
+        def.pk_prop_ids.push_back(pid);
     }
 
     auto encoded = MetadataCodec::encodeLabelDef(def);
@@ -107,12 +199,6 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
 // ==================== Index management ====================
 
 namespace {
-
-void persistLabelDef(ISyncGraphMetaStore& store, const LabelDef& def) {
-    auto encoded = MetadataCodec::encodeLabelDef(def);
-    store.metadataPut(std::string("M|label:") + def.name, encoded);
-    store.metadataPut(std::string("M|label_id:") + std::to_string(def.id), encoded);
-}
 
 void persistEdgeLabelDef(ISyncGraphMetaStore& store, const EdgeLabelDef& def) {
     auto encoded = MetadataCodec::encodeEdgeLabelDef(def);

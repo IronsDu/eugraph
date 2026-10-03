@@ -173,6 +173,30 @@ int64_t temporalToComparable(const TimeValue& tv);
 bool temporalLess(const DateTimeValue& a, const DateTimeValue& b);
 bool temporalLess(const TimeValue& a, const TimeValue& b);
 
+// ==================== Text → Temporal 解析 ====================
+//
+// 单一实现：命令行/查询函数（date()/time()/datetime()/duration()）与 CSV loader
+// 共用同一套解析逻辑，避免两处规则漂移。解析器只做「文本 → 值」的转换，
+// 不做业务校验（范围错误按下面的规则抛 QueryException）。
+
+/// 解析日期文本（支持 `YYYY-MM-DD`、`YYYYMMDD`、扩展/周/序数等 ISO-8601 形式）。
+/// 年份超出 ±999999999 时抛 QueryException(Syntax)。
+DateTimeValue parseDateFromString(const std::string& s);
+
+/// 解析时间文本；kind 指定是否带时区。allow_named_tz=false 时，
+/// 命名时区（如 `Europe/Stockholm`）会被拒绝并抛 QueryException(Argument)。
+TimeValue parseTimeStr(const std::string& s, TimeKind kind, bool allow_named_tz = false);
+
+/// 解析日期时间文本；kind 为 DATE / LOCAL_DATETIME / DATETIME。
+DateTimeValue parseDatetimeStr(const std::string& s, DateTimeKind kind);
+
+/// 解析 ISO-8601 duration 文本（`P1Y2M3DT4H5M6S`）。无法解析时返回零值。
+DurationValue parseDurationFromString(const std::string& s);
+
+/// 解析时区偏移文本（`Z` / `+HH:MM` / `-HHMM` / `+HH:MM:SS`）。
+/// 命名时区（含 `/`）与无法识别的文本返回 0（偏移由调用方另行处理）。
+int32_t parseTzOffset(const std::string& tz);
+
 // ==================== Calendar helpers ====================
 
 bool isLeapYear(int64_t year);

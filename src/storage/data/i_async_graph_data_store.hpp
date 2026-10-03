@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -170,6 +171,12 @@ public:
                                       const std::optional<std::vector<PropertyValue>>& end) = 0;
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
     scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values) = 0;
+
+    /// 主键点查：在 index_id 指定的唯一索引上按完整元组做等值查找，取 vid 最小者。
+    /// 找不到返回 nullopt。取最小者与「重复主键 first-wins」的语义一致
+    /// （并发写入同一主键时索引里可能有多条）。
+    virtual folly::coro::Task<std::optional<VertexId>>
+    lookupVertexByPrimaryKey(uint32_t index_id, const std::vector<PropertyValue>& values) = 0;
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
     scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
                                const std::optional<std::vector<PropertyValue>>& end) = 0;
@@ -200,9 +207,14 @@ public:
         uint64_t seq;
         Properties props;
     };
-    virtual folly::coro::Task<void> batchInsertVertices(std::vector<BatchVertexEntry> entries) = 0;
-    virtual folly::coro::Task<void> batchInsertEdges(EdgeLabelId edge_label_id,
-                                                     std::vector<BatchEdgeEntry> entries) = 0;
+    /// 批量写入顶点，并**在同一事务内维护索引条目**（与查询写路径语义一致）。
+    /// label_defs 为该图的标签定义（索引定义在其中）；调用方从元数据服务取。
+    virtual folly::coro::Task<void> batchInsertVertices(std::vector<BatchVertexEntry> entries,
+                                                        const std::unordered_map<LabelId, LabelDef>& label_defs) = 0;
+    /// 批量写入边，并维护边索引条目（同上）。
+    virtual folly::coro::Task<void>
+    batchInsertEdges(EdgeLabelId edge_label_id, std::vector<BatchEdgeEntry> entries,
+                     const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) = 0;
 };
 
 } // namespace eugraph

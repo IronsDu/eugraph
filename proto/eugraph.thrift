@@ -85,6 +85,8 @@ struct LabelInfo {
   1: i16 id
   2: string name
   3: list<PropertyDefThrift> properties
+  // 主键属性名，**有序**（顺序 = 主键元组顺序 = 唯一索引 accessor 顺序）；空 = 无主键
+  4: list<string> pk_props
 }
 
 struct EdgeLabelInfo {
@@ -96,20 +98,43 @@ struct EdgeLabelInfo {
 
 // ==================== Batch Import ====================
 
+// 主键键值对：一个顶点/端点的主键（复合主键时多个，按声明顺序）
+struct PkKey {
+  1: string name
+  2: PropertyValueThrift value
+}
+
+// 边端点引用：目标顶点的主标签 + 主键值。VertexId 是内部实现，不出现在写协议里。
+struct PkRef {
+  1: string primary_label
+  2: list<PkKey> keys
+}
+
 struct VertexRecord {
   1: list<PropertyValueThrift> properties
   2: list<string> labels
+  // 该顶点的主键；空 = 该顶点无主键（不可被边引用）
+  3: list<PkKey> pk
 }
 
 struct EdgeRecord {
-  1: i64 src_vertex_id
-  2: i64 dst_vertex_id
+  1: PkRef src
+  2: PkRef dst
   3: list<PropertyValueThrift> properties
 }
 
 struct BatchInsertVerticesResult {
   1: list<i64> vertex_ids
   2: i32 count
+  3: i32 inserted
+  // 因主键已存在（first-wins）或批内重复而未写入的记录数
+  4: i32 duplicate_pk
+}
+
+struct BatchInsertEdgesResult {
+  1: i32 inserted
+  // 端点解析不到（对应现状 loader 侧的 skipped 计数）
+  2: i32 skipped_unresolved
 }
 
 // ==================== Query Result ====================
@@ -156,7 +181,11 @@ service EuGraphService {
   list<GraphInfo> listGraphs()
 
   // DDL: Label management
-  LabelInfo createLabel(1: string name, 2: list<PropertyDefThrift> properties, 3: string graph_name)
+  // pk_props 空列表 = 无主键（Thrift 参数不允许 optional，空即缺省）
+  // merge_properties 非空 = 对已存在标签增量加属性（同名跳过、类型冲突报错）；
+  // 用于「同一标签由多个数据文件供给」的场景（如 LDBC 的 Comment/Post 共享 Message 父标签）。
+  LabelInfo createLabel(1: string name, 2: list<PropertyDefThrift> properties, 3: string graph_name,
+                        4: list<string> pk_props, 5: list<PropertyDefThrift> merge_properties)
   list<LabelInfo> listLabels(1: string graph_name)
 
   // DDL: EdgeLabel management
@@ -168,5 +197,5 @@ service EuGraphService {
 
   // Batch import
   BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records, 3: string graph_name)
-  i32 batchInsertEdges(1: string edge_label_name, 2: list<EdgeRecord> records, 3: string graph_name)
+  BatchInsertEdgesResult batchInsertEdges(1: string edge_label_name, 2: list<EdgeRecord> records, 3: string graph_name)
 }

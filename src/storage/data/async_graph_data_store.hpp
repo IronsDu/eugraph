@@ -4,6 +4,7 @@
 #include "common/types/graph_types.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
+#include "storage/data/index_maintenance.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/kv/value_codec.hpp"
 
@@ -42,13 +43,22 @@ public:
         co_return txn;
     }
 
+    /// 结束事务后必须清掉指向它的 txn_：
+    /// txn_ 是「本对象对外暴露的当前事务」，事务一旦结束，句柄即失效。
+    /// 之前 commit/rollback 不清 txn_，导致后续任何走 txn_ 的读写都拿它去查事务表，
+    /// 命中不到就返回 nullptr session（或读到已释放的表项）—— 这正是「建索引的临时事务
+    /// 结束后、批量写入解析主键时崩溃」的根因。
     folly::coro::Task<bool> commitTran(GraphTxnHandle txn) override {
         auto ok = co_await io_.dispatch([this, txn]() { return store_.commitTransaction(txn); });
+        if (ok && txn_ == txn)
+            txn_ = INVALID_GRAPH_TXN;
         co_return ok;
     }
 
     folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) override {
         auto ok = co_await io_.dispatch([this, txn]() { return store_.rollbackTransaction(txn); });
+        if (txn_ == txn)
+            txn_ = INVALID_GRAPH_TXN;
         co_return ok;
     }
 
@@ -57,7 +67,10 @@ public:
     /// WT work inline is fine there: the transaction is idle by then, and blocking
     /// the loop is far cheaper than leaking its session forever.
     bool rollbackTranNow(GraphTxnHandle txn) override {
-        return store_.rollbackTransaction(txn);
+        bool ok = store_.rollbackTransaction(txn);
+        if (txn_ == txn)
+            txn_ = INVALID_GRAPH_TXN;
+        return ok;
     }
 
     // ==================== DDL ====================
@@ -439,7 +452,7 @@ public:
         auto t = table;
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val), entity_id]() {
-            return store_.insertIndexEntry(t, val, entity_id);
+            return store_.insertIndexEntry(txn, t, val, entity_id);
         });
         co_return ok;
     }
@@ -450,7 +463,7 @@ public:
         auto t = table;
         auto vals = values;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id]() {
-            return store_.insertIndexEntry(t, vals, entity_id);
+            return store_.insertIndexEntry(txn, t, vals, entity_id);
         });
         co_return ok;
     }
@@ -462,7 +475,7 @@ public:
         auto val = value;
         auto ok = co_await io_.dispatch(
             [this, txn, t = std::move(t), val = std::move(val), entity_id, payload = std::move(payload)]() {
-                return store_.insertIndexEntry(t, val, entity_id, payload);
+                return store_.insertIndexEntry(txn, t, val, entity_id, payload);
             });
         co_return ok;
     }
@@ -474,7 +487,7 @@ public:
         auto vals = values;
         auto ok = co_await io_.dispatch(
             [this, txn, t = std::move(t), vals = std::move(vals), entity_id, payload = std::move(payload)]() {
-                return store_.insertIndexEntry(t, vals, entity_id, payload);
+                return store_.insertIndexEntry(txn, t, vals, entity_id, payload);
             });
         co_return ok;
     }
@@ -485,7 +498,7 @@ public:
         auto t = table;
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val), entity_id]() {
-            return store_.deleteIndexEntry(t, val, entity_id);
+            return store_.deleteIndexEntry(txn, t, val, entity_id);
         });
         co_return ok;
     }
@@ -496,7 +509,7 @@ public:
         auto t = table;
         auto vals = values;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id]() {
-            return store_.deleteIndexEntry(t, vals, entity_id);
+            return store_.deleteIndexEntry(txn, t, vals, entity_id);
         });
         co_return ok;
     }
@@ -505,8 +518,9 @@ public:
         auto txn = txn_;
         auto t = table;
         auto val = value;
-        auto ok = co_await io_.dispatch(
-            [this, txn, t = std::move(t), val = std::move(val)]() { return store_.checkUniqueConstraint(t, val); });
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val)]() {
+            return store_.checkUniqueConstraint(txn, t, val);
+        });
         co_return ok;
     }
 
@@ -515,8 +529,9 @@ public:
         auto txn = txn_;
         auto t = table;
         auto vals = values;
-        auto ok = co_await io_.dispatch(
-            [this, txn, t = std::move(t), vals = std::move(vals)]() { return store_.checkUniqueConstraint(t, vals); });
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals)]() {
+            return store_.checkUniqueConstraint(txn, t, vals);
+        });
         co_return ok;
     }
 
@@ -628,6 +643,23 @@ public:
             std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end));
             co_yield std::move(batch);
         }
+    }
+
+    folly::coro::Task<std::optional<VertexId>>
+    lookupVertexByPrimaryKey(uint32_t index_id, const std::vector<PropertyValue>& values) override {
+        auto txn = txn_;
+        std::string table = vidxTableById(index_id);
+        auto vals = values;
+        std::optional<VertexId> best;
+        co_await io_.dispatchVoid([this, txn, &table, &vals, &best]() {
+            store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
+                VertexId vid = static_cast<VertexId>(entity_id);
+                if (!best.has_value() || vid < *best)
+                    best = vid;
+                return true; // 需要扫完才能保证拿到最小 vid（前缀命中的条目通常只有 1 条）
+            });
+        });
+        co_return best;
     }
 
     folly::coro::AsyncGenerator<std::vector<VertexId>>
@@ -800,23 +832,31 @@ public:
 
     // ==================== Batch Write ====================
 
-    folly::coro::Task<void> batchInsertVertices(std::vector<BatchVertexEntry> entries) override {
-        co_await io_.dispatchVoid([this, entries = std::move(entries)]() {
+    folly::coro::Task<void> batchInsertVertices(std::vector<BatchVertexEntry> entries,
+                                                const std::unordered_map<LabelId, LabelDef>& label_defs) override {
+        co_await io_.dispatchVoid([this, entries = std::move(entries), &label_defs]() {
             auto txn = store_.beginTransaction();
             for (const auto& e : entries) {
                 store_.insertVertex(
                     txn, e.vid,
                     std::span<const std::pair<LabelId, Properties>>{e.label_props.data(), e.label_props.size()});
+                // 顶点数据与索引条目同事务，避免「顶点已提交、索引没跟上」
+                auto index_entries = collectVertexIndexEntriesFromLabelProps(label_defs, e.label_props, e.vid);
+                insertVertexIndexEntries(store_, txn, index_entries);
             }
             store_.commitTransaction(txn);
         });
     }
 
-    folly::coro::Task<void> batchInsertEdges(EdgeLabelId edge_label_id, std::vector<BatchEdgeEntry> entries) override {
-        co_await io_.dispatchVoid([this, edge_label_id, entries = std::move(entries)]() {
+    folly::coro::Task<void>
+    batchInsertEdges(EdgeLabelId edge_label_id, std::vector<BatchEdgeEntry> entries,
+                     const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) override {
+        co_await io_.dispatchVoid([this, edge_label_id, entries = std::move(entries), &edge_label_defs]() {
             auto txn = store_.beginTransaction();
             for (const auto& e : entries) {
                 store_.insertEdge(txn, e.eid, e.src_id, e.dst_id, edge_label_id, e.seq, e.props);
+                auto index_entries = collectEdgeIndexEntries(edge_label_defs, edge_label_id, e.eid, e.props);
+                insertEdgeIndexEntries(store_, txn, index_entries);
             }
             store_.commitTransaction(txn);
         });

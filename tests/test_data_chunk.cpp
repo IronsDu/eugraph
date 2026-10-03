@@ -401,10 +401,13 @@ TEST(EdgeIndexScanLayout, BoundColumnsFollowPlannerOrder) {
             EXPECT_EQ(used[static_cast<size_t>(i)], i) << "src=" << c.src << " dst=" << c.dst << " edge=" << c.edge;
 
         // 相对顺序必须是 src < dst < edge（planner 的 push 顺序）。
-        if (l.src >= 0 && l.dst >= 0)
+        // 花括号必需：EXPECT_LT 展开成 if/else，裸 if 会触发 -Wdangling-else（-Werror）。
+        if (l.src >= 0 && l.dst >= 0) {
             EXPECT_LT(l.src, l.dst);
-        if (l.dst >= 0 && l.edge >= 0)
+        }
+        if (l.dst >= 0 && l.edge >= 0) {
             EXPECT_LT(l.dst, l.edge);
+        }
     }
 }
 

@@ -187,8 +187,8 @@ StructMetadata<::eugraph::thrift_service::LabelInfo>::gen(ThriftMetadata& metada
   eugraph_LabelInfo.name() = "eugraph.LabelInfo";
   eugraph_LabelInfo.is_union() = false;
   static const auto* const
-  eugraph_LabelInfo_fields = new std::array<EncodedThriftField, 3>{ {
-    { 1, "id", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I16_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "name", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "properties", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::PropertyDefThrift>>("eugraph.PropertyDefThrift")), std::vector<ThriftConstStruct>{ }},  }};
+  eugraph_LabelInfo_fields = new std::array<EncodedThriftField, 4>{ {
+    { 1, "id", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I16_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "name", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "properties", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::PropertyDefThrift>>("eugraph.PropertyDefThrift")), std::vector<ThriftConstStruct>{ }},    { 4, "pk_props", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE)), std::vector<ThriftConstStruct>{ }},  }};
   for (const auto& f : *eugraph_LabelInfo_fields) {
     ::apache::thrift::metadata::ThriftField field;
     field.id() = f.id;
@@ -224,6 +224,52 @@ StructMetadata<::eugraph::thrift_service::EdgeLabelInfo>::gen(ThriftMetadata& me
   return res.first->second;
 }
 const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift_service::PkKey>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.PkKey", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_PkKey = res.first->second;
+  eugraph_PkKey.name() = "eugraph.PkKey";
+  eugraph_PkKey.is_union() = false;
+  static const auto* const
+  eugraph_PkKey_fields = new std::array<EncodedThriftField, 2>{ {
+    { 1, "name", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "value", false, std::make_unique<Union<::eugraph::thrift_service::PropertyValueThrift>>("eugraph.PropertyValueThrift"), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_PkKey_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_PkKey.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift_service::PkRef>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.PkRef", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_PkRef = res.first->second;
+  eugraph_PkRef.name() = "eugraph.PkRef";
+  eugraph_PkRef.is_union() = false;
+  static const auto* const
+  eugraph_PkRef_fields = new std::array<EncodedThriftField, 2>{ {
+    { 1, "primary_label", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "keys", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::PkKey>>("eugraph.PkKey")), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_PkRef_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_PkRef.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
 StructMetadata<::eugraph::thrift_service::VertexRecord>::gen(ThriftMetadata& metadata) {
   auto res = metadata.structs()->emplace("eugraph.VertexRecord", ::apache::thrift::metadata::ThriftStruct{});
   if (!res.second) {
@@ -233,8 +279,8 @@ StructMetadata<::eugraph::thrift_service::VertexRecord>::gen(ThriftMetadata& met
   eugraph_VertexRecord.name() = "eugraph.VertexRecord";
   eugraph_VertexRecord.is_union() = false;
   static const auto* const
-  eugraph_VertexRecord_fields = new std::array<EncodedThriftField, 2>{ {
-    { 1, "properties", false, std::make_unique<List>(std::make_unique<Union<::eugraph::thrift_service::PropertyValueThrift>>("eugraph.PropertyValueThrift")), std::vector<ThriftConstStruct>{ }},    { 2, "labels", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE)), std::vector<ThriftConstStruct>{ }},  }};
+  eugraph_VertexRecord_fields = new std::array<EncodedThriftField, 3>{ {
+    { 1, "properties", false, std::make_unique<List>(std::make_unique<Union<::eugraph::thrift_service::PropertyValueThrift>>("eugraph.PropertyValueThrift")), std::vector<ThriftConstStruct>{ }},    { 2, "labels", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE)), std::vector<ThriftConstStruct>{ }},    { 3, "pk", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::PkKey>>("eugraph.PkKey")), std::vector<ThriftConstStruct>{ }},  }};
   for (const auto& f : *eugraph_VertexRecord_fields) {
     ::apache::thrift::metadata::ThriftField field;
     field.id() = f.id;
@@ -257,7 +303,7 @@ StructMetadata<::eugraph::thrift_service::EdgeRecord>::gen(ThriftMetadata& metad
   eugraph_EdgeRecord.is_union() = false;
   static const auto* const
   eugraph_EdgeRecord_fields = new std::array<EncodedThriftField, 3>{ {
-    { 1, "src_vertex_id", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "dst_vertex_id", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "properties", false, std::make_unique<List>(std::make_unique<Union<::eugraph::thrift_service::PropertyValueThrift>>("eugraph.PropertyValueThrift")), std::vector<ThriftConstStruct>{ }},  }};
+    { 1, "src", false, std::make_unique<Struct<::eugraph::thrift_service::PkRef>>("eugraph.PkRef"), std::vector<ThriftConstStruct>{ }},    { 2, "dst", false, std::make_unique<Struct<::eugraph::thrift_service::PkRef>>("eugraph.PkRef"), std::vector<ThriftConstStruct>{ }},    { 3, "properties", false, std::make_unique<List>(std::make_unique<Union<::eugraph::thrift_service::PropertyValueThrift>>("eugraph.PropertyValueThrift")), std::vector<ThriftConstStruct>{ }},  }};
   for (const auto& f : *eugraph_EdgeRecord_fields) {
     ::apache::thrift::metadata::ThriftField field;
     field.id() = f.id;
@@ -279,8 +325,8 @@ StructMetadata<::eugraph::thrift_service::BatchInsertVerticesResult>::gen(Thrift
   eugraph_BatchInsertVerticesResult.name() = "eugraph.BatchInsertVerticesResult";
   eugraph_BatchInsertVerticesResult.is_union() = false;
   static const auto* const
-  eugraph_BatchInsertVerticesResult_fields = new std::array<EncodedThriftField, 2>{ {
-    { 1, "vertex_ids", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE)), std::vector<ThriftConstStruct>{ }},    { 2, "count", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},  }};
+  eugraph_BatchInsertVerticesResult_fields = new std::array<EncodedThriftField, 4>{ {
+    { 1, "vertex_ids", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE)), std::vector<ThriftConstStruct>{ }},    { 2, "count", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "inserted", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},    { 4, "duplicate_pk", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},  }};
   for (const auto& f : *eugraph_BatchInsertVerticesResult_fields) {
     ::apache::thrift::metadata::ThriftField field;
     field.id() = f.id;
@@ -289,6 +335,29 @@ StructMetadata<::eugraph::thrift_service::BatchInsertVerticesResult>::gen(Thrift
     f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
     field.structured_annotations() = f.structured_annotations;
     eugraph_BatchInsertVerticesResult.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift_service::BatchInsertEdgesResult>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.BatchInsertEdgesResult", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_BatchInsertEdgesResult = res.first->second;
+  eugraph_BatchInsertEdgesResult.name() = "eugraph.BatchInsertEdgesResult";
+  eugraph_BatchInsertEdgesResult.is_union() = false;
+  static const auto* const
+  eugraph_BatchInsertEdgesResult_fields = new std::array<EncodedThriftField, 2>{ {
+    { 1, "inserted", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "skipped_unresolved", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_BatchInsertEdgesResult_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_BatchInsertEdgesResult.fields()->push_back(std::move(field));
   }
   return res.first->second;
 }
@@ -472,6 +541,20 @@ void ServiceMetadata<::apache::thrift::ServiceHandler<::eugraph::thrift_service:
   auto eugraph_EuGraphService_createLabel_graph_name_3_type = std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE);
   eugraph_EuGraphService_createLabel_graph_name_3_type->writeAndGenType(*eugraph_EuGraphService_createLabel_graph_name_3.type(), metadata);
   func.arguments()->push_back(std::move(eugraph_EuGraphService_createLabel_graph_name_3));
+  ::apache::thrift::metadata::ThriftField eugraph_EuGraphService_createLabel_pk_props_4;
+  eugraph_EuGraphService_createLabel_pk_props_4.id() = 4;
+  eugraph_EuGraphService_createLabel_pk_props_4.name() = "pk_props";
+  eugraph_EuGraphService_createLabel_pk_props_4.is_optional() = false;
+  auto eugraph_EuGraphService_createLabel_pk_props_4_type = std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE));
+  eugraph_EuGraphService_createLabel_pk_props_4_type->writeAndGenType(*eugraph_EuGraphService_createLabel_pk_props_4.type(), metadata);
+  func.arguments()->push_back(std::move(eugraph_EuGraphService_createLabel_pk_props_4));
+  ::apache::thrift::metadata::ThriftField eugraph_EuGraphService_createLabel_merge_properties_5;
+  eugraph_EuGraphService_createLabel_merge_properties_5.id() = 5;
+  eugraph_EuGraphService_createLabel_merge_properties_5.name() = "merge_properties";
+  eugraph_EuGraphService_createLabel_merge_properties_5.is_optional() = false;
+  auto eugraph_EuGraphService_createLabel_merge_properties_5_type = std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::PropertyDefThrift>>("eugraph.PropertyDefThrift"));
+  eugraph_EuGraphService_createLabel_merge_properties_5_type->writeAndGenType(*eugraph_EuGraphService_createLabel_merge_properties_5.type(), metadata);
+  func.arguments()->push_back(std::move(eugraph_EuGraphService_createLabel_merge_properties_5));
   func.is_oneway() = false;
   service.functions()->push_back(std::move(func));
 }
@@ -595,7 +678,7 @@ void ServiceMetadata<::apache::thrift::ServiceHandler<::eugraph::thrift_service:
 void ServiceMetadata<::apache::thrift::ServiceHandler<::eugraph::thrift_service::EuGraphService>>::gen_batchInsertEdges([[maybe_unused]] ThriftMetadata& metadata, ThriftService& service) {
   ::apache::thrift::metadata::ThriftFunction func;
   func.name() = "batchInsertEdges";
-  auto func_ret_type = std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE);
+  auto func_ret_type = std::make_unique<Struct<::eugraph::thrift_service::BatchInsertEdgesResult>>("eugraph.BatchInsertEdgesResult");
   func_ret_type->writeAndGenType(*func.return_type(), metadata);
   ::apache::thrift::metadata::ThriftField eugraph_EuGraphService_batchInsertEdges_edge_label_name_1;
   eugraph_EuGraphService_batchInsertEdges_edge_label_name_1.id() = 1;

@@ -195,18 +195,25 @@ public:
 
     // ==================== Index Entry Operations ====================
 
-    virtual bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
-    virtual bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+    // 索引条目写入/删除/唯一性检查都必须在**调用方的事务**里完成：
+    // 否则条目与实体数据落在不同事务，批量导入时会出现「顶点已提交、索引没跟上」
+    // 或者并发装载下唯一性预检读到旧快照（first-wins 语义失效）。
+    virtual bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                   uint64_t entity_id) = 0;
-    virtual bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
-                                  std::string_view payload) = 0;
-    virtual bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+    virtual bool insertIndexEntry(GraphTxnHandle txn, const std::string& table,
+                                  const std::vector<PropertyValue>& values, uint64_t entity_id) = 0;
+    virtual bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                   uint64_t entity_id, std::string_view payload) = 0;
-    virtual bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
-    virtual bool deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+    virtual bool insertIndexEntry(GraphTxnHandle txn, const std::string& table,
+                                  const std::vector<PropertyValue>& values, uint64_t entity_id,
+                                  std::string_view payload) = 0;
+    virtual bool deleteIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                   uint64_t entity_id) = 0;
-    virtual bool checkUniqueConstraint(const std::string& table, const PropertyValue& value) = 0;
-    virtual bool checkUniqueConstraint(const std::string& table, const std::vector<PropertyValue>& values) = 0;
+    virtual bool deleteIndexEntry(GraphTxnHandle txn, const std::string& table,
+                                  const std::vector<PropertyValue>& values, uint64_t entity_id) = 0;
+    virtual bool checkUniqueConstraint(GraphTxnHandle txn, const std::string& table, const PropertyValue& value) = 0;
+    virtual bool checkUniqueConstraint(GraphTxnHandle txn, const std::string& table,
+                                       const std::vector<PropertyValue>& values) = 0;
 
     // ==================== Index Scan ====================
 

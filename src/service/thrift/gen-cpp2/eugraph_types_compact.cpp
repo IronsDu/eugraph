@@ -43,6 +43,16 @@ template uint32_t EdgeLabelInfo::write<>(apache::thrift::CompactProtocolWriter*)
 template uint32_t EdgeLabelInfo::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
 template uint32_t EdgeLabelInfo::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
 
+template void PkKey::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t PkKey::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t PkKey::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t PkKey::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
+template void PkRef::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t PkRef::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t PkRef::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t PkRef::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
 template void VertexRecord::readNoXfer<>(apache::thrift::CompactProtocolReader*);
 template uint32_t VertexRecord::write<>(apache::thrift::CompactProtocolWriter*) const;
 template uint32_t VertexRecord::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
@@ -57,6 +67,11 @@ template void BatchInsertVerticesResult::readNoXfer<>(apache::thrift::CompactPro
 template uint32_t BatchInsertVerticesResult::write<>(apache::thrift::CompactProtocolWriter*) const;
 template uint32_t BatchInsertVerticesResult::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
 template uint32_t BatchInsertVerticesResult::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
+template void BatchInsertEdgesResult::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t BatchInsertEdgesResult::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t BatchInsertEdgesResult::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t BatchInsertEdgesResult::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
 
 template void ResultValue::readNoXfer<>(apache::thrift::CompactProtocolReader*);
 template uint32_t ResultValue::write<>(apache::thrift::CompactProtocolWriter*) const;

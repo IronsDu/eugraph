@@ -25,8 +25,12 @@ public:
     virtual folly::coro::Task<void> close() = 0;
 
     // Label management
+    /// 创建标签（幂等）。pk_props 为**主键属性名**（有序，顺序 = 主键元组顺序）；
+    /// 空 = 无主键。标签已存在时：属性与主键声明一致则返回既有 id，不一致则抛异常。
     virtual folly::coro::Task<LabelId> createLabel(const std::string& name,
-                                                   const std::vector<PropertyDef>& properties = {}) = 0;
+                                                   const std::vector<PropertyDef>& properties = {},
+                                                   const std::vector<std::string>& pk_props = {},
+                                                   bool merge_properties = false) = 0;
     virtual folly::coro::Task<bool>
     addVertexLabelProperties(const std::string& name,
                              const std::vector<std::pair<std::string, PropertyType>>& prop_defs) = 0;

@@ -74,6 +74,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 修改 Shell 交互 | [program/design/server-shell-design.md] | `src/program/shell/` |
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
 | 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |
+| 主键/外部键引用（loader 主键化） | [program/design/loader-design.md] | `src/program/loader/`, `proto/eugraph.thrift`, `src/storage/data/` |
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md] | `src/storage/` |
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
 | 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/storage/graph_schema.hpp` |
@@ -180,7 +181,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [Server + Shell 设计](program/design/server-shell-design.md) | 启动流程、双模式架构、Shell REPL 设计 |
-| [Loader 设计](program/design/loader-design.md) | 装载流程、服务端批量端点、错误处理 |
+| [Loader 设计](program/design/loader-design.md) | **权威版本**：schema 文件是唯一声明入口；主键 = 普通 `UNIQUE` 索引、支持复合主键；Thrift 写协议去 VertexId；列类型/属性重命名/行级标签（多来源数组）/端点标签/分隔符/时间格式全部外部声明（后两者支持文件级覆盖）；装载流程、服务端批量端点、错误处理；§12 记录当前限制 |
 
 ## 调试
 

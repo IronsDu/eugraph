@@ -16,7 +16,7 @@ typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apac
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::integral, bool*>> EuGraphService_dropGraph_presult;
 typedef apache::thrift::ThriftPresult<false> EuGraphService_listGraphs_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::GraphInfo>*>> EuGraphService_listGraphs_presult;
-typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_createLabel_pargs;
+typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<4, ::apache::thrift::type_class::list<::apache::thrift::type_class::string>, ::std::vector<::std::string>*>, apache::thrift::FieldData<5, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>> EuGraphService_createLabel_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::structure, ::eugraph::thrift_service::LabelInfo*>> EuGraphService_createLabel_presult;
 typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_listLabels_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::LabelInfo>*>> EuGraphService_listLabels_presult;
@@ -32,7 +32,7 @@ typedef apache::thrift::ThriftPResultStream<
 typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::VertexRecord>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_batchInsertVertices_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::structure, ::eugraph::thrift_service::BatchInsertVerticesResult*>> EuGraphService_batchInsertVertices_presult;
 typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::EdgeRecord>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_batchInsertEdges_pargs;
-typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::integral, ::std::int32_t*>> EuGraphService_batchInsertEdges_presult;
+typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::structure, ::eugraph::thrift_service::BatchInsertEdgesResult*>> EuGraphService_batchInsertEdges_presult;
 } // namespace eugraph::thrift_service
 template <typename RpcOptions>
 void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_send_createGraph(apache::thrift::SerializedRequest&& request, RpcOptions&& rpcOptions, std::shared_ptr<apache::thrift::transport::THeader> header, apache::thrift::RequestClientCallback::Ptr callback, std::unique_ptr<folly::IOBuf> interceptorFrameworkMetadata) {
@@ -744,24 +744,26 @@ folly::exception_wrapper apache::thrift::Client<::eugraph::thrift_service::EuGra
   return recv_wrapped_listGraphs(_return, state);
 }
 
-void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::createLabel(std::unique_ptr<apache::thrift::RequestCallback> callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::createLabel(std::unique_ptr<apache::thrift::RequestCallback> callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   ::apache::thrift::RpcOptions rpcOptions;
-  createLabel(rpcOptions, std::move(callback), p_name, p_properties, p_graph_name);
+  createLabel(rpcOptions, std::move(callback), p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
 }
 
-void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::createLabel(apache::thrift::RpcOptions& rpcOptions, std::unique_ptr<apache::thrift::RequestCallback> callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::createLabel(apache::thrift::RpcOptions& rpcOptions, std::unique_ptr<apache::thrift::RequestCallback> callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   auto [ctx, header] = createLabelCtx(&rpcOptions);
   auto [wrappedCallback, contextStack] = apache::thrift::GeneratedAsyncClient::template prepareRequestClientCallback<false /* kIsOneWay */>(std::move(callback), std::move(ctx));
-  fbthrift_serialize_and_send_createLabel(rpcOptions, std::move(header), contextStack, std::move(wrappedCallback), p_name, p_properties, p_graph_name);
+  fbthrift_serialize_and_send_createLabel(rpcOptions, std::move(header), contextStack, std::move(wrappedCallback), p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
 }
 
-apache::thrift::SerializedRequest apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_serialize_createLabel(const RpcOptions& rpcOptions, apache::thrift::transport::THeader& header, apache::thrift::ContextStack* contextStack, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+apache::thrift::SerializedRequest apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_serialize_createLabel(const RpcOptions& rpcOptions, apache::thrift::transport::THeader& header, apache::thrift::ContextStack* contextStack, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   return apache::thrift::detail::ac::withProtocolWriter(apache::thrift::GeneratedAsyncClient::getChannel()->getProtocolId(), [&](auto&& prot) {
     using ProtocolWriter = std::decay_t<decltype(prot)>;
     ::eugraph::thrift_service::EuGraphService_createLabel_pargs args;
     args.get<0>().value = const_cast<::std::string*>(&p_name);
     args.get<1>().value = const_cast<::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>(&p_properties);
     args.get<2>().value = const_cast<::std::string*>(&p_graph_name);
+    args.get<3>().value = const_cast<::std::vector<::std::string>*>(&p_pk_props);
+    args.get<4>().value = const_cast<::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>(&p_merge_properties);
     const auto sizer = [&](ProtocolWriter* p) { return args.serializedSizeZC(p); };
     const auto writer = [&](ProtocolWriter* p) { args.write(p); };
     return apache::thrift::preprocessSendT<ProtocolWriter>(
@@ -776,8 +778,8 @@ apache::thrift::SerializedRequest apache::thrift::Client<::eugraph::thrift_servi
   });
 }
 
-void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_serialize_and_send_createLabel(apache::thrift::RpcOptions& rpcOptions, std::shared_ptr<apache::thrift::transport::THeader> header, apache::thrift::ContextStack* contextStack, apache::thrift::RequestClientCallback::Ptr callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, bool stealRpcOptions) {
-  apache::thrift::SerializedRequest request = fbthrift_serialize_createLabel(rpcOptions, *header, contextStack, p_name, p_properties, p_graph_name);
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_serialize_and_send_createLabel(apache::thrift::RpcOptions& rpcOptions, std::shared_ptr<apache::thrift::transport::THeader> header, apache::thrift::ContextStack* contextStack, apache::thrift::RequestClientCallback::Ptr callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties, bool stealRpcOptions) {
+  apache::thrift::SerializedRequest request = fbthrift_serialize_createLabel(rpcOptions, *header, contextStack, p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
   std::unique_ptr<folly::IOBuf> interceptorFrameworkMetadata = nullptr;
   if (contextStack != nullptr) {
     interceptorFrameworkMetadata = detail::ContextStackUnsafeAPI(*contextStack).getInterceptorFrameworkMetadata(rpcOptions);
@@ -807,12 +809,12 @@ std::pair<::apache::thrift::ContextStack::UniquePtr, std::shared_ptr<::apache::t
   return {std::move(ctx), std::move(header)};
 }
 
-void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_createLabel(::eugraph::thrift_service::LabelInfo& _return, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_createLabel(::eugraph::thrift_service::LabelInfo& _return, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   ::apache::thrift::RpcOptions rpcOptions;
-  sync_createLabel(rpcOptions, _return, p_name, p_properties, p_graph_name);
+  sync_createLabel(rpcOptions, _return, p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
 }
 
-void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_createLabel(apache::thrift::RpcOptions& rpcOptions, ::eugraph::thrift_service::LabelInfo& _return, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_createLabel(apache::thrift::RpcOptions& rpcOptions, ::eugraph::thrift_service::LabelInfo& _return, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   apache::thrift::ClientReceiveState returnState;
   apache::thrift::ClientSyncCallback<false> callback(&returnState);
   auto protocolId = apache::thrift::GeneratedAsyncClient::getChannel()->getProtocolId();
@@ -821,13 +823,13 @@ void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_cre
   auto wrappedCallback = apache::thrift::RequestClientCallback::Ptr(&callback);
   auto* contextStack  = ctxAndHeader.first.get();
   if (contextStack != nullptr) {
-    auto argsAsRefs = std::tie(p_name, p_properties, p_graph_name);
+    auto argsAsRefs = std::tie(p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
     contextStack->processClientInterceptorsOnRequest(apache::thrift::ClientInterceptorOnRequestArguments(argsAsRefs), ctxAndHeader.second.get(), rpcOptions).throwUnlessValue();
   }
   callback.waitUntilDone(
     evb,
     [&] {
-      fbthrift_serialize_and_send_createLabel(rpcOptions, ctxAndHeader.second, ctxAndHeader.first.get(), std::move(wrappedCallback), p_name, p_properties, p_graph_name);
+      fbthrift_serialize_and_send_createLabel(rpcOptions, ctxAndHeader.second, ctxAndHeader.first.get(), std::move(wrappedCallback), p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
     });
   if (contextStack != nullptr) {
     contextStack->processClientInterceptorsOnResponse(returnState.header()).throwUnlessValue();
@@ -849,7 +851,7 @@ void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_cre
 
 
 template <typename CallbackType>
-folly::SemiFuture<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_semifuture_createLabel(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+folly::SemiFuture<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_semifuture_createLabel(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   using CallbackHelper = apache::thrift::detail::FutureCallbackHelper<::eugraph::thrift_service::LabelInfo>;
   folly::Promise<CallbackHelper::PromiseResult> promise;
   auto semifuture = promise.getSemiFuture();
@@ -862,41 +864,41 @@ folly::SemiFuture<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<:
   auto wrappedCallback = std::move(wrappedCallbackAndContextStack.first);
   std::unique_ptr<folly::IOBuf> interceptorFrameworkMetadata = nullptr;
   if (contextStack != nullptr) {
-    auto argsAsRefs = std::tie(p_name, p_properties, p_graph_name);
+    auto argsAsRefs = std::tie(p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
     if (auto exTry = contextStack->processClientInterceptorsOnRequest(apache::thrift::ClientInterceptorOnRequestArguments(argsAsRefs), header.get(), rpcOptions);
         exTry.hasException()) {
       return folly::makeSemiFuture<::eugraph::thrift_service::LabelInfo>(std::move(exTry).exception());
     }
     interceptorFrameworkMetadata = detail::ContextStackUnsafeAPI(*contextStack).getInterceptorFrameworkMetadata(rpcOptions);
   }
-  apache::thrift::SerializedRequest request = fbthrift_serialize_createLabel(rpcOptions, *header, contextStack, p_name, p_properties, p_graph_name);
+  apache::thrift::SerializedRequest request = fbthrift_serialize_createLabel(rpcOptions, *header, contextStack, p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
   fbthrift_send_createLabel(std::move(request), rpcOptions, std::move(header), std::move(wrappedCallback), std::move(interceptorFrameworkMetadata));
   return std::move(semifuture).deferValue(CallbackHelper::processClientInterceptorsAndExtractResult);
 }
 
-folly::Future<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_createLabel(const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+folly::Future<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_createLabel(const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   ::apache::thrift::RpcOptions rpcOptions;
-  return future_createLabel(rpcOptions, p_name, p_properties, p_graph_name);
+  return future_createLabel(rpcOptions, p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
 }
 
-folly::SemiFuture<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_createLabel(const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+folly::SemiFuture<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_createLabel(const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   ::apache::thrift::RpcOptions rpcOptions;
-  return semifuture_createLabel(rpcOptions, p_name, p_properties, p_graph_name);
+  return semifuture_createLabel(rpcOptions, p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
 }
 
-folly::Future<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_createLabel(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+folly::Future<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_createLabel(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   using CallbackType = apache::thrift::FutureCallback<::eugraph::thrift_service::LabelInfo>;
-  return fbthrift_semifuture_createLabel<CallbackType>(rpcOptions, p_name, p_properties, p_graph_name).toUnsafeFuture();
+  return fbthrift_semifuture_createLabel<CallbackType>(rpcOptions, p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties).toUnsafeFuture();
 }
 
-folly::SemiFuture<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_createLabel(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
+folly::SemiFuture<::eugraph::thrift_service::LabelInfo> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_createLabel(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
   using CallbackType = apache::thrift::SemiFutureCallback<::eugraph::thrift_service::LabelInfo>;
-  return fbthrift_semifuture_createLabel<CallbackType>(rpcOptions, p_name, p_properties, p_graph_name);
+  return fbthrift_semifuture_createLabel<CallbackType>(rpcOptions, p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
 }
 
 
-void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::createLabel(folly::Function<void (::apache::thrift::ClientReceiveState&&)> callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name) {
-  createLabel(std::make_unique<apache::thrift::FunctionReplyCallback>(std::move(callback)), p_name, p_properties, p_graph_name);
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::createLabel(folly::Function<void (::apache::thrift::ClientReceiveState&&)> callback, const ::std::string& p_name, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_properties, const ::std::string& p_graph_name, const ::std::vector<::std::string>& p_pk_props, const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& p_merge_properties) {
+  createLabel(std::make_unique<apache::thrift::FunctionReplyCallback>(std::move(callback)), p_name, p_properties, p_graph_name, p_pk_props, p_merge_properties);
 }
 
 #if FOLLY_HAS_COROUTINES
@@ -2003,12 +2005,12 @@ std::pair<::apache::thrift::ContextStack::UniquePtr, std::shared_ptr<::apache::t
   return {std::move(ctx), std::move(header)};
 }
 
-::std::int32_t apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_batchInsertEdges(const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& _return, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
   ::apache::thrift::RpcOptions rpcOptions;
-  return sync_batchInsertEdges(rpcOptions, p_edge_label_name, p_records, p_graph_name);
+  sync_batchInsertEdges(rpcOptions, _return, p_edge_label_name, p_records, p_graph_name);
 }
 
-::std::int32_t apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::sync_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, ::eugraph::thrift_service::BatchInsertEdgesResult& _return, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
   apache::thrift::ClientReceiveState returnState;
   apache::thrift::ClientSyncCallback<false> callback(&returnState);
   auto protocolId = apache::thrift::GeneratedAsyncClient::getChannel()->getProtocolId();
@@ -2039,14 +2041,14 @@ std::pair<::apache::thrift::ContextStack::UniquePtr, std::shared_ptr<::apache::t
     }
   };
   return folly::fibers::runInMainContext([&] {
-      return recv_batchInsertEdges(returnState);
+      recv_batchInsertEdges(_return, returnState);
   });
 }
 
 
 template <typename CallbackType>
-folly::SemiFuture<::std::int32_t> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_semifuture_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
-  using CallbackHelper = apache::thrift::detail::FutureCallbackHelper<::std::int32_t>;
+folly::SemiFuture<::eugraph::thrift_service::BatchInsertEdgesResult> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::fbthrift_semifuture_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
+  using CallbackHelper = apache::thrift::detail::FutureCallbackHelper<::eugraph::thrift_service::BatchInsertEdgesResult>;
   folly::Promise<CallbackHelper::PromiseResult> promise;
   auto semifuture = promise.getSemiFuture();
   auto ctxAndHeader = batchInsertEdgesCtx(&rpcOptions);
@@ -2061,7 +2063,7 @@ folly::SemiFuture<::std::int32_t> apache::thrift::Client<::eugraph::thrift_servi
     auto argsAsRefs = std::tie(p_edge_label_name, p_records, p_graph_name);
     if (auto exTry = contextStack->processClientInterceptorsOnRequest(apache::thrift::ClientInterceptorOnRequestArguments(argsAsRefs), header.get(), rpcOptions);
         exTry.hasException()) {
-      return folly::makeSemiFuture<::std::int32_t>(std::move(exTry).exception());
+      return folly::makeSemiFuture<::eugraph::thrift_service::BatchInsertEdgesResult>(std::move(exTry).exception());
     }
     interceptorFrameworkMetadata = detail::ContextStackUnsafeAPI(*contextStack).getInterceptorFrameworkMetadata(rpcOptions);
   }
@@ -2070,23 +2072,23 @@ folly::SemiFuture<::std::int32_t> apache::thrift::Client<::eugraph::thrift_servi
   return std::move(semifuture).deferValue(CallbackHelper::processClientInterceptorsAndExtractResult);
 }
 
-folly::Future<::std::int32_t> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_batchInsertEdges(const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
+folly::Future<::eugraph::thrift_service::BatchInsertEdgesResult> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_batchInsertEdges(const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
   ::apache::thrift::RpcOptions rpcOptions;
   return future_batchInsertEdges(rpcOptions, p_edge_label_name, p_records, p_graph_name);
 }
 
-folly::SemiFuture<::std::int32_t> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_batchInsertEdges(const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
+folly::SemiFuture<::eugraph::thrift_service::BatchInsertEdgesResult> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_batchInsertEdges(const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
   ::apache::thrift::RpcOptions rpcOptions;
   return semifuture_batchInsertEdges(rpcOptions, p_edge_label_name, p_records, p_graph_name);
 }
 
-folly::Future<::std::int32_t> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
-  using CallbackType = apache::thrift::FutureCallback<::std::int32_t>;
+folly::Future<::eugraph::thrift_service::BatchInsertEdgesResult> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::future_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
+  using CallbackType = apache::thrift::FutureCallback<::eugraph::thrift_service::BatchInsertEdgesResult>;
   return fbthrift_semifuture_batchInsertEdges<CallbackType>(rpcOptions, p_edge_label_name, p_records, p_graph_name).toUnsafeFuture();
 }
 
-folly::SemiFuture<::std::int32_t> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
-  using CallbackType = apache::thrift::SemiFutureCallback<::std::int32_t>;
+folly::SemiFuture<::eugraph::thrift_service::BatchInsertEdgesResult> apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::semifuture_batchInsertEdges(apache::thrift::RpcOptions& rpcOptions, const ::std::string& p_edge_label_name, const ::std::vector<::eugraph::thrift_service::EdgeRecord>& p_records, const ::std::string& p_graph_name) {
+  using CallbackType = apache::thrift::SemiFutureCallback<::eugraph::thrift_service::BatchInsertEdgesResult>;
   return fbthrift_semifuture_batchInsertEdges<CallbackType>(rpcOptions, p_edge_label_name, p_records, p_graph_name);
 }
 
@@ -2097,7 +2099,7 @@ void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::batchIns
 
 #if FOLLY_HAS_COROUTINES
 #endif // FOLLY_HAS_COROUTINES
-folly::exception_wrapper apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_wrapped_batchInsertEdges(::std::int32_t& _return, ::apache::thrift::ClientReceiveState& state) {
+folly::exception_wrapper apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_wrapped_batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& _return, ::apache::thrift::ClientReceiveState& state) {
   if (state.isException()) {
     return std::move(state.exception());
   }
@@ -2126,20 +2128,18 @@ folly::exception_wrapper apache::thrift::Client<::eugraph::thrift_service::EuGra
   return folly::make_exception_wrapper<apache::thrift::TApplicationException>("Could not find Protocol");
 }
 
-::std::int32_t apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_batchInsertEdges(::apache::thrift::ClientReceiveState& state) {
-  ::std::int32_t _return;
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& _return, ::apache::thrift::ClientReceiveState& state) {
   auto ew = recv_wrapped_batchInsertEdges(_return, state);
   if (ew) {
     ew.throw_exception();
   }
-  return _return;
 }
 
-::std::int32_t apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_instance_batchInsertEdges(::apache::thrift::ClientReceiveState& state) {
-  return recv_batchInsertEdges(state);
+void apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_instance_batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& _return, ::apache::thrift::ClientReceiveState& state) {
+  return recv_batchInsertEdges(_return, state);
 }
 
-folly::exception_wrapper apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_instance_wrapped_batchInsertEdges(::std::int32_t& _return, ::apache::thrift::ClientReceiveState& state) {
+folly::exception_wrapper apache::thrift::Client<::eugraph::thrift_service::EuGraphService>::recv_instance_wrapped_batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& _return, ::apache::thrift::ClientReceiveState& state) {
   return recv_wrapped_batchInsertEdges(_return, state);
 }
 
