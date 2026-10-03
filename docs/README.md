@@ -73,6 +73,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | Neo4j Bolt 协议支持 | [service/neo4j-bolt-protocol.md] | `src/service/bolt/`, `src/service/graph_service.*` |
 | 修改 Shell 交互 | [program/design/server-shell-design.md] | `src/program/shell/` |
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
+| 在线索引构建（后台任务/变更表/状态机） | [storage/online-index-build-design.md] | `src/storage/`, `src/query/executor/` |
 | 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |
 | 主键/外部键引用（loader 主键化） | [program/design/loader-design.md] | `src/program/loader/`, `proto/eugraph.thrift`, `src/storage/data/` |
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md] | `src/storage/` |
@@ -121,6 +122,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [接口设计](storage/interfaces.md) | sync/async 分离接口 |
 | [元数据服务](storage/metadata-service-design.md) | AsyncGraphMetaStore、GraphSchema、索引元数据、batch ID 分配 |
 | [二级索引](storage/index_design.md) | B-tree 索引、IndexKeyCodec、状态机、IndexScan 优化 |
+| [在线索引构建](storage/online-index-build-design.md) | **设计**：后台任务 + 状态机（BUILDING/CATCHING_UP/FINALIZING/PUBLIC）+ 变更表追赶 + 最终加锁；图内构建串行 |
 | [DDL 设计](storage/ddl.md) | 删除标签类型、删除关系类型、列的增删改（设计规划） |
 | [多图支持](storage/multi-graph.md) | 多图隔离存储、Catalog、GraphManager、Shell 图切换 |
 
