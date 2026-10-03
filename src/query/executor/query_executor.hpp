@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/types/index_state.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
@@ -79,6 +80,23 @@ public:
 
 private:
     folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
+
+    /// 顶点索引的 accessor 解析结果（原为 handleIndexDdl 内的局部结构体，抽出以便协程参数化）
+    struct ResolvedIndexAccessor {
+        bool is_strong = false;
+        LabelId source_label_id = 0;
+        uint16_t source_prop_id = UINT16_MAX;
+        std::string property_name;
+    };
+
+    /// 顶点索引回填 + 提交（**不落状态**：由调用方或发布回调落，保持两库提交顺序）。
+    /// 抽成协程的原因：同步路径与后台构建任务需要**同一份实现**（P1-④）。
+    folly::coro::Task<IndexBuildResult> backfillVertexIndex(IndexDdlStatement stmt, std::string table, LabelId label_id,
+                                                            std::vector<ResolvedIndexAccessor> resolved);
+
+    /// 边索引回填 + 提交（同样**不落状态**）
+    folly::coro::Task<IndexBuildResult> backfillEdgeIndex(IndexDdlStatement stmt, std::string table,
+                                                          EdgeLabelId edge_label_id, std::vector<uint16_t> prop_ids);
     IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;

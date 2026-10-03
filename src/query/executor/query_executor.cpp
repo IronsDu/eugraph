@@ -330,6 +330,186 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     co_return ctx;
 }
 
+folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlStatement stmt, std::string table,
+                                                                       LabelId label_id,
+                                                                       std::vector<ResolvedIndexAccessor> resolved) {
+    // 顶点索引回填 + 提交。**不落状态**：由调用方（同步路径）或发布回调（后台路径）落，
+    // 以保持"先提交数据、后翻状态"的两库顺序（设计 §7.3）。
+    // 弱 accessor 需要按属性名在各标签里查 prop id ⇒ 取当前 schema（构建与模式 DDL 互斥，§8）。
+    const auto& schema = async_meta_.schema();
+    bool hasConflict = false;
+    {
+        GraphTxnHandle txn = co_await async_data_.beginTran();
+        async_data_.setTransaction(txn);
+
+        {
+            auto gen = async_data_.scanVerticesByLabel(label_id);
+            while (auto batch = co_await gen.next()) {
+                for (auto vid : *batch) {
+                    std::vector<PropertyValue> values;
+                    bool allPresent = true;
+                    bool conflict = false;
+
+                    auto vertex_labels = co_await async_data_.getVertexLabels(vid);
+                    for (const auto& ra : resolved) {
+                        if (ra.is_strong) {
+                            auto props_opt = co_await async_data_.getVertexProperties(vid, ra.source_label_id);
+                            if (!props_opt || ra.source_prop_id >= props_opt->size() ||
+                                !(*props_opt)[ra.source_prop_id].has_value()) {
+                                allPresent = false;
+                                break;
+                            }
+                            values.push_back((*props_opt)[ra.source_prop_id].value());
+                        } else {
+                            std::optional<PropertyValue> found_value;
+                            for (LabelId lid : vertex_labels) {
+                                auto lab = schema.getLabel(lid);
+                                if (!lab)
+                                    continue;
+                                uint16_t pid = UINT16_MAX;
+                                for (const auto& pd : lab->properties) {
+                                    if (pd.name == ra.property_name) {
+                                        pid = pd.id;
+                                        break;
+                                    }
+                                }
+                                if (pid == UINT16_MAX)
+                                    continue;
+                                auto props_opt = co_await async_data_.getVertexProperties(vid, lid);
+                                if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
+                                    continue;
+                                const auto& candidate = (*props_opt)[pid].value();
+                                if (found_value.has_value()) {
+                                    if (!(found_value.value() == candidate)) {
+                                        conflict = true;
+                                        break;
+                                    }
+                                } else {
+                                    found_value = candidate;
+                                }
+                            }
+                            if (conflict) {
+                                spdlog::warn("Index '{}' weak accessor '{}' has conflicting values on vertex {}",
+                                             stmt.index_name, ra.property_name, vid);
+                                break;
+                            }
+                            if (!found_value.has_value()) {
+                                allPresent = false;
+                                break;
+                            }
+                            values.push_back(found_value.value());
+                        }
+                    }
+
+                    if (conflict) {
+                        hasConflict = true;
+                        break;
+                    }
+                    if (!allPresent)
+                        continue;
+
+                    if (stmt.unique) {
+                        bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                        if (!constraint_ok) {
+                            spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
+                                         stmt.index_name, vid);
+                            hasConflict = true;
+                            break;
+                        }
+                    }
+                    co_await async_data_.insertIndexEntry(table, values, vid);
+                }
+                if (hasConflict)
+                    break;
+            }
+        } // gen destroyed before commit
+
+        // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
+        // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
+        const bool committed = co_await async_data_.commitTran(txn);
+        if (!committed) {
+            co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                       "Index backfill transaction failed to commit (index left in ERROR, not "
+                                       "ONLINE); see the server log for the WiredTiger error"};
+        }
+    }
+
+    if (hasConflict) {
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                   "Index creation failed: conflicting values or duplicate values during backfill"};
+    }
+    co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
+}
+
+folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlStatement stmt, std::string table,
+                                                                    EdgeLabelId edge_label_id,
+                                                                    std::vector<uint16_t> prop_ids) {
+    // 边索引回填 + 提交（**不落状态**，理由同顶点版本）。
+    const auto& schema = async_meta_.schema();
+    bool hasConflict = false;
+    {
+        GraphTxnHandle txn = co_await async_data_.beginTran();
+        async_data_.setTransaction(txn);
+
+        {
+            auto gen = async_data_.scanEdgesByType(edge_label_id, std::nullopt, std::nullopt);
+            while (auto batch = co_await gen.next()) {
+                for (const auto& entry : *batch) {
+                    auto props_opt = co_await async_data_.getEdgeProperties(edge_label_id, entry.edge_id);
+                    // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
+                    // For now skip properties; index entries will be created when properties API is added
+                    if (!props_opt.has_value())
+                        continue;
+                    auto& props = *props_opt;
+                    // Collect all indexed property values; skip if any is missing
+                    std::vector<PropertyValue> values;
+                    bool allPresent = true;
+                    for (auto pid : prop_ids) {
+                        if (pid < props.size() && props[pid].has_value()) {
+                            values.push_back(props[pid].value());
+                        } else {
+                            allPresent = false;
+                            break;
+                        }
+                    }
+                    if (!allPresent)
+                        continue;
+
+                    if (stmt.unique) {
+                        bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                        if (!constraint_ok) {
+                            spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
+                                         stmt.index_name, entry.edge_id);
+                            hasConflict = true;
+                            break;
+                        }
+                    }
+                    auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
+                                                                     entry.seq, edge_label_id);
+                    co_await async_data_.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
+                }
+                if (hasConflict)
+                    break;
+            }
+        } // gen destroyed before commit
+
+        // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
+        // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
+        const bool committed = co_await async_data_.commitTran(txn);
+        if (!committed) {
+            co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                       "Index backfill transaction failed to commit (index left in ERROR, not "
+                                       "ONLINE); see the server log for the WiredTiger error"};
+        }
+    }
+
+    if (hasConflict) {
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                   "Unique edge index creation failed: duplicate values found during backfill"};
+    }
+    co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
+}
+
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {
     if (stmt.type == IndexDdlStatement::CREATE_VERTEX_INDEX) {
         auto label_def = co_await async_meta_.getLabelDef(stmt.label_name);
@@ -380,15 +560,9 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         }
 
         // Pre-resolve strong accessors to prop ids.
-        struct ResolvedAccessor {
-            bool is_strong;
-            LabelId source_label_id;
-            uint16_t source_prop_id;
-            std::string property_name;
-        };
-        std::vector<ResolvedAccessor> resolved;
+        std::vector<ResolvedIndexAccessor> resolved;
         for (const auto& acc : idx_def->accessors) {
-            ResolvedAccessor ra;
+            ResolvedIndexAccessor ra;
             ra.is_strong = acc.is_strong;
             ra.property_name = acc.property_name;
             ra.source_label_id = acc.source_label_id;
@@ -416,108 +590,11 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             resolved.push_back(std::move(ra));
         }
 
-        // Backfill.
-        bool hasConflict = false;
-        {
-            GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
-
-            {
-                auto gen = async_data_.scanVerticesByLabel(label_def->id);
-                while (auto batch = co_await gen.next()) {
-                    for (auto vid : *batch) {
-                        std::vector<PropertyValue> values;
-                        bool allPresent = true;
-                        bool conflict = false;
-
-                        auto vertex_labels = co_await async_data_.getVertexLabels(vid);
-                        for (const auto& ra : resolved) {
-                            if (ra.is_strong) {
-                                auto props_opt = co_await async_data_.getVertexProperties(vid, ra.source_label_id);
-                                if (!props_opt || ra.source_prop_id >= props_opt->size() ||
-                                    !(*props_opt)[ra.source_prop_id].has_value()) {
-                                    allPresent = false;
-                                    break;
-                                }
-                                values.push_back((*props_opt)[ra.source_prop_id].value());
-                            } else {
-                                std::optional<PropertyValue> found_value;
-                                for (LabelId lid : vertex_labels) {
-                                    auto lab = schema.getLabel(lid);
-                                    if (!lab)
-                                        continue;
-                                    uint16_t pid = UINT16_MAX;
-                                    for (const auto& pd : lab->properties) {
-                                        if (pd.name == ra.property_name) {
-                                            pid = pd.id;
-                                            break;
-                                        }
-                                    }
-                                    if (pid == UINT16_MAX)
-                                        continue;
-                                    auto props_opt = co_await async_data_.getVertexProperties(vid, lid);
-                                    if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
-                                        continue;
-                                    const auto& candidate = (*props_opt)[pid].value();
-                                    if (found_value.has_value()) {
-                                        if (!(found_value.value() == candidate)) {
-                                            conflict = true;
-                                            break;
-                                        }
-                                    } else {
-                                        found_value = candidate;
-                                    }
-                                }
-                                if (conflict) {
-                                    spdlog::warn("Index '{}' weak accessor '{}' has conflicting values on vertex {}",
-                                                 stmt.index_name, ra.property_name, vid);
-                                    break;
-                                }
-                                if (!found_value.has_value()) {
-                                    allPresent = false;
-                                    break;
-                                }
-                                values.push_back(found_value.value());
-                            }
-                        }
-
-                        if (conflict) {
-                            hasConflict = true;
-                            break;
-                        }
-                        if (!allPresent)
-                            continue;
-
-                        if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
-                            if (!constraint_ok) {
-                                spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
-                                             stmt.index_name, vid);
-                                hasConflict = true;
-                                break;
-                            }
-                        }
-                        co_await async_data_.insertIndexEntry(table, values, vid);
-                    }
-                    if (hasConflict)
-                        break;
-                }
-            } // gen destroyed before commit
-
-            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
-            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = co_await async_data_.commitTran(txn);
-            if (!committed) {
-                ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-                result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
-                               "see the server log for the WiredTiger error";
-                co_return;
-            }
-        }
-
-        if (hasConflict) {
+        // Backfill（已抽成协程：同一实现对同步路径与后台任务都可用）
+        IndexBuildResult build = co_await backfillVertexIndex(stmt, table, label_def->id, std::move(resolved));
+        if (build.outcome != IndexBuildOutcome::PUBLIC) {
             ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-            result.error = "Index creation failed: conflicting values or duplicate values during backfill";
+            result.error = build.error;
             co_return;
         }
 
@@ -572,67 +649,11 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         }
 
         // Backfill: scan existing edges and insert index entries
-        bool hasConflict = false;
-        {
-            GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
-
-            {
-                auto gen = async_data_.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
-                while (auto batch = co_await gen.next()) {
-                    for (const auto& entry : *batch) {
-                        auto props_opt = co_await async_data_.getEdgeProperties(edge_label_def->id, entry.edge_id);
-                        // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
-                        // For now skip properties; index entries will be created when properties API is added
-                        if (!props_opt.has_value())
-                            continue;
-                        auto& props = *props_opt;
-                        // Collect all indexed property values; skip if any is missing
-                        std::vector<PropertyValue> values;
-                        bool allPresent = true;
-                        for (auto pid : prop_ids) {
-                            if (pid < props.size() && props[pid].has_value()) {
-                                values.push_back(props[pid].value());
-                            } else {
-                                allPresent = false;
-                                break;
-                            }
-                        }
-                        if (!allPresent)
-                            continue;
-
-                        if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
-                            if (!constraint_ok) {
-                                spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
-                                             stmt.index_name, entry.edge_id);
-                                hasConflict = true;
-                                break;
-                            }
-                        }
-                        auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
-                                                                         entry.seq, edge_label_def->id);
-                        co_await async_data_.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
-                    }
-                    if (hasConflict)
-                        break;
-                }
-            } // gen destroyed before commit
-
-            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
-            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = co_await async_data_.commitTran(txn);
-            if (!committed) {
-                ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-                result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
-                               "see the server log for the WiredTiger error";
-                co_return;
-            }
-        }
-
-        if (hasConflict) {
+        // Backfill（已抽成协程）
+        IndexBuildResult build = co_await backfillEdgeIndex(stmt, table, edge_label_def->id, prop_ids);
+        if (build.outcome != IndexBuildOutcome::PUBLIC) {
             ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-            result.error = "Unique edge index creation failed: duplicate values found during backfill";
+            result.error = build.error;
             co_return;
         }
 

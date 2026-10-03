@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace eugraph {
@@ -92,6 +93,18 @@ inline bool indexPlannerUsable(IndexState durable) {
     st.durable = durable;
     return st.plannerUsable();
 }
+
+/// 构建任务的最终判定（相位机产出；纯数据类型，供各层共用）
+enum class IndexBuildOutcome {
+    PUBLIC,
+    ERROR,
+    CANCELLED
+};
+
+struct IndexBuildResult {
+    IndexBuildOutcome outcome = IndexBuildOutcome::ERROR;
+    std::string error; ///< outcome == ERROR 时的原因（写日志/索引状态）
+};
 
 /// 索引句柄：**只持 `shared_ptr`**。
 /// 语义：① 句柄存活 ⇒ 对象不会被释放（DROP 不会悬空）；② `acquire()` 在 pin 之后**复查可见性**，

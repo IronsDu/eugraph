@@ -9,6 +9,8 @@
 ///   4. **FINALIZE 是唯一分界线**（I3）：关闸 + 排空 + 重放最后一批 + 三项校验都在这一步内完成。
 ///
 /// 无裸指针：全部回调为 `std::function`，结果按值返回。
+#include "common/types/index_state.hpp"
+
 #include <functional>
 #include <string>
 #include <utility>
