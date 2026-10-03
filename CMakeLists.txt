@@ -496,6 +496,15 @@ if(EUGRAPH_BUILD_TESTS)
     add_executable(numa_topology_tests tests/common/numa_topology_test.cpp)
     # 索引两维状态模型与句柄所有权（纯类型/谓词，无需服务端）
     add_executable(index_runtime_state_tests tests/test_index_runtime_state.cpp)
+    # 索引构建调度器（FIFO + 可配并发度 + 取消；注入假运行器 ⇒ 确定性测试）
+    add_executable(index_build_scheduler_tests tests/test_index_build_scheduler.cpp)
+    target_include_directories(index_build_scheduler_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_scheduler_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+    gtest_add_tests(TARGET index_build_scheduler_tests)
+
     target_include_directories(index_runtime_state_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(index_runtime_state_tests PRIVATE
         GTest::gtest
