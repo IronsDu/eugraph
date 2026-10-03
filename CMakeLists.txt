@@ -500,6 +500,16 @@ if(EUGRAPH_BUILD_TESTS)
     add_executable(index_build_scheduler_tests tests/test_index_build_scheduler.cpp)
     # 索引构建相位机（相位顺序 / 多轮追赶 / 失败绝不 PUBLIC / 阶段边界取消）
     add_executable(index_build_task_tests tests/test_index_build_task.cpp)
+    # 每图构建服务（发布结果/异常兜底/幂等/取消排队/关图编排）
+    add_executable(index_build_service_tests tests/test_index_build_service.cpp)
+    target_include_directories(index_build_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_service_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        pthread
+    )
+    gtest_add_tests(TARGET index_build_service_tests)
+
     target_include_directories(index_build_task_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(index_build_task_tests PRIVATE
         GTest::gtest
