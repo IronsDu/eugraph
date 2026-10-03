@@ -1126,8 +1126,11 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                                      std::move(composite_start), std::move(composite_end), std::move(output_types));
         }
 
+        // 必须发布**真实的槽布局**（父算子用 getColumnIndex(slot) 解析变量所在列；空布局 ⇒ -1 ⇒ 求值为 NULL），
+        // 并经 ProjectionExtract 收尾（把 lowering 产生的匿名 PE 列物化出来）。
+        TupleSlotLayout slot_layout = makeSlotLayout(output_schema, ctx);
         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
-                                              std::move(result_output_types), TupleSlotLayout{}};
+                                              std::move(result_output_types), std::move(slot_layout)};
         plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
         return plan_result;
     }
@@ -1236,8 +1239,14 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
                 std::move(output_types), store, ctx.edge_label_defs);
         }
 
-        return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types),
-                                  TupleSlotLayout{}};
+        // 与顶点分支一致：必须经过 ProjectionExtract 收尾。
+        // 谓词/投影被 lowering 成**匿名 PE 列**（如槽 2147483649），若这里直接返回，父算子解析该槽失败(-1)
+        // ⇒ 求值为 NULL ⇒ `count(r)`/`RETURN r`/`id(r)` 静默为空（P0，见设计文档 §17）。
+        TupleSlotLayout slot_layout = makeSlotLayout(output_schema, ctx);
+        auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                              std::move(result_output_types), std::move(slot_layout)};
+        plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+        return plan_result;
     }
     return std::nullopt;
 }

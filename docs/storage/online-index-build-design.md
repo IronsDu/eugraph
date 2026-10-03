@@ -816,3 +816,33 @@ state == PUBLIC  ⟹  基础扫描已完成 ∧ delta 已逻辑清空 ∧ 唯一
 3. 以**统一契约**修正（所有算子对"变量 → 输出列"的声明与写入必须逐位一致），并覆盖该算子 6 种绑定形状；
 4. 复跑本节的 5 个判别查询作为验收判据。
 
+### 17.2 根因确认与修复（本轮完成其一，并暴露第二个缺陷）
+
+**根因（已确认并修复）**：规划器在**边索引扫描**分支上**漏了一步收尾**——
+顶点分支在返回前会调用 `dispatchProjectionExtract(...)`，而边分支**直接返回**。
+谓词/投影被 lowering 成**匿名 PE 列**（实测槽 `2147483649`），父算子解析该槽时
+`TupleSlotLayout::getColumnIndex()` 返回 **-1**（证据：求值器观测 `槽解析失败(-1) slot=2147483649 layout_size=3`）
+⇒ 求值为 NULL ⇒ `count(r)` / `RETURN r` / `id(r)` 全空。
+
+**修复**（`src/query/physical_plan/physical_planner.cpp`，两处）：
+1. 边索引分支补 `dispatchProjectionExtract(...)`（与顶点分支一致）；
+2. 两处索引扫描分支都不再返回**空 `TupleSlotLayout{}`**，改为 `makeSlotLayout(output_schema, ctx)`
+   —— 发布真实槽布局是算子契约（空布局 ⇒ 父算子解析必失败）。
+
+**修复后验收（sf0.1 实测）**：
+
+| 查询 | 修复前 | 修复后 |
+|---|---|---|
+| `RETURN r LIMIT 1`（走边索引） | `(None,)` ✗ | **真实关系**（含 `creationDate` 属性）✓ |
+| `WHERE r.creationDate = 1334989271388 RETURN count(r)` | 0 ✗ | **1** ✓ |
+| `count(r)` vs `count(*)`（同条件） | 0 / 1024 ✗ | **1024 / 1024** ✓ 自洽 |
+| `count(r.creationDate)` | 0 ✗ | 1024 ✓ |
+
+**同时暴露的第二个缺陷（未修）**：范围扫描只返回 **1024 行**，而 `BATCH` 常量恰为 **1024**
+⇒ 异步边索引扫描的**分批续扫（pagination）失效**：`scanEdgesByIndexRange` 在批次满时让回调返回 false
+（停止本批），下一轮却**未能从上次位置继续**（既未续扫也未正确终止），最终只交付一批。
+**影响**：任何走边索引且结果 > 1024 行的查询**静默少结果**（本例 109,440 → 1024）。
+**下一步**：修 `async_graph_data_store.hpp` 的 `scanEdgesByIndex*`（含 Composite/Range 与**顶点索引的同类实现**）
+的分批续扫——用**游标位置**（key 续扫或 `set_key` 定位）而非"重新扫描 + 满批即停"；
+并以"结果 > 2×BATCH 的查询"为回归判据（先确认其当前失败）。
+
