@@ -494,6 +494,15 @@ if(EUGRAPH_BUILD_TESTS)
     gtest_add_tests(TARGET eugraph_tests)
     # 单元测试：NUMA 拓扑解析与节点归属（纯函数，无需 libnuma / NUMA 硬件）
     add_executable(numa_topology_tests tests/common/numa_topology_test.cpp)
+    # 索引两维状态模型与句柄所有权（纯类型/谓词，无需服务端）
+    add_executable(index_runtime_state_tests tests/test_index_runtime_state.cpp)
+    target_include_directories(index_runtime_state_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_runtime_state_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+    gtest_add_tests(TARGET index_runtime_state_tests)
+
     target_include_directories(numa_topology_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME numa_topology_tests COMMAND numa_topology_tests)
 
