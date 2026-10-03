@@ -676,3 +676,63 @@ state == PUBLIC  ⟹  基础扫描已完成 ∧ delta 已逻辑清空 ∧ 唯一
 | 唯一索引严格模式 | **一期不做** | 工作流 A（先建索引→PUBLIC→再装载）已覆盖主场景；事后补建走 `FINALIZING` 校验失败即可 |
 | `PENDING_PURGE` 触发 | **unpin RAII 回调（零延迟）+ 10s 定时兜底** | 回调保证及时；定时任务兜住"计数泄漏"这类异常 |
 | 显式等待接口 | **优先 `CALL db.awaitIndex(name, timeout_ms)`**；`WAIT` 关键字作为后续可选 | 存储过程不改语法（兼容性风险低），对 CI/运维脚本也友好 |
+
+## 16. P1-④ 接入清单（把构建服务接进真实 DDL 路径；逐条可执行）
+
+> 现状（已完成，均在测试覆盖下，**尚未被生产路径包含**）：
+> `src/common/types/index_state.hpp`（两维状态 + `IndexHandle`）、
+> `src/storage/index/index_build_scheduler.hpp`（FIFO + 可配并发度 + 取消）、
+> `src/storage/index/index_build_task.hpp`（相位机）、
+> `src/storage/index/index_build_service.hpp`（每图服务：调度 + 相位机 + 发布 + 关图编排）。
+> 配套单测：`index_runtime_state_tests` 7、`index_build_scheduler_tests` 7、`index_build_task_tests` 6、
+> `index_build_service_tests` 6。
+
+**步骤 1：把回填抽成可复用的协程（行为不变）**
+
+* 位置：`src/query/executor/query_executor.cpp` 的 `CREATE INDEX` 分支（顶点回填与边回填各一段）。
+* 抽成 `folly::coro::Task<IndexBuildResult> backfillVertexIndex(...)` / `backfillEdgeIndex(...)`，
+  参数为当前局部量（`table`、`label_id`、`resolved`、`unique`、`index_name`）；
+  内部用 `IndexBuildTask::run()` 组织相位：`scan_base` = 现有扫描循环、`catch_up_round` = 首期返回 `false`
+  （P2 落变更表后才变真追赶）、`finalize_gate` = 现有"提交 + 校验"、`validate` = 三项校验；
+  取消令牌取 `IndexBuildService::isCancelled(index_id)`。
+* **判据**：`index_e2e_tests` 53/53 不回归（此步纯重构，行为应逐位一致）。
+
+**步骤 2：`GraphInstance` 持有服务，并固定析构顺序**
+
+* `src/storage/graph_manager.hpp`：在 `executor` **之后**声明
+  `std::unique_ptr<IndexBuildService> index_builds;`
+  ⇒ 反向析构顺序使其**先于** executor/async 存储析构 ⇒ 任务在 store 还活着时排空（**H17 的根治**）。
+* `src/storage/graph_manager.cpp:267` 附近（构造 executor 处）构造服务：
+  `runner` = `[inst = instance.get()](uint64_t id) { return folly::coro::blockingWait(inst->executor->backfillIndex(id)); }`；
+  `publisher` = 把 `PUBLIC`/`ERROR` 落到 meta（`updateIndexState`）+ 记日志（`CANCELLED` 只记日志）。
+* `GraphManager::close()` / `dropGraph()`：**先 `inst->index_builds->shutdown()` 再 `closeConnection()`**
+  （顺序错即 use-after-close）。
+
+**步骤 3：`CREATE INDEX` 异步化**
+
+* 建定义（`WRITE_ONLY`）后 `index_builds->submit(index_id, name)` ⇒ **立即返回**
+  `{index, state: BUILDING}`（`result.rows` 带状态，便于脚本判断）。
+* 若服务不可用（例如极小化构建下未装配），**回退到同步路径**并打印一次警告 ⇒ 保证任何构建都能工作。
+
+**步骤 4：`DROP INDEX` 与可观测**
+
+* `DROP` 命中正在构建的索引 ⇒ `index_builds->cancel(index_id)`（排队中丢弃；运行中由相位机在阶段边界察觉）
+  ⇒ `BuildState=ERROR` ⇒ `Lifecycle=DROPPING`（§7.2 两阶段）。
+* `SHOW INDEXES` 增加列：`state`（`BUILDING`/`FINALIZING`/`PUBLIC`/`ERROR`）、`phase`、`progress`、
+  `queued`/`running`（来自服务快照）。
+
+**步骤 5：验证（一个都不能省）**
+
+| 判据 | 方法 |
+|---|---|
+| 异步返回 | `CREATE INDEX` 立即返回且状态 `BUILDING`；构建中 `SHOW INDEXES` 可见 |
+| 构建期可写 | 构建期间持续写入 ⇒ `PUBLIC` 后"索引查询 == 全表扫+过滤"**逐行比对** |
+| 并发度受控 | 并发提交 N 个 `CREATE INDEX` ⇒ 在跑数 ≤ 配置值、排队 FIFO |
+| `DROP` 取消 | 构建中 `DROP` ⇒ 任务在阶段边界退出、无 use-after-close、索引终态非 `PUBLIC` |
+| 关图顺序 | 构建中 `dropGraph` ⇒ 无崩溃（历史同类缺陷：H17） |
+| 失败不 `PUBLIC` | 注入校验失败/唯一冲突 ⇒ 索引 `ERROR`，绝不 `PUBLIC` |
+| 回归 | `index_e2e_tests`、`index_store_tests`、`eugraph TCK`、**ASan 闸门** |
+
+**为什么必须一起落地**：步骤 2/3/4 互为前提——只加服务不提交任务是死代码；只提交任务不固定析构顺序
+会在关图时 use-after-close；只异步化不接 `cancel` 则 `DROP` 无法取消。因此 P1-④ 作为**一个提交**完成，
+并附上表的验证。
