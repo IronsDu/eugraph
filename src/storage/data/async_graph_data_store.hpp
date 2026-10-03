@@ -692,25 +692,31 @@ public:
         auto txn = txn_;
         std::string table = eidxTable(label_id, prop_id);
         auto val = value;
+        // 续扫位置：上一批最后一个键。缺了它每批都会从头重扫、满批即停 ⇒ >1 批的结果被静默截断。
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &val, &batch]() {
-                store_.scanIndexEqualityWithValue(txn, table, val, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &val, &batch, &last_key, &next_key]() {
+                store_.scanIndexEqualityWithValue(
+                    txn, table, val,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
-            if (batch.empty()) {
+            if (batch.empty())
                 co_return;
-            }
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH) {
-                co_return;
-            }
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 
@@ -721,23 +727,31 @@ public:
         auto txn = txn_;
         std::string table = eidxCompositeTable(label_id, prop_ids);
         auto vals = values;
+        // 续扫位置：上一批最后一个键（缺了它每批从头重扫 ⇒ >1 批结果被静默截断）
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
-                store_.scanIndexEqualityWithValue(txn, table, vals, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch, &last_key, &next_key]() {
+                store_.scanIndexEqualityWithValue(
+                    txn, table, vals,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
             if (batch.empty())
                 co_return;
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 
@@ -749,23 +763,31 @@ public:
         std::string table = eidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
+        // 续扫位置：上一批最后一个键（缺了它每批从头重扫 ⇒ >1 批结果被静默截断）
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch, &last_key, &next_key]() {
+                store_.scanIndexRangeWithValue(
+                    txn, table, s, e,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
             if (batch.empty())
                 co_return;
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 
@@ -778,23 +800,31 @@ public:
         std::string table = eidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
+        // 续扫位置：上一批最后一个键（缺了它每批从头重扫 ⇒ >1 批结果被静默截断）
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch, &last_key, &next_key]() {
+                store_.scanIndexRangeWithValue(
+                    txn, table, s, e,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
             if (batch.empty())
                 co_return;
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 

@@ -1391,9 +1391,11 @@ void SyncGraphDataStore::scanIndexEqualityWithValue(GraphTxnHandle txn, const st
     if (!cursor)
         return;
     auto* c = cursor.get();
-    if (!positionIndexCursor(c, start_after))
-        return;
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
+    // 首批发起时必须**定位到前缀起点**（reset+next 会从表首开始，前缀检查会立刻失败 ⇒ 等值查询返回 0）；
+    // 续扫时定位到上一批最后的键之后。
+    if (!positionIndexCursor(c, start_after.empty() ? std::string_view(prefix) : start_after))
+        return;
     loopEqualityPrefix(c, prefix, start_after, last_key_out, callback);
 }
 
@@ -1406,9 +1408,9 @@ void SyncGraphDataStore::scanIndexEqualityWithValue(GraphTxnHandle txn, const st
     if (!cursor)
         return;
     auto* c = cursor.get();
-    if (!positionIndexCursor(c, start_after))
-        return;
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(values);
+    if (!positionIndexCursor(c, start_after.empty() ? std::string_view(prefix) : start_after))
+        return; // 同上：首批从前缀起点开始
     loopEqualityPrefix(c, prefix, start_after, last_key_out, callback);
 }
 
