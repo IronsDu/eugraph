@@ -2,6 +2,7 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
@@ -123,6 +124,7 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
             }
         }
         // No variable bound: nothing to write, the planner never produces this shape.
+        if (chunk.count > 0) {}
         if (chunk.count > 0) {
             co_yield std::move(chunk);
         }

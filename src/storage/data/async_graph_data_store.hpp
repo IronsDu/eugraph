@@ -704,11 +704,13 @@ public:
                     return batch.size() < BATCH;
                 });
             });
-            if (batch.empty())
+            if (batch.empty()) {
                 co_return;
+            }
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
+            if (batch.size() < BATCH) {
                 co_return;
+            }
         }
     }
 

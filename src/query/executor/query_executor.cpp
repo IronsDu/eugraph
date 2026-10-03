@@ -442,8 +442,8 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlS
 }
 
 folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlStatement stmt, std::string table,
-                                                                    EdgeLabelId edge_label_id,
-                                                                    std::vector<uint16_t> prop_ids) {
+                                                                     EdgeLabelId edge_label_id,
+                                                                     std::vector<uint16_t> prop_ids) {
     // 边索引回填 + 提交（**不落状态**，理由同顶点版本）。
     const auto& schema = async_meta_.schema();
     bool hasConflict = false;
@@ -641,7 +641,11 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             co_return;
         }
 
-        auto table = eidxCompositeTable(edge_label_def->id, prop_ids);
+        // 表名与写入/维护/扫描三处保持同一写法（都按属性个数选择）。
+        // 注意：单属性时 eidxCompositeTable(label, {p}) 与 eidxTable(label, p) **生成同一个名字**
+        // （均为 table:eidx_<label>_<p>），故本处并非"表名不一致"缺陷的修复点（曾误判，已更正）。
+        auto table = prop_ids.size() == 1 ? eidxTable(edge_label_def->id, prop_ids[0])
+                                          : eidxCompositeTable(edge_label_def->id, prop_ids);
         ok = co_await async_data_.createIndex(table);
         if (!ok) {
             result.error = "Failed to create edge index storage table";
