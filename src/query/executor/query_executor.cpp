@@ -345,6 +345,7 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlS
     // 弱 accessor 需要按属性名在各标签里查 prop id ⇒ 取当前 schema（构建与模式 DDL 互斥，§8）。
     const auto& schema = async_meta_.schema();
     bool hasConflict = false;
+    bool cancelled_midway = false;
     {
         GraphTxnHandle txn = co_await async_data_.beginTran();
         async_data_.setTransaction(txn);
@@ -352,6 +353,10 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlS
         {
             auto gen = async_data_.scanVerticesByLabel(label_id);
             while (auto batch = co_await gen.next()) {
+                if (cancelled && cancelled()) {
+                    cancelled_midway = true;
+                    break; // 顶点侧原先没有取消检查（补齐）
+                }
                 for (auto vid : *batch) {
                     std::vector<PropertyValue> values;
                     bool allPresent = true;
@@ -431,6 +436,13 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlS
             }
         } // gen destroyed before commit
 
+        if (cancelled_midway) {
+            // **显式同步回滚**：只置取消位就返回会让索引表仍被本会话占用 ⇒ DROP 删表失败
+            // （"Device or resource busy"）。同步回滚确保任务退出时表已释放。
+            async_data_.rollbackTranNow(txn);
+            co_return IndexBuildResult{IndexBuildOutcome::CANCELLED, "cancelled during backfill"};
+        }
+
         // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
         // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
         const bool committed = co_await async_data_.commitTran(txn);
@@ -455,6 +467,7 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlSta
     // 边索引回填 + 提交（**不落状态**，理由同顶点版本）。
     const auto& schema = async_meta_.schema();
     bool hasConflict = false;
+    bool cancelled_midway = false;
     {
         GraphTxnHandle txn = co_await async_data_.beginTran();
         async_data_.setTransaction(txn);
@@ -462,8 +475,10 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlSta
         {
             auto gen = async_data_.scanEdgesByType(edge_label_id, std::nullopt, std::nullopt);
             while (auto batch = co_await gen.next()) {
-                if (cancelled && cancelled())
-                    co_return IndexBuildResult{IndexBuildOutcome::CANCELLED, "cancelled during backfill"};
+                if (cancelled && cancelled()) {
+                    cancelled_midway = true;
+                    break; // 跳出扫描：先让 gen 析构，再显式回滚（见提交前）
+                }
                 for (const auto& entry : *batch) {
                     auto props_opt = co_await async_data_.getEdgeProperties(edge_label_id, entry.edge_id);
                     // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
@@ -502,6 +517,13 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlSta
                     break;
             }
         } // gen destroyed before commit
+
+        if (cancelled_midway) {
+            // **显式同步回滚**：只置取消位就返回会让索引表仍被本会话占用 ⇒ DROP 删表失败
+            // （"Device or resource busy"）。同步回滚确保任务退出时表已释放。
+            async_data_.rollbackTranNow(txn);
+            co_return IndexBuildResult{IndexBuildOutcome::CANCELLED, "cancelled during backfill"};
+        }
 
         // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
         // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。

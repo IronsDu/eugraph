@@ -1053,3 +1053,26 @@ DROP INDEX idx_cancel3                                          → dropIndex: f
 至此 P1-④ 的"异步 + 可取消 + 关图可排空 + ASan 干净"四项验收均达成
 （`DROP` 在**极短窗口**内仍可能返回"表被占用"的明确错误并**保留定义**——安全失败，不崩不坏）。
 
+### 19.3 取消收尾完成：`DROP` 现在**总是成功**（不再是"安全失败"）
+
+**做法**（§19.1 遗留问题的根因修复）：
+1. 两个回填协程的**逐批取消检查**改为 `cancelled_midway = true; break;`（跳出扫描 ⇒ 让生成器先析构）；
+2. **提交前**插入显式**同步回滚**：`async_data_.rollbackTranNow(txn)` ⇒ 任务退出时索引表**已释放**
+   （此前仅靠协程帧析构，释放时机不确定 ⇒ DROP 撞上"Device or resource busy"）；
+3. 顺带补齐：**顶点回填此前没有取消检查**（只有边侧有），现已补上。
+
+**实测（release，三种标签连测）**：
+
+| # | 标签 | 建索引 | 立即 `DROP` |
+|---|---|---|---|
+| 1 | Comment | `Index created (building)` | **✓ 成功** |
+| 2 | Message | `Index created (building)` | **✓ 成功** |
+| 3 | Person | `Index created (building)` | **✓ 成功** |
+
+日志中 **`Device or resource busy` 0 次、崩溃/Signal 0 次**；服务健康（286,744 点 / 13 索引）。
+
+**回归**：release 与 **ASan** 双份通过 —— `query_executor_tests` 573/573、`index_e2e_tests` 55/55、
+`index_store_tests` 14/14，ASan 报告 0。
+
+⇒ 至此"构建中 `DROP`"从"可能崩溃（§19.1）→ 安全失败（§19.1 修复）→ **总是成功**（本节）"三阶段收敛完毕。
+
