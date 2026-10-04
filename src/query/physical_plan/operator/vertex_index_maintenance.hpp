@@ -139,104 +139,104 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
 
     for (const auto& [filter_label, props] : label_props) {
         auto def_it = label_defs.find(filter_label);
-        if (def_it == label_defs.end())
-            continue;
-        for (const auto& idx : def_it->second.indexes) {
-            if (!indexWriteMaintained(idx.state))
-                continue;
-            if (idx.index_id == 0)
-                continue;
+        if (def_it == label_defs.end()) {
+            for (const auto& idx : def_it->second.indexes) {
+                if (!indexWriteMaintained(idx.state))
+                    continue;
+                if (idx.index_id == 0)
+                    continue;
 
-            std::vector<PropertyValue> values;
-            bool all_present = true;
-            for (const auto& acc : idx.accessors) {
-                if (acc.is_strong) {
-                    const Properties* src = props_for(acc.source_label_id);
-                    uint16_t pid = UINT16_MAX;
-                    auto sit = label_defs.find(acc.source_label_id);
-                    if (sit != label_defs.end()) {
-                        for (const auto& pd : sit->second.properties)
-                            if (pd.name == acc.property_name) {
-                                pid = pd.id;
-                                break;
-                            }
-                    }
-                    if (!src || pid == UINT16_MAX || pid >= src->size() || !(*src)[pid].has_value()) {
-                        all_present = false;
-                        break;
-                    }
-                    values.push_back((*src)[pid].value());
-                } else {
-                    std::optional<PropertyValue> found;
-                    bool conflict = false;
-                    for (const auto& [lid, lp] : label_props) {
-                        auto lit = label_defs.find(lid);
-                        if (lit == label_defs.end())
-                            continue;
+                std::vector<PropertyValue> values;
+                bool all_present = true;
+                for (const auto& acc : idx.accessors) {
+                    if (acc.is_strong) {
+                        const Properties* src = props_for(acc.source_label_id);
                         uint16_t pid = UINT16_MAX;
-                        for (const auto& pd : lit->second.properties)
-                            if (pd.name == acc.property_name) {
-                                pid = pd.id;
-                                break;
-                            }
-                        if (pid == UINT16_MAX || pid >= lp.size() || !lp[pid].has_value())
-                            continue;
-                        if (found.has_value()) {
-                            if (!(found.value() == lp[pid].value())) {
-                                conflict = true;
-                                break;
-                            }
-                        } else {
-                            found = lp[pid].value();
+                        auto sit = label_defs.find(acc.source_label_id);
+                        if (sit != label_defs.end()) {
+                            for (const auto& pd : sit->second.properties)
+                                if (pd.name == acc.property_name) {
+                                    pid = pd.id;
+                                    break;
+                                }
                         }
+                        if (!src || pid == UINT16_MAX || pid >= src->size() || !(*src)[pid].has_value()) {
+                            all_present = false;
+                            break;
+                        }
+                        values.push_back((*src)[pid].value());
+                    } else {
+                        std::optional<PropertyValue> found;
+                        bool conflict = false;
+                        for (const auto& [lid, lp] : label_props) {
+                            auto lit = label_defs.find(lid);
+                            if (lit == label_defs.end())
+                                continue;
+                            uint16_t pid = UINT16_MAX;
+                            for (const auto& pd : lit->second.properties)
+                                if (pd.name == acc.property_name) {
+                                    pid = pd.id;
+                                    break;
+                                }
+                            if (pid == UINT16_MAX || pid >= lp.size() || !lp[pid].has_value())
+                                continue;
+                            if (found.has_value()) {
+                                if (!(found.value() == lp[pid].value())) {
+                                    conflict = true;
+                                    break;
+                                }
+                            } else {
+                                found = lp[pid].value();
+                            }
+                        }
+                        if (conflict || !found.has_value()) {
+                            all_present = false;
+                            break;
+                        }
+                        values.push_back(std::move(*found));
                     }
-                    if (conflict || !found.has_value()) {
-                        all_present = false;
-                        break;
-                    }
-                    values.push_back(std::move(*found));
+                }
+                if (all_present)
+                    entries.push_back(VertexIndexEntry{
+                        idx.state == IndexState::WRITE_ONLY ? idxDeltaTable(idx.index_id) : vidxTableById(idx.index_id),
+                        std::move(values), vid, idx.unique, idx.state == IndexState::WRITE_ONLY});
+            }
+        }
+        return entries;
+    }
+
+    inline folly::coro::Task<void> deleteVertexIndexEntries(IAsyncGraphDataStore & store,
+                                                            const std::vector<VertexIndexEntry>& entries) {
+        for (const auto& entry : entries)
+            if (entry.to_delta)
+                co_await store.putDeltaEntry(entry.table, entry.values, entry.vid, /*is_delete=*/true);
+            else
+                co_await store.deleteIndexEntry(entry.table, entry.values, entry.vid);
+    }
+
+    inline folly::coro::Task<bool> insertVertexIndexEntriesChecked(IAsyncGraphDataStore & store,
+                                                                   const std::vector<VertexIndexEntry>& entries) {
+        for (const auto& entry : entries) {
+            if (entry.unique) {
+                bool constraint_ok = co_await store.checkUniqueConstraint(entry.table, entry.values);
+                if (!constraint_ok) {
+                    spdlog::warn("Unique index constraint violated while maintaining index entry for vertex {}",
+                                 entry.vid);
+                    co_return false;
                 }
             }
-            if (all_present)
-                entries.push_back(VertexIndexEntry{
-                    idx.state == IndexState::WRITE_ONLY ? idxDeltaTable(idx.index_id) : vidxTableById(idx.index_id),
-                    std::move(values), vid, idx.unique, idx.state == IndexState::WRITE_ONLY});
+            if (entry.to_delta)
+                co_await store.putDeltaEntry(entry.table, entry.values, entry.vid, /*is_delete=*/false);
+            else
+                co_await store.insertIndexEntry(entry.table, entry.values, entry.vid);
         }
+        co_return true;
     }
-    return entries;
-}
 
-inline folly::coro::Task<void> deleteVertexIndexEntries(IAsyncGraphDataStore& store,
-                                                        const std::vector<VertexIndexEntry>& entries) {
-    for (const auto& entry : entries)
-        if (entry.to_delta)
-            co_await store.putDeltaEntry(entry.table, entry.values, entry.vid, /*is_delete=*/true);
-        else
-            co_await store.deleteIndexEntry(entry.table, entry.values, entry.vid);
-}
-
-inline folly::coro::Task<bool> insertVertexIndexEntriesChecked(IAsyncGraphDataStore& store,
-                                                               const std::vector<VertexIndexEntry>& entries) {
-    for (const auto& entry : entries) {
-        if (entry.unique) {
-            bool constraint_ok = co_await store.checkUniqueConstraint(entry.table, entry.values);
-            if (!constraint_ok) {
-                spdlog::warn("Unique index constraint violated while maintaining index entry for vertex {}", entry.vid);
-                co_return false;
-            }
-        }
-        if (entry.to_delta)
-            co_await store.putDeltaEntry(entry.table, entry.values, entry.vid, /*is_delete=*/false);
-        else
-            co_await store.insertIndexEntry(entry.table, entry.values, entry.vid);
+    inline folly::coro::Task<void> insertVertexIndexEntries(IAsyncGraphDataStore & store,
+                                                            const std::vector<VertexIndexEntry>& entries) {
+        (void)co_await insertVertexIndexEntriesChecked(store, entries);
     }
-    co_return true;
-}
-
-inline folly::coro::Task<void> insertVertexIndexEntries(IAsyncGraphDataStore& store,
-                                                        const std::vector<VertexIndexEntry>& entries) {
-    (void)co_await insertVertexIndexEntriesChecked(store, entries);
-}
 
 } // namespace compute
 } // namespace eugraph

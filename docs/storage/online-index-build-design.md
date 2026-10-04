@@ -1251,3 +1251,31 @@ P2（变更表）落地后，同一步还需**删除残留变更表**（§5.2 �
 "Failed to drop index storage table"（表仍被占用），导致该属性集再也建不了新索引（`duplicate name?`）。
 这与 §19.1/§19.3 的"先删表后删定义 + 取消并等待"属同一族问题，需确认占用的来源（是否为残留构建任务/未释放游标）。
 
+### 20.7 本轮定位进展与**当前最硬的阻塞项**
+
+**本轮确认的事实**：
+
+1. `CREATE (c:Comment {…})` 的索引写入路径是
+   `create_node_physical_op.cpp`（收集 `collectVertexIndexEntriesFromLabelProps` → 逐条 `insertIndexEntry`），
+   且**两个收集器都已接入分流**（`idx.state == WRITE_ONLY` ⇒ `idxDeltaTable(id)` + `to_delta=true`）；
+2. 该写入**忽略返回值**（`co_await store_.insertIndexEntry(...)` 未检查）——已改为检查并在失败时
+   `spdlog::error` + 让语句失败（不再有"行建了、索引没条目"的静默不一致）；
+3. 上一轮把该处收集改为读**实时 schema**（`meta_.schema().labels`）——**但判据仍未通过**，
+   且**尚未取得**"收集时是否看到新索引 / 写入是否成功"的观测（实验被下述阻塞项打断）。
+
+**当前最硬的阻塞项：部分索引**无法删除**，会永久占住其属性集**
+
+```
+DROP INDEX idx_r3b  →  Failed to drop index storage table（表仍被占用）
+CREATE INDEX <同名属性集>  →  Failed to create index (duplicate name?)
+```
+
+这与 §19.1/§19.3 属同一族（"占用未释放"），但**已排除**"取消不及时"这一成因（当前无构建在跑，
+服务端已重启过）。**必须先解决它**，否则：(a) 每次实验都要换属性/换名字；(b) 用户无法重建索引（可用性事故）。
+
+**下一步（按序）**：
+1. **查占用来源**：`DROP` 失败时打印 WT 错误 + 该表的打开句柄/会话（或检查是否存在**残留的构建任务/未关闭游标**）；
+   注意 §19.5 的启动恢复只把 `WRITE_ONLY` 置 `ERROR`，**并未清理**其表/变更表 ⇒ `ERROR` 态索引的表可能长期被占用；
+2. 解决后再取"收集/写入"观测，判定 P2 判据失败的最后一环；
+3. 之后补 §7.1 关闸，并复跑 P2 判据（顶点 + 边）。
+
