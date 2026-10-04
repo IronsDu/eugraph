@@ -1495,3 +1495,81 @@ TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
     std::printf("[scale] N=%d 索引命中=%zu（期望 %d）\n", N, hits, N);
     EXPECT_EQ(hits, static_cast<size_t>(N)) << "回填不完整";
 }
+
+// ==================== 回归：三处"静默错结果"修复（设计文档 §17 / §17.5 / §18.1）====================
+// 说明：这三个用例在缺陷存在时**必须失败**（已逐一确认过失败形态），否则等于没覆盖。
+
+/// 读取"单行单列 INT64"结果
+static int64_t scalarInt(const ExecutionResult& r) {
+    EXPECT_TRUE(r.error.empty()) << r.error;
+    EXPECT_EQ(r.rows.size(), 1u);
+    if (r.rows.empty())
+        return -1;
+    return std::get<int64_t>(r.rows[0][0]);
+}
+
+// §18.1：`IS NOT NULL` 推出的静态剪枝提示**只能收窄，不得覆盖显式标签**。
+// 复现条件：**另一个边标签也定义了同名属性**（提示=定义该属性的标签集合，会包含 LIKES）。
+// 缺陷形态：`MATCH ()-[r:KNOWS]->() WHERE r.since IS NOT NULL` 被拓宽成 "KNOWS 或 LIKES"，计数偏大。
+TEST_F(IndexE2ETest, IsNotNullOnAnonymousEdgeDoesNotWidenLabels) {
+    createLabel(env, "Person", {{0, "name", PropertyType::STRING, false, std::nullopt}});
+    createEdgeLabel(env, "KNOWS", {{0, "since", PropertyType::INT64, false, std::nullopt}});
+    createEdgeLabel(env, "LIKES", {{0, "since", PropertyType::INT64, false, std::nullopt}}); // 同名属性
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    ASSERT_TRUE(execSync(executor, "CREATE (a:Person {name:'a'}), (b:Person {name:'b'}), "
+                                   "(a)-[:KNOWS {since:1}]->(b), (a)-[:KNOWS {since:2}]->(b), "
+                                   "(a)-[:LIKES {since:3}]->(b), (a)-[:LIKES {since:4}]->(b), "
+                                   "(a)-[:LIKES {since:5}]->(b)")
+                    .error.empty());
+
+    const auto q = [&](const std::string& s) { return scalarInt(execSync(executor, s)); };
+    EXPECT_EQ(q("MATCH ()-[r:KNOWS]->() RETURN count(*)"), 2);                          // 基线
+    EXPECT_EQ(q("MATCH ()-[r:KNOWS]->() WHERE r.since IS NOT NULL RETURN count(*)"), 2) // 曾为 5
+        << "IS NOT NULL 的剪枝提示必须只收窄，不得覆盖显式标签";
+    EXPECT_EQ(q("MATCH ()-[r:KNOWS]->() WHERE NOT (r.since IS NULL) RETURN count(*)"), 2);
+    EXPECT_EQ(q("MATCH ()-[r:KNOWS]->() WHERE r.since > 0 RETURN count(*)"), 2);
+    EXPECT_EQ(q("MATCH ()-[r:LIKES]->() WHERE r.since IS NOT NULL RETURN count(*)"), 3);
+}
+
+// §17 / §17.5：边索引的**值可读性**与**查询层语义**回归。
+// 注意：小图上规划器未必选中边索引（代价模型），因此本用例断言的是**查询语义正确**；
+// 分批续扫（§17.5）与求值层物化（§17）的缺陷形态已由活体判据确认（109,440 行 vs 1024 行、count(r)=0），
+// 这里补的是"语义等价"这一层，防止回归时静默给错结果。
+TEST_F(IndexE2ETest, EdgeIndexQuerySemanticsMatchFullScan) {
+    constexpr int kEdges = 2100; // > 2×BATCH(1024)
+    createLabel(env, "Person", {{0, "name", PropertyType::STRING, false, std::nullopt}});
+    createEdgeLabel(env, "KNOWS", {{0, "since", PropertyType::INT64, false, std::nullopt}});
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    ASSERT_TRUE(execSync(executor, "CREATE (a:Person {name:'a'}), (b:Person {name:'b'})").error.empty());
+    for (int i = 0; i < kEdges; ++i) {
+        auto r = execSync(executor, "MATCH (a:Person {name:'a'}), (b:Person {name:'b'}) "
+                                    "CREATE (a)-[:KNOWS {since:" +
+                                        std::to_string(i) + "}]->(b)");
+        ASSERT_TRUE(r.error.empty()) << r.error;
+    }
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_k_since FOR ()-[r:KNOWS]-() ON (r.since)").error.empty());
+
+    // 独立探针：索引表确实已回填（与查询路径不同源）
+    auto edge_label = blockingWait(env.async_meta->getEdgeLabelDef("KNOWS"));
+    ASSERT_TRUE(edge_label.has_value());
+    const auto prop_id = edge_label->properties[0].id;
+    {
+        auto txn = env.data_store->beginTransaction();
+        size_t in_table = 0;
+        env.data_store->scanIndexRangeWithValue(txn, eidxTable(edge_label->id, prop_id), std::optional<PropertyValue>{},
+                                                std::optional<PropertyValue>{}, [&](uint64_t, std::string_view) {
+                                                    ++in_table;
+                                                    return true;
+                                                });
+        env.data_store->commitTransaction(txn);
+        EXPECT_EQ(in_table, static_cast<size_t>(kEdges)) << "索引表回填不完整";
+    }
+
+    const auto q = [&](const std::string& stmt) { return scalarInt(execSync(executor, stmt)); };
+    EXPECT_EQ(q("MATCH ()-[r:KNOWS]->() WHERE r.since >= 0 RETURN count(*)"), kEdges);
+    EXPECT_EQ(q("MATCH ()-[r:KNOWS]->() WHERE r.since >= 0 RETURN count(r)"), kEdges)
+        << "读边值失败（曾因未物化 EDGE_KEY 全为 NULL）";
+    EXPECT_EQ(q("MATCH ()-[r:KNOWS]->() WHERE r.since >= 0 RETURN count(r.since)"), kEdges);
+}
