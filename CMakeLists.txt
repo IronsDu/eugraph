@@ -502,6 +502,16 @@ if(EUGRAPH_BUILD_TESTS)
     add_executable(index_build_task_tests tests/test_index_build_task.cpp)
     # 每图构建服务（发布结果/异常兜底/幂等/取消排队/关图编排）
     add_executable(index_build_service_tests tests/test_index_build_service.cpp)
+    # 索引构建闸门（准入线性化 / 关闸等在飞 / RAII 释放）
+    add_executable(index_build_gate_tests tests/test_index_build_gate.cpp)
+    target_include_directories(index_build_gate_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_gate_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        pthread
+    )
+    gtest_add_tests(TARGET index_build_gate_tests)
+
     target_include_directories(index_build_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(index_build_service_tests PRIVATE
         GTest::gtest

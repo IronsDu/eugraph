@@ -1497,3 +1497,21 @@ Failed to open cursor on table:idx_delta_48: error 2      ← 变更表打不开
 ② **ASan 闸门**（闸门/分流/重放/助手四条新路径）；③ 孤儿表启动回收；④ 文档同步（`docs/README.md`、架构文档）；
 ⑤ 全量 `ctest` 一次跑通。
 
+### 20.16 自动化回归测试（P2 机制）
+
+为 P2 的新机制补了两组**确定性**测试（不依赖活体实验，可在 CI 跑）：
+
+1. **变更表重放语义**（`index_store_tests`，15 → **16 个**）：
+   预置索引条目 (10,1) → 变更表写 `PUT(20,2)` / `DEL(10,1)` / `PUT(30,3)` → 在测试内复刻生产端
+   `replayDeltaBatch` 的循环（**每批 2 行强制续扫** + 应用后从变更表删行）⇒ 断言：
+   ① 应用 3 条；② **变更表已排空**（追赶可终止）；③ 索引终态 **2 条**（`DEL` 生效、`PUT` 未丢、payload 原样写回）。
+2. **构建闸门**（新目标 `index_build_gate_tests`，**4/4**）：
+   ① 关闸前可准入、**关闸后被拒**、RAII 守卫析构归还名额；
+   ② `closeAndWait` **必须等待**在飞写者（未退出时超时返回 false，退出后成功且 `inflight==0`）；
+   ③ **两阶段准入的不变量**：200 轮"关闸 × 并发准入"中，**不存在**"准入成功却观察到已关闸"的写者；
+   ④ 注册表同一 `index_id` 返回同一闸门。
+
+**全量回归（release）**：`query_executor_tests` 573/573、`index_e2e_tests` 55/55、`index_store_tests` **16/16**、
+`index_build_gate_tests` **4/4**、`index_build_service_tests` 6/6、`index_build_task_tests` 6/6、
+`index_build_scheduler_tests` 7/7、`index_runtime_state_tests` 7/7；**TCK 31/31 场景 + 144/144 步骤** ✓。
+

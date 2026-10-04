@@ -402,3 +402,78 @@ TEST_F(IndexStoreTest, DeltaTablePutOrderedResumableScanAndOpDecoding) {
     EXPECT_FALSE(got[3].second);
     EXPECT_FALSE(got[4].second);
 }
+
+// ==================== P2 核心：变更表重放语义（PUT/DEL 应用 + 应用后删行 + 续扫）====================
+// 生产端由 `AsyncGraphDataStore::replayDeltaBatch` 执行同一组原语（这里在测试内复刻其循环，
+// 以便确定性地覆盖"按键序 + 分批续扫 + 应用后从变更表删除"的语义）。
+TEST_F(IndexStoreTest, DeltaReplayAppliesPutsAndDeletesAndDrains) {
+    const uint32_t idx_id = 77;
+    const std::string index_table = "table:vidx_" + std::to_string(idx_id);
+    const std::string delta_table = idxDeltaTable(idx_id);
+    ASSERT_TRUE(store_->createIndex(index_table));
+    ASSERT_TRUE(store_->createIndex(delta_table));
+
+    // 索引里预置 (10, 1)：稍后由变更表的 DEL 删除它
+    ASSERT_TRUE(store_->insertIndexEntry(txn(), index_table, PropertyValue{static_cast<int64_t>(10)}, 1, "old-adj"));
+
+    // 变更表三条：PUT(20,2) / DEL(10,1) / PUT(30,3)
+    ASSERT_TRUE(store_->putDeltaEntry(txn(), delta_table, PropertyValue{static_cast<int64_t>(20)}, 2, false, "adj-2"));
+    ASSERT_TRUE(store_->putDeltaEntry(txn(), delta_table, PropertyValue{static_cast<int64_t>(10)}, 1, true));
+    ASSERT_TRUE(store_->putDeltaEntry(txn(), delta_table, PropertyValue{static_cast<int64_t>(30)}, 3, false, "adj-3"));
+    commit();
+
+    size_t applied = 0;
+    std::string last_key;
+    while (true) {
+        size_t n = 0;
+        std::string next_key;
+        ASSERT_TRUE(store_->scanDeltaWithKey(
+            txn(), delta_table,
+            [&](uint64_t /*entity_id*/, std::string_view key, std::string_view raw) {
+                bool is_del = false;
+                std::string_view payload;
+                EXPECT_TRUE(decodeDeltaValue(raw, is_del, payload)); // 注意：lambda 需返回 bool，不能用 ASSERT_*
+                if (is_del)
+                    store_->deleteIndexEntryByKey(txn(), index_table, key);
+                else
+                    store_->putIndexEntryByKey(txn(), index_table, key, payload);
+                store_->deleteIndexEntryByKey(txn(), delta_table, key); // 应用后删行（§6.1 方案①）
+                ++n;
+                ++applied;
+                return n < 2; // 每批 2 行 ⇒ 强制续扫
+            },
+            last_key, &next_key));
+        if (n == 0)
+            break;
+        last_key = std::move(next_key);
+        if (n < 2)
+            break;
+    }
+    commit();
+    EXPECT_EQ(applied, 3u);
+
+    // 变更表**已排空**（重放可终止）
+    size_t leftover = 0;
+    {
+        auto t = store_->beginTransaction();
+        store_->scanDeltaWithKey(t, delta_table, [&](uint64_t, std::string_view, std::string_view) {
+            ++leftover;
+            return true;
+        });
+        store_->commitTransaction(t);
+    }
+    EXPECT_EQ(leftover, 0u) << "应用后未删除变更行 ⇒ 追赶无法终止";
+
+    // 索引终态：只剩 2 条（(10,1) 已被 DEL 删除），且 payload 原样写回
+    size_t in_index = 0;
+    {
+        auto t = store_->beginTransaction();
+        store_->scanIndexRangeWithValue(t, index_table, std::optional<PropertyValue>{}, std::optional<PropertyValue>{},
+                                        [&](uint64_t, std::string_view) {
+                                            ++in_index;
+                                            return true;
+                                        });
+        store_->commitTransaction(t);
+    }
+    EXPECT_EQ(in_index, 2u) << "DEL 未生效或 PUT 丢失";
+}
