@@ -814,9 +814,12 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
             if (!table_dropped) {
-                result.error =
-                    "Failed to drop index storage table: " + new_table + " (索引定义保持不变；稍后重试 DROP)";
-                co_return;
+                // **设计调整**：物理表暂时删不掉（实测：构建侧会话可能仍缓存表句柄）时**不再保留定义**——
+                // 否则该属性集**永久无法重建索引**（用户可见事故）。改为：定义照删（继续往下走），
+                // 表降级为**孤儿表**，由启动清理/后续清理回收。DROP 的语义是"索引不再存在"，
+                // 物理回收只是实现细节，不应阻塞语义。
+                spdlog::warn("dropIndex: 索引表 {} 暂时无法删除，降级为孤儿表（定义仍删除，可由启动清理回收）",
+                             new_table);
             }
         }
         // P2：连同变更表一起删（若存在；失败不致命，记日志即可——启动清理会兜底，§5.2）
