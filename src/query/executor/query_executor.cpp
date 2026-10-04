@@ -653,6 +653,9 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlSta
 }
 
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {
+    // 异步索引构建开关：会话已按线程隔离（AsyncGraphDataStore 的 txn 为 thread-local，§20.18 A）
+    // ⇒ 后台构建线程与查询线程不再共享 txn/session，可安全启用。
+    static constexpr bool kEnableAsyncIndexBuild = true;
     if (stmt.type == IndexDdlStatement::CREATE_VERTEX_INDEX) {
         auto label_def = co_await async_meta_.getLabelDef(stmt.label_name);
         if (!label_def.has_value()) {
@@ -744,7 +747,6 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         // ⇒ `session_dhandle` 损坏 + SIGSEGV（ASan 与 release 均复现，设计 §20.17）。
         // 强怀疑根因：后台任务与查询线程**共享 async store 的 `txn_`**。在改为"后台任务独立 txn/会话"前，
         // 只走**同步构建**以消除崩溃路径。
-        static constexpr bool kEnableAsyncIndexBuild = false;
         if (index_builds_ && kEnableAsyncIndexBuild) {
             auto job = [this, stmt, table, label_id = label_def->id, id = idx_def->index_id,
                         resolved = std::move(resolved)]() mutable {
@@ -842,7 +844,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
         // Backfill: scan existing edges and insert index entries
         // 同顶点分支：注入服务 ⇒ 后台异步构建并立即返回
-        if (index_builds_ && false) { // 同上：临时安全开关（后台构建暂时关闭，避免 §20.17 的会话竞态）
+        if (index_builds_ && kEnableAsyncIndexBuild) { // 同上：与顶点分支共用同一开关
             auto job = [this, stmt, table, elid = edge_label_def->id, id = idx_def_edge->index_id, prop_ids]() mutable {
                 return folly::coro::blockingWait(
                     backfillEdgeIndex(stmt, table, elid, std::move(prop_ids),
