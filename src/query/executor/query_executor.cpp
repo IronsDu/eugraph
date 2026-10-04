@@ -825,13 +825,14 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         if (!ok) {
             result.error = "Failed to create edge index storage table";
             co_return;
-
-            // P2：边索引的变更表（与索引同生命周期）
-            ok = co_await async_data_.createIndex(idxDeltaTable(idx_def_edge->index_id));
-            if (!ok) {
-                result.error = "Failed to create edge index delta table";
-                co_return;
-            }
+        }
+        // P2：边索引的变更表（与索引同生命周期）。
+        // **必须在上面 if 之外**——此前它被插到了 `co_return` 之后 ⇒ **死代码** ⇒ 边索引的变更表从未创建
+        // ⇒ 构建期分流写入变更表时 "Failed to open cursor … error 2" ⇒ 写入失败丢数据（设计 §20.14/§20.15）。
+        ok = co_await async_data_.createIndex(idxDeltaTable(idx_def_edge->index_id));
+        if (!ok) {
+            result.error = "Failed to create edge index delta table";
+            co_return;
         }
 
         // Backfill: scan existing edges and insert index entries
