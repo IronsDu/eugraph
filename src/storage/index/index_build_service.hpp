@@ -14,6 +14,7 @@
 #include "storage/index/index_build_scheduler.hpp"
 #include "storage/index/index_build_task.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -79,6 +80,20 @@ public:
     /// `DROP` 命中：取消该索引自己的任务（排队中丢弃；运行中由相位机在阶段边界察觉）。
     bool cancel(uint64_t index_id) {
         return scheduler_.cancel(index_id);
+    }
+
+    /// 取消并**等待任务真正退出**。`DROP` 删索引表之前**必须**调用：
+    /// 只置取消位就删表 ⇒ 回填仍持有该表 ⇒ 删表失败（"Device or resource busy"），
+    /// 且"定义已删、表仍在"的坏状态下继续 ⇒ **实测 SIGSEGV**（设计 H13/H17 同类竞态）。
+    bool cancelAndWait(uint64_t index_id, std::chrono::milliseconds timeout = std::chrono::milliseconds(10000)) {
+        scheduler_.cancel(index_id);
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (!isBuilding(index_id))
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return !isBuilding(index_id);
     }
 
     bool isCancelled(uint64_t index_id) const {

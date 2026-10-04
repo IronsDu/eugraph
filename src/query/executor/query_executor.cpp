@@ -338,7 +338,8 @@ void QueryExecutor::setIndexBuildService(std::shared_ptr<IndexBuildService> serv
 
 folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlStatement stmt, std::string table,
                                                                        LabelId label_id,
-                                                                       std::vector<ResolvedIndexAccessor> resolved) {
+                                                                       std::vector<ResolvedIndexAccessor> resolved,
+                                                                       std::function<bool()> cancelled) {
     // 顶点索引回填 + 提交。**不落状态**：由调用方（同步路径）或发布回调（后台路径）落，
     // 以保持"先提交数据、后翻状态"的两库顺序（设计 §7.3）。
     // 弱 accessor 需要按属性名在各标签里查 prop id ⇒ 取当前 schema（构建与模式 DDL 互斥，§8）。
@@ -449,7 +450,8 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlS
 
 folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlStatement stmt, std::string table,
                                                                      EdgeLabelId edge_label_id,
-                                                                     std::vector<uint16_t> prop_ids) {
+                                                                     std::vector<uint16_t> prop_ids,
+                                                                     std::function<bool()> cancelled) {
     // 边索引回填 + 提交（**不落状态**，理由同顶点版本）。
     const auto& schema = async_meta_.schema();
     bool hasConflict = false;
@@ -460,6 +462,8 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlSta
         {
             auto gen = async_data_.scanEdgesByType(edge_label_id, std::nullopt, std::nullopt);
             while (auto batch = co_await gen.next()) {
+                if (cancelled && cancelled())
+                    co_return IndexBuildResult{IndexBuildOutcome::CANCELLED, "cancelled during backfill"};
                 for (const auto& entry : *batch) {
                     auto props_opt = co_await async_data_.getEdgeProperties(edge_label_id, entry.edge_id);
                     // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
@@ -599,8 +603,11 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         // 注入了"每图构建服务" ⇒ 提交后台任务后**立即返回**（异步构建；状态由服务的发布回调落 PUBLIC/ERROR）。
         // 未注入（例如单测里的极小化装配）则走下面的同步路径，保证任何装配下都可用。
         if (index_builds_) {
-            auto job = [this, stmt, table, label_id = label_def->id, resolved = std::move(resolved)]() mutable {
-                return folly::coro::blockingWait(backfillVertexIndex(stmt, table, label_id, std::move(resolved)));
+            auto job = [this, stmt, table, label_id = label_def->id, id = idx_def->index_id,
+                        resolved = std::move(resolved)]() mutable {
+                return folly::coro::blockingWait(
+                    backfillVertexIndex(stmt, table, label_id, std::move(resolved),
+                                        [svc = index_builds_, id] { return svc->isCancelled(id); }));
             };
             if (index_builds_->submit(idx_def->index_id, stmt.index_name, std::move(job))) {
                 result.columns.push_back("result");
@@ -685,8 +692,10 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         // Backfill: scan existing edges and insert index entries
         // 同顶点分支：注入服务 ⇒ 后台异步构建并立即返回
         if (index_builds_) {
-            auto job = [this, stmt, table, elid = edge_label_def->id, prop_ids]() mutable {
-                return folly::coro::blockingWait(backfillEdgeIndex(stmt, table, elid, std::move(prop_ids)));
+            auto job = [this, stmt, table, elid = edge_label_def->id, id = idx_def_edge->index_id, prop_ids]() mutable {
+                return folly::coro::blockingWait(
+                    backfillEdgeIndex(stmt, table, elid, std::move(prop_ids),
+                                      [svc = index_builds_, id] { return svc->isCancelled(id); }));
             };
             if (index_builds_->submit(idx_def_edge->index_id, stmt.index_name, std::move(job))) {
                 result.columns.push_back("result");
@@ -719,17 +728,29 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
     } else if (stmt.type == IndexDdlStatement::DROP_INDEX) {
         const auto& schema = async_meta_.schema();
         auto idx_def = schema.findIndexByName(stmt.index_name);
+
+        // ① 构建中 ⇒ **取消并等待任务真正退出**。只置取消位不够：回填仍持有索引表时删表会失败
+        //   （"Device or resource busy"），实测随后 **SIGSEGV**（设计 H13/H17 同类竞态）。
+        if (idx_def && index_builds_)
+            index_builds_->cancelAndWait(idx_def->index_id);
+
         std::string new_table;
         if (idx_def && idx_def->index_id != 0)
             new_table = vidxTableById(idx_def->index_id);
 
+        // ② **先删存储表，成功后再删定义**。顺序颠倒会在"表删不掉"时留下"定义已消失、表还在"的坏状态。
+        if (!new_table.empty()) {
+            const bool table_dropped = co_await async_data_.dropIndex(new_table);
+            if (!table_dropped) {
+                result.error = "Failed to drop index storage table: " + new_table + " (索引定义保持不变)";
+                co_return;
+            }
+        }
         bool ok = co_await async_meta_.dropIndex(stmt.index_name);
         if (!ok) {
             result.error = "Failed to drop index: " + stmt.index_name;
             co_return;
         }
-        if (!new_table.empty())
-            co_await async_data_.dropIndex(new_table);
         result.columns.push_back("result");
         Row row;
         row.push_back(std::string("Index dropped: " + stmt.index_name));
@@ -755,7 +776,9 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             std::string state_str;
             switch (idx.state) {
             case IndexState::WRITE_ONLY:
-                state_str = "WRITE_ONLY";
+                // 对外只暴露**语义状态**：`WRITE_ONLY` 就是"构建中"（读路径只认 PUBLIC，见 I1）。
+                // 内部枚举名不再泄漏给用户，避免把实现细节当约定。
+                state_str = "BUILDING";
                 break;
             case IndexState::PUBLIC:
                 state_str = "PUBLIC";

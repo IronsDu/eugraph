@@ -1006,3 +1006,30 @@ Expand 的**显式**标签集：
 ② 构建中 `dropGraph` 的关图顺序实测；③ **ASan 全量闸门**（P1-④ 首次让后台任务进入生产路径，这道闸门必跑）；
 ④ `SHOW INDEXES` 把 `WRITE_ONLY` 呈现为 `BUILDING`（纯展示层）。
 
+### 19.1 实测发现的**崩溃**（异步构建期间 DROP）——已修一半
+
+**现象（release 构建，实测）**：
+
+```
+CREATE INDEX idx_cancel3 FOR (m:Message) ON (m.creationDate)   → Index created (building)（id=16）
+DROP INDEX idx_cancel3                                          → dropIndex: failed to drop table:vidx_16: Device or resource busy
+                                                               → *** Signal 11 (SIGSEGV) ***
+```
+
+**根因（两个叠加）**：
+1. `DROP` 只**置取消位**就继续删表：回填协程仍持有该索引表（打开的游标/事务）⇒ WT 拒绝删表；
+2. **删除顺序错误**：代码**先删定义、后删表**，且表删失败仍继续 ⇒ 进入"**定义已消失、表仍在**"的坏状态，
+   而在跑的回填继续使用该会话/表 ⇒ **SIGSEGV**（设计 H13/H17 同类：删除与在飞使用者的竞态）。
+
+**已修**：
+* 新增 `IndexBuildService::cancelAndWait(index_id, timeout)`：取消并**等待任务真正退出**；`DROP` 删表前调用；
+* 回填协程新增**可选取消令牌**（`backfillVertexIndex/backfillEdgeIndex(..., cancelled)`），**逐批检查** ⇒ 在飞构建能及时察觉；
+* `DROP` **改为先删存储表、成功后再删定义**；表删失败则**返回明确错误并保留定义**。
+
+**修复后实测**：不再崩溃 ✓；`DROP` 返回
+`Failed to drop index storage table: table:vidx_18 (索引定义保持不变)` —— **安全失败**取代了"崩溃 + 坏状态" ✓。
+
+**仍未达成的验收（下一步）**：取消后索引表可能**短暂仍被占用** ⇒ DROP 失败而非成功。
+根因：回填的**打开事务/生成器需在取消路径上显式收尾**（析构时机不足以保证立即释放），
+修法：取消时显式回滚事务并销毁生成器再返回，或让 `DROP` 在明确错误前**短暂重试**几次（幂等）。
+

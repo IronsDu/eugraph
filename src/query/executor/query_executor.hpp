@@ -97,12 +97,15 @@ private:
 
     /// 顶点索引回填 + 提交（**不落状态**：由调用方或发布回调落，保持两库提交顺序）。
     /// 抽成协程的原因：同步路径与后台构建任务需要**同一份实现**（P1-④）。
+    /// `cancelled` 为可选取消令牌：**逐批检查**（构建中 DROP 时据此尽快退出，而不是把整个回填跑完）。
     folly::coro::Task<IndexBuildResult> backfillVertexIndex(IndexDdlStatement stmt, std::string table, LabelId label_id,
-                                                            std::vector<ResolvedIndexAccessor> resolved);
+                                                            std::vector<ResolvedIndexAccessor> resolved,
+                                                            std::function<bool()> cancelled = {});
 
     /// 边索引回填 + 提交（同样**不落状态**）
     folly::coro::Task<IndexBuildResult> backfillEdgeIndex(IndexDdlStatement stmt, std::string table,
-                                                          EdgeLabelId edge_label_id, std::vector<uint16_t> prop_ids);
+                                                          EdgeLabelId edge_label_id, std::vector<uint16_t> prop_ids,
+                                                          std::function<bool()> cancelled = {});
     IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;
