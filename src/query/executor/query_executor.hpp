@@ -23,6 +23,8 @@
 #include <variant>
 
 namespace eugraph {
+
+class IndexBuildService; // 前向声明（实现细节见 .cpp，保持编译防火墙）
 namespace compute {
 
 struct StreamContext {
@@ -59,6 +61,9 @@ struct StreamContext {
 /// Depends only on async interfaces — no direct sync store dependency.
 class QueryExecutor {
 public:
+    /// 注入"每图索引构建服务"：注入后 CREATE INDEX 走**后台异步**构建；未注入则走同步路径（既有行为）。
+    void setIndexBuildService(std::shared_ptr<IndexBuildService> service);
+
     struct Config {
         size_t compute_threads = 4;
         Config() = default;
@@ -79,6 +84,7 @@ public:
     }
 
 private:
+    std::shared_ptr<IndexBuildService> index_builds_;
     folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
 
     /// 顶点索引的 accessor 解析结果（原为 handleIndexDdl 内的局部结构体，抽出以便协程参数化）

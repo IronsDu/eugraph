@@ -979,3 +979,30 @@ Expand 的**显式**标签集：
 **通用教训**：**静态剪枝提示必须只做"收窄"**。任何"用提示覆盖显式约束"的写法都可能放大扫描范围 ⇒ 静默错结果；
 提示的语义是"候选集合"而非"等价集合"。
 
+## 19. P1-④ 实施结果（异步 `CREATE INDEX` 已落地）
+
+按 §16 清单实施完成（提交见仓库历史），并给出实测验收：
+
+| 步骤 | 实现要点 | 状态 |
+|---|---|---|
+| 1 回填抽协程 | `backfillVertexIndex` / `backfillEdgeIndex`，**不落状态**（状态由调用方或发布回调落） | ✅ |
+| 2 每图持有服务 | `GraphInstance::index_builds`（**声明在 `executor` 之后** ⇒ 反向析构先排空任务） | ✅ |
+| 3 关图顺序 | `closeAll()` / `dropGraph()` 中**先 `index_builds->shutdown()`**（取消全部 + drain）再关 store | ✅ |
+| 4 `CREATE INDEX` 异步 | 建定义（`WRITE_ONLY`）→ `submit(index_id, name, job)` → **立即返回** `Index created (building)`；<br>发布回调据相位机结果落 `PUBLIC`/`ERROR`；**未注入服务时回落同步路径**（单测与极小化装配仍可用） | ✅ |
+| 5 可观测 | `SHOW INDEXES` 在构建期显示 `WRITE_ONLY`，完成后自动变 `PUBLIC` | ✅ |
+
+**实测验收（sf0.1）**：
+
+| 判据 | 结果 |
+|---|---|
+| `CREATE INDEX` 立即返回 | **84 ms** 返回 `Index created (building): idx_async_cd`（同步路径此前需 2.2 s） |
+| 构建中状态可观测 | `SHOW INDEXES` → `('idx_async_cd','Comment','creationDate','false','WRITE_ONLY')` |
+| 后台完成后自动发布 | 约 1.4 s 后转 `PUBLIC` |
+| 索引结果正确 | `WHERE c.creationDate > 1.3e12`：索引 **114,795** == 全表扫 **114,795** |
+| `DROP INDEX` | 正常 |
+| 回归 | `query_executor_tests` 573/573、`index_e2e_tests` 55/55、`index_store_tests` 14/14、<br>`index_build_service_tests` 6/6、`index_build_task_tests` 6/6、**TCK 31/31 场景 + 144/144 步骤** |
+
+**尚未做（下一步）**：① 构建中 `DROP` 的取消路径（排队中丢弃已实现，运行中的"阶段边界察觉"需构造长构建用例验证）；
+② 构建中 `dropGraph` 的关图顺序实测；③ **ASan 全量闸门**（P1-④ 首次让后台任务进入生产路径，这道闸门必跑）；
+④ `SHOW INDEXES` 把 `WRITE_ONLY` 呈现为 `BUILDING`（纯展示层）。
+

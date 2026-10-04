@@ -33,7 +33,7 @@ struct Recorder {
     std::mutex mu;
 
     IndexBuildService::Publisher publisher() {
-        return [this](uint64_t id, IndexBuildOutcome outcome, const std::string& error) {
+        return [this](uint64_t id, const std::string& /*name*/, IndexBuildOutcome outcome, const std::string& error) {
             {
                 std::lock_guard<std::mutex> lock(mu);
                 all.push_back(Published{id, outcome, error});

@@ -1,5 +1,7 @@
 #include "query/executor/query_executor.hpp"
 
+#include "storage/index/index_build_service.hpp"
+
 #include "common/types/constants.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/function/function_registry.hpp"
@@ -330,6 +332,10 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     co_return ctx;
 }
 
+void QueryExecutor::setIndexBuildService(std::shared_ptr<IndexBuildService> service) {
+    index_builds_ = std::move(service);
+}
+
 folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlStatement stmt, std::string table,
                                                                        LabelId label_id,
                                                                        std::vector<ResolvedIndexAccessor> resolved) {
@@ -590,6 +596,22 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             resolved.push_back(std::move(ra));
         }
 
+        // 注入了"每图构建服务" ⇒ 提交后台任务后**立即返回**（异步构建；状态由服务的发布回调落 PUBLIC/ERROR）。
+        // 未注入（例如单测里的极小化装配）则走下面的同步路径，保证任何装配下都可用。
+        if (index_builds_) {
+            auto job = [this, stmt, table, label_id = label_def->id, resolved = std::move(resolved)]() mutable {
+                return folly::coro::blockingWait(backfillVertexIndex(stmt, table, label_id, std::move(resolved)));
+            };
+            if (index_builds_->submit(idx_def->index_id, stmt.index_name, std::move(job))) {
+                result.columns.push_back("result");
+                Row row;
+                row.push_back(std::string("Index created (building): " + stmt.index_name));
+                result.rows.push_back(std::move(row));
+                co_return;
+            }
+            // 提交失败（该索引已在构建中）⇒ 回落到同步路径继续本次请求
+        }
+
         // Backfill（已抽成协程：同一实现对同步路径与后台任务都可用）
         IndexBuildResult build = co_await backfillVertexIndex(stmt, table, label_def->id, std::move(resolved));
         if (build.outcome != IndexBuildOutcome::PUBLIC) {
@@ -641,6 +663,14 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             co_return;
         }
 
+        // 取回刚创建的边索引定义（后面据此拿 index_id 提交后台构建；与顶点分支同一做法）
+        const auto& schema_edge = async_meta_.schema();
+        auto idx_def_edge = schema_edge.findIndexByName(stmt.index_name);
+        if (!idx_def_edge) {
+            result.error = "Created edge index not found in schema: " + stmt.index_name;
+            co_return;
+        }
+
         // 表名与写入/维护/扫描三处保持同一写法（都按属性个数选择）。
         // 注意：单属性时 eidxCompositeTable(label, {p}) 与 eidxTable(label, p) **生成同一个名字**
         // （均为 table:eidx_<label>_<p>），故本处并非"表名不一致"缺陷的修复点（曾误判，已更正）。
@@ -653,6 +683,20 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         }
 
         // Backfill: scan existing edges and insert index entries
+        // 同顶点分支：注入服务 ⇒ 后台异步构建并立即返回
+        if (index_builds_) {
+            auto job = [this, stmt, table, elid = edge_label_def->id, prop_ids]() mutable {
+                return folly::coro::blockingWait(backfillEdgeIndex(stmt, table, elid, std::move(prop_ids)));
+            };
+            if (index_builds_->submit(idx_def_edge->index_id, stmt.index_name, std::move(job))) {
+                result.columns.push_back("result");
+                Row row;
+                row.push_back(std::string("Edge index created (building): " + stmt.index_name));
+                result.rows.push_back(std::move(row));
+                co_return;
+            }
+        }
+
         // Backfill（已抽成协程）
         IndexBuildResult build = co_await backfillEdgeIndex(stmt, table, edge_label_def->id, prop_ids);
         if (build.outcome != IndexBuildOutcome::PUBLIC) {

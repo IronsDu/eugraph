@@ -121,6 +121,9 @@ void GraphManager::shutdown() {
     }
 
     for (auto& inst : instances) {
+        // **必须先排空后台构建任务**（任务持有该图 store 的引用）；顺序颠倒会 use-after-close（设计 H17）
+        if (inst->index_builds)
+            inst->index_builds->shutdown();
         folly::coro::blockingWait(inst->async_meta->close());
         inst->sync_data->close();
         inst->sync_meta->close();
@@ -177,6 +180,8 @@ bool GraphManager::dropGraph(const std::string& name) {
     }
     // lock released — safe to block on I/O; inst owns the GraphInstance
 
+    if (inst->index_builds)
+        inst->index_builds->shutdown(); // 同上：先取消并等待构建任务退出，再关 store
     folly::coro::blockingWait(inst->async_meta->close());
     inst->sync_data->close();
     inst->sync_meta->close();
@@ -266,6 +271,29 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
     executor_config.compute_threads = compute_threads_;
     instance->executor =
         std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta, executor_config);
+
+    // 每图索引构建服务：按"任务"提交（具体怎么建由 executor 的协程决定），
+    // 这里只负责①调度/并发度②取消③把最终状态落到 meta（PUBLIC 只在相位机判定成功时出现）。
+    // 生命周期：由本 GraphInstance 持有；`index_builds` 声明在 executor 之后 ⇒ 反向析构时先析构并排空任务。
+    instance->index_builds = std::make_shared<IndexBuildService>(
+        IndexBuildService::BuildRunner{},
+        [meta = instance->async_meta.get()](uint64_t index_id, const std::string& index_name, IndexBuildOutcome outcome,
+                                            const std::string& error) {
+            if (outcome == IndexBuildOutcome::CANCELLED) {
+                spdlog::info("[index-build] '{}' (id={}) 构建已取消", index_name, index_id);
+                return;
+            }
+            const auto state = (outcome == IndexBuildOutcome::PUBLIC) ? IndexState::PUBLIC : IndexState::ERROR;
+            if (outcome == IndexBuildOutcome::ERROR)
+                spdlog::error("[index-build] '{}' (id={}) 构建失败：{}", index_name, index_id, error);
+            const bool ok = folly::coro::blockingWait(meta->updateIndexState(index_name, state));
+            if (!ok)
+                spdlog::error("[index-build] '{}' 状态落库失败", index_name);
+            else
+                spdlog::info("[index-build] '{}' 构建结束，状态={}", index_name,
+                             outcome == IndexBuildOutcome::PUBLIC ? "PUBLIC" : "ERROR");
+        });
+    instance->executor->setIndexBuildService(instance->index_builds);
 
     return instance;
 }

@@ -31,7 +31,8 @@ public:
     /// 真正执行构建的回调：内部通常用相位机跑完整流程并返回结果。
     using BuildRunner = std::function<IndexBuildResult(uint64_t index_id)>;
     /// 发布最终状态（落 meta）：`PUBLIC` 只在 result.outcome==PUBLIC 时调用。
-    using Publisher = std::function<void(uint64_t index_id, IndexBuildOutcome outcome, const std::string& error)>;
+    using Publisher = std::function<void(uint64_t index_id, const std::string& name, IndexBuildOutcome outcome,
+                                         const std::string& error)>;
 
     IndexBuildService(BuildRunner runner, Publisher publisher, IndexBuildScheduler::Options opts = {})
         : runner_(std::move(runner)), publisher_(std::move(publisher)), scheduler_(opts) {}
@@ -44,6 +45,26 @@ public:
 
     IndexBuildService(const IndexBuildService&) = delete;
     IndexBuildService& operator=(const IndexBuildService&) = delete;
+
+    /// 每个索引自带的构建闭包（捕获 stmt/表名/解析结果等）。
+    /// 有了它，服务不必知道"怎么建索引"，只负责调度/取消/发布生命周期。
+    using BuildJob = std::function<IndexBuildResult()>;
+
+    /// 提交一个索引的构建任务（按任务版本）。返回 false = 已在排队或运行中（幂等）。
+    bool submit(uint64_t index_id, std::string name, BuildJob job) {
+        if (!job)
+            return false;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (shutting_down_)
+                return false;
+        }
+        // 名字要留给发布回调（落状态需要索引名）⇒ 复制一份进任务闭包
+        std::string job_name = name;
+        return scheduler_.submit(index_id, std::move(name), [this, index_id, job_name, job = std::move(job)] {
+            execute_job(index_id, job_name, job);
+        });
+    }
 
     /// 提交一个索引的构建任务。返回 false = 该索引已在排队或运行中（幂等）。
     bool submit(uint64_t index_id, std::string name) {
@@ -95,6 +116,20 @@ public:
     }
 
 private:
+    /// 执行"按任务"版本：任务自带闭包（含索引名），异常同样经发布回调收口。
+    void execute_job(uint64_t index_id, const std::string& name, const BuildJob& job) {
+        IndexBuildResult result;
+        try {
+            result = job();
+        } catch (const std::exception& e) {
+            result = IndexBuildResult{IndexBuildOutcome::ERROR, std::string("build threw: ") + e.what()};
+        } catch (...) {
+            result = IndexBuildResult{IndexBuildOutcome::ERROR, "build threw (unknown)"};
+        }
+        if (publisher_)
+            publisher_(index_id, name, result.outcome, result.error);
+    }
+
     void execute(uint64_t index_id) {
         IndexBuildResult result;
         try {
@@ -107,7 +142,7 @@ private:
         }
         // 三种结果都发布：CANCELLED 由调用方（DROP/关图）负责清理，PUBLIC/ERROR 落元数据
         if (publisher_)
-            publisher_(index_id, result.outcome, result.error);
+            publisher_(index_id, std::string{}, result.outcome, result.error); // ctor-runner 路径无名字
     }
 
     BuildRunner runner_;

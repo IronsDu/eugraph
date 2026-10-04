@@ -17,17 +17,6 @@
 
 namespace eugraph {
 
-enum class IndexBuildOutcome {
-    PUBLIC,
-    ERROR,
-    CANCELLED
-};
-
-struct IndexBuildResult {
-    IndexBuildOutcome outcome = IndexBuildOutcome::ERROR;
-    std::string error; ///< outcome == ERROR 时的原因（写入日志/索引状态）
-};
-
 class IndexBuildTask {
 public:
     struct Callbacks {
