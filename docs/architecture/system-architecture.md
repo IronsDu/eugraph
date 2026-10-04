@@ -388,7 +388,7 @@ Handler::co_createLabel(name, props):
 ### DDL 与生命周期
 
 * `CREATE INDEX`：建定义（`BUILDING`）→ 建索引表与**变更表** → 回填 → 追赶 →（关闸）→ `PUBLIC`；
-  **当前实现走同步构建**（异步开关 `kEnableAsyncIndexBuild=false`，见下）；
+  **默认异步**（后台任务 + `IndexBuildService`；开关 `kEnableAsyncIndexBuild=true`）；
 * `DROP INDEX`：**定义总是删除**；表删除**尽力而为**，失败则降级为**孤儿表**（避免"属性集永久无法重建索引"）；
   **构建中的索引拒绝 DROP**（返回明确错误）；
 * **启动恢复**：`BUILDING` 状态的索引一律置 `ERROR`（不置 `PUBLIC`，可 DROP 后重建）。
@@ -398,6 +398,6 @@ Handler::co_createLabel(name, props):
 | 项 | 状态 |
 |---|---|
 | 状态模型 / 分流 / 变更表 / 追赶 / 守卫 / 启动恢复 / 判据（顶点 5==5、边 6==6） | ✅ 已实现并验证 |
-| **异步构建** | ⚠️ **暂时关闭**（同步构建）：后台构建与 DML 写入并发时出现 WT **会话竞态**（`session_dhandle` SEGV，ASan 与 release 均可复现）——强怀疑后台任务与查询线程**共享 `AsyncGraphDataStore::txn_`**；待改为"后台任务独立 txn/会话"后开启 |
+| **异步构建** | ✅ **已启用**：事务句柄改为**按线程隔离**（`txnRef()`，与 I10 一致）后，WT 会话竞态消除；ASan 活体冒烟（异步路径）**0 报告 / 0 崩溃**，构建期写入双判据通过 |
 | 孤儿表回收 | ⏳ 待做（启动时扫描并删除无对应定义的 `vidx_*/eidx_*/idx_delta_*`） |
 

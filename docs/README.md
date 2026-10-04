@@ -122,7 +122,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [接口设计](storage/interfaces.md) | sync/async 分离接口 |
 | [元数据服务](storage/metadata-service-design.md) | AsyncGraphMetaStore、GraphSchema、索引元数据、batch ID 分配 |
 | [二级索引](storage/index_design.md) | B-tree 索引、IndexKeyCodec、状态机、IndexScan 优化 |
-| [在线索引构建](storage/online-index-build-design.md) | **设计 + 实施记录**：两维状态（BuildState × Lifecycle）+ 变更表追赶 + **构建闸门**（关闸/排空）+ 可配并发度；含并发矩阵与危险清单 H1–H20、验收判据。**注意**：异步构建暂时关闭（走同步，见 §20.17 的会话竞态） |
+| [在线索引构建](storage/online-index-build-design.md) | **设计 + 实施记录**：两维状态（BuildState × Lifecycle）+ 变更表追赶 + **构建闸门**（关闸/排空）+ 可配并发度；含并发矩阵与危险清单 H1–H20、验收判据。**异步构建已启用**（事务按线程隔离后消除会话竞态；ASan 闸门通过） |
 | [DDL 设计](storage/ddl.md) | 删除标签类型、删除关系类型、列的增删改（设计规划） |
 | [多图支持](storage/multi-graph.md) | 多图隔离存储、Catalog、GraphManager、Shell 图切换 |
 
