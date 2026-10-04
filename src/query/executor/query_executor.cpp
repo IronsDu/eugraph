@@ -339,6 +339,31 @@ void QueryExecutor::setIndexBuildService(std::shared_ptr<IndexBuildService> serv
     index_builds_ = std::move(service);
 }
 
+namespace {
+/// 待回收的孤儿表（DROP 时删表失败留下的表）。DROP 是幂等的，因此在**后续每次 DROP** 时机会式重试回收——
+/// 无需新增持久化（进程重启后遗留的孤儿表由后续 §20.18 B 的持久化登记方案处理）。
+std::mutex& orphanMu() {
+    static std::mutex m;
+    return m;
+}
+std::vector<std::string>& orphanTables() {
+    static std::vector<std::string> v;
+    return v;
+}
+void rememberOrphan(const std::string& table) {
+    std::lock_guard<std::mutex> lock(orphanMu());
+    auto& v = orphanTables();
+    if (std::find(v.begin(), v.end(), table) == v.end())
+        v.push_back(table);
+}
+std::vector<std::string> takeOrphans() {
+    std::lock_guard<std::mutex> lock(orphanMu());
+    auto v = orphanTables();
+    orphanTables().clear();
+    return v;
+}
+} // namespace
+
 folly::coro::Task<bool> QueryExecutor::catchUpAndPublish(const std::string& index_table,
                                                          const std::string& index_name) {
     const auto& schema_now = async_meta_.schema();
@@ -885,6 +910,14 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         // ① 构建中 ⇒ **取消并等待任务退出**；**但绝不在此时删表** —— 实测在"取消等待期间删表"会与
         //   构建侧的 WT 会话并发使用同一会话，导致 `session_dhandle` 损坏并 **SIGSEGV**
         //   （ASan 与 release 均可复现，设计 §20.17）。表交给**构建任务退出后/启动清理**回收（孤儿表）。
+        // ⓪ 机会式回收：重试此前登记失败的孤儿表（DROP 幂等 ⇒ 安全）
+        for (const auto& orphan : takeOrphans()) {
+            if (!(co_await async_data_.dropIndex(orphan)))
+                rememberOrphan(orphan); // 仍占用 ⇒ 留待下次
+            else
+                spdlog::info("dropIndex: 孤儿表 {} 已回收", orphan);
+        }
+
         // ① 构建中 ⇒ **拒绝删除**（安全优先）。实测"取消 + 删定义 + 删表"的组合会与在飞构建的 WT 会话
         //   并发使用同一会话 ⇒ `session_dhandle` 损坏并 **SIGSEGV**（ASan 与 release 均复现，§20.17）。
         //   在竞态根因定位前，先返回明确错误，避免崩溃与半删状态；用户可等构建结束（秒级）再删。
@@ -903,14 +936,23 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             // 曾试过"200ms 紧循环重试"，结果在 ASan 下暴露 **WT 会话并发使用** 的 SEGV
             // （`session_dhandle.c:77 __session_add_dhandle`：重试的 drop 与构建侧会话收尾并发）⇒ 撤销重试。
             // 失败即降级为**孤儿表**（定义照删，见下），由后续清理回收。
-            const bool table_dropped = co_await async_data_.dropIndex(new_table);
+            // 有界重试：非构建期删表偶发被并发读/游标占用（WT "Device or resource busy"），
+            // 稍后即释放。**构建中的 DROP 已在上方被拒绝**，故此处不存在"与构建并发删表"的竞态。
+            bool table_dropped = false;
+            for (int attempt = 0; attempt < 100 && !table_dropped; ++attempt) {
+                table_dropped = co_await async_data_.dropIndex(new_table);
+                if (!table_dropped)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
             if (!table_dropped) {
                 // **设计调整**：物理表暂时删不掉（实测：构建侧会话可能仍缓存表句柄）时**不再保留定义**——
                 // 否则该属性集**永久无法重建索引**（用户可见事故）。改为：定义照删（继续往下走），
                 // 表降级为**孤儿表**，由启动清理/后续清理回收。DROP 的语义是"索引不再存在"，
                 // 物理回收只是实现细节，不应阻塞语义。
-                spdlog::warn("dropIndex: 索引表 {} 暂时无法删除，降级为孤儿表（定义仍删除，可由启动清理回收）",
-                             new_table);
+                spdlog::warn(
+                    "dropIndex: 索引表 {} 暂时无法删除，登记为孤儿表（定义已删除；后续 DROP 会机会式重试回收）",
+                    new_table);
+                rememberOrphan(new_table);
             }
         }
         // P2：连同变更表一起删（若存在；失败不致命，记日志即可——启动清理会兜底，§5.2）
