@@ -394,8 +394,19 @@ CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<Lab
         ok = co_await store_.insertVertex(vid, label_props);
 
     if (ok) {
-        for (const auto& entry : planned_entries)
-            co_await store_.insertIndexEntry(entry.table, entry.values, entry.vid);
+        for (const auto& entry : planned_entries) {
+            // BUILDING ⇒ 写**变更表**（构建器随后追赶重放）。**关键**：不能直写索引表——
+            // 回填正持有长事务在同一张表上，直写会撞 WT 写冲突而**静默失败**
+            // （实测：构建期插入在索引里缺失 0 vs 全表扫 5，见设计 §20.4/§20.6）。
+            const bool wrote = entry.to_delta ? co_await store_.putDeltaEntry(entry.table, entry.values, entry.vid,
+                                                                              /*is_delete=*/false)
+                                              : co_await store_.insertIndexEntry(entry.table, entry.values, entry.vid);
+            if (!wrote) {
+                spdlog::error("索引条目写入失败：table={} vid={}（to_delta={}）", entry.table, entry.vid,
+                              entry.to_delta);
+                ok = false; // 不再静默忽略：写入失败必须让语句失败，否则索引与数据不一致
+            }
+        }
     }
     co_return ok;
 }
