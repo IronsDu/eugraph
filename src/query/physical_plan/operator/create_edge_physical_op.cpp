@@ -153,6 +153,11 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                 if (use_delta && idx.index_id != 0) {
                     gate = IndexBuildGateRegistry::instance().gate(idx.index_id)->tryEnter();
                     use_delta = static_cast<bool>(gate);
+                    if (use_delta) {
+                        // **把守卫绑定到用户事务**：名额覆盖到 commit/rollback 才释放（§15.1 / H2），
+                        // 否则"写入变更表后、提交前"的行会被排空错过 ⇒ 构建结束后永久留在变更表 ⇒ 丢写。
+                        IndexBuildTxnScope::attach(reinterpret_cast<uint64_t>(store_.currentTxn()), std::move(gate));
+                    }
                 }
                 const std::string& write_table = use_delta ? table : index_table;
                 const bool wrote =

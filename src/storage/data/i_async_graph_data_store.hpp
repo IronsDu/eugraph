@@ -25,6 +25,9 @@ public:
     virtual folly::coro::Task<GraphTxnHandle> beginTran() = 0;
     virtual folly::coro::Task<bool> commitTran(GraphTxnHandle txn) = 0;
     virtual folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) = 0;
+
+    /// 当前线程绑定的事务句柄（供"把索引构建闸门守卫绑定到事务"使用，见 index_build_gate.hpp）
+    virtual GraphTxnHandle currentTxn() const = 0;
     /// Roll back without a coroutine, for teardown paths that run on a network
     /// EventBase thread where nothing can be awaited. A transaction whose handle is
     /// dropped without being ended keeps its WT session and snapshot alive forever,

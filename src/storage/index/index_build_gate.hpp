@@ -19,6 +19,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace eugraph {
 
@@ -122,6 +123,43 @@ public:
 private:
     std::mutex mu_;
     std::unordered_map<uint32_t, std::shared_ptr<IndexBuildGate>> gates_;
+};
+
+/// **把闸门守卫绑定到用户事务**：守卫在事务 **commit/rollback 时**才释放
+/// （设计 §15.1 的实现契约：准入名额必须覆盖整个用户事务，而不是"一次写调用"）。
+/// 为什么必须如此：写入变更表后、事务提交前，构建器的"排空"看不到该行 ⇒ 若此刻就放行，
+/// 该行会在构建结束后永远留在变更表里 ⇒ **丢写**（实测边路径丢 1/6，设计 §20.19/H2）。
+class IndexBuildTxnScope {
+public:
+    static void attach(uint64_t txn, IndexBuildGate::Guard guard) {
+        if (!guard)
+            return;
+        std::lock_guard<std::mutex> lock(mu());
+        guards()[txn].push_back(std::move(guard));
+    }
+    /// 事务结束时调用（commit/rollback 之后）：释放该事务登记的全部准入名额
+    static void releaseAll(uint64_t txn) {
+        std::vector<IndexBuildGate::Guard> to_release;
+        {
+            std::lock_guard<std::mutex> lock(mu());
+            auto it = guards().find(txn);
+            if (it == guards().end())
+                return;
+            to_release = std::move(it->second);
+            guards().erase(it);
+        }
+        to_release.clear(); // Guard 析构 ⇒ inflight--
+    }
+
+private:
+    static std::mutex& mu() {
+        static std::mutex m;
+        return m;
+    }
+    static std::unordered_map<uint64_t, std::vector<IndexBuildGate::Guard>>& guards() {
+        static std::unordered_map<uint64_t, std::vector<IndexBuildGate::Guard>> g;
+        return g;
+    }
 };
 
 } // namespace eugraph

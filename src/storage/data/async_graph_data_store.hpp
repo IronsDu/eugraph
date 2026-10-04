@@ -5,6 +5,7 @@
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/data/index_maintenance.hpp"
+#include "storage/index/index_build_gate.hpp"
 #include "storage/index/index_delta_codec.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/kv/value_codec.hpp"
@@ -29,6 +30,10 @@ public:
     AsyncGraphDataStore(ISyncGraphDataStore& store, IoScheduler& io, GraphTxnHandle txn = INVALID_GRAPH_TXN)
         : store_(store), io_(io) {
         txnRef() = txn; // 事务句柄按**线程**隔离（见下 txnRef() 的说明）
+    }
+
+    GraphTxnHandle currentTxn() const override {
+        return txnRef();
     }
 
     void setTransaction(GraphTxnHandle txn) override {
@@ -56,6 +61,8 @@ public:
         if (ok && txnRef() == txn)
             txnRef() = INVALID_GRAPH_TXN;
         co_return ok;
+        // 事务**真正结束**后，才释放该事务登记的构建闸门守卫（设计 §15.1/H2：名额覆盖整个事务）
+        IndexBuildTxnScope::releaseAll(reinterpret_cast<uint64_t>(txn));
     }
 
     folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) override {
