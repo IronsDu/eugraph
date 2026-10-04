@@ -140,6 +140,17 @@ public:
     // Index Operations
     virtual folly::coro::Task<bool> createIndex(const std::string& table_name) = 0;
     virtual folly::coro::Task<bool> dropIndex(const std::string& table_name) = 0;
+    // ==================== 变更表（delta，设计 §5.0 / P2）====================
+    /// 写一条变更：索引处于 BUILDING 时，维护写入改去此处（**与实体写入同事务**）
+    virtual folly::coro::Task<bool> putDeltaEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                                  uint64_t entity_id, bool is_delete) = 0;
+
+    /// 重放**一批**变更表记录到索引表（在 IO 线程上整批完成，避免跨线程回调）：
+    /// 按键序取最多 `max_rows` 行，逐行应用（PUT ⇒ putIndexEntryByKey；DEL ⇒ deleteIndexEntryByKey），
+    /// 返回本批处理行数；`last_key` 被更新为**已消费的最后一行键**（供下一批续扫）。
+    virtual folly::coro::Task<size_t> replayDeltaBatch(const std::string& index_table, const std::string& delta_table,
+                                                       size_t max_rows, std::string& last_key) = 0;
+
     virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
                                                      uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,

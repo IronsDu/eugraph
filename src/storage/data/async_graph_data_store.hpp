@@ -5,6 +5,7 @@
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/data/index_maintenance.hpp"
+#include "storage/index/index_delta_codec.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/kv/value_codec.hpp"
 
@@ -444,6 +445,51 @@ public:
         auto name = table_name;
         auto ok = co_await io_.dispatch([this, name = std::move(name)]() { return store_.dropIndex(name); });
         co_return ok;
+    }
+
+    folly::coro::Task<bool> putDeltaEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                          uint64_t entity_id, bool is_delete) override {
+        auto txn = txn_;
+        auto t = table;
+        auto vals = values;
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id, is_delete]() {
+            return store_.putDeltaEntry(txn, t, vals, entity_id, is_delete);
+        });
+        co_return ok;
+    }
+
+    folly::coro::Task<size_t> replayDeltaBatch(const std::string& index_table, const std::string& delta_table,
+                                               size_t max_rows, std::string& last_key) override {
+        auto txn = txn_;
+        auto idx_table = index_table;
+        auto d_table = delta_table;
+        auto start_after = last_key;
+        auto result = co_await io_.dispatch([this, txn, idx_table = std::move(idx_table), d_table = std::move(d_table),
+                                             max_rows, start_after = std::move(start_after)]() {
+            size_t applied = 0;
+            std::string next_key = start_after;
+            bool ok = store_.scanDeltaWithKey(
+                txn, d_table,
+                [&](uint64_t /*entity_id*/, std::string_view key, std::string_view raw) {
+                    bool is_delete = false;
+                    std::string_view payload;
+                    if (!decodeDeltaValue(raw, is_delete, payload))
+                        return true; // 损坏记录跳过（不阻塞追赶）
+                    if (is_delete)
+                        store_.deleteIndexEntryByKey(txn, idx_table, key);
+                    else
+                        store_.putIndexEntryByKey(txn, idx_table, key, payload);
+                    // **应用后从变更表删除**（设计 §6.1 方案①）：否则变更表永不排空，追赶无法终止。
+                    store_.deleteIndexEntryByKey(txn, d_table, key);
+                    ++applied;
+                    return applied < max_rows;
+                },
+                start_after, &next_key);
+            (void)ok;
+            return std::pair<size_t, std::string>{applied, next_key};
+        });
+        last_key = std::move(result.second);
+        co_return result.first;
     }
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,

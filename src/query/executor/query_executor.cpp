@@ -457,6 +457,33 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlS
         co_return IndexBuildResult{IndexBuildOutcome::ERROR,
                                    "Index creation failed: conflicting values or duplicate values during backfill"};
     }
+
+    // ==================== P2 追赶：重放构建期间的变更表（§6.1）====================
+    // 构建期（BUILDING）的维护写入不再直写索引，而是进变更表 ⇒ 这里按键序、分批把它追平。
+    // **注意（已知边界）**：尚未实现 §7.1 的"关闸 + 排空在飞写者"，因此**极窄窗口内**与最后一批重放竞争的
+    // 写入仍可能丢失；已用"多轮直到某轮应用 0 行"缩小窗口，完整协议见设计 §20.2 第 2 步。
+    {
+        const auto& schema_now = async_meta_.schema();
+        auto def_now = schema_now.findIndexByName(stmt.index_name);
+        if (def_now && def_now->index_id != 0) {
+            const std::string delta_table = idxDeltaTable(def_now->index_id);
+            constexpr size_t kReplayBatch = 1024;
+            for (int pass = 0; pass < 50; ++pass) { // 有界轮数，避免持续写入下无限追赶
+                size_t applied_total = 0;
+                std::string last_key; // **每轮**从变更表表首开始；轮内靠 last_key 续扫（此前误为每批清空 ⇒ 重复应用）
+                while (true) {
+                    const size_t applied =
+                        co_await async_data_.replayDeltaBatch(table, delta_table, kReplayBatch, last_key);
+                    applied_total += applied;
+                    if (applied < kReplayBatch)
+                        break; // 本批未满 ⇒ 变更表已到末尾
+                }
+                if (applied_total == 0)
+                    break; // 本轮无新变更 ⇒ 追平
+            }
+        }
+    }
+
     co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
 }
 
@@ -590,6 +617,12 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             result.error = "Failed to create index storage table";
             co_return;
         }
+        // P2：变更表与索引同生命周期（构建期写入进它，追赶后删除，§5.0/§5.2）
+        ok = co_await async_data_.createIndex(idxDeltaTable(idx_def->index_id));
+        if (!ok) {
+            result.error = "Failed to create index delta table";
+            co_return;
+        }
 
         // Pre-resolve strong accessors to prop ids.
         std::vector<ResolvedIndexAccessor> resolved;
@@ -709,6 +742,13 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         if (!ok) {
             result.error = "Failed to create edge index storage table";
             co_return;
+
+            // P2：边索引的变更表（与索引同生命周期）
+            ok = co_await async_data_.createIndex(idxDeltaTable(idx_def_edge->index_id));
+            if (!ok) {
+                result.error = "Failed to create edge index delta table";
+                co_return;
+            }
         }
 
         // Backfill: scan existing edges and insert index entries
@@ -767,6 +807,12 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 result.error = "Failed to drop index storage table: " + new_table + " (索引定义保持不变)";
                 co_return;
             }
+        }
+        // P2：连同变更表一起删（若存在；失败不致命，记日志即可——启动清理会兜底，§5.2）
+        if (idx_def && idx_def->index_id != 0) {
+            const std::string delta_table = idxDeltaTable(idx_def->index_id);
+            if (!(co_await async_data_.dropIndex(delta_table)))
+                spdlog::warn("dropIndex: 变更表 {} 删除失败（启动清理会兜底）", delta_table);
         }
         bool ok = co_await async_meta_.dropIndex(stmt.index_name);
         if (!ok) {
