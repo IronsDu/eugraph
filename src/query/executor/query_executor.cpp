@@ -740,7 +740,12 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
         // 注入了"每图构建服务" ⇒ 提交后台任务后**立即返回**（异步构建；状态由服务的发布回调落 PUBLIC/ERROR）。
         // 未注入（例如单测里的极小化装配）则走下面的同步路径，保证任何装配下都可用。
-        if (index_builds_) {
+        // **临时安全开关（2026-10）**：后台构建与 DML 写入并发时 WT 会话被并发使用
+        // ⇒ `session_dhandle` 损坏 + SIGSEGV（ASan 与 release 均复现，设计 §20.17）。
+        // 强怀疑根因：后台任务与查询线程**共享 async store 的 `txn_`**。在改为"后台任务独立 txn/会话"前，
+        // 只走**同步构建**以消除崩溃路径。
+        static constexpr bool kEnableAsyncIndexBuild = false;
+        if (index_builds_ && kEnableAsyncIndexBuild) {
             auto job = [this, stmt, table, label_id = label_def->id, id = idx_def->index_id,
                         resolved = std::move(resolved)]() mutable {
                 return folly::coro::blockingWait(
@@ -837,7 +842,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
         // Backfill: scan existing edges and insert index entries
         // 同顶点分支：注入服务 ⇒ 后台异步构建并立即返回
-        if (index_builds_) {
+        if (index_builds_ && false) { // 同上：临时安全开关（后台构建暂时关闭，避免 §20.17 的会话竞态）
             auto job = [this, stmt, table, elid = edge_label_def->id, id = idx_def_edge->index_id, prop_ids]() mutable {
                 return folly::coro::blockingWait(
                     backfillEdgeIndex(stmt, table, elid, std::move(prop_ids),
@@ -875,10 +880,16 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         const auto& schema = async_meta_.schema();
         auto idx_def = schema.findIndexByName(stmt.index_name);
 
-        // ① 构建中 ⇒ **取消并等待任务真正退出**。只置取消位不够：回填仍持有索引表时删表会失败
-        //   （"Device or resource busy"），实测随后 **SIGSEGV**（设计 H13/H17 同类竞态）。
-        if (idx_def && index_builds_)
-            index_builds_->cancelAndWait(idx_def->index_id);
+        // ① 构建中 ⇒ **取消并等待任务退出**；**但绝不在此时删表** —— 实测在"取消等待期间删表"会与
+        //   构建侧的 WT 会话并发使用同一会话，导致 `session_dhandle` 损坏并 **SIGSEGV**
+        //   （ASan 与 release 均可复现，设计 §20.17）。表交给**构建任务退出后/启动清理**回收（孤儿表）。
+        // ① 构建中 ⇒ **拒绝删除**（安全优先）。实测"取消 + 删定义 + 删表"的组合会与在飞构建的 WT 会话
+        //   并发使用同一会话 ⇒ `session_dhandle` 损坏并 **SIGSEGV**（ASan 与 release 均复现，§20.17）。
+        //   在竞态根因定位前，先返回明确错误，避免崩溃与半删状态；用户可等构建结束（秒级）再删。
+        if (idx_def && index_builds_ && index_builds_->isBuilding(idx_def->index_id)) {
+            result.error = "Index is still building; retry DROP after it finishes (state: BUILDING)";
+            co_return;
+        }
 
         std::string new_table;
         if (idx_def && idx_def->index_id != 0)
@@ -886,15 +897,11 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
         // ② **先删存储表，成功后再删定义**。顺序颠倒会在"表删不掉"时留下"定义已消失、表还在"的坏状态。
         if (!new_table.empty()) {
-            // **有界重试**：刚构建完成的索引表可能在短时间内仍被构建侧的会话/游标占用
-            // （WT 报 "Device or resource busy"），实测稍后即可删除。这里重试 ~200ms，
-            // 把这类**瞬态**占用转为成功；仍失败才走"安全失败"（保留定义、明确报错）。
-            bool table_dropped = false;
-            for (int attempt = 0; attempt < 100 && !table_dropped; ++attempt) {
-                table_dropped = co_await async_data_.dropIndex(new_table);
-                if (!table_dropped)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            }
+            // **只尝试一次**：索引表可能仍被构建侧的会话/游标占用（WT 报 "Device or resource busy"）。
+            // 曾试过"200ms 紧循环重试"，结果在 ASan 下暴露 **WT 会话并发使用** 的 SEGV
+            // （`session_dhandle.c:77 __session_add_dhandle`：重试的 drop 与构建侧会话收尾并发）⇒ 撤销重试。
+            // 失败即降级为**孤儿表**（定义照删，见下），由后续清理回收。
+            const bool table_dropped = co_await async_data_.dropIndex(new_table);
             if (!table_dropped) {
                 // **设计调整**：物理表暂时删不掉（实测：构建侧会话可能仍缓存表句柄）时**不再保留定义**——
                 // 否则该属性集**永久无法重建索引**（用户可见事故）。改为：定义照删（继续往下走），

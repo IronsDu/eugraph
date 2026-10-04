@@ -1515,3 +1515,35 @@ Failed to open cursor on table:idx_delta_48: error 2      ← 变更表打不开
 `index_build_gate_tests` **4/4**、`index_build_service_tests` 6/6、`index_build_task_tests` 6/6、
 `index_build_scheduler_tests` 7/7、`index_runtime_state_tests` 7/7；**TCK 31/31 场景 + 144/144 步骤** ✓。
 
+### 20.17 ASan 闸门抓到**崩溃**：后台构建与 DML 写入并发时的 WT 会话竞态（已用临时开关消除）
+
+**ASan 活体冒烟（构建 + 构建期写入 + 构建中 DROP）结果**：
+
+```
+==ERROR: AddressSanitizer: SEGV on unknown address ... T91
+SUMMARY: AddressSanitizer: SEGV ... wiredtiger/src/session/session_dhandle.c:77 in __session_add_dhandle
+```
+
+`__session_add_dhandle` 处崩溃 ⇒ **同一个 `WT_SESSION` 被并发使用**（会话句柄链表损坏）。
+release 构建同样可复现（非 ASan 特有）。
+
+**排除过程**：
+
+| 假设 | 实验 | 结论 |
+|---|---|---|
+| 删除重试循环（200ms 紧循环）导致 | 撤销重试（改单次尝试） | 仍崩 ✗ |
+| `DROP` 期间删表导致 | 构建中 `DROP` **拒绝删除** | 仍崩 ✗ |
+| ⇒ 崩因在**更早**的路径 | 只跑"建索引 + 构建期写入"（不做 DROP） | 复现 |
+
+**强怀疑根因**：**后台构建任务与查询线程共享 `AsyncGraphDataStore::txn_`**（该字段是 **per-store 成员**，不是 per-thread/per-txn ✗）⇒
+后台协程（`blockingWait(backfillVertexIndex(...))` 在调度器线程上）与 DML 写入可能使用**同一个 txn/session** ⇒ 并发使用 ⇒ 崩溃。
+
+**临时处置（消除崩溃路径，保可用性）**：`CREATE INDEX` **暂时只走同步构建**
+（`if (index_builds_ && kEnableAsyncIndexBuild)`，开关默认 `false`；边分支同）。
+实测：建→删、建→写→查（`3 == 3` ✓）、服务健康、**崩溃 0** ✓；
+回归 `query_executor_tests` 573/573、`index_e2e_tests` 55/55、`index_store_tests` 16/16、`index_build_gate_tests` 4/4、
+**TCK 31/31 + 144/144** ✓。
+
+**下一步（恢复异步构建的前提）**：让后台构建使用**独立的 txn/会话**（例如为构建任务单独 `beginTran()` 并绑定到该任务，
+或为后台线程使用独立 store/会话），随后把开关打开并重跑 ASan 活体冒烟（判据：**0 报告 + 0 崩溃 + 双判据通过**）。
+
