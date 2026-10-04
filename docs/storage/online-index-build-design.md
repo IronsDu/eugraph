@@ -1231,3 +1231,23 @@ P2（变更表）落地后，同一步还需**删除残留变更表**（§5.2 �
 **注**：`SET <vertex>.<prop>` 不持久（§20.3）是**另一个独立缺陷**，与索引无关（无索引时同样复现），
 它使"改键/删属性"形式的 P2 判据暂时无法在活体上执行；`CREATE` 形式不受影响，故 §20.4/§20.5 用它做判据。
 
+### 20.6 定位过程中的关键否证与下一步（观测记录）
+
+**实验记录（每步都以"能否区分对错"为准）**：
+
+| 步骤 | 观测 | 结论 |
+|---|---|---|
+| 在 DML 收集点（`vertex_index_maintenance.hpp` 的 `collectVertexIndexEntries`）与变更表写入点插桩，构建窗口内 `CREATE` 2 个顶点 | **两条日志都没有输出** | `CREATE` **既不走**该 DML 收集函数，**也不走** `putDeltaEntry` ⇒ 在这条路径上**尚未接入分流**（我此前的分流改动覆盖的是 `SET/REMOVE` 走的收集函数） |
+| 磁盘检查 `idx_delta_*.wt` | 构建周期结束后**不存在任何变更表文件** | 证实"没写变更表" ✓（与上一条一致） |
+| 把 `create_node_physical_op.cpp:375` 改为读**实时 schema** | 判据结果**不变**（索引 0 / 全表扫 5） | 说明 375 行的调用**不在**该语句的执行路径上（`CREATE (c:Comment {…})` 走的是存储层 `async_graph_data_store.hpp:922`，其 `label_defs` 由**调用方**提供） |
+
+**下一步（唯一未插桩的决定性观测点）**：在 `async_graph_data_store.hpp:922`
+（`collectVertexIndexEntriesFromLabelProps(label_defs, e.label_props, e.vid)`）处打印
+**传入的 `label_defs` 里该标签的索引数量与状态**、以及**产出的条目数**：
+* 若索引数=0 ⇒ 调用方传的还是**旧快照** ⇒ 修调用方（把实时 schema 传下去）；
+* 若条目数>0 而索引里没有 ⇒ 写入阶段丢失（再看写入返回值，禁止静默忽略 `false`）。
+
+**顺带发现（待记录/修复）**：部分**残留索引无法删除** —— `DROP INDEX idx_r3b` 报
+"Failed to drop index storage table"（表仍被占用），导致该属性集再也建不了新索引（`duplicate name?`）。
+这与 §19.1/§19.3 的"先删表后删定义 + 取消并等待"属同一族问题，需确认占用的来源（是否为残留构建任务/未释放游标）。
+

@@ -372,7 +372,11 @@ CreateNodePhysicalOp::buildLabelProps(ExpressionEvaluator& evaluator, const Data
 
 folly::coro::Task<bool>
 CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props) {
-    auto planned_entries = collectVertexIndexEntriesFromLabelProps(label_defs_, label_props, vid);
+    // **必须用实时模式**：构建期间新建的索引若不在快照里，写入会既不入索引也不入变更表 ⇒
+    // 构建完成后该行在索引里缺失（实测 §20.4/§20.5：构建期插入 0 vs 全表扫 5）。
+    // 算子已持有 `meta_`，故直接读实时 schema（算子持有的 `label_defs_` 是计划期快照）。
+    const auto& live_label_defs = meta_.schema().labels;
+    auto planned_entries = collectVertexIndexEntriesFromLabelProps(live_label_defs, label_props, vid);
 
     bool ok = true;
     for (const auto& entry : planned_entries) {
