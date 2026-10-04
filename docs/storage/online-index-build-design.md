@@ -912,3 +912,33 @@ state == PUBLIC  ⟹  基础扫描已完成 ∧ delta 已逻辑清空 ∧ 唯一
 **意义**：至此边索引的两处静默错误（§17 求值层 + §17.5 分批层）都已修复，
 "索引结果 == 全表扫结果"成为可回归的判据；这也是本文档 I1/I4 所要求的可信前提。
 
+## 18. 排查中发现的**独立**缺陷：`IS NOT NULL` 在"匿名端点 + 边属性"形状下计数错误
+
+> 与索引**无关**（无任何索引时同样复现），是在验证边索引时顺带发现的第三个缺陷。
+> 尚未修复；本节固化判别实验与已定位的可疑点。
+
+### 判别实验（sf0.1，KNOWS 边总数 14,074）
+
+| 查询 | 结果 | 判定 |
+|---|---|---|
+| `MATCH ()-[r:KNOWS]->() RETURN count(*)` | 14,074 | 基线 |
+| `... WHERE r.creationDate IS NOT NULL RETURN count(*)` | **123,514** | **错**（多于总数） |
+| `... WHERE NOT (r.creationDate IS NULL) RETURN count(*)` | 14,074 | ✓ 正确 |
+| `... WHERE r.creationDate IS NULL RETURN count(*)` | 0 | ✓ 正确 |
+| `... WHERE r.creationDate > 0 RETURN count(*)` | 14,074 | ✓ 正确 |
+| `MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.creationDate IS NOT NULL RETURN count(*)` | 14,074 | ✓ **带端点时正确** |
+| `MATCH (p:Person) WHERE p.creationDate IS NOT NULL RETURN count(*)` | 1,528 = Person 总数 | ✓ 顶点属性正确 |
+
+**结论**：缺陷**只在"匿名端点（`()-[r]->()`）+ 边属性 + `IS NOT NULL`"**这一形状出现；
+`IS NULL` 侧与 `NOT(IS NULL)` 写法均正确 ⇒ 疑点在 `IS NOT NULL` 的**规划/lowering**路径，而非谓词求值本身。
+
+### 已定位的可疑点（下一步从这里查）
+
+1. `src/query/physical_plan/physical_planner.cpp:652-710` —— 三处 `IS_NOT_NULL` 处理，
+   是"由 `IS NOT NULL` 反推候选标签"的**标签提示收集器**（`collectLabelsFrom…`）：
+   该提示会影响扫描/连接的选择，若在"只有边变量绑定"的形状下选出的来源与行数不符，即可能造成行数放大；
+2. `src/query/physical_plan/operator/filter_physical_op.cpp:110` —— `staticTruthOf()` 对
+   `IS_NULL/IS_NOT_NULL` 的静态判定（逻辑本身看似正确，但需确认与上者组合后的行为）；
+3. 下一步应先**观测该形状实际选中的计划**（`EXPLAIN` 对照"匿名 vs 具名端点"两种形状），
+   再对比两者在 `IS NOT NULL` 上的差异；判据：同一数据下两种形状必须给出**相同**行数。
+
