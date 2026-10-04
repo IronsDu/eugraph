@@ -5,6 +5,7 @@
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include "query/physical_plan/operator/vertex_index_maintenance.hpp"
+#include "storage/index/index_build_gate.hpp"
 #include <spdlog/spdlog.h>
 
 namespace {
@@ -398,9 +399,18 @@ CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<Lab
             // BUILDING ⇒ 写**变更表**（构建器随后追赶重放）。**关键**：不能直写索引表——
             // 回填正持有长事务在同一张表上，直写会撞 WT 写冲突而**静默失败**
             // （实测：构建期插入在索引里缺失 0 vs 全表扫 5，见设计 §20.4/§20.6）。
-            const bool wrote = entry.to_delta ? co_await store_.putDeltaEntry(entry.table, entry.values, entry.vid,
-                                                                              /*is_delete=*/false)
-                                              : co_await store_.insertIndexEntry(entry.table, entry.values, entry.vid);
+            // BUILDING ⇒ 先尝试进入**构建闸门**：成功 ⇒ 写变更表（构建器会排空）；
+            // 闸门已关（收尾中/已发布）⇒ 直写索引（§7.1：关闸后不再有写入进变更表 ⇒ 排空即终局）。
+            bool use_delta = entry.to_delta;
+            IndexBuildGate::Guard gate;
+            if (use_delta && entry.index_id != 0) {
+                gate = IndexBuildGateRegistry::instance().gate(entry.index_id)->tryEnter();
+                use_delta = static_cast<bool>(gate);
+            }
+            const std::string& write_table = use_delta ? entry.table : entry.index_table;
+            const bool wrote = use_delta ? co_await store_.putDeltaEntry(write_table, entry.values, entry.vid,
+                                                                         /*is_delete=*/false)
+                                         : co_await store_.insertIndexEntry(write_table, entry.values, entry.vid);
             if (!wrote) {
                 spdlog::error("索引条目写入失败：table={} vid={}（to_delta={}）", entry.table, entry.vid,
                               entry.to_delta);

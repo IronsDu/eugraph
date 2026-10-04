@@ -24,6 +24,9 @@ struct VertexIndexEntry {
     /// 索引处于 BUILDING 时，维护写入改去**变更表**（此时 table 已是 delta 表名）；
     /// PUBLIC 时直写索引（设计 I2 / §4 写路径分流）。默认 false ⇒ 既有聚合初始化不受影响。
     bool to_delta = false;
+    /// 索引表名 + 索引 id：闸门关闭（构建收尾中）时，写者必须**直写索引**而不是变更表（设计 §7.1）
+    std::string index_table;
+    uint32_t index_id = 0;
 };
 
 /// Collect all index entries the vertex currently contributes to.
@@ -118,7 +121,8 @@ collectVertexIndexEntries(IAsyncGraphDataStore& store, const std::unordered_map<
             if (idx.index_id != 0)
                 entries.push_back(VertexIndexEntry{idx.state == IndexState::WRITE_ONLY ? idxDeltaTable(idx.index_id)
                                                                                        : vidxTableById(idx.index_id),
-                                                   values, vid, idx.unique, idx.state == IndexState::WRITE_ONLY});
+                                                   values, vid, idx.unique, idx.state == IndexState::WRITE_ONLY,
+                                                   vidxTableById(idx.index_id), idx.index_id});
         }
     }
 
@@ -200,7 +204,8 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
             if (all_present)
                 entries.push_back(VertexIndexEntry{
                     idx.state == IndexState::WRITE_ONLY ? idxDeltaTable(idx.index_id) : vidxTableById(idx.index_id),
-                    std::move(values), vid, idx.unique, idx.state == IndexState::WRITE_ONLY});
+                    std::move(values), vid, idx.unique, idx.state == IndexState::WRITE_ONLY,
+                    vidxTableById(idx.index_id), idx.index_id});
         }
     }
     return entries;

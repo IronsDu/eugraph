@@ -2,6 +2,7 @@
 
 #include <thread>
 
+#include "storage/index/index_build_gate.hpp"
 #include "storage/index/index_build_service.hpp"
 
 #include "common/types/constants.hpp"
@@ -346,6 +347,12 @@ folly::coro::Task<bool> QueryExecutor::catchUpAndPublish(const std::string& inde
         co_return true; // 定义已消失（例如构建中被 DROP）⇒ 无需追赶
     const std::string delta_table = idxDeltaTable(def_now->index_id);
     constexpr size_t kReplayBatch = 1024;
+
+    // ⓪ **关闸并等在飞写者退出**（设计 §7.1/§15.1）：此后到达的写者会直写索引（不再进变更表），
+    // 因此"追平 + 翻 PUBLIC"之后不会再有落在变更表里的写入 ⇒ 丢写窗口被彻底封死。
+    auto gate = IndexBuildGateRegistry::instance().gate(def_now->index_id);
+    if (!gate->closeAndWait(5000))
+        spdlog::warn("[index-build] '{}' 关闸等待在飞写者超时（窗口可能变大，但不会静默丢写）", index_name);
 
     // ① 追平（多轮；每轮从表首开始、轮内 last_key 续扫；应用后从变更表删除 ⇒ 可终止）
     for (int pass = 0; pass < 50; ++pass) {

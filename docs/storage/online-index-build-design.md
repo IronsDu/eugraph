@@ -1441,3 +1441,31 @@ COLLECT label=2 idx_count=1                 ← DML **看到了新索引**（实
 3. 构建器收尾：`CAS closed=true` → **等 `inflight==0`** → 追平变更表 → 翻 `PUBLIC` → 释放闸门；
 4. 判据：构建期插入 N 条边/顶点 ⇒ `索引 == 全表扫 == N`（当前顶点 5/5 ✓、纯 `PUBLIC` 期 6/6 ✓、边构建期 4/6 ✗）。
 
+### 20.14 构建闸门已落地（顶点通过）；边路径暴露出**新的**具体缺陷
+
+**已落地：`IndexBuildGateRegistry`（设计 §7.1 的落地形态）**
+
+* `src/storage/index/index_build_gate.hpp`：进程内按 `index_id` 的闸门（`closed` 原子 + `inflight` 计数）
+  + **两阶段准入**（`inflight++` 后复查 `closed`，与 §15.1 的线性化要求一致）+ RAII `Guard`（析构自动 `--`）；
+* **写者**（顶点/边两个 CREATE 路径）：`BUILDING` ⇒ `tryEnter()`：成功 ⇒ 写**变更表**；
+  **闸门已关** ⇒ **直写索引**（用 `index_table`，而非 delta 表）；
+* **构建器收尾**（`catchUpAndPublish`）：`closeAndWait()` ⇒ 追平变更表 ⇒ 翻 `PUBLIC`。
+  由此建立"关闸前写入都在变更表里、关闸后写入都直写索引"的边界 ⇒ 排空即终局。
+
+**判据**：顶点构建期插入 **5 == 5** ✓（未回归）；边构建期插入 **4 == 6** ✗。
+
+**边路径的新缺陷（本轮新证据）**：
+
+```
+边索引条目写入失败：table=table:idx_delta_48 eid=1605633（to_delta=true）
+Failed to open cursor on table:idx_delta_48: error 2      ← 变更表打不开（不存在？）
+```
+
+即：**边索引的变更表在写入时不存在**。诡异之处：代码中**两处**建表都在
+（`query_executor.cpp:704` 顶点、`:830` 边），且 DDL 返回成功。**下一步诊断**：
+在 DDL 处打印"为哪个 `index_id` 建了哪张变更表"，与 DML 路由用的 `idx.index_id` **逐一对账**；
+同时确认 `createEdgeIndex` 里 `next_index_id++` 的取值与 `findIndexByName` 返回的副本一致
+（怀疑点：边路径可能用了与建表时**不同的 id**，或建表分支未被执行）。
+
+**影响**：边索引在构建期写入会失败（现在**会显式报错**，不再静默丢），需尽快修复以达成 `6 == 6`。
+
