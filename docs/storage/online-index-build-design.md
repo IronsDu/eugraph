@@ -1547,3 +1547,30 @@ release 构建同样可复现（非 ASan 特有）。
 **下一步（恢复异步构建的前提）**：让后台构建使用**独立的 txn/会话**（例如为构建任务单独 `beginTran()` 并绑定到该任务，
 或为后台线程使用独立 store/会话），随后把开关打开并重跑 ASan 活体冒烟（判据：**0 报告 + 0 崩溃 + 双判据通过**）。
 
+### 20.18 两个剩余阻塞项的可行方案（本轮勘察结论）
+
+#### A. 异步构建的会话隔离（恢复 `kEnableAsyncIndexBuild` 的前提）
+
+**根因（强怀疑，§20.17）**：后台构建任务与查询线程**共享** `AsyncGraphDataStore::txn_`（per-store 成员）
+⇒ 同一 `WT_SESSION` 并发使用 ⇒ `session_dhandle` 损坏 + SEGV。
+
+**方案（推荐，边界清晰）**：**后台构建使用独立的一对 store**——
+`GraphInstance` 为构建再建 `AsyncGraphDataStore`（复用同一 `sync_data`）+ `AsyncGraphMetaStore`（复用同一 `sync_meta`），
+二者各自持有 `txn_` 与会话，天然与查询路径隔离。落地步骤：
+
+1. `QueryExecutor` 增加 `setBuildStores(build_data, build_meta)`；
+2. 把 `backfillVertexIndex` / `backfillEdgeIndex` / `catchUpAndPublish` 改为**显式接收 stores**
+   （或引入 `IndexBuildContext{ data, meta, table, index_name, cancelled }` 结构体，一次到位）；
+3. 后台任务用 `build_*`；**同步路径**仍用 `async_data_/async_meta_`（行为不变）；
+4. 打开开关 ⇒ 重跑 **ASan 活体冒烟**（判据：0 报告 + 0 崩溃 + 顶点 `5==5` + 边 `6==6`）。
+
+#### B. 孤儿表回收（`DROP` 降级产生）
+
+**勘察结论**：本仓库所用的 WT 版本**没有** `get_table_names` 之类的"列出表名"API ⇒
+**"启动时扫描孤儿表"的方案不可行** ✗（本轮实现到一半即撤除，未留破坏）。
+
+**改用方案（推荐）：显式登记 + 打开图时重试**
+1. `DROP` 删表失败时，把该表名写入 meta（如 `M|orphan:<table>`，复用既有 `metadataPut` 通路）；
+2. 图打开时（§19.5 同一处）**按前缀扫描** meta 的 orphan 记录，逐条重试 `dropIndex`；成功则删除该记录；
+3. 若表名可解析出 `index_id`，顺手确认该 id 已无索引定义（避免误删重建后的同 id 表——注意 **index_id 永不复用**，见 H15）。
+
