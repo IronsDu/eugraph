@@ -1,5 +1,7 @@
 #include "query/executor/query_executor.hpp"
 
+#include <thread>
+
 #include "storage/index/index_build_service.hpp"
 
 #include "common/types/constants.hpp"
@@ -802,9 +804,18 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
         // ② **先删存储表，成功后再删定义**。顺序颠倒会在"表删不掉"时留下"定义已消失、表还在"的坏状态。
         if (!new_table.empty()) {
-            const bool table_dropped = co_await async_data_.dropIndex(new_table);
+            // **有界重试**：刚构建完成的索引表可能在短时间内仍被构建侧的会话/游标占用
+            // （WT 报 "Device or resource busy"），实测稍后即可删除。这里重试 ~200ms，
+            // 把这类**瞬态**占用转为成功；仍失败才走"安全失败"（保留定义、明确报错）。
+            bool table_dropped = false;
+            for (int attempt = 0; attempt < 100 && !table_dropped; ++attempt) {
+                table_dropped = co_await async_data_.dropIndex(new_table);
+                if (!table_dropped)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
             if (!table_dropped) {
-                result.error = "Failed to drop index storage table: " + new_table + " (索引定义保持不变)";
+                result.error =
+                    "Failed to drop index storage table: " + new_table + " (索引定义保持不变；稍后重试 DROP)";
                 co_return;
             }
         }
