@@ -127,6 +127,23 @@ public:
                           std::string_view payload) override;
     bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,
                           uint64_t entity_id, std::string_view payload) override;
+    /// **按键**写入/删除索引条目：重放变更表时直接复用原始键，无需解码键里的属性值。
+    bool putIndexEntryByKey(GraphTxnHandle txn, const std::string& table, std::string_view key,
+                            std::string_view payload = {});
+    bool deleteIndexEntryByKey(GraphTxnHandle txn, const std::string& table, std::string_view key);
+
+    /// 变更表扫描（**按键序**、可续扫、把原始键交给回调）——重放用。
+    /// 回调签名 `(entity_id, key, value)`；返回 false 表示调用方要求停止。
+    bool scanDeltaWithKey(GraphTxnHandle txn, const std::string& table,
+                          const std::function<bool(uint64_t, std::string_view, std::string_view)>& callback,
+                          std::string_view start_after = {}, std::string* last_key_out = nullptr);
+
+    /// 写一条**变更表**记录（op 由值编码携带，见 index_delta_codec.hpp）。与实体写入**同事务**。
+    bool putDeltaEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value, uint64_t entity_id,
+                       bool is_delete, std::string_view payload = {});
+    bool putDeltaEntry(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,
+                       uint64_t entity_id, bool is_delete, std::string_view payload = {});
+
     bool deleteIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                           uint64_t entity_id) override;
     bool deleteIndexEntry(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,

@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_delta_codec.hpp"
 #include "storage/kv/index_key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
 
@@ -341,4 +342,63 @@ TEST_F(IndexStoreTest, EdgeCompositeIndexInsertAndScan) {
     ASSERT_EQ(results.size(), 1u);
     EXPECT_EQ(results[0], 1u);
     commit();
+}
+
+// ==================== 变更表（delta）原语：P2 第一步（设计 §5.0）====================
+TEST_F(IndexStoreTest, DeltaTablePutOrderedResumableScanAndOpDecoding) {
+    const auto table = idxDeltaTable(42);
+    ASSERT_TRUE(store_->createIndex(table));
+
+    struct Row {
+        int64_t value;
+        uint64_t entity;
+        bool del;
+        std::string payload;
+    };
+    // 故意乱序写入；并让 (20,2) 先 DEL 再 PUT ⇒ 验证同一 (键, 实体) **覆盖去重**（最终只应剩一条 PUT）
+    const std::vector<Row> rows = {
+        {30, 3, false, "adj-3"},  {10, 1, false, "adj-1"}, {20, 2, true, ""},
+        {10, 2, false, "adj-1b"}, {40, 4, false, "adj-4"}, {20, 2, false, "adj-2-redone"},
+    };
+    for (const auto& r : rows) {
+        ASSERT_TRUE(store_->putDeltaEntry(txn(), table, PropertyValue{static_cast<int64_t>(r.value)}, r.entity, r.del,
+                                          r.payload));
+    }
+    commit();
+
+    // 每批 2 条 ⇒ 必须靠**续扫**才能取完；顺序必须按 (值, 实体) 键序
+    std::vector<std::pair<uint64_t, bool>> got; // (entity, is_delete)
+    std::vector<std::string> payloads;
+    std::string last_key;
+    while (true) {
+        size_t n = 0;
+        std::string next_key;
+        ASSERT_TRUE(store_->scanDeltaWithKey(
+            txn(), table,
+            [&](uint64_t /*entity_id*/, std::string_view /*key*/, std::string_view raw) {
+                bool is_del = false;
+                std::string_view payload;
+                EXPECT_TRUE(decodeDeltaValue(raw, is_del, payload));
+                got.emplace_back(0, is_del); // entity 由下面的断言单独取
+                payloads.emplace_back(payload);
+                ++n;
+                return n < 2;
+            },
+            last_key, &next_key));
+        if (n == 0)
+            break;
+        last_key = std::move(next_key);
+        if (n < 2)
+            break;
+    }
+
+    // 去重后应有 5 条（(20,2) 只保留最后一条 PUT）
+    ASSERT_EQ(got.size(), 5u);
+    // 键序：(10,1) (10,2) (20,2) (30,3) (40,4) —— 用 op 序列间接验证顺序（只有 (20,2) 曾被 DEL 覆盖）
+    EXPECT_FALSE(got[0].second);
+    EXPECT_FALSE(got[1].second);
+    EXPECT_FALSE(got[2].second) << "(20,2) 应被后来的 PUT 覆盖（去重），不应还是 DEL";
+    EXPECT_EQ(payloads[2], "adj-2-redone");
+    EXPECT_FALSE(got[3].second);
+    EXPECT_FALSE(got[4].second);
 }

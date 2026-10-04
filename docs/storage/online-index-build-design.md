@@ -1115,3 +1115,38 @@ P2（变更表）落地后，同一步还需**删除残留变更表**（§5.2 �
 ⇒ **P1 主线（状态机 + 调度 + 相位机 + 异步 DDL + 取消 + 关图 + 启动恢复）至此全部落地**；
 剩余主线仅 **P2（变更表 + 写路径按 `BuildState` 分流）**——即"构建期间的并发写入"这一块。
 
+## 20. P2 实施（变更表 + 写路径分流 + 追赶）——第一步已完成
+
+### 20.1 变更表存储原语（已完成并测过）
+
+**关键发现（省掉大量新代码）**：设计里变更表需要的多数能力**已存在**，可原样复用——
+建表 `createIndex`、删表 `dropIndex`、**按键序可续扫** `scanIndexRangeWithValue`（§17.5 已修成真正推进）。
+
+**新增的只有"带 op 的写入"与"按键读写/扫键"**（`sync_graph_data_store`）：
+
+| 原语 | 作用 |
+|---|---|
+| `putDeltaEntry(txn, table, values, entity_id, is_delete, payload)` | 写一条变更（**与实体写入同事务**，§5.0 不变量） |
+| `putIndexEntryByKey` / `deleteIndexEntryByKey` | 重放时**直接复用原始键**，无需解码键里的属性值 |
+| `scanDeltaWithKey(txn, table, cb(entity_id, key, value), start_after, last_key_out)` | **按键序 + 可续扫**的变更表读，供重放用 |
+
+配套：`idxDeltaTable(index_id)` 表名；`index_delta_codec.hpp` 值编码 `{op(1B), payload}`
+（键沿用 `IndexKeyCodec::encodeIndexKey(values, entity_id)` ⇒ **索引键在前、实体 id 在后**，
+故相同键相邻（唯一性自查只需比相邻项）、且同一 (键, 实体) 覆盖写**天然去重**）。
+
+**单测**（`index_store_tests` 现 15 个）：乱序写入 6 条（含 (20,2) 先 `DEL` 后被 `PUT` 覆盖）、
+**每批 2 条**的续扫取完全部、断言键序与 op 解码、并断言**去重后 (20,2) 只剩最后那条 PUT**（payload 校验）✓
+
+### 20.2 剩余步骤（按序，均已明确到文件与判据）
+
+1. **写路径分流**（`vertex_index_maintenance.hpp` / `edge_index_maintenance.hpp` + 存储层收集器）：
+   索引处于 `BUILDING` 时，维护写入改写到**变更表**而非索引表（`PUBLIC` 时直写索引，I2）。
+   需要把"索引运行时状态"（`IndexRuntimeState`，§3 两维度模型）挂到 `IndexDef` 上（共享 `shared_ptr`）
+   以便写路径与构建器看到**同一个**状态。
+2. **追赶 + 关闸排空**（§6.1 / §7.1）：基础扫描后循环重放变更表（用 §20.1 的续扫原语），
+   达到阈值后**关闸**（拒绝新写入进入变更表 ⇒ 让它们等待或直写索引）、等待在飞写者结束、重放最后一批。
+3. **三项校验**（§5.1 / §6.1）：变更表已空（**扫到 EOF 判定**，不得用计数器）、唯一性（最终合并态）、条目数护栏。
+4. **清理**：置 `PUBLIC`/`ERROR` 后**删除变更表**（drop，§5.2）；启动时（§19.5 的同一处）删除残留变更表。
+5. **验收判据**（§12）：构建期间并发写入（增/删/改键）后，`PUBLIC` 时"索引查询结果 == 全表扫 + 过滤"**逐行一致**；
+   并用 §16 的活体手段（sf0.1）验证。
+

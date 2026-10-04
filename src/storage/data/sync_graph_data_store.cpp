@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <spdlog/spdlog.h>
 
+#include "storage/index/index_delta_codec.hpp"
 #include "storage/kv/index_key_codec.hpp"
 
 namespace eugraph {
@@ -1050,6 +1051,80 @@ bool SyncGraphDataStore::dropIndex(const std::string& table_name) {
 }
 
 // ==================== Index Entry Operations ====================
+
+namespace {
+/// 定义在本文件后部（索引扫描实现处）；此处前向声明以便变更表扫描复用。
+bool positionIndexCursor(WT_CURSOR* c, std::string_view from);
+} // namespace
+
+bool SyncGraphDataStore::putIndexEntryByKey(GraphTxnHandle txn, const std::string& table, std::string_view key,
+                                            std::string_view payload) {
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tablePutTxn(txn, session, table, key, payload);
+}
+
+bool SyncGraphDataStore::deleteIndexEntryByKey(GraphTxnHandle txn, const std::string& table, std::string_view key) {
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tableDel(session, table, key);
+}
+
+bool SyncGraphDataStore::scanDeltaWithKey(
+    GraphTxnHandle txn, const std::string& table,
+    const std::function<bool(uint64_t, std::string_view, std::string_view)>& callback, std::string_view start_after,
+    std::string* last_key_out) {
+    auto* session = getSession(txn);
+    auto cursor = openCursor(session, table);
+    if (!cursor)
+        return false;
+    auto* c = cursor.get();
+    if (!positionIndexCursor(c, start_after))
+        return false;
+    while (true) {
+        WT_ITEM key_item;
+        if (c->get_key(c, &key_item) != 0)
+            break;
+        std::string_view key(static_cast<const char*>(key_item.data), key_item.size);
+        if (!start_after.empty() && key <= start_after) {
+            if (c->next(c) != 0)
+                break;
+            continue;
+        }
+        if (last_key_out != nullptr)
+            last_key_out->assign(key.data(), key.size());
+        WT_ITEM val_item;
+        int vret = c->get_value(c, &val_item);
+        std::string_view val((vret == 0 && val_item.data) ? static_cast<const char*>(val_item.data) : "",
+                             (vret == 0) ? val_item.size : 0);
+        if (!callback(IndexKeyCodec::decodeEntityId(key), key, val))
+            break;
+        if (c->next(c) != 0)
+            break;
+    }
+    return true;
+}
+
+bool SyncGraphDataStore::putDeltaEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                                       uint64_t entity_id, bool is_delete, std::string_view payload) {
+    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tablePutTxn(txn, session, table, key, encodeDeltaValue(is_delete, payload));
+}
+
+bool SyncGraphDataStore::putDeltaEntry(GraphTxnHandle txn, const std::string& table,
+                                       const std::vector<PropertyValue>& values, uint64_t entity_id, bool is_delete,
+                                       std::string_view payload) {
+    auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tablePutTxn(txn, session, table, key, encodeDeltaValue(is_delete, payload));
+}
 
 bool SyncGraphDataStore::insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                           uint64_t entity_id) {
