@@ -458,6 +458,19 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> putDeltaEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                          uint64_t entity_id, bool is_delete, std::string_view payload) override {
+        auto txn = txn_;
+        auto t = table;
+        auto vals = values;
+        auto pl = std::string(payload);
+        auto ok = co_await io_.dispatch(
+            [this, txn, t = std::move(t), vals = std::move(vals), entity_id, is_delete, pl = std::move(pl)]() {
+                return store_.putDeltaEntry(txn, t, vals, entity_id, is_delete, pl);
+            });
+        co_return ok;
+    }
+
     folly::coro::Task<size_t> replayDeltaBatch(const std::string& index_table, const std::string& delta_table,
                                                size_t max_rows, std::string& last_key) override {
         auto txn = txn_;

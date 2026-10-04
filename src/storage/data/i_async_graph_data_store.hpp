@@ -144,6 +144,9 @@ public:
     /// 写一条变更：索引处于 BUILDING 时，维护写入改去此处（**与实体写入同事务**）
     virtual folly::coro::Task<bool> putDeltaEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                                   uint64_t entity_id, bool is_delete) = 0;
+    /// 同上，但携带 payload（**边索引**的邻接值必须随变更一起进变更表，重放时原样写回索引）
+    virtual folly::coro::Task<bool> putDeltaEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                                  uint64_t entity_id, bool is_delete, std::string_view payload) = 0;
 
     /// 重放**一批**变更表记录到索引表（在 IO 线程上整批完成，避免跨线程回调）：
     /// 按键序取最多 `max_rows` 行，逐行应用（PUT ⇒ putIndexEntryByKey；DEL ⇒ deleteIndexEntryByKey），

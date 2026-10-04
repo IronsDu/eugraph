@@ -138,9 +138,21 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                     continue;
 
                 auto adj_value = ValueCodec::encodeEdgeAdjacency(src, dst, 0, effective_label_id);
-                auto table = idx.prop_ids.size() == 1 ? eidxTable(effective_label_id, idx.prop_ids[0])
-                                                      : eidxCompositeTable(effective_label_id, idx.prop_ids);
-                co_await store_.insertIndexEntry(table, values, eid, std::move(adj_value));
+                // 构建中（WRITE_ONLY）⇒ 写**变更表**（构建器随后追赶重放）；**不可直写索引表**——
+                // 回填正持有长事务在同一张表上，直写会撞 WT 写冲突而**静默失败**
+                // （顶点路径实测：构建期写入在索引里缺失，见设计 §20.4/§20.10）。边索引还要带上邻接 payload。
+                const bool to_delta = (idx.state == IndexState::WRITE_ONLY);
+                const std::string table =
+                    to_delta ? idxDeltaTable(idx.index_id)
+                             : (idx.prop_ids.size() == 1 ? eidxTable(effective_label_id, idx.prop_ids[0])
+                                                         : eidxCompositeTable(effective_label_id, idx.prop_ids));
+                const bool wrote =
+                    to_delta ? co_await store_.putDeltaEntry(table, values, eid, /*is_delete=*/false, adj_value)
+                             : co_await store_.insertIndexEntry(table, values, eid, std::move(adj_value));
+                if (!wrote) {
+                    spdlog::error("边索引条目写入失败：table={} eid={}（to_delta={}）", table, eid, to_delta);
+                    ok = false; // 不再静默忽略
+                }
             }
         }
         co_return ok;

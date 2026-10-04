@@ -568,6 +568,31 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlSta
         co_return IndexBuildResult{IndexBuildOutcome::ERROR,
                                    "Unique edge index creation failed: duplicate values found during backfill"};
     }
+
+    // ==================== P2 追赶：重放构建期间的变更表（**边路径此前完全缺失**）====================
+    // 顶点路径有同样的收尾；边路径遗漏 ⇒ 构建期写入变更表的边**永远不会进索引**（实测 3/6 丢失）。
+    {
+        const auto& schema_now = async_meta_.schema();
+        auto def_now = schema_now.findIndexByName(stmt.index_name);
+        if (def_now && def_now->index_id != 0) {
+            const std::string delta_table = idxDeltaTable(def_now->index_id);
+            constexpr size_t kReplayBatch = 1024;
+            for (int pass = 0; pass < 50; ++pass) {
+                size_t applied_total = 0;
+                std::string last_key; // 每轮从表首开始，轮内靠 last_key 续扫
+                while (true) {
+                    const size_t applied =
+                        co_await async_data_.replayDeltaBatch(table, delta_table, kReplayBatch, last_key);
+                    applied_total += applied;
+                    if (applied < kReplayBatch)
+                        break;
+                }
+                if (applied_total == 0)
+                    break; // 追平（已应用的行在重放时从变更表删除）
+            }
+        }
+    }
+
     co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
 }
 
