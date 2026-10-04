@@ -1095,3 +1095,23 @@ DROP INDEX idx_cancel3                                          → dropIndex: f
 遍历 schema 的索引定义，把 `state == WRITE_ONLY` 的统一改为 `ERROR` 并记日志；
 P2（变更表）落地后，同一步还需**删除残留变更表**（§5.2 的"启动时清理"）。
 
+### 19.5 §9 策略 A 已落地：重启时"构建中"的索引置 `ERROR`
+
+`openGraphInstance`（async meta 打开之后）遍历 `schema.labels` / `schema.edge_labels` 的索引定义，
+把 `state == WRITE_ONLY`（即 `BUILDING`）的统一改为 **`ERROR` 并保留定义**，逐个记 warning，并汇总条数。
+
+**实测验收**：
+
+| 判据 | 结果 |
+|---|---|
+| 重启前状态 | `('idx_shutdown','Message','creationDate','false','BUILDING')` |
+| 重启后状态 | **`ERROR`** ✓ |
+| 是否残留 `BUILDING` | **0 个** ✓ |
+| 启动日志 | `索引 'idx_shutdown' 重启前处于构建中 ⇒ 置 ERROR（不置 PUBLIC；可 DROP 后重建）` + `共处理 1 个未完成的索引构建` ✓ |
+| 服务可用 | ✓（286,744 点） |
+
+**回归**：`query_executor_tests` 573/573、`index_e2e_tests` 55/55、`index_store_tests` 14/14、TCK 通过。
+
+⇒ **P1 主线（状态机 + 调度 + 相位机 + 异步 DDL + 取消 + 关图 + 启动恢复）至此全部落地**；
+剩余主线仅 **P2（变更表 + 写路径按 `BuildState` 分流）**——即"构建期间的并发写入"这一块。
+

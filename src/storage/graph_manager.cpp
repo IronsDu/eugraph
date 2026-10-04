@@ -269,6 +269,32 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
 
     compute::QueryExecutor::Config executor_config;
     executor_config.compute_threads = compute_threads_;
+    // §9 策略 A：**构建中的索引在重启后一律不置 PUBLIC，标 ERROR 并保留定义**。
+    // 依据：异步构建任务不跨进程存活；若不处理，索引会永远停在 BUILDING（读路径只认 PUBLIC ⇒ 安全但**无法自愈**），
+    // 用户只能 DROP 后重建。实测缺口见设计文档 §19.4。
+    {
+        const auto& schema_on_open = instance->async_meta->schema();
+        std::vector<std::string> stuck;
+        for (const auto& [_, label] : schema_on_open.labels) {
+            for (const auto& idx : label.indexes) {
+                if (idx.state == IndexState::WRITE_ONLY)
+                    stuck.push_back(idx.name);
+            }
+        }
+        for (const auto& [_, elabel] : schema_on_open.edge_labels) {
+            for (const auto& idx : elabel.indexes) {
+                if (idx.state == IndexState::WRITE_ONLY)
+                    stuck.push_back(idx.name);
+            }
+        }
+        for (const auto& name : stuck) {
+            folly::coro::blockingWait(instance->async_meta->updateIndexState(name, IndexState::ERROR));
+            spdlog::warn("[index-build] 索引 '{}' 重启前处于构建中 ⇒ 置 ERROR（不置 PUBLIC；可 DROP 后重建）", name);
+        }
+        if (!stuck.empty())
+            spdlog::warn("[index-build] 本次启动共处理 {} 个未完成的索引构建", stuck.size());
+    }
+
     instance->executor =
         std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta, executor_config);
 
