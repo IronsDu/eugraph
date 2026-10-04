@@ -1076,3 +1076,22 @@ DROP INDEX idx_cancel3                                          → dropIndex: f
 
 ⇒ 至此"构建中 `DROP`"从"可能崩溃（§19.1）→ 安全失败（§19.1 修复）→ **总是成功**（本节）"三阶段收敛完毕。
 
+### 19.4 关机顺序验证 + 重启后"卡在 BUILDING"的缺口（待修）
+
+**验证（构建中优雅停机）**：`CREATE INDEX`（大标签）后立即 `SIGTERM` ⇒ 进程**干净退出**，
+日志中 **SIGSEGV / Check failed 均为 0**（唯一信号诊断是本次 SIGTERM 自身，folly 会打印栈信息，属正常行为）。
+
+**但重启后暴露一个未落实的设计项（§9 策略 A）**：
+
+```
+重启后 SHOW INDEXES → ('idx_shutdown','Message','creationDate','false','BUILDING')
+```
+
+即：构建中的索引在重启后**停留在 `BUILDING`（持久化为 `WRITE_ONLY`）且没有任何构建在跑** ⇒
+既不可用（读路径只认 `PUBLIC`，**安全** ✓），也**永远无法自愈**，必须手工 `DROP` 后重建。
+
+**设计早已规定**（§9 策略 A："构建中的索引在重启后一律不置 `PUBLIC`，标 `ERROR` 保留定义"）——
+**实现里尚未落地**。修法（下一步，小改动）：图打开时（`openGraphInstance` 中 async meta 打开之后）
+遍历 schema 的索引定义，把 `state == WRITE_ONLY` 的统一改为 `ERROR` 并记日志；
+P2（变更表）落地后，同一步还需**删除残留变更表**（§5.2 的"启动时清理"）。
+
