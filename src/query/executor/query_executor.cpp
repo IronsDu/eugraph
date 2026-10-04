@@ -338,6 +338,47 @@ void QueryExecutor::setIndexBuildService(std::shared_ptr<IndexBuildService> serv
     index_builds_ = std::move(service);
 }
 
+folly::coro::Task<bool> QueryExecutor::catchUpAndPublish(const std::string& index_table,
+                                                         const std::string& index_name) {
+    const auto& schema_now = async_meta_.schema();
+    auto def_now = schema_now.findIndexByName(index_name);
+    if (!def_now || def_now->index_id == 0)
+        co_return true; // 定义已消失（例如构建中被 DROP）⇒ 无需追赶
+    const std::string delta_table = idxDeltaTable(def_now->index_id);
+    constexpr size_t kReplayBatch = 1024;
+
+    // ① 追平（多轮；每轮从表首开始、轮内 last_key 续扫；应用后从变更表删除 ⇒ 可终止）
+    for (int pass = 0; pass < 50; ++pass) {
+        size_t applied_total = 0;
+        std::string last_key;
+        while (true) {
+            const size_t applied =
+                co_await async_data_.replayDeltaBatch(index_table, delta_table, kReplayBatch, last_key);
+            applied_total += applied;
+            if (applied < kReplayBatch)
+                break;
+        }
+        if (applied_total == 0)
+            break;
+    }
+
+    // ② **先翻 PUBLIC**：此后新写入直写索引、不再进变更表（关闸的近似实现）
+    if (!(co_await async_meta_.updateIndexState(index_name, IndexState::PUBLIC)))
+        co_return false;
+
+    // ③ **再排空一次**：收走"翻状态瞬间仍在飞"的写入
+    {
+        std::string last_key;
+        while (true) {
+            const size_t applied =
+                co_await async_data_.replayDeltaBatch(index_table, delta_table, kReplayBatch, last_key);
+            if (applied < kReplayBatch)
+                break;
+        }
+    }
+    co_return true;
+}
+
 folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlStatement stmt, std::string table,
                                                                        LabelId label_id,
                                                                        std::vector<ResolvedIndexAccessor> resolved,
@@ -486,6 +527,10 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlS
         }
     }
 
+    // P2 追赶 + **近似关闸**：追平 → 翻 PUBLIC → 再排空一次（见 catchUpAndPublish 注释）
+    if (!(co_await catchUpAndPublish(table, stmt.index_name)))
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR, "Failed to publish index state (PUBLIC)"};
+
     co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
 }
 
@@ -592,6 +637,10 @@ folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlSta
             }
         }
     }
+
+    // P2 追赶 + **近似关闸**：追平 → 翻 PUBLIC → 再排空一次（见 catchUpAndPublish 注释）
+    if (!(co_await catchUpAndPublish(table, stmt.index_name)))
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR, "Failed to publish index state (PUBLIC)"};
 
     co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
 }

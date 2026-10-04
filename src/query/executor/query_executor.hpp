@@ -97,6 +97,11 @@ private:
 
     /// 顶点索引回填 + 提交（**不落状态**：由调用方或发布回调落，保持两库提交顺序）。
     /// 抽成协程的原因：同步路径与后台构建任务需要**同一份实现**（P1-④）。
+    /// P2 追赶 + **近似关闸**：重放变更表追平 → **先翻 `PUBLIC`**（此后新写入直写索引）→ **再排空一次**
+    /// （收走"翻状态瞬间仍在飞"的写入）。返回 false 表示状态翻转失败（构建应置 ERROR）。
+    /// 严格版关闸（per-index 闸门 + 在飞写者计数）见设计 §7.1/§15.1，尚未实现。
+    folly::coro::Task<bool> catchUpAndPublish(const std::string& index_table, const std::string& index_name);
+
     /// `cancelled` 为可选取消令牌：**逐批检查**（构建中 DROP 时据此尽快退出，而不是把整个回填跑完）。
     folly::coro::Task<IndexBuildResult> backfillVertexIndex(IndexDdlStatement stmt, std::string table, LabelId label_id,
                                                             std::vector<ResolvedIndexAccessor> resolved,
