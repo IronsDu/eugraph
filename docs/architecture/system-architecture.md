@@ -361,3 +361,43 @@ Handler::co_createLabel(name, props):
 | ------ | ----------------------------------- | ------------------ |
 | 存算一体   | SyncGraphDataStore + SyncGraphMetaStore + IoScheduler + Compute | 单机部署，本地计算，零 RPC 开销 |
 | 全功能节点  | 上述 + fbthrift Server + Shell         | 单机全功能 / 分布式协调节点    |
+
+## 索引子系统（在线构建）
+
+**设计全文**见 [storage/online-index-build-design.md](../storage/online-index-build-design.md)（§1–§20；含并发矩阵、
+危险清单 H1–H20、实施阶段与验收判据）。此处只记**对外契约**与**当前实现状态**。
+
+### 状态模型：两个正交维度
+
+| 维度 | 取值 | 决定什么 |
+|---|---|---|
+| **BuildState** | `BUILDING`(phase SCAN/CATCHUP) / `FINALIZING` / `PUBLIC` / `ERROR` | **写路径去向**与构建进度 |
+| **Lifecycle** | `ACTIVE` / `DROPPING` / `PENDING_PURGE` / `PURGING` | 规划器可选性、维护是否继续、何时物理删除 |
+
+* **读路径唯一判据**：`BuildState == PUBLIC ∧ Lifecycle == ACTIVE`（I1）——半成品索引永不被规划器选中；
+* **写路径**：`BUILDING` ⇒ 写**变更表**（受构建闸门保护）；`PUBLIC` ⇒ 直写索引（I2）。
+
+### 在线构建的三件套
+
+1. **变更表**（`table:idx_delta_<index_id>`）：键 `(索引键, 实体 id)` ⇒ 按键序、可续扫、同键覆盖天然去重；
+   与实体写入**同事务**；应用后逐行删除（保证追赶可终止）；
+2. **构建闸门**（`IndexBuildGateRegistry`，进程内按 `index_id`）：写者两阶段准入（`inflight++` → 复查 `closed`）；
+   构建器收尾 `closeAndWait()` ⇒ 追平变更表 ⇒ 翻 `PUBLIC` ⇒ **排空即终局**（不存在"关闸后仍写变更表"的写入）；
+3. **追赶**（`replayDeltaBatch`）：IO 线程上整批"按键序取 + 逐行应用(PUT/DEL) + 删行"。
+
+### DDL 与生命周期
+
+* `CREATE INDEX`：建定义（`BUILDING`）→ 建索引表与**变更表** → 回填 → 追赶 →（关闸）→ `PUBLIC`；
+  **当前实现走同步构建**（异步开关 `kEnableAsyncIndexBuild=false`，见下）；
+* `DROP INDEX`：**定义总是删除**；表删除**尽力而为**，失败则降级为**孤儿表**（避免"属性集永久无法重建索引"）；
+  **构建中的索引拒绝 DROP**（返回明确错误）；
+* **启动恢复**：`BUILDING` 状态的索引一律置 `ERROR`（不置 `PUBLIC`，可 DROP 后重建）。
+
+### 当前实现状态与已知限制
+
+| 项 | 状态 |
+|---|---|
+| 状态模型 / 分流 / 变更表 / 追赶 / 守卫 / 启动恢复 / 判据（顶点 5==5、边 6==6） | ✅ 已实现并验证 |
+| **异步构建** | ⚠️ **暂时关闭**（同步构建）：后台构建与 DML 写入并发时出现 WT **会话竞态**（`session_dhandle` SEGV，ASan 与 release 均可复现）——强怀疑后台任务与查询线程**共享 `AsyncGraphDataStore::txn_`**；待改为"后台任务独立 txn/会话"后开启 |
+| 孤儿表回收 | ⏳ 待做（启动时扫描并删除无对应定义的 `vidx_*/eidx_*/idx_delta_*`） |
+
