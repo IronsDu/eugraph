@@ -952,7 +952,10 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 spdlog::warn(
                     "dropIndex: 索引表 {} 暂时无法删除，登记为孤儿表（定义已删除；后续 DROP 会机会式重试回收）",
                     new_table);
-                rememberOrphan(new_table);
+                if (index_builds_)
+                    index_builds_->recordOrphan(new_table); // 跨进程回收（§20.22 方案 2）
+                else
+                    rememberOrphan(new_table);
             }
         }
         // P2：连同变更表一起删（若存在；失败不致命，记日志即可——启动清理会兜底，§5.2）

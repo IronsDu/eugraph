@@ -319,7 +319,20 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
                 spdlog::info("[index-build] '{}' 构建结束，状态={}", index_name,
                              outcome == IndexBuildOutcome::PUBLIC ? "PUBLIC" : "ERROR");
         });
+    // 孤儿表日志（每图一份，随图目录）：DROP 删表失败时登记，**下次打开该图时重试回收**
+    instance->index_builds->setOrphanLogPath(data_dir_ + "/graph_" + std::to_string(instance->graph_id) +
+                                             "/orphan_tables.txt");
     instance->executor->setIndexBuildService(instance->index_builds);
+
+    // **跨进程回收孤儿表**：上一个进程删不掉的索引表（其会话随进程消失 ⇒ 这里必然可删）
+    for (const auto& orphan : instance->index_builds->takeOrphans()) {
+        if (!folly::coro::blockingWait(instance->async_data->dropIndex(orphan))) {
+            instance->index_builds->recordOrphan(orphan); // 仍失败 ⇒ 留待下次
+            spdlog::warn("[index-build] 孤儿表 {} 仍无法删除，留待下次回收", orphan);
+        } else {
+            spdlog::info("[index-build] 孤儿表 {} 已回收", orphan);
+        }
+    }
 
     return instance;
 }

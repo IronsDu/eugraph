@@ -14,8 +14,10 @@
 #include "storage/index/index_build_scheduler.hpp"
 #include "storage/index/index_build_task.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -116,6 +118,34 @@ public:
         return false;
     }
 
+    // ==================== 孤儿表日志（跨进程回收，设计 §20.22 / §20.18 B）====================
+    /// 设定孤儿表日志路径（每图一份，随图目录）。为空 ⇒ 只做进程内登记。
+    void setOrphanLogPath(std::string path) {
+        orphan_log_path_ = std::move(path);
+    }
+
+    /// 记录一张删不掉的索引表（去重）。**跨进程回收**：下次打开该图时重试删除。
+    void recordOrphan(const std::string& table) {
+        if (table.empty())
+            return;
+        std::lock_guard<std::mutex> lock(orphan_mu_);
+        if (orphan_log_path_.empty())
+            return;
+        auto existing = readOrphansLocked();
+        if (std::find(existing.begin(), existing.end(), table) != existing.end())
+            return;
+        existing.push_back(table);
+        writeOrphansLocked(existing);
+    }
+
+    /// 读取待回收的孤儿表（打开图时用），并清空日志（失败者由调用方重新登记）
+    std::vector<std::string> takeOrphans() {
+        std::lock_guard<std::mutex> lock(orphan_mu_);
+        auto existing = readOrphansLocked();
+        writeOrphansLocked({});
+        return existing;
+    }
+
     /// 关图/停机：先请求取消全部任务，再等它们结束（**顺序不可颠倒**，见 H17）。
     void shutdown() {
         {
@@ -163,6 +193,28 @@ private:
     BuildRunner runner_;
     Publisher publisher_;
     mutable std::mutex mu_;
+    std::string orphan_log_path_;
+    mutable std::mutex orphan_mu_;
+    std::vector<std::string> readOrphansLocked() const {
+        std::vector<std::string> out;
+        if (orphan_log_path_.empty())
+            return out;
+        std::ifstream in(orphan_log_path_);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty())
+                out.push_back(line);
+        }
+        return out;
+    }
+    void writeOrphansLocked(const std::vector<std::string>& tables) const {
+        if (orphan_log_path_.empty())
+            return;
+        std::ofstream out(orphan_log_path_, std::ios::trunc);
+        for (const auto& t : tables)
+            out << t << '\n';
+    }
+
     bool shutting_down_ = false;
     IndexBuildScheduler scheduler_;
 };
