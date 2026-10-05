@@ -211,6 +211,50 @@ Bolt 连接把整个 session 消息处理放到 Compute 池，以便 socket Even
 代价是 IO 线程写出的 chunk 可能被另一个核读取（**跨核搬运 dirty line**；同节点 L3 仍命中）。
 不消除它的原因：唯一干净做法是"同核生产+消费"= 存储内联，实测 −4.3%；而钉核会恶化 P99。
 
+### 跨线程使用的边界：同会话多 cursor / 串行交接（口头结论成文）
+
+**粒度是 session，不是 cursor。** 线程亲和性的单位是 `WT_SESSION`；由它派生的**所有** cursor
+（哪怕"同一时刻只用一把"）都继承同一份会话私有状态，因此：
+
+| 会话私有状态 | 两个线程各用一把 cursor（同会话）会怎样 |
+|---|---|
+| 当前事务（一个 session 同时只能有一个 txn） | 两把 cursor 实际共用同一事务 ⇒ 快照/读位置/写集互相踩 |
+| cursor 列表 / 缓存的 dhandle | 每次 open/close/reposition 都改它 ⇒ 链表损坏 ⇒ **SIGSEGV**（实测 `session_dhandle.c:77`） |
+| hazard pointer 数组 + pin 住的页 | 会话的 hazard 槽位是**固定数组** ⇒ 互相覆盖 ⇒ 页被驱逐而仍被引用 ⇒ use-after-free |
+| scratch 缓冲 / 错误状态 | 键值解码、reconcile、错误码互相污染 |
+
+⇒ **同一 session 的多个 cursor 只能串行使用**；要真正并发，只能**多开 session**（每线程/每流一把）。
+WT 的检测也印证粒度在会话：`WT_SESSION.open_cursor: lock_success == 0`（报的是 `WT_SESSION.*`）。
+
+**串行化后的"跨线程交接"在 WT 层面是合法的**（契约是"**同一时刻一个线程**"，不是"一个线程终身"），
+但必须同时满足三条，否则检测不到的地方会**静默损坏**：
+
+1. **真串行 + 真 happens-before**：mutex 释放/获取、future 完成、join 或原子 acquire-release 之一，
+   把"线程 A 已不再使用"与"线程 B 开始使用"隔开（不能依赖 WT 的并发检测）；
+2. **事务随会话走**：游标属于 `session->txn`，交接时必须传**同一个事务句柄**，新线程不得用**自己的**
+   session/txn 去操作它（否则报"cursor 不属于本会话事务"/取不到 session）；
+3. **生命周期不被打断**：交接窗口内该 cursor/会话不得被 close、`reset()`、缓存淘汰或其它路径释放。
+
+**我们仍不采用交接**（三条理由，均已在代码/实测中体现）：
+
+* 本仓库 `getSession(INVALID_GRAPH_TXN)` 返回**调用线程自己的**会话 ⇒ 游标是 A 线程会话的产物，
+  混用等于"游标在 A 的会话里、操作走 B 的会话"，语义直接错；
+* **I10 的收益正来自"会话=线程独占资源"**：唯此 KV 原语才能全程无锁（删掉共享 `defaultSession_` 后
+  存储 8 线程吞吐 0.65 → **4.88 M/s**）；允许交接就必须引入交接协议/锁，等于把锁装回去；
+* 我们已用 `io_.dispatch`（送达**会话属主的 EventBase**）**免费**获得串行化，无需证明任何事。
+
+**替代范式（我们实际使用的两种）**：
+
+| 范式 | 做法 | 代价 | 用在哪 |
+|---|---|---|---|
+| **钉在属主 EventBase**（保留 cursor） | 记下创建 cursor 的 `bound_evb`，每批 `co_viaIfAsync(bound_evb, …)` 回原线程续扫 | 该线程被这条流占用一部分（失衡） | 流式扫描（续扫 O(1)、零锁），见 R3 |
+| **按键续扫**（交接"位置"而非 cursor） | 关 cursor → 用**上一批最后一个键**作位置凭证 → 新线程重新 open + `set_key`/`search_near` | 每批多一次重定位（非 O(1)） | 变更表重放、索引扫描（`scanDeltaWithKey(…, start_after, last_key_out)`） |
+
+**与事务句柄的关系**：事务句柄也必须**按线程隔离**（`AsyncGraphDataStore::txnRef()`，thread-local）。
+异步索引构建曾因"后台构建线程与查询线程共享同一 txn/session"而在 `__session_add_dhandle` **SIGSEGV**；
+修法是按线程隔离句柄，而非"证明交接合法"——**把问题从"需要证明串行"降级为"结构上不可能并发"**。
+详见 [storage/online-index-build-design.md](../storage/online-index-build-design.md) §20.19。
+
 ### 待定议题：**短命 cursor 场景**是否值得引入 cursor 池（需实测，尚未做）
 
 上面"不做跨调用池化"的结论有**明确的适用边界**，不要外推：
