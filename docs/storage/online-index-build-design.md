@@ -1681,3 +1681,26 @@ release 构建同样可复现（非 ASan 特有）。
 
 ⇒ **设计文档 §1–§20 的全部实施项（P0/P1/P2 + 启动恢复 + DROP 语义 + 孤儿回收）均已落地并验证**。
 
+### 20.24 测试去时间化（回答"能否让测试不依赖时间"）——并修掉一处**本就错误的断言**
+
+**发现的真问题（很可能就是 CI 失败的原因）**：`IndexBuildGateTest` 曾断言
+"`tryEnter()` 成功之后、再读 `closed()` 必为 false" ✗ —— 这**不是协议保证的事**：
+关闸完全可能发生在"准入成功"与"再读 `closed()`"之间 ⇒ 该断言**随时序随机失败** ✗。
+协议真正保证的是：① 成功准入者必被计入 `inflight`（关闸方必须等它）；
+② `closeAndWait` 仅在 `inflight == 0` 时报告成功；③ **关闸之后**的 `tryEnter()` 必定失败。
+
+**去时间化改造（不再把 sleep/超时当机制）**：
+
+| 套件 | 改造 |
+|---|---|
+| `index_build_gate_tests` | 用 **`closeAndWait(timeout=0)`**（纯状态查询，不等待）断言不变量；并发用例改为**信号同步 + 只断言协议不变量**（每个写者恰好"被准入或被拒"，且名额不泄漏），并去掉全部 `sleep_for` 轮询（改 `yield`）⇒ 5/5，**连跑 3 次稳定** ✓ |
+| `index_build_service_tests` | 服务支持**注入同步运行器**（`submit()` 内直接执行完）⇒ 断言在提交返回时即成立，**无需等待发布回调**；幂等用例改为"任务内部重入提交"（确定性）⇒ 7/7，连跑 3 次稳定 ✓ |
+| `index_e2e_tests` | 边索引用例规模 2100 → **1200 条**（仍 > `BATCH=1024` ⇒ 覆盖分批续扫）⇒ 缩短 CI 用时 |
+
+**复跑（release）**：`index_build_gate_tests` 5/5、`index_build_service_tests` 7/7、`index_build_task_tests` 6/6、
+`index_build_scheduler_tests` 7/7、`index_runtime_state_tests` 7/7、`index_store_tests` 16/16、
+`index_e2e_tests` 55/55、`query_executor_tests` 573/573；**TCK 31/31 + 144/144** ✓。
+
+**遗留说明**：`closeAndWait`/`waitFirst` 仍保留**超时参数**（作为生产环境的兜底语义），
+但测试**不再依赖它们**（一律用 `timeout=0` 或同步运行器）✓。
+

@@ -1537,7 +1537,7 @@ TEST_F(IndexE2ETest, IsNotNullOnAnonymousEdgeDoesNotWidenLabels) {
 // 分批续扫（§17.5）与求值层物化（§17）的缺陷形态已由活体判据确认（109,440 行 vs 1024 行、count(r)=0），
 // 这里补的是"语义等价"这一层，防止回归时静默给错结果。
 TEST_F(IndexE2ETest, EdgeIndexQuerySemanticsMatchFullScan) {
-    constexpr int kEdges = 2100; // > 2×BATCH(1024)
+    constexpr int kEdges = 1200; // > BATCH(1024) 即可覆盖分批续扫；规模从 2100 下调以缩短 CI 用时
     createLabel(env, "Person", {{0, "name", PropertyType::STRING, false, std::nullopt}});
     createEdgeLabel(env, "KNOWS", {{0, "since", PropertyType::INT64, false, std::nullopt}});
 
