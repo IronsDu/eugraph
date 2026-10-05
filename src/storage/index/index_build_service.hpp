@@ -37,10 +37,13 @@ public:
     using Publisher = std::function<void(uint64_t index_id, const std::string& name, IndexBuildOutcome outcome,
                                          const std::string& error)>;
 
-    IndexBuildService(BuildRunner runner, Publisher publisher, IndexBuildScheduler::Options opts = {})
-        : runner_(std::move(runner)), publisher_(std::move(publisher)), scheduler_(opts) {}
-    // 说明：**不注入自定义运行器**——用调度器自带的线程运行器（它自己持有并 join 线程）。
-    // 曾用自定义运行器另起线程，结果没人 join ⇒ std::thread 析构会 std::terminate。
+    /// `scheduler_runner` 可注入（默认空 ⇒ 调度器自带**线程**运行器）。
+    /// **测试注入"同步运行器"** ⇒ 任务在提交点直接执行完 ⇒ 断言无需等待、**完全不依赖时间**。
+    IndexBuildService(BuildRunner runner, Publisher publisher, IndexBuildScheduler::Options opts = {},
+                      IndexBuildScheduler::Runner scheduler_runner = {})
+        : runner_(std::move(runner)), publisher_(std::move(publisher)), scheduler_(opts, std::move(scheduler_runner)) {}
+    // 说明：默认用调度器自带的**线程**运行器（它自己持有并 join 线程）——早前用自定义运行器另起线程
+    // 却没人 join，导致 std::thread 析构 terminate。此处仅在**测试**注入同步运行器（无线程、无等待）。
 
     ~IndexBuildService() {
         shutdown();
