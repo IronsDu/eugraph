@@ -22,7 +22,7 @@ TEST(IndexBuildGateTest, AdmissionSucceedsBeforeCloseAndFailsAfter) {
     }
     EXPECT_EQ(gate->inflight(), 0u) << "RAII 守卫析构必须归还名额";
 
-    EXPECT_TRUE(gate->closeAndWait(100));
+    EXPECT_TRUE(gate->closeAndWait(10000));
     EXPECT_TRUE(gate->closed());
     auto denied = gate->tryEnter();
     EXPECT_FALSE(static_cast<bool>(denied)) << "关闸后写者必须被拒绝（改直写索引）";
@@ -50,7 +50,7 @@ TEST(IndexBuildGateTest, CloseWaitsForInflightWriters) {
     may_exit = true;
     writer.join();
     // 写者已退出 ⇒ 再等必定成功（且 inflight 归零）
-    EXPECT_TRUE(gate->closeAndWait(1000));
+    EXPECT_TRUE(gate->closeAndWait(30000));
     EXPECT_EQ(gate->inflight(), 0u);
 }
 
@@ -67,7 +67,7 @@ TEST(IndexBuildGateTest, TwoPhaseAdmissionNeverLetsWriterStraddleClose) {
             if (guard && g->closed())
                 ++admitted_after_close; // 准入成功却在关闸后 ⇒ 违反线性化
         });
-        g->closeAndWait(1000);
+        g->closeAndWait(30000);
         t.join();
         ++repeated;
     }

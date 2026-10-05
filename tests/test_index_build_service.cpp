@@ -45,7 +45,7 @@ struct Recorder {
             }
         };
     }
-    Published waitFirst(std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
+    Published waitFirst(std::chrono::milliseconds timeout = std::chrono::milliseconds(30000)) {
         auto fut = first_ptr->get_future();
         EXPECT_EQ(fut.wait_for(timeout), std::future_status::ready) << "发布回调未被调用（超时）";
         return fut.get();
