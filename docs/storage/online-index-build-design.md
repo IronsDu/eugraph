@@ -1704,3 +1704,29 @@ release 构建同样可复现（非 ASan 特有）。
 **遗留说明**：`closeAndWait`/`waitFirst` 仍保留**超时参数**（作为生产环境的兜底语义），
 但测试**不再依赖它们**（一律用 `timeout=0` 或同步运行器）✓。
 
+### 20.25 CI 编译失败根因（漏提交头文件）+ ASan 全闸门复跑
+
+**CI 症状**：
+
+```
+test_index_build_service.cpp:36: error: no matching function for call to
+  IndexBuildService(..., <brace-enclosed initializer list>, IndexBuildScheduler::Runner)
+index_build_service.hpp:40: note: candidate expects 3 arguments, 4 provided
+```
+
+**根因（我的流程漏洞，非代码问题）**：`391ca44d`（测试去时间化）提交时只执行了
+`git add -A tests/ docs/`，**漏掉** `src/storage/index/index_build_service.hpp` 的改动
+⇒ 本地工作区能编过，CI 从**提交内容**构建则失败。已补提交 `08c7ece2`。
+
+**纪律（新增，防复发）**：提交后必须核对 `git status --short` 中**不含任何源码改动**
+——「本地能编过」不等于「提交内容能编过」，两者只在**工作区干净**时等价。
+
+**ASan 全闸门复跑（`build/asan`，`ASAN_OPTIONS=detect_leaks=0`）**：
+
+| 类别 | 结果 |
+|---|---|
+| 索引相关套件 | `index_build_service_tests` 7/7、`index_build_gate_tests` 5/5、`index_store_tests` 16/16、`index_runtime_state_tests` 7/7、`index_build_scheduler_tests` 7/7、`index_build_task_tests` 6/6 ✓ |
+| 主套件 | `query_executor_tests` **573/573**、`index_e2e_tests` **55/55** ✓ |
+| **TCK（ASan 构建的服务端）** | **31/31 场景 + 144/144 步骤** ✓ |
+| AddressSanitizer 报告 | **0** ✓ |
+
