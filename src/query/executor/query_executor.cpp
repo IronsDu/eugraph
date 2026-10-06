@@ -129,209 +129,205 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // Begin transaction. Fork a dedicated store wrapper so concurrent
     // queries can never overwrite each other's transaction handle.
     GraphTxnHandle txn = co_await async_data_.beginTran();
-                 static_cast<const void*>(&async_data_));
-                 if (txn == INVALID_GRAPH_TXN) {
-                     // Fail loudly. Continuing would run the query through the store's shared
-                     // default session in autocommit mode: writes would land one row at a time
-                     // with nothing to roll back, which is exactly what a transaction is for.
-                     ctx->error = "Failed to begin transaction";
-                     spdlog::error("[QueryExecutor] beginTran failed; refusing to run '{}'", cypher_query);
-                     co_return ctx;
-                 }
-                 // Statement execution context: the one place statement-scoped state (today the
-                 // cancellation flag, later deadlines/budgets) belongs. Operators hold it through
-                 // a shared_ptr, and the store stays unaware of it -- cancellation is observed on
-                 // the operator side, where upstream chunks are consumed.
-                 auto query_ctx = std::make_shared<QueryContext>(std::move(cancel));
-                 ctx->query_context = query_ctx;
-                 auto query_store = async_data_.forkTransaction(txn);
-                 IAsyncGraphDataStore& query_data = *query_store;
-                 ctx->query_store = std::move(query_store);
+    if (txn == INVALID_GRAPH_TXN) {
+        // Fail loudly. Continuing would run the query through the store's shared
+        // default session in autocommit mode: writes would land one row at a time
+        // with nothing to roll back, which is exactly what a transaction is for.
+        ctx->error = "Failed to begin transaction";
+        spdlog::error("[QueryExecutor] beginTran failed; refusing to run '{}'", cypher_query);
+        co_return ctx;
+    }
+    // Statement execution context: the one place statement-scoped state (today the
+    // cancellation flag, later deadlines/budgets) belongs. Operators hold it through
+    // a shared_ptr, and the store stays unaware of it -- cancellation is observed on
+    // the operator side, where upstream chunks are consumed.
+    auto query_ctx = std::make_shared<QueryContext>(std::move(cancel));
+    ctx->query_context = query_ctx;
+    auto query_store = async_data_.forkTransaction(txn);
+    IAsyncGraphDataStore& query_data = *query_store;
+    ctx->query_store = std::move(query_store);
 
-                 // Store label/edge_label defs + name→id maps in StreamContext so physical operator
-                 // raw pointers remain valid throughout streaming consumption
-                 for (const auto& l : labels)
-                     ctx->label_defs[l.id] = l;
-                 for (const auto& el : edge_labels)
-                     ctx->edge_label_defs[el.id] = el;
-                 ctx->label_name_to_id = std::move(label_name_to_id);
-                 ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
+    // Store label/edge_label defs + name→id maps in StreamContext so physical operator
+    // raw pointers remain valid throughout streaming consumption
+    for (const auto& l : labels)
+        ctx->label_defs[l.id] = l;
+    for (const auto& el : edge_labels)
+        ctx->edge_label_defs[el.id] = el;
+    ctx->label_name_to_id = std::move(label_name_to_id);
+    ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
 
-                 PlanContext plan_ctx{
-                     .label_name_to_id = ctx->label_name_to_id,
-                     .edge_label_name_to_id = ctx->edge_label_name_to_id,
-                     .label_defs = ctx->label_defs,
-                     .edge_label_defs = ctx->edge_label_defs,
-                     .eval_ctx = {},
-                     .requirements = {},
-                     .extraction_info = {},
-                     .var_slots = {},
-                     .scoped_var_slots = {},
-                     .label_order_by_name = {},
-                     .alias_map = {},
-                     .slot_allocator = {},
-                     .fresh_expands = {},
-                     .static_prune_hints = {},
-                     .func_registry = ctx->func_registry.get(),
-                     .expand_allowed_filter = {},
-                     .filtered_expand = nullptr,
-                 };
+    PlanContext plan_ctx{
+        .label_name_to_id = ctx->label_name_to_id,
+        .edge_label_name_to_id = ctx->edge_label_name_to_id,
+        .label_defs = ctx->label_defs,
+        .edge_label_defs = ctx->edge_label_defs,
+        .eval_ctx = {},
+        .requirements = {},
+        .extraction_info = {},
+        .var_slots = {},
+        .scoped_var_slots = {},
+        .label_order_by_name = {},
+        .alias_map = {},
+        .slot_allocator = {},
+        .fresh_expands = {},
+        .static_prune_hints = {},
+        .func_registry = ctx->func_registry.get(),
+        .expand_allowed_filter = {},
+        .filtered_expand = nullptr,
+    };
 
-                 plan_ctx.eval_ctx.catalog = ctx->catalog.get();
-                 plan_ctx.eval_ctx.label_defs = &ctx->label_defs;
-                 // Static property pruning is only valid when the statement itself cannot
-                 // create labels/properties between bind time and execution time.
-                 plan_ctx.eval_ctx.allow_static_schema_pruning = !binder.ctx().has_mutation;
+    plan_ctx.eval_ctx.catalog = ctx->catalog.get();
+    plan_ctx.eval_ctx.label_defs = &ctx->label_defs;
+    // Static property pruning is only valid when the statement itself cannot
+    // create labels/properties between bind time and execution time.
+    plan_ctx.eval_ctx.allow_static_schema_pruning = !binder.ctx().has_mutation;
 
-                 // Populate variable → SlotId mapping from the Binder's symbol table.
-                 // This covers ALL variables (including intermediate anon edges/nodes),
-                 // not just the RETURN-level output schema.
-                 for (const auto& [name, info] : binder.ctx().symbols) {
-                     if (info.slot_id != binder::INVALID_SLOT_ID)
-                         plan_ctx.var_slots[name] = info.slot_id;
-                 }
-                 // Also seed from the binder's ordered binding log, but only for names
-                 // absent from the final symbol table. WITH clauses narrow ctx().symbols
-                 // to their outputs, and inner scopes may bind the same name to a fresh
-                 // slot; neither must overwrite the visible outer binding.
-                 for (const auto& binding : binder.ctx().binding_order) {
-                     if (binding.slot != binder::INVALID_SLOT_ID && plan_ctx.var_slots.count(binding.name) == 0)
-                         plan_ctx.var_slots[binding.name] = binding.slot;
-                 }
-                 // Scope-aware records for DPL: (scope, name) → slot.
-                 plan_ctx.scoped_var_slots = binder.ctx().scoped_bindings;
-                 // Query-time label presentation order (source_labels are already in
-                 // pattern order for bound node variables).
-                 for (const auto& [name, info] : binder.ctx().symbols) {
-                     if (!info.source_labels.empty())
-                         plan_ctx.label_order_by_name[name] = info.source_labels;
-                 }
-                 // Seed the planner's slot allocator to continue after the binder's slots.
-                 // Start from the next slot after the binder's allocation.
-                 ctx->label_order = plan_ctx.label_order_by_name;
-                 plan_ctx.slot_allocator.seed(binder.ctx().slot_allocator.current());
+    // Populate variable → SlotId mapping from the Binder's symbol table.
+    // This covers ALL variables (including intermediate anon edges/nodes),
+    // not just the RETURN-level output schema.
+    for (const auto& [name, info] : binder.ctx().symbols) {
+        if (info.slot_id != binder::INVALID_SLOT_ID)
+            plan_ctx.var_slots[name] = info.slot_id;
+    }
+    // Also seed from the binder's ordered binding log, but only for names
+    // absent from the final symbol table. WITH clauses narrow ctx().symbols
+    // to their outputs, and inner scopes may bind the same name to a fresh
+    // slot; neither must overwrite the visible outer binding.
+    for (const auto& binding : binder.ctx().binding_order) {
+        if (binding.slot != binder::INVALID_SLOT_ID && plan_ctx.var_slots.count(binding.name) == 0)
+            plan_ctx.var_slots[binding.name] = binding.slot;
+    }
+    // Scope-aware records for DPL: (scope, name) → slot.
+    plan_ctx.scoped_var_slots = binder.ctx().scoped_bindings;
+    // Query-time label presentation order (source_labels are already in
+    // pattern order for bound node variables).
+    for (const auto& [name, info] : binder.ctx().symbols) {
+        if (!info.source_labels.empty())
+            plan_ctx.label_order_by_name[name] = info.source_labels;
+    }
+    // Seed the planner's slot allocator to continue after the binder's slots.
+    // Start from the next slot after the binder's allocation.
+    ctx->label_order = plan_ctx.label_order_by_name;
+    plan_ctx.slot_allocator.seed(binder.ctx().slot_allocator.current());
 
-                 // 2.5. Logical optimization
-                 optimizer::LogicalOptimizer logical_optimizer;
-                 logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get());
+    // 2.5. Logical optimization
+    optimizer::LogicalOptimizer logical_optimizer;
+    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get());
 
-                 // 3. Physical planning. Try CBO-chosen plan first (Phase 4); fall back
-                 // to planBound (RBO over the optimized logical tree) when no winner.
-                 PhysicalPlanner physical_planner;
-                 std::variant<std::unique_ptr<PhysicalOperator>, std::string> phys_result = std::string("");
-                 if (bound_stmt->plan.chosen) {
-                     phys_result =
-                         physical_planner.planChosen(*bound_stmt->plan.chosen, query_data, async_meta_, plan_ctx);
-                     if (std::holds_alternative<std::string>(phys_result)) {
-                         // planChosen failed — log and fall through to planBound rather than
-                         // aborting the whole query. The RBO path produces a known-good plan.
-                         spdlog::warn("[executor] planChosen failed ({}); falling back to planBound",
-                                      std::get<std::string>(phys_result));
-                         phys_result = std::string("");
-                     }
-                 }
-                 if (!bound_stmt->plan.chosen || std::holds_alternative<std::string>(phys_result)) {
-                     phys_result = physical_planner.planBound(bound_stmt->plan, query_data, async_meta_, plan_ctx);
-                 }
-                 if (std::holds_alternative<std::string>(phys_result)) {
-                     ctx->error = std::get<std::string>(phys_result);
-                     co_await query_data.rollbackTran(txn);
-                     co_return ctx;
-                 }
-                 auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
+    // 3. Physical planning. Try CBO-chosen plan first (Phase 4); fall back
+    // to planBound (RBO over the optimized logical tree) when no winner.
+    PhysicalPlanner physical_planner;
+    std::variant<std::unique_ptr<PhysicalOperator>, std::string> phys_result = std::string("");
+    if (bound_stmt->plan.chosen) {
+        phys_result = physical_planner.planChosen(*bound_stmt->plan.chosen, query_data, async_meta_, plan_ctx);
+        if (std::holds_alternative<std::string>(phys_result)) {
+            // planChosen failed — log and fall through to planBound rather than
+            // aborting the whole query. The RBO path produces a known-good plan.
+            spdlog::warn("[executor] planChosen failed ({}); falling back to planBound",
+                         std::get<std::string>(phys_result));
+            phys_result = std::string("");
+        }
+    }
+    if (!bound_stmt->plan.chosen || std::holds_alternative<std::string>(phys_result)) {
+        phys_result = physical_planner.planBound(bound_stmt->plan, query_data, async_meta_, plan_ctx);
+    }
+    if (std::holds_alternative<std::string>(phys_result)) {
+        ctx->error = std::get<std::string>(phys_result);
+        co_await query_data.rollbackTran(txn);
+        co_return ctx;
+    }
+    auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
 
-                 // 5.5. If EXPLAIN, format plan into generator without executing
-                 if (is_explain) {
-                     // Build output schema description for an operator
-                     auto formatOutput = [](const PhysicalOperator& op) -> std::string {
-                         const auto& schema = op.outputSchema();
-                         const auto& types = op.outputTypes();
-                         if (schema.empty())
-                             return "  output: []";
-                         std::string result = "  output: [";
-                         for (size_t i = 0; i < schema.size(); ++i) {
-                             if (i > 0)
-                                 result += ", ";
-                             result += schema[i] + ":" + types[i].toString();
-                         }
-                         result += "]";
-                         return result;
-                     };
+    // 5.5. If EXPLAIN, format plan into generator without executing
+    if (is_explain) {
+        // Build output schema description for an operator
+        auto formatOutput = [](const PhysicalOperator& op) -> std::string {
+            const auto& schema = op.outputSchema();
+            const auto& types = op.outputTypes();
+            if (schema.empty())
+                return "  output: []";
+            std::string result = "  output: [";
+            for (size_t i = 0; i < schema.size(); ++i) {
+                if (i > 0)
+                    result += ", ";
+                result += schema[i] + ":" + types[i].toString();
+            }
+            result += "]";
+            return result;
+        };
 
-                     // Collect operator info: toString + output schema for each operator
-                     struct OpInfo {
-                         std::string to_string;
-                         std::string output;
-                     };
-                     std::vector<OpInfo> ops;
-                     std::function<void(const PhysicalOperator&)> collect;
-                     collect = [&](const PhysicalOperator& op) {
-                         ops.push_back({op.toString(), formatOutput(op)});
-                         for (const auto* child : op.children()) {
-                             collect(*child);
-                         }
-                     };
-                     collect(*phys_op);
+        // Collect operator info: toString + output schema for each operator
+        struct OpInfo {
+            std::string to_string;
+            std::string output;
+        };
+        std::vector<OpInfo> ops;
+        std::function<void(const PhysicalOperator&)> collect;
+        collect = [&](const PhysicalOperator& op) {
+            ops.push_back({op.toString(), formatOutput(op)});
+            for (const auto* child : op.children()) {
+                collect(*child);
+            }
+        };
+        collect(*phys_op);
 
-                     ctx->columns.clear();
-                     ctx->columns.push_back("Plan");
+        ctx->columns.clear();
+        ctx->columns.push_back("Plan");
 
-                     // Calculate box width from all lines
-                     size_t box_width = 0;
-                     for (const auto& op : ops) {
-                         box_width = std::max(box_width, op.to_string.size());
-                         box_width = std::max(box_width, op.output.size());
-                     }
-                     box_width += 2; // padding inside box
+        // Calculate box width from all lines
+        size_t box_width = 0;
+        for (const auto& op : ops) {
+            box_width = std::max(box_width, op.to_string.size());
+            box_width = std::max(box_width, op.output.size());
+        }
+        box_width += 2; // padding inside box
 
-                     std::vector<Row> plan_rows;
-                     for (size_t i = 0; i < ops.size(); i++) {
-                         // Top border
-                         Row top_row;
-                         top_row.push_back("+" + std::string(box_width, '-') + "+");
-                         plan_rows.push_back(std::move(top_row));
+        std::vector<Row> plan_rows;
+        for (size_t i = 0; i < ops.size(); i++) {
+            // Top border
+            Row top_row;
+            top_row.push_back("+" + std::string(box_width, '-') + "+");
+            plan_rows.push_back(std::move(top_row));
 
-                         // Operator name line
-                         Row name_row;
-                         name_row.push_back("| " + ops[i].to_string +
-                                            std::string(box_width - 1 - ops[i].to_string.size(), ' ') + "|");
-                         plan_rows.push_back(std::move(name_row));
+            // Operator name line
+            Row name_row;
+            name_row.push_back("| " + ops[i].to_string + std::string(box_width - 1 - ops[i].to_string.size(), ' ') +
+                               "|");
+            plan_rows.push_back(std::move(name_row));
 
-                         // Output schema line
-                         Row out_row;
-                         out_row.push_back("| " + ops[i].output +
-                                           std::string(box_width - 1 - ops[i].output.size(), ' ') + "|");
-                         plan_rows.push_back(std::move(out_row));
+            // Output schema line
+            Row out_row;
+            out_row.push_back("| " + ops[i].output + std::string(box_width - 1 - ops[i].output.size(), ' ') + "|");
+            plan_rows.push_back(std::move(out_row));
 
-                         // Bottom border
-                         Row bot_row;
-                         bot_row.push_back("+" + std::string(box_width, '-') + "+");
-                         plan_rows.push_back(std::move(bot_row));
+            // Bottom border
+            Row bot_row;
+            bot_row.push_back("+" + std::string(box_width, '-') + "+");
+            plan_rows.push_back(std::move(bot_row));
 
-                         // Arrow between operators
-                         if (i + 1 < ops.size()) {
-                             size_t arrow_pad = box_width / 2;
-                             Row arrow_row;
-                             arrow_row.push_back(std::string(arrow_pad, ' ') + "\xe2\x86\x93");
-                             plan_rows.push_back(std::move(arrow_row));
-                         }
-                     }
+            // Arrow between operators
+            if (i + 1 < ops.size()) {
+                size_t arrow_pad = box_width / 2;
+                Row arrow_row;
+                arrow_row.push_back(std::string(arrow_pad, ' ') + "\xe2\x86\x93");
+                plan_rows.push_back(std::move(arrow_row));
+            }
+        }
 
-                     ctx->gen = wrapRowsToChunkGenerator(std::move(plan_rows));
+        ctx->gen = wrapRowsToChunkGenerator(std::move(plan_rows));
 
-                     co_await query_data.rollbackTran(txn);
-                     ctx->should_commit = false;
-                     co_return ctx;
-                 }
+        co_await query_data.rollbackTran(txn);
+        ctx->should_commit = false;
+        co_return ctx;
+    }
 
-                 ctx->phys_op = std::move(phys_op);
-                 // One attach call reaches the whole tree (base class recurses over children).
-                 ctx->phys_op->setQueryContext(ctx->query_context);
-                 ctx->gen = ctx->phys_op->executeChunk();
-                 static_cast<const void*>(&ctx->store), static_cast<const void*>(&async_data_));
-                 ctx->txn = txn;
+    ctx->phys_op = std::move(phys_op);
+    // One attach call reaches the whole tree (base class recurses over children).
+    ctx->phys_op->setQueryContext(ctx->query_context);
+    ctx->gen = ctx->phys_op->executeChunk();
+    ctx->txn = txn;
 
-                 co_return ctx;
+    co_return ctx;
 }
 
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {
