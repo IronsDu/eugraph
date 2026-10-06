@@ -954,6 +954,7 @@ if(EUGRAPH_BUILD_TESTS)
                 WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
             )
             set_tests_properties(bolt_python_driver_integration_tests PROPERTIES
+                    RESOURCE_LOCK "bolt_driver_port" # 三个驱动测试**互斥串行**：固定端口组不再互相踩
                 TIMEOUT 600
                 LABELS "bolt;integration;python"
                 ENVIRONMENT "BOLT_PORT=17690;THRIFT_PORT=19090"
@@ -996,6 +997,7 @@ if(EUGRAPH_BUILD_TESTS)
                 # 每个驱动测试独占一组端口：ctest 会并行跑这几个测试，
                 # 共用端口时后启动的 server 会绑定失败，或探测连到先启动的实例。
                 set_tests_properties(bolt_java_driver_integration_tests PROPERTIES
+                    RESOURCE_LOCK "bolt_driver_port" # 三个驱动测试**互斥串行**：固定端口组不再互相踩
                     TIMEOUT 600
                     LABELS "bolt;integration;java"
                     ENVIRONMENT "BOLT_PORT=17691;THRIFT_PORT=19091"
@@ -1020,6 +1022,7 @@ if(EUGRAPH_BUILD_TESTS)
                     WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
                 )
                 set_tests_properties(bolt_js_ws_driver_integration_tests PROPERTIES
+                    RESOURCE_LOCK "bolt_driver_port" # 三个驱动测试**互斥串行**：固定端口组不再互相踩
                     TIMEOUT 600
                     LABELS "bolt;integration;websocket;javascript"
                     ENVIRONMENT "BOLT_PORT=17692;THRIFT_PORT=19092"
