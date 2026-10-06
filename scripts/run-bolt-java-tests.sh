@@ -22,10 +22,18 @@ LOG_FILE="${WORK_DIR}/bolt-server.log"
 PROBE="$(dirname "$(readlink -f "$0")")/bolt_ready_probe.py"
 
 cleanup() {
+    local rc=$?
     if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
         kill "$SERVER_PID" 2>/dev/null || true
     fi
-    rm -rf "$WORK_DIR"
+    # **失败时保留 WORK_DIR**（内含 bolt-server.log）便于诊断；成功才清理。
+    # 并且**必须 `exit $rc`**：否则 trap 里最后一条成功命令会把脚本退出码覆盖成 0 ⇒ 包装脚本谎报成功。
+    if [[ "$rc" -eq 0 ]]; then
+        rm -rf "$WORK_DIR"
+    else
+        echo "[wrapper] 测试失败（rc=$rc）⇒ 保留诊断目录: ${WORK_DIR}（服务端日志 ${LOG_FILE}）" >&2
+    fi
+    exit "$rc"
 }
 trap cleanup EXIT
 
@@ -35,7 +43,7 @@ mkdir -p "$WORK_DIR"
     > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 
-for i in $(seq 1 30); do
+for i in $(seq 1 180); do
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
         echo "ERROR: eugraph-server died during startup" >&2
         cat "$LOG_FILE" >&2
