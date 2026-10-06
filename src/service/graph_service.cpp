@@ -570,262 +570,277 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
 folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const DatabaseDdlStatement& stmt,
                                                                           GraphInstance& instance) {
     CypherExecutionContext result;
-    auto ctx = std::make_shared<compute::StreamContext>(*instance.async_data);
-    Schema columns;
-    std::vector<Row> rows;
+                 static_cast<const void*>(&instance));
+                 auto ctx = std::make_shared<compute::StreamContext>(*instance.async_data);
+                 Schema columns;
+                 std::vector<Row> rows;
 
-    // Database-level statements below are answered from the default graph regardless
-    // of which graph the session selected, so they keep resolving it themselves. The
-    // DESCRIBE family is graph-scoped and reads `instance.async_meta` directly.
-    switch (stmt.type) {
-    case DatabaseDdlStatement::USE_GRAPH: {
-        result.switched_database = stmt.name;
-        spdlog::info("[service] switched to database: {}", stmt.name);
-        columns = {"current_database"};
-        Row row;
-        row.push_back(std::string(stmt.name));
-        rows.push_back(std::move(row));
-        break;
-    }
-    case DatabaseDdlStatement::CREATE_DATABASE: {
-        auto entry = gm_.createGraph(stmt.name);
-        spdlog::info("[service] created database: {}", stmt.name);
-        columns = {"result"};
-        Row row;
-        row.push_back(std::string("Database created: " + stmt.name));
-        rows.push_back(std::move(row));
-        break;
-    }
-    case DatabaseDdlStatement::DROP_DATABASE: {
-        bool ok = false;
-        std::string error_msg;
-        try {
-            ok = gm_.dropGraph(stmt.name);
-        } catch (const std::exception& e) {
-            error_msg = e.what();
-        }
-        spdlog::info("[service] dropped database: {} (success={})", stmt.name, ok);
-        columns = {"result"};
-        Row row;
-        if (ok) {
-            row.push_back(std::string("Database dropped: " + stmt.name));
-        } else {
-            row.push_back(
-                std::string("Failed to drop database: " + stmt.name + (error_msg.empty() ? "" : " - " + error_msg)));
-        }
-        rows.push_back(std::move(row));
-        break;
-    }
-    case DatabaseDdlStatement::SHOW_DATABASES: {
-        auto graphs = gm_.listGraphs();
-        if (stmt.yield_all) {
-            // Neo4j Browser 5+ uses `SHOW DATABASES YIELD *` and validates the
-            // full SHOW DATABASES record shape.
-            columns = {
-                "name",          "type",          "aliases", "access",  "address", "role",         "requestedStatus",
-                "currentStatus", "statusMessage", "error",   "default", "home",    "constituents", "defaultLanguage",
-                "writer"};
-            for (auto& g : graphs) {
-                bool is_default = g.name == "default";
-                Row row;
-                row.push_back(std::string(g.name));
-                row.push_back(std::string("standard"));
-                row.push_back(Value(mk<ListValue>()));
-                row.push_back(std::string("READ_WRITE"));
-                row.push_back(std::string("localhost:17687"));
-                row.push_back(Value{});
-                row.push_back(std::string("online"));
-                row.push_back(std::string("online"));
-                row.push_back(std::string(""));
-                row.push_back(std::string(""));
-                row.push_back(bool(is_default));
-                row.push_back(bool(is_default));
-                row.push_back(Value(mk<ListValue>()));
-                row.push_back(std::string(""));
-                row.push_back(bool(false));
-                rows.push_back(std::move(row));
-            }
-        } else {
-            columns = {"name", "status", "type", "current", "currentStatus"};
-            for (auto& g : graphs) {
-                Row row;
-                row.push_back(std::string(g.name));
-                row.push_back(std::string("online"));
-                row.push_back(std::string("standard"));
-                row.push_back(bool(g.name == "default")); // current — tracks the session default
-                row.push_back(std::string("online"));
-                rows.push_back(std::move(row));
-            }
-        }
-        break;
-    }
-    case DatabaseDdlStatement::SHOW_DATABASE: {
-        auto graphs = gm_.listGraphs();
-        columns = {"name", "status", "type", "current", "currentStatus"};
-        for (auto& g : graphs) {
-            if (g.name != stmt.name)
-                continue;
-            Row row;
-            row.push_back(std::string(g.name));
-            row.push_back(std::string("online"));
-            row.push_back(std::string("standard"));
-            row.push_back(bool(false));
-            row.push_back(std::string("online"));
-            rows.push_back(std::move(row));
-            break;
-        }
-        break;
-    }
-    case DatabaseDdlStatement::SHOW_CURRENT_USER: {
-        columns = {"user", "roles", "passwordChangeRequired", "suspended", "home"};
-        Row row;
-        row.push_back(std::string("neo4j"));
-        row.push_back(Value(mk<ListValue>(catalogStringList({"PUBLIC"}))));
-        row.push_back(bool(false));
-        row.push_back(bool(false));
-        row.push_back(Value{});
-        rows.push_back(std::move(row));
-        break;
-    }
-    case DatabaseDdlStatement::SHOW_PROCEDURES: {
-        columns = {"name",   "signature",           "description",      "mode", "admin", "worksOnSystem",
-                   "option", "argumentDescription", "returnDescription"};
-        for (const auto& entry : builtinProcedureShowEntries()) {
-            Row row;
-            row.push_back(std::string(entry.name));
-            row.push_back(std::string(entry.signature));
-            row.push_back(std::string(entry.description));
-            row.push_back(std::string("READ"));
-            row.push_back(bool(false));
-            row.push_back(bool(false));
-            row.push_back(Value(mk<MapValue>()));
-            row.push_back(Value(mk<ListValue>()));
-            row.push_back(std::string(""));
-            rows.push_back(std::move(row));
-        }
-        break;
-    }
-    case DatabaseDdlStatement::SHOW_FUNCTIONS: {
-        columns = {"name",     "signature", "description",         "aggregating",
-                   "category", "isBuiltIn", "argumentDescription", "returnDescription"};
-        function::FunctionRegistry registry;
-        auto defs = registry.listFunctions();
-        defs.erase(std::remove_if(defs.begin(), defs.end(), [](const auto& def) { return def.name.starts_with("__"); }),
-                   defs.end());
-        std::sort(defs.begin(), defs.end(), [](const auto& a, const auto& b) {
-            if (a.name != b.name)
-                return a.name < b.name;
-            return catalogFunctionSignature(a) < catalogFunctionSignature(b);
-        });
-        for (const auto& def : defs) {
-            ListValue args;
-            for (size_t i = 0; i < def.arg_types.size(); ++i) {
-                MapValue arg;
-                arg.entries.push_back({"name", ValueStorage{Value{std::string{"input"} + std::to_string(i)}}});
-                arg.entries.push_back({"description", ValueStorage{Value{std::string{}}}});
-                arg.entries.push_back({"type", ValueStorage{Value{catalogTypeName(def.arg_types[i])}}});
-                args.elements.push_back({ValueStorage{Value(mk<MapValue>(std::move(arg)))}});
-            }
+                 // Database-level statements below are answered from the default graph regardless
+                 // of which graph the session selected, so they keep resolving it themselves. The
+                 // DESCRIBE family is graph-scoped and reads `instance.async_meta` directly.
+                 switch (stmt.type) {
+                 case DatabaseDdlStatement::USE_GRAPH: {
+                     result.switched_database = stmt.name;
+                     spdlog::info("[service] switched to database: {}", stmt.name);
+                     columns = {"current_database"};
+                     Row row;
+                     row.push_back(std::string(stmt.name));
+                     rows.push_back(std::move(row));
+                     break;
+                 }
+                 case DatabaseDdlStatement::CREATE_DATABASE: {
+                     auto entry = gm_.createGraph(stmt.name);
+                     spdlog::info("[service] created database: {}", stmt.name);
+                     columns = {"result"};
+                     Row row;
+                     row.push_back(std::string("Database created: " + stmt.name));
+                     rows.push_back(std::move(row));
+                     break;
+                 }
+                 case DatabaseDdlStatement::DROP_DATABASE: {
+                     bool ok = false;
+                     std::string error_msg;
+                     try {
+                         ok = gm_.dropGraph(stmt.name);
+                     } catch (const std::exception& e) {
+                         error_msg = e.what();
+                     }
+                     spdlog::info("[service] dropped database: {} (success={})", stmt.name, ok);
+                     columns = {"result"};
+                     Row row;
+                     if (ok) {
+                         row.push_back(std::string("Database dropped: " + stmt.name));
+                     } else {
+                         row.push_back(std::string("Failed to drop database: " + stmt.name +
+                                                   (error_msg.empty() ? "" : " - " + error_msg)));
+                     }
+                     rows.push_back(std::move(row));
+                     break;
+                 }
+                 case DatabaseDdlStatement::SHOW_DATABASES: {
+                     auto graphs = gm_.listGraphs();
+                     if (stmt.yield_all) {
+                         // Neo4j Browser 5+ uses `SHOW DATABASES YIELD *` and validates the
+                         // full SHOW DATABASES record shape.
+                         columns = {"name",
+                                    "type",
+                                    "aliases",
+                                    "access",
+                                    "address",
+                                    "role",
+                                    "requestedStatus",
+                                    "currentStatus",
+                                    "statusMessage",
+                                    "error",
+                                    "default",
+                                    "home",
+                                    "constituents",
+                                    "defaultLanguage",
+                                    "writer"};
+                         for (auto& g : graphs) {
+                             bool is_default = g.name == "default";
+                             Row row;
+                             row.push_back(std::string(g.name));
+                             row.push_back(std::string("standard"));
+                             row.push_back(Value(mk<ListValue>()));
+                             row.push_back(std::string("READ_WRITE"));
+                             row.push_back(std::string("localhost:17687"));
+                             row.push_back(Value{});
+                             row.push_back(std::string("online"));
+                             row.push_back(std::string("online"));
+                             row.push_back(std::string(""));
+                             row.push_back(std::string(""));
+                             row.push_back(bool(is_default));
+                             row.push_back(bool(is_default));
+                             row.push_back(Value(mk<ListValue>()));
+                             row.push_back(std::string(""));
+                             row.push_back(bool(false));
+                             rows.push_back(std::move(row));
+                         }
+                     } else {
+                         columns = {"name", "status", "type", "current", "currentStatus"};
+                         for (auto& g : graphs) {
+                             Row row;
+                             row.push_back(std::string(g.name));
+                             row.push_back(std::string("online"));
+                             row.push_back(std::string("standard"));
+                             row.push_back(bool(g.name == "default")); // current — tracks the session default
+                             row.push_back(std::string("online"));
+                             rows.push_back(std::move(row));
+                         }
+                     }
+                     break;
+                 }
+                 case DatabaseDdlStatement::SHOW_DATABASE: {
+                     auto graphs = gm_.listGraphs();
+                     columns = {"name", "status", "type", "current", "currentStatus"};
+                     for (auto& g : graphs) {
+                         if (g.name != stmt.name)
+                             continue;
+                         Row row;
+                         row.push_back(std::string(g.name));
+                         row.push_back(std::string("online"));
+                         row.push_back(std::string("standard"));
+                         row.push_back(bool(false));
+                         row.push_back(std::string("online"));
+                         rows.push_back(std::move(row));
+                         break;
+                     }
+                     break;
+                 }
+                 case DatabaseDdlStatement::SHOW_CURRENT_USER: {
+                     columns = {"user", "roles", "passwordChangeRequired", "suspended", "home"};
+                     Row row;
+                     row.push_back(std::string("neo4j"));
+                     row.push_back(Value(mk<ListValue>(catalogStringList({"PUBLIC"}))));
+                     row.push_back(bool(false));
+                     row.push_back(bool(false));
+                     row.push_back(Value{});
+                     rows.push_back(std::move(row));
+                     break;
+                 }
+                 case DatabaseDdlStatement::SHOW_PROCEDURES: {
+                     columns = {"name",   "signature",           "description",      "mode", "admin", "worksOnSystem",
+                                "option", "argumentDescription", "returnDescription"};
+                     for (const auto& entry : builtinProcedureShowEntries()) {
+                         Row row;
+                         row.push_back(std::string(entry.name));
+                         row.push_back(std::string(entry.signature));
+                         row.push_back(std::string(entry.description));
+                         row.push_back(std::string("READ"));
+                         row.push_back(bool(false));
+                         row.push_back(bool(false));
+                         row.push_back(Value(mk<MapValue>()));
+                         row.push_back(Value(mk<ListValue>()));
+                         row.push_back(std::string(""));
+                         rows.push_back(std::move(row));
+                     }
+                     break;
+                 }
+                 case DatabaseDdlStatement::SHOW_FUNCTIONS: {
+                     columns = {"name",     "signature", "description",         "aggregating",
+                                "category", "isBuiltIn", "argumentDescription", "returnDescription"};
+                     function::FunctionRegistry registry;
+                     auto defs = registry.listFunctions();
+                     defs.erase(std::remove_if(defs.begin(), defs.end(),
+                                               [](const auto& def) { return def.name.starts_with("__"); }),
+                                defs.end());
+                     std::sort(defs.begin(), defs.end(), [](const auto& a, const auto& b) {
+                         if (a.name != b.name)
+                             return a.name < b.name;
+                         return catalogFunctionSignature(a) < catalogFunctionSignature(b);
+                     });
+                     for (const auto& def : defs) {
+                         ListValue args;
+                         for (size_t i = 0; i < def.arg_types.size(); ++i) {
+                             MapValue arg;
+                             arg.entries.push_back(
+                                 {"name", ValueStorage{Value{std::string{"input"} + std::to_string(i)}}});
+                             arg.entries.push_back({"description", ValueStorage{Value{std::string{}}}});
+                             arg.entries.push_back({"type", ValueStorage{Value{catalogTypeName(def.arg_types[i])}}});
+                             args.elements.push_back({ValueStorage{Value(mk<MapValue>(std::move(arg)))}});
+                         }
 
-            Row row;
-            row.push_back(def.name);
-            row.push_back(catalogFunctionSignature(def));
-            row.push_back(std::string(def.is_aggregate ? "Aggregate function" : "Scalar function"));
-            row.push_back(bool(def.is_aggregate));
-            row.push_back(std::string(def.is_aggregate ? "Aggregate" : "Scalar"));
-            row.push_back(bool(true));
-            row.push_back(Value(mk<ListValue>(std::move(args))));
-            row.push_back(catalogTypeName(def.return_type));
-            rows.push_back(std::move(row));
-        }
-        break;
-    }
-    case DatabaseDdlStatement::SHOW_VECTOR_INDEXES: {
-        columns = {"id",         "name",          "state",      "populationPercent", "type",
-                   "entityType", "labelsOrTypes", "properties", "indexProvider",     "owningConstraint",
-                   "lastRead",   "readCount",     "options"};
-        break;
-    }
-    // ── DESCRIBE family: graph-scoped schema introspection ──
-    //
-    // Unlike the SHOW statements above, these read the *selected* graph and they do
-    // NOT filter out the anonymous label: seeing the fields of unlabeled nodes is the
-    // point. `anonymous` distinguishes it, so the internal name stays legible.
-    // `CALL db.labels()` keeps filtering it out -- a documented divergence.
-    case DatabaseDdlStatement::DESCRIBE_LABELS: {
-        columns = {"name", "anonymous"};
-        auto labels = co_await instance.async_meta->listLabels();
-        std::sort(labels.begin(), labels.end(), [](const LabelDef& a, const LabelDef& b) { return a.name < b.name; });
-        for (const auto& label : labels) {
-            Row row;
-            row.push_back(std::string(label.name));
-            row.push_back(bool(label.name == kAnonLabelName));
-            rows.push_back(std::move(row));
-        }
-        break;
-    }
-    case DatabaseDdlStatement::DESCRIBE_RELATIONSHIPS: {
-        columns = {"relationshipType"};
-        auto edge_labels = co_await instance.async_meta->listEdgeLabels();
-        std::vector<std::string> names;
-        names.reserve(edge_labels.size());
-        for (const auto& edge_label : edge_labels)
-            names.push_back(edge_label.name);
-        std::sort(names.begin(), names.end());
-        for (const auto& name : names) {
-            Row row;
-            row.push_back(name);
-            rows.push_back(std::move(row));
-        }
-        break;
-    }
-    case DatabaseDdlStatement::DESCRIBE_LABEL: {
-        // `propertyType` is singular and a plain STRING: a declared field has exactly
-        // one PropertyType. (The procedures keep the plural LIST form because that is
-        // neo4j's shape; DESCRIBE is our own surface and has no such constraint.)
-        columns = {"label", "propertyName", "propertyType"};
-        auto labels = co_await instance.async_meta->listLabels();
-        for (auto& label : labels) {
-            if (label.name != stmt.name)
-                continue;
-            std::sort(label.properties.begin(), label.properties.end(),
-                      [](const PropertyDef& a, const PropertyDef& b) { return a.name < b.name; });
-            for (const auto& prop : label.properties) {
-                Row row;
-                row.push_back(std::string(label.name));
-                row.push_back(prop.name);
-                row.push_back(propertyTypeName(prop.type));
-                rows.push_back(std::move(row));
-            }
-            break; // names are unique; no second label can match
-        }
-        break;
-    }
-    case DatabaseDdlStatement::DESCRIBE_RELATIONSHIP: {
-        columns = {"relType", "propertyName", "propertyType"};
-        auto edge_labels = co_await instance.async_meta->listEdgeLabels();
-        for (auto& edge_label : edge_labels) {
-            if (edge_label.name != stmt.name)
-                continue;
-            std::sort(edge_label.properties.begin(), edge_label.properties.end(),
-                      [](const PropertyDef& a, const PropertyDef& b) { return a.name < b.name; });
-            for (const auto& prop : edge_label.properties) {
-                Row row;
-                row.push_back(std::string(edge_label.name));
-                row.push_back(prop.name);
-                row.push_back(propertyTypeName(prop.type));
-                rows.push_back(std::move(row));
-            }
-            break;
-        }
-        break;
-    }
-    }
+                         Row row;
+                         row.push_back(def.name);
+                         row.push_back(catalogFunctionSignature(def));
+                         row.push_back(std::string(def.is_aggregate ? "Aggregate function" : "Scalar function"));
+                         row.push_back(bool(def.is_aggregate));
+                         row.push_back(std::string(def.is_aggregate ? "Aggregate" : "Scalar"));
+                         row.push_back(bool(true));
+                         row.push_back(Value(mk<ListValue>(std::move(args))));
+                         row.push_back(catalogTypeName(def.return_type));
+                         rows.push_back(std::move(row));
+                     }
+                     break;
+                 }
+                 case DatabaseDdlStatement::SHOW_VECTOR_INDEXES: {
+                     columns = {"id",         "name",          "state",      "populationPercent", "type",
+                                "entityType", "labelsOrTypes", "properties", "indexProvider",     "owningConstraint",
+                                "lastRead",   "readCount",     "options"};
+                     break;
+                 }
+                 // ── DESCRIBE family: graph-scoped schema introspection ──
+                 //
+                 // Unlike the SHOW statements above, these read the *selected* graph and they do
+                 // NOT filter out the anonymous label: seeing the fields of unlabeled nodes is the
+                 // point. `anonymous` distinguishes it, so the internal name stays legible.
+                 // `CALL db.labels()` keeps filtering it out -- a documented divergence.
+                 case DatabaseDdlStatement::DESCRIBE_LABELS: {
+                     columns = {"name", "anonymous"};
+                     auto labels = co_await instance.async_meta->listLabels();
+                     std::sort(labels.begin(), labels.end(),
+                               [](const LabelDef& a, const LabelDef& b) { return a.name < b.name; });
+                     for (const auto& label : labels) {
+                         Row row;
+                         row.push_back(std::string(label.name));
+                         row.push_back(bool(label.name == kAnonLabelName));
+                         rows.push_back(std::move(row));
+                     }
+                     break;
+                 }
+                 case DatabaseDdlStatement::DESCRIBE_RELATIONSHIPS: {
+                     columns = {"relationshipType"};
+                     auto edge_labels = co_await instance.async_meta->listEdgeLabels();
+                     std::vector<std::string> names;
+                     names.reserve(edge_labels.size());
+                     for (const auto& edge_label : edge_labels)
+                         names.push_back(edge_label.name);
+                     std::sort(names.begin(), names.end());
+                     for (const auto& name : names) {
+                         Row row;
+                         row.push_back(name);
+                         rows.push_back(std::move(row));
+                     }
+                     break;
+                 }
+                 case DatabaseDdlStatement::DESCRIBE_LABEL: {
+                     // `propertyType` is singular and a plain STRING: a declared field has exactly
+                     // one PropertyType. (The procedures keep the plural LIST form because that is
+                     // neo4j's shape; DESCRIBE is our own surface and has no such constraint.)
+                     columns = {"label", "propertyName", "propertyType"};
+                     auto labels = co_await instance.async_meta->listLabels();
+                     for (auto& label : labels) {
+                         if (label.name != stmt.name)
+                             continue;
+                         std::sort(label.properties.begin(), label.properties.end(),
+                                   [](const PropertyDef& a, const PropertyDef& b) { return a.name < b.name; });
+                         for (const auto& prop : label.properties) {
+                             Row row;
+                             row.push_back(std::string(label.name));
+                             row.push_back(prop.name);
+                             row.push_back(propertyTypeName(prop.type));
+                             rows.push_back(std::move(row));
+                         }
+                         break; // names are unique; no second label can match
+                     }
+                     break;
+                 }
+                 case DatabaseDdlStatement::DESCRIBE_RELATIONSHIP: {
+                     columns = {"relType", "propertyName", "propertyType"};
+                     auto edge_labels = co_await instance.async_meta->listEdgeLabels();
+                     for (auto& edge_label : edge_labels) {
+                         if (edge_label.name != stmt.name)
+                             continue;
+                         std::sort(edge_label.properties.begin(), edge_label.properties.end(),
+                                   [](const PropertyDef& a, const PropertyDef& b) { return a.name < b.name; });
+                         for (const auto& prop : edge_label.properties) {
+                             Row row;
+                             row.push_back(std::string(edge_label.name));
+                             row.push_back(prop.name);
+                             row.push_back(propertyTypeName(prop.type));
+                             rows.push_back(std::move(row));
+                         }
+                         break;
+                     }
+                     break;
+                 }
+                 }
 
-    ctx->columns = std::move(columns);
-    ctx->gen = compute::wrapRowsToChunkGenerator(std::move(rows));
-    result.ctx = std::move(ctx);
-    co_return result;
+                 ctx->columns = std::move(columns);
+                 ctx->gen = compute::wrapRowsToChunkGenerator(std::move(rows));
+                 result.ctx = std::move(ctx);
+                 co_return result;
 }
 
 } // namespace service
