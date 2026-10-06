@@ -681,6 +681,9 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
     // 异步索引构建开关：会话已按线程隔离（AsyncGraphDataStore 的 txn 为 thread-local，§20.18 A）
     // ⇒ 后台构建线程与查询线程不再共享 txn/session，可安全启用。
     static constexpr bool kEnableAsyncIndexBuild = true;
+    // 提交后台构建后**默认等待**的上界：正常规模毫秒级完成 ⇒ 对外表现与旧同步语义一致（RPC/脚本无需改）；
+    // 超长构建则返回 BUILDING（不阻塞调用方）。依据设计 §11（异步 + 可选等待）/§14。
+    static constexpr uint32_t kIndexBuildWaitMs = 5000;
     if (stmt.type == IndexDdlStatement::CREATE_VERTEX_INDEX) {
         auto label_def = co_await async_meta_.getLabelDef(stmt.label_name);
         if (!label_def.has_value()) {
@@ -780,9 +783,10 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                         [svc = index_builds_, id] { return svc->isCancelled(id); }));
             };
             if (index_builds_->submit(idx_def->index_id, stmt.index_name, std::move(job))) {
+                const bool done = index_builds_->waitForCompletion(idx_def->index_id, kIndexBuildWaitMs);
                 result.columns.push_back("result");
                 Row row;
-                row.push_back(std::string("Index created (building): " + stmt.index_name));
+                row.push_back(std::string((done ? "Index created: " : "Index created (building): ") + stmt.index_name));
                 result.rows.push_back(std::move(row));
                 co_return;
             }
@@ -876,9 +880,11 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                       [svc = index_builds_, id] { return svc->isCancelled(id); }));
             };
             if (index_builds_->submit(idx_def_edge->index_id, stmt.index_name, std::move(job))) {
+                const bool done = index_builds_->waitForCompletion(idx_def_edge->index_id, kIndexBuildWaitMs);
                 result.columns.push_back("result");
                 Row row;
-                row.push_back(std::string("Edge index created (building): " + stmt.index_name));
+                row.push_back(
+                    std::string((done ? "Edge index created: " : "Edge index created (building): ") + stmt.index_name));
                 result.rows.push_back(std::move(row));
                 co_return;
             }

@@ -105,6 +105,19 @@ public:
         return scheduler_.isCancelled(index_id);
     }
 
+    /// 等待该索引的构建**结束**（返回 true = 已结束；false = 超时仍在构建）。
+    /// 语义保证：发布回调（落 PUBLIC/ERROR）在任务函数内、**先于**"任务结束"发生
+    /// ⇒ 返回 true 时状态已落库（`SHOW INDEXES` 立即能看到 PUBLIC）。见设计 §11/§14 的"可选等待"。
+    bool waitForCompletion(uint64_t index_id, uint32_t timeout_ms = 5000) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (isBuilding(index_id)) {
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return true;
+    }
+
     size_t runningCount() const {
         return scheduler_.runningCount();
     }
