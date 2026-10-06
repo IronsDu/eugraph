@@ -28,6 +28,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
+
         if (n == 0)
             continue;
 
@@ -55,6 +56,11 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
             for (size_t ai = 0; ai < aggregates_[a].arguments.size(); ++ai) {
                 auto col = Column::flat(binder::BoundTypeKind::ANY, n);
                 evaluator.evaluate(aggregates_[a].arguments[ai], *chunk, col);
+                size_t non_null = 0;
+                for (size_t r = 0; r < n; ++r) {
+                    if (!col.isNull(r))
+                        ++non_null;
+                }
                 for (size_t r = 0; r < n; ++r)
                     chunk_arg_vals[a][r][ai] = col.getValue(r);
             }

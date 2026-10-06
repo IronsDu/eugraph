@@ -1,5 +1,10 @@
 #include "query/executor/query_executor.hpp"
 
+#include <thread>
+
+#include "storage/index/index_build_gate.hpp"
+#include "storage/index/index_build_service.hpp"
+
 #include "common/types/constants.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/function/function_registry.hpp"
@@ -330,7 +335,355 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     co_return ctx;
 }
 
+void QueryExecutor::setIndexBuildService(std::shared_ptr<IndexBuildService> service) {
+    index_builds_ = std::move(service);
+}
+
+namespace {
+/// 待回收的孤儿表（DROP 时删表失败留下的表）。DROP 是幂等的，因此在**后续每次 DROP** 时机会式重试回收——
+/// 无需新增持久化（进程重启后遗留的孤儿表由后续 §20.18 B 的持久化登记方案处理）。
+std::mutex& orphanMu() {
+    static std::mutex m;
+    return m;
+}
+std::vector<std::string>& orphanTables() {
+    static std::vector<std::string> v;
+    return v;
+}
+void rememberOrphan(const std::string& table) {
+    std::lock_guard<std::mutex> lock(orphanMu());
+    auto& v = orphanTables();
+    if (std::find(v.begin(), v.end(), table) == v.end())
+        v.push_back(table);
+}
+std::vector<std::string> takeOrphans() {
+    std::lock_guard<std::mutex> lock(orphanMu());
+    auto v = orphanTables();
+    orphanTables().clear();
+    return v;
+}
+} // namespace
+
+folly::coro::Task<bool> QueryExecutor::catchUpAndPublish(const std::string& index_table,
+                                                         const std::string& index_name) {
+    const auto& schema_now = async_meta_.schema();
+    auto def_now = schema_now.findIndexByName(index_name);
+    if (!def_now || def_now->index_id == 0)
+        co_return true; // 定义已消失（例如构建中被 DROP）⇒ 无需追赶
+    const std::string delta_table = idxDeltaTable(def_now->index_id);
+    constexpr size_t kReplayBatch = 1024;
+
+    // ⓪ **关闸并等在飞写者退出**（设计 §7.1/§15.1）：此后到达的写者会直写索引（不再进变更表），
+    // 因此"追平 + 翻 PUBLIC"之后不会再有落在变更表里的写入 ⇒ 丢写窗口被彻底封死。
+    auto gate = IndexBuildGateRegistry::instance().gate(def_now->index_id);
+    if (!gate->closeAndWait(5000))
+        spdlog::warn("[index-build] '{}' 关闸等待在飞写者超时（窗口可能变大，但不会静默丢写）", index_name);
+
+    // ① 追平（多轮；每轮从表首开始、轮内 last_key 续扫；应用后从变更表删除 ⇒ 可终止）
+    for (int pass = 0; pass < 50; ++pass) {
+        size_t applied_total = 0;
+        std::string last_key;
+        while (true) {
+            const size_t applied =
+                co_await async_data_.replayDeltaBatch(index_table, delta_table, kReplayBatch, last_key);
+            applied_total += applied;
+            if (applied < kReplayBatch)
+                break;
+        }
+        if (applied_total == 0)
+            break;
+    }
+
+    // ② **先翻 PUBLIC**：此后新写入直写索引、不再进变更表（关闸的近似实现）
+    if (!(co_await async_meta_.updateIndexState(index_name, IndexState::PUBLIC)))
+        co_return false;
+
+    // ③ **再排空一次**：收走"翻状态瞬间仍在飞"的写入
+    {
+        std::string last_key;
+        while (true) {
+            const size_t applied =
+                co_await async_data_.replayDeltaBatch(index_table, delta_table, kReplayBatch, last_key);
+            if (applied < kReplayBatch)
+                break;
+        }
+    }
+    co_return true;
+}
+
+folly::coro::Task<IndexBuildResult> QueryExecutor::backfillVertexIndex(IndexDdlStatement stmt, std::string table,
+                                                                       LabelId label_id,
+                                                                       std::vector<ResolvedIndexAccessor> resolved,
+                                                                       std::function<bool()> cancelled) {
+    // 顶点索引回填 + 提交。**不落状态**：由调用方（同步路径）或发布回调（后台路径）落，
+    // 以保持"先提交数据、后翻状态"的两库顺序（设计 §7.3）。
+    // 弱 accessor 需要按属性名在各标签里查 prop id ⇒ 取当前 schema（构建与模式 DDL 互斥，§8）。
+    const auto& schema = async_meta_.schema();
+    bool hasConflict = false;
+    bool cancelled_midway = false;
+    {
+        GraphTxnHandle txn = co_await async_data_.beginTran();
+        async_data_.setTransaction(txn);
+
+        {
+            auto gen = async_data_.scanVerticesByLabel(label_id);
+            while (auto batch = co_await gen.next()) {
+                if (cancelled && cancelled()) {
+                    cancelled_midway = true;
+                    break; // 顶点侧原先没有取消检查（补齐）
+                }
+                for (auto vid : *batch) {
+                    std::vector<PropertyValue> values;
+                    bool allPresent = true;
+                    bool conflict = false;
+
+                    auto vertex_labels = co_await async_data_.getVertexLabels(vid);
+                    for (const auto& ra : resolved) {
+                        if (ra.is_strong) {
+                            auto props_opt = co_await async_data_.getVertexProperties(vid, ra.source_label_id);
+                            if (!props_opt || ra.source_prop_id >= props_opt->size() ||
+                                !(*props_opt)[ra.source_prop_id].has_value()) {
+                                allPresent = false;
+                                break;
+                            }
+                            values.push_back((*props_opt)[ra.source_prop_id].value());
+                        } else {
+                            std::optional<PropertyValue> found_value;
+                            for (LabelId lid : vertex_labels) {
+                                auto lab = schema.getLabel(lid);
+                                if (!lab)
+                                    continue;
+                                uint16_t pid = UINT16_MAX;
+                                for (const auto& pd : lab->properties) {
+                                    if (pd.name == ra.property_name) {
+                                        pid = pd.id;
+                                        break;
+                                    }
+                                }
+                                if (pid == UINT16_MAX)
+                                    continue;
+                                auto props_opt = co_await async_data_.getVertexProperties(vid, lid);
+                                if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
+                                    continue;
+                                const auto& candidate = (*props_opt)[pid].value();
+                                if (found_value.has_value()) {
+                                    if (!(found_value.value() == candidate)) {
+                                        conflict = true;
+                                        break;
+                                    }
+                                } else {
+                                    found_value = candidate;
+                                }
+                            }
+                            if (conflict) {
+                                spdlog::warn("Index '{}' weak accessor '{}' has conflicting values on vertex {}",
+                                             stmt.index_name, ra.property_name, vid);
+                                break;
+                            }
+                            if (!found_value.has_value()) {
+                                allPresent = false;
+                                break;
+                            }
+                            values.push_back(found_value.value());
+                        }
+                    }
+
+                    if (conflict) {
+                        hasConflict = true;
+                        break;
+                    }
+                    if (!allPresent)
+                        continue;
+
+                    if (stmt.unique) {
+                        bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                        if (!constraint_ok) {
+                            spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
+                                         stmt.index_name, vid);
+                            hasConflict = true;
+                            break;
+                        }
+                    }
+                    co_await async_data_.insertIndexEntry(table, values, vid);
+                }
+                if (hasConflict)
+                    break;
+            }
+        } // gen destroyed before commit
+
+        if (cancelled_midway) {
+            // **显式同步回滚**：只置取消位就返回会让索引表仍被本会话占用 ⇒ DROP 删表失败
+            // （"Device or resource busy"）。同步回滚确保任务退出时表已释放。
+            async_data_.rollbackTranNow(txn);
+            co_return IndexBuildResult{IndexBuildOutcome::CANCELLED, "cancelled during backfill"};
+        }
+
+        // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
+        // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
+        const bool committed = co_await async_data_.commitTran(txn);
+        if (!committed) {
+            co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                       "Index backfill transaction failed to commit (index left in ERROR, not "
+                                       "ONLINE); see the server log for the WiredTiger error"};
+        }
+    }
+
+    if (hasConflict) {
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                   "Index creation failed: conflicting values or duplicate values during backfill"};
+    }
+
+    // ==================== P2 追赶：重放构建期间的变更表（§6.1）====================
+    // 构建期（BUILDING）的维护写入不再直写索引，而是进变更表 ⇒ 这里按键序、分批把它追平。
+    // **注意（已知边界）**：尚未实现 §7.1 的"关闸 + 排空在飞写者"，因此**极窄窗口内**与最后一批重放竞争的
+    // 写入仍可能丢失；已用"多轮直到某轮应用 0 行"缩小窗口，完整协议见设计 §20.2 第 2 步。
+    {
+        const auto& schema_now = async_meta_.schema();
+        auto def_now = schema_now.findIndexByName(stmt.index_name);
+        if (def_now && def_now->index_id != 0) {
+            const std::string delta_table = idxDeltaTable(def_now->index_id);
+            constexpr size_t kReplayBatch = 1024;
+            for (int pass = 0; pass < 50; ++pass) { // 有界轮数，避免持续写入下无限追赶
+                size_t applied_total = 0;
+                std::string last_key; // **每轮**从变更表表首开始；轮内靠 last_key 续扫（此前误为每批清空 ⇒ 重复应用）
+                while (true) {
+                    const size_t applied =
+                        co_await async_data_.replayDeltaBatch(table, delta_table, kReplayBatch, last_key);
+                    applied_total += applied;
+                    if (applied < kReplayBatch)
+                        break; // 本批未满 ⇒ 变更表已到末尾
+                }
+                if (applied_total == 0)
+                    break; // 本轮无新变更 ⇒ 追平
+            }
+        }
+    }
+
+    // P2 追赶 + **近似关闸**：追平 → 翻 PUBLIC → 再排空一次（见 catchUpAndPublish 注释）
+    if (!(co_await catchUpAndPublish(table, stmt.index_name)))
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR, "Failed to publish index state (PUBLIC)"};
+
+    co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
+}
+
+folly::coro::Task<IndexBuildResult> QueryExecutor::backfillEdgeIndex(IndexDdlStatement stmt, std::string table,
+                                                                     EdgeLabelId edge_label_id,
+                                                                     std::vector<uint16_t> prop_ids,
+                                                                     std::function<bool()> cancelled) {
+    // 边索引回填 + 提交（**不落状态**，理由同顶点版本）。
+    const auto& schema = async_meta_.schema();
+    bool hasConflict = false;
+    bool cancelled_midway = false;
+    {
+        GraphTxnHandle txn = co_await async_data_.beginTran();
+        async_data_.setTransaction(txn);
+
+        {
+            auto gen = async_data_.scanEdgesByType(edge_label_id, std::nullopt, std::nullopt);
+            while (auto batch = co_await gen.next()) {
+                if (cancelled && cancelled()) {
+                    cancelled_midway = true;
+                    break; // 跳出扫描：先让 gen 析构，再显式回滚（见提交前）
+                }
+                for (const auto& entry : *batch) {
+                    auto props_opt = co_await async_data_.getEdgeProperties(edge_label_id, entry.edge_id);
+                    // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
+                    // For now skip properties; index entries will be created when properties API is added
+                    if (!props_opt.has_value())
+                        continue;
+                    auto& props = *props_opt;
+                    // Collect all indexed property values; skip if any is missing
+                    std::vector<PropertyValue> values;
+                    bool allPresent = true;
+                    for (auto pid : prop_ids) {
+                        if (pid < props.size() && props[pid].has_value()) {
+                            values.push_back(props[pid].value());
+                        } else {
+                            allPresent = false;
+                            break;
+                        }
+                    }
+                    if (!allPresent)
+                        continue;
+
+                    if (stmt.unique) {
+                        bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                        if (!constraint_ok) {
+                            spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
+                                         stmt.index_name, entry.edge_id);
+                            hasConflict = true;
+                            break;
+                        }
+                    }
+                    auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
+                                                                     entry.seq, edge_label_id);
+                    co_await async_data_.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
+                }
+                if (hasConflict)
+                    break;
+            }
+        } // gen destroyed before commit
+
+        if (cancelled_midway) {
+            // **显式同步回滚**：只置取消位就返回会让索引表仍被本会话占用 ⇒ DROP 删表失败
+            // （"Device or resource busy"）。同步回滚确保任务退出时表已释放。
+            async_data_.rollbackTranNow(txn);
+            co_return IndexBuildResult{IndexBuildOutcome::CANCELLED, "cancelled during backfill"};
+        }
+
+        // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
+        // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
+        const bool committed = co_await async_data_.commitTran(txn);
+        if (!committed) {
+            co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                       "Index backfill transaction failed to commit (index left in ERROR, not "
+                                       "ONLINE); see the server log for the WiredTiger error"};
+        }
+    }
+
+    if (hasConflict) {
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR,
+                                   "Unique edge index creation failed: duplicate values found during backfill"};
+    }
+
+    // ==================== P2 追赶：重放构建期间的变更表（**边路径此前完全缺失**）====================
+    // 顶点路径有同样的收尾；边路径遗漏 ⇒ 构建期写入变更表的边**永远不会进索引**（实测 3/6 丢失）。
+    {
+        const auto& schema_now = async_meta_.schema();
+        auto def_now = schema_now.findIndexByName(stmt.index_name);
+        if (def_now && def_now->index_id != 0) {
+            const std::string delta_table = idxDeltaTable(def_now->index_id);
+            constexpr size_t kReplayBatch = 1024;
+            for (int pass = 0; pass < 50; ++pass) {
+                size_t applied_total = 0;
+                std::string last_key; // 每轮从表首开始，轮内靠 last_key 续扫
+                while (true) {
+                    const size_t applied =
+                        co_await async_data_.replayDeltaBatch(table, delta_table, kReplayBatch, last_key);
+                    applied_total += applied;
+                    if (applied < kReplayBatch)
+                        break;
+                }
+                if (applied_total == 0)
+                    break; // 追平（已应用的行在重放时从变更表删除）
+            }
+        }
+    }
+
+    // P2 追赶 + **近似关闸**：追平 → 翻 PUBLIC → 再排空一次（见 catchUpAndPublish 注释）
+    if (!(co_await catchUpAndPublish(table, stmt.index_name)))
+        co_return IndexBuildResult{IndexBuildOutcome::ERROR, "Failed to publish index state (PUBLIC)"};
+
+    co_return IndexBuildResult{IndexBuildOutcome::PUBLIC, {}};
+}
+
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {
+    // 异步索引构建开关：会话已按线程隔离（AsyncGraphDataStore 的 txn 为 thread-local，§20.18 A）
+    // ⇒ 后台构建线程与查询线程不再共享 txn/session，可安全启用。
+    static constexpr bool kEnableAsyncIndexBuild = true;
+    // 提交后台构建后**默认等待**的上界：正常规模毫秒级完成 ⇒ 对外表现与旧同步语义一致（RPC/脚本无需改）；
+    // 超长构建则返回 BUILDING（不阻塞调用方）。依据设计 §11（异步 + 可选等待）/§14。
+    static constexpr uint32_t kIndexBuildWaitMs = 5000;
     if (stmt.type == IndexDdlStatement::CREATE_VERTEX_INDEX) {
         auto label_def = co_await async_meta_.getLabelDef(stmt.label_name);
         if (!label_def.has_value()) {
@@ -378,17 +731,17 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             result.error = "Failed to create index storage table";
             co_return;
         }
+        // P2：变更表与索引同生命周期（构建期写入进它，追赶后删除，§5.0/§5.2）
+        ok = co_await async_data_.createIndex(idxDeltaTable(idx_def->index_id));
+        if (!ok) {
+            result.error = "Failed to create index delta table";
+            co_return;
+        }
 
         // Pre-resolve strong accessors to prop ids.
-        struct ResolvedAccessor {
-            bool is_strong;
-            LabelId source_label_id;
-            uint16_t source_prop_id;
-            std::string property_name;
-        };
-        std::vector<ResolvedAccessor> resolved;
+        std::vector<ResolvedIndexAccessor> resolved;
         for (const auto& acc : idx_def->accessors) {
-            ResolvedAccessor ra;
+            ResolvedIndexAccessor ra;
             ra.is_strong = acc.is_strong;
             ra.property_name = acc.property_name;
             ra.source_label_id = acc.source_label_id;
@@ -416,108 +769,35 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             resolved.push_back(std::move(ra));
         }
 
-        // Backfill.
-        bool hasConflict = false;
-        {
-            GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
-
-            {
-                auto gen = async_data_.scanVerticesByLabel(label_def->id);
-                while (auto batch = co_await gen.next()) {
-                    for (auto vid : *batch) {
-                        std::vector<PropertyValue> values;
-                        bool allPresent = true;
-                        bool conflict = false;
-
-                        auto vertex_labels = co_await async_data_.getVertexLabels(vid);
-                        for (const auto& ra : resolved) {
-                            if (ra.is_strong) {
-                                auto props_opt = co_await async_data_.getVertexProperties(vid, ra.source_label_id);
-                                if (!props_opt || ra.source_prop_id >= props_opt->size() ||
-                                    !(*props_opt)[ra.source_prop_id].has_value()) {
-                                    allPresent = false;
-                                    break;
-                                }
-                                values.push_back((*props_opt)[ra.source_prop_id].value());
-                            } else {
-                                std::optional<PropertyValue> found_value;
-                                for (LabelId lid : vertex_labels) {
-                                    auto lab = schema.getLabel(lid);
-                                    if (!lab)
-                                        continue;
-                                    uint16_t pid = UINT16_MAX;
-                                    for (const auto& pd : lab->properties) {
-                                        if (pd.name == ra.property_name) {
-                                            pid = pd.id;
-                                            break;
-                                        }
-                                    }
-                                    if (pid == UINT16_MAX)
-                                        continue;
-                                    auto props_opt = co_await async_data_.getVertexProperties(vid, lid);
-                                    if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
-                                        continue;
-                                    const auto& candidate = (*props_opt)[pid].value();
-                                    if (found_value.has_value()) {
-                                        if (!(found_value.value() == candidate)) {
-                                            conflict = true;
-                                            break;
-                                        }
-                                    } else {
-                                        found_value = candidate;
-                                    }
-                                }
-                                if (conflict) {
-                                    spdlog::warn("Index '{}' weak accessor '{}' has conflicting values on vertex {}",
-                                                 stmt.index_name, ra.property_name, vid);
-                                    break;
-                                }
-                                if (!found_value.has_value()) {
-                                    allPresent = false;
-                                    break;
-                                }
-                                values.push_back(found_value.value());
-                            }
-                        }
-
-                        if (conflict) {
-                            hasConflict = true;
-                            break;
-                        }
-                        if (!allPresent)
-                            continue;
-
-                        if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
-                            if (!constraint_ok) {
-                                spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
-                                             stmt.index_name, vid);
-                                hasConflict = true;
-                                break;
-                            }
-                        }
-                        co_await async_data_.insertIndexEntry(table, values, vid);
-                    }
-                    if (hasConflict)
-                        break;
-                }
-            } // gen destroyed before commit
-
-            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
-            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = co_await async_data_.commitTran(txn);
-            if (!committed) {
-                ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-                result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
-                               "see the server log for the WiredTiger error";
+        // 注入了"每图构建服务" ⇒ 提交后台任务后**立即返回**（异步构建；状态由服务的发布回调落 PUBLIC/ERROR）。
+        // 未注入（例如单测里的极小化装配）则走下面的同步路径，保证任何装配下都可用。
+        // **临时安全开关（2026-10）**：后台构建与 DML 写入并发时 WT 会话被并发使用
+        // ⇒ `session_dhandle` 损坏 + SIGSEGV（ASan 与 release 均复现，设计 §20.17）。
+        // 强怀疑根因：后台任务与查询线程**共享 async store 的 `txn_`**。在改为"后台任务独立 txn/会话"前，
+        // 只走**同步构建**以消除崩溃路径。
+        if (index_builds_ && kEnableAsyncIndexBuild) {
+            auto job = [this, stmt, table, label_id = label_def->id, id = idx_def->index_id,
+                        resolved = std::move(resolved)]() mutable {
+                return folly::coro::blockingWait(
+                    backfillVertexIndex(stmt, table, label_id, std::move(resolved),
+                                        [svc = index_builds_, id] { return svc->isCancelled(id); }));
+            };
+            if (index_builds_->submit(idx_def->index_id, stmt.index_name, std::move(job))) {
+                const bool done = index_builds_->waitForCompletion(idx_def->index_id, kIndexBuildWaitMs);
+                result.columns.push_back("result");
+                Row row;
+                row.push_back(std::string((done ? "Index created: " : "Index created (building): ") + stmt.index_name));
+                result.rows.push_back(std::move(row));
                 co_return;
             }
+            // 提交失败（该索引已在构建中）⇒ 回落到同步路径继续本次请求
         }
 
-        if (hasConflict) {
+        // Backfill（已抽成协程：同一实现对同步路径与后台任务都可用）
+        IndexBuildResult build = co_await backfillVertexIndex(stmt, table, label_def->id, std::move(resolved));
+        if (build.outcome != IndexBuildOutcome::PUBLIC) {
             ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-            result.error = "Index creation failed: conflicting values or duplicate values during backfill";
+            result.error = build.error;
             co_return;
         }
 
@@ -564,75 +844,57 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             co_return;
         }
 
-        auto table = eidxCompositeTable(edge_label_def->id, prop_ids);
+        // 取回刚创建的边索引定义（后面据此拿 index_id 提交后台构建；与顶点分支同一做法）
+        const auto& schema_edge = async_meta_.schema();
+        auto idx_def_edge = schema_edge.findIndexByName(stmt.index_name);
+        if (!idx_def_edge) {
+            result.error = "Created edge index not found in schema: " + stmt.index_name;
+            co_return;
+        }
+
+        // 表名与写入/维护/扫描三处保持同一写法（都按属性个数选择）。
+        // 注意：单属性时 eidxCompositeTable(label, {p}) 与 eidxTable(label, p) **生成同一个名字**
+        // （均为 table:eidx_<label>_<p>），故本处并非"表名不一致"缺陷的修复点（曾误判，已更正）。
+        auto table = prop_ids.size() == 1 ? eidxTable(edge_label_def->id, prop_ids[0])
+                                          : eidxCompositeTable(edge_label_def->id, prop_ids);
         ok = co_await async_data_.createIndex(table);
         if (!ok) {
             result.error = "Failed to create edge index storage table";
             co_return;
         }
+        // P2：边索引的变更表（与索引同生命周期）。
+        // **必须在上面 if 之外**——此前它被插到了 `co_return` 之后 ⇒ **死代码** ⇒ 边索引的变更表从未创建
+        // ⇒ 构建期分流写入变更表时 "Failed to open cursor … error 2" ⇒ 写入失败丢数据（设计 §20.14/§20.15）。
+        ok = co_await async_data_.createIndex(idxDeltaTable(idx_def_edge->index_id));
+        if (!ok) {
+            result.error = "Failed to create edge index delta table";
+            co_return;
+        }
 
         // Backfill: scan existing edges and insert index entries
-        bool hasConflict = false;
-        {
-            GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
-
-            {
-                auto gen = async_data_.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
-                while (auto batch = co_await gen.next()) {
-                    for (const auto& entry : *batch) {
-                        auto props_opt = co_await async_data_.getEdgeProperties(edge_label_def->id, entry.edge_id);
-                        // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
-                        // For now skip properties; index entries will be created when properties API is added
-                        if (!props_opt.has_value())
-                            continue;
-                        auto& props = *props_opt;
-                        // Collect all indexed property values; skip if any is missing
-                        std::vector<PropertyValue> values;
-                        bool allPresent = true;
-                        for (auto pid : prop_ids) {
-                            if (pid < props.size() && props[pid].has_value()) {
-                                values.push_back(props[pid].value());
-                            } else {
-                                allPresent = false;
-                                break;
-                            }
-                        }
-                        if (!allPresent)
-                            continue;
-
-                        if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
-                            if (!constraint_ok) {
-                                spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
-                                             stmt.index_name, entry.edge_id);
-                                hasConflict = true;
-                                break;
-                            }
-                        }
-                        auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
-                                                                         entry.seq, edge_label_def->id);
-                        co_await async_data_.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
-                    }
-                    if (hasConflict)
-                        break;
-                }
-            } // gen destroyed before commit
-
-            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
-            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = co_await async_data_.commitTran(txn);
-            if (!committed) {
-                ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-                result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
-                               "see the server log for the WiredTiger error";
+        // 同顶点分支：注入服务 ⇒ 后台异步构建并立即返回
+        if (index_builds_ && kEnableAsyncIndexBuild) { // 同上：与顶点分支共用同一开关
+            auto job = [this, stmt, table, elid = edge_label_def->id, id = idx_def_edge->index_id, prop_ids]() mutable {
+                return folly::coro::blockingWait(
+                    backfillEdgeIndex(stmt, table, elid, std::move(prop_ids),
+                                      [svc = index_builds_, id] { return svc->isCancelled(id); }));
+            };
+            if (index_builds_->submit(idx_def_edge->index_id, stmt.index_name, std::move(job))) {
+                const bool done = index_builds_->waitForCompletion(idx_def_edge->index_id, kIndexBuildWaitMs);
+                result.columns.push_back("result");
+                Row row;
+                row.push_back(
+                    std::string((done ? "Edge index created: " : "Edge index created (building): ") + stmt.index_name));
+                result.rows.push_back(std::move(row));
                 co_return;
             }
         }
 
-        if (hasConflict) {
+        // Backfill（已抽成协程）
+        IndexBuildResult build = co_await backfillEdgeIndex(stmt, table, edge_label_def->id, prop_ids);
+        if (build.outcome != IndexBuildOutcome::PUBLIC) {
             ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-            result.error = "Unique edge index creation failed: duplicate values found during backfill";
+            result.error = build.error;
             co_return;
         }
 
@@ -650,17 +912,69 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
     } else if (stmt.type == IndexDdlStatement::DROP_INDEX) {
         const auto& schema = async_meta_.schema();
         auto idx_def = schema.findIndexByName(stmt.index_name);
+
+        // ① 构建中 ⇒ **取消并等待任务退出**；**但绝不在此时删表** —— 实测在"取消等待期间删表"会与
+        //   构建侧的 WT 会话并发使用同一会话，导致 `session_dhandle` 损坏并 **SIGSEGV**
+        //   （ASan 与 release 均可复现，设计 §20.17）。表交给**构建任务退出后/启动清理**回收（孤儿表）。
+        // ⓪ 机会式回收：重试此前登记失败的孤儿表（DROP 幂等 ⇒ 安全）
+        for (const auto& orphan : takeOrphans()) {
+            if (!(co_await async_data_.dropIndex(orphan)))
+                rememberOrphan(orphan); // 仍占用 ⇒ 留待下次
+            else
+                spdlog::info("dropIndex: 孤儿表 {} 已回收", orphan);
+        }
+
+        // ① 构建中 ⇒ **拒绝删除**（安全优先）。实测"取消 + 删定义 + 删表"的组合会与在飞构建的 WT 会话
+        //   并发使用同一会话 ⇒ `session_dhandle` 损坏并 **SIGSEGV**（ASan 与 release 均复现，§20.17）。
+        //   在竞态根因定位前，先返回明确错误，避免崩溃与半删状态；用户可等构建结束（秒级）再删。
+        if (idx_def && index_builds_ && index_builds_->isBuilding(idx_def->index_id)) {
+            result.error = "Index is still building; retry DROP after it finishes (state: BUILDING)";
+            co_return;
+        }
+
         std::string new_table;
         if (idx_def && idx_def->index_id != 0)
             new_table = vidxTableById(idx_def->index_id);
 
+        // ② **先删存储表，成功后再删定义**。顺序颠倒会在"表删不掉"时留下"定义已消失、表还在"的坏状态。
+        if (!new_table.empty()) {
+            // **只尝试一次**：索引表可能仍被构建侧的会话/游标占用（WT 报 "Device or resource busy"）。
+            // 曾试过"200ms 紧循环重试"，结果在 ASan 下暴露 **WT 会话并发使用** 的 SEGV
+            // （`session_dhandle.c:77 __session_add_dhandle`：重试的 drop 与构建侧会话收尾并发）⇒ 撤销重试。
+            // 失败即降级为**孤儿表**（定义照删，见下），由后续清理回收。
+            // 有界重试：非构建期删表偶发被并发读/游标占用（WT "Device or resource busy"），
+            // 稍后即释放。**构建中的 DROP 已在上方被拒绝**，故此处不存在"与构建并发删表"的竞态。
+            bool table_dropped = false;
+            for (int attempt = 0; attempt < 100 && !table_dropped; ++attempt) {
+                table_dropped = co_await async_data_.dropIndex(new_table);
+                if (!table_dropped)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            if (!table_dropped) {
+                // **设计调整**：物理表暂时删不掉（实测：构建侧会话可能仍缓存表句柄）时**不再保留定义**——
+                // 否则该属性集**永久无法重建索引**（用户可见事故）。改为：定义照删（继续往下走），
+                // 表降级为**孤儿表**，由启动清理/后续清理回收。DROP 的语义是"索引不再存在"，
+                // 物理回收只是实现细节，不应阻塞语义。
+                spdlog::warn(
+                    "dropIndex: 索引表 {} 暂时无法删除，登记为孤儿表（定义已删除；后续 DROP 会机会式重试回收）",
+                    new_table);
+                if (index_builds_)
+                    index_builds_->recordOrphan(new_table); // 跨进程回收（§20.22 方案 2）
+                else
+                    rememberOrphan(new_table);
+            }
+        }
+        // P2：连同变更表一起删（若存在；失败不致命，记日志即可——启动清理会兜底，§5.2）
+        if (idx_def && idx_def->index_id != 0) {
+            const std::string delta_table = idxDeltaTable(idx_def->index_id);
+            if (!(co_await async_data_.dropIndex(delta_table)))
+                spdlog::warn("dropIndex: 变更表 {} 删除失败（启动清理会兜底）", delta_table);
+        }
         bool ok = co_await async_meta_.dropIndex(stmt.index_name);
         if (!ok) {
             result.error = "Failed to drop index: " + stmt.index_name;
             co_return;
         }
-        if (!new_table.empty())
-            co_await async_data_.dropIndex(new_table);
         result.columns.push_back("result");
         Row row;
         row.push_back(std::string("Index dropped: " + stmt.index_name));
@@ -686,7 +1000,9 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             std::string state_str;
             switch (idx.state) {
             case IndexState::WRITE_ONLY:
-                state_str = "WRITE_ONLY";
+                // 对外只暴露**语义状态**：`WRITE_ONLY` 就是"构建中"（读路径只认 PUBLIC，见 I1）。
+                // 内部枚举名不再泄漏给用户，避免把实现细节当约定。
+                state_str = "BUILDING";
                 break;
             case IndexState::PUBLIC:
                 state_str = "PUBLIC";

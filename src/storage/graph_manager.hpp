@@ -5,6 +5,7 @@
 #include "storage/catalog/catalog_store.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_build_service.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
@@ -28,6 +29,9 @@ struct GraphInstance {
     std::unique_ptr<AsyncGraphDataStore> async_data;
     std::unique_ptr<AsyncGraphMetaStore> async_meta;
     std::unique_ptr<compute::QueryExecutor> executor;
+    /// 每图索引构建服务：**声明在 executor 之后** ⇒ 反向析构时它**先**析构，
+    /// 从而在 store 仍存活时把后台构建任务排空（关图顺序，见设计 §16 / H17）。
+    std::shared_ptr<IndexBuildService> index_builds;
 };
 
 class GraphManager {

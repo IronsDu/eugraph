@@ -121,6 +121,9 @@ void GraphManager::shutdown() {
     }
 
     for (auto& inst : instances) {
+        // **必须先排空后台构建任务**（任务持有该图 store 的引用）；顺序颠倒会 use-after-close（设计 H17）
+        if (inst->index_builds)
+            inst->index_builds->shutdown();
         folly::coro::blockingWait(inst->async_meta->close());
         inst->sync_data->close();
         inst->sync_meta->close();
@@ -177,6 +180,8 @@ bool GraphManager::dropGraph(const std::string& name) {
     }
     // lock released — safe to block on I/O; inst owns the GraphInstance
 
+    if (inst->index_builds)
+        inst->index_builds->shutdown(); // 同上：先取消并等待构建任务退出，再关 store
     folly::coro::blockingWait(inst->async_meta->close());
     inst->sync_data->close();
     inst->sync_meta->close();
@@ -264,8 +269,70 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
 
     compute::QueryExecutor::Config executor_config;
     executor_config.compute_threads = compute_threads_;
+    // §9 策略 A：**构建中的索引在重启后一律不置 PUBLIC，标 ERROR 并保留定义**。
+    // 依据：异步构建任务不跨进程存活；若不处理，索引会永远停在 BUILDING（读路径只认 PUBLIC ⇒ 安全但**无法自愈**），
+    // 用户只能 DROP 后重建。实测缺口见设计文档 §19.4。
+    {
+        const auto& schema_on_open = instance->async_meta->schema();
+        std::vector<std::string> stuck;
+        for (const auto& [_, label] : schema_on_open.labels) {
+            for (const auto& idx : label.indexes) {
+                if (idx.state == IndexState::WRITE_ONLY)
+                    stuck.push_back(idx.name);
+            }
+        }
+        for (const auto& [_, elabel] : schema_on_open.edge_labels) {
+            for (const auto& idx : elabel.indexes) {
+                if (idx.state == IndexState::WRITE_ONLY)
+                    stuck.push_back(idx.name);
+            }
+        }
+        for (const auto& name : stuck) {
+            folly::coro::blockingWait(instance->async_meta->updateIndexState(name, IndexState::ERROR));
+            spdlog::warn("[index-build] 索引 '{}' 重启前处于构建中 ⇒ 置 ERROR（不置 PUBLIC；可 DROP 后重建）", name);
+        }
+        if (!stuck.empty())
+            spdlog::warn("[index-build] 本次启动共处理 {} 个未完成的索引构建", stuck.size());
+    }
+
     instance->executor =
         std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta, executor_config);
+
+    // 每图索引构建服务：按"任务"提交（具体怎么建由 executor 的协程决定），
+    // 这里只负责①调度/并发度②取消③把最终状态落到 meta（PUBLIC 只在相位机判定成功时出现）。
+    // 生命周期：由本 GraphInstance 持有；`index_builds` 声明在 executor 之后 ⇒ 反向析构时先析构并排空任务。
+    instance->index_builds = std::make_shared<IndexBuildService>(
+        IndexBuildService::BuildRunner{},
+        [meta = instance->async_meta.get()](uint64_t index_id, const std::string& index_name, IndexBuildOutcome outcome,
+                                            const std::string& error) {
+            if (outcome == IndexBuildOutcome::CANCELLED) {
+                spdlog::info("[index-build] '{}' (id={}) 构建已取消", index_name, index_id);
+                return;
+            }
+            const auto state = (outcome == IndexBuildOutcome::PUBLIC) ? IndexState::PUBLIC : IndexState::ERROR;
+            if (outcome == IndexBuildOutcome::ERROR)
+                spdlog::error("[index-build] '{}' (id={}) 构建失败：{}", index_name, index_id, error);
+            const bool ok = folly::coro::blockingWait(meta->updateIndexState(index_name, state));
+            if (!ok)
+                spdlog::error("[index-build] '{}' 状态落库失败", index_name);
+            else
+                spdlog::info("[index-build] '{}' 构建结束，状态={}", index_name,
+                             outcome == IndexBuildOutcome::PUBLIC ? "PUBLIC" : "ERROR");
+        });
+    // 孤儿表日志（每图一份，随图目录）：DROP 删表失败时登记，**下次打开该图时重试回收**
+    instance->index_builds->setOrphanLogPath(data_dir_ + "/graph_" + std::to_string(instance->graph_id) +
+                                             "/orphan_tables.txt");
+    instance->executor->setIndexBuildService(instance->index_builds);
+
+    // **跨进程回收孤儿表**：上一个进程删不掉的索引表（其会话随进程消失 ⇒ 这里必然可删）
+    for (const auto& orphan : instance->index_builds->takeOrphans()) {
+        if (!folly::coro::blockingWait(instance->async_data->dropIndex(orphan))) {
+            instance->index_builds->recordOrphan(orphan); // 仍失败 ⇒ 留待下次
+            spdlog::warn("[index-build] 孤儿表 {} 仍无法删除，留待下次回收", orphan);
+        } else {
+            spdlog::info("[index-build] 孤儿表 {} 已回收", orphan);
+        }
+    }
 
     return instance;
 }

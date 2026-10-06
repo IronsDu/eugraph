@@ -494,6 +494,53 @@ if(EUGRAPH_BUILD_TESTS)
     gtest_add_tests(TARGET eugraph_tests)
     # 单元测试：NUMA 拓扑解析与节点归属（纯函数，无需 libnuma / NUMA 硬件）
     add_executable(numa_topology_tests tests/common/numa_topology_test.cpp)
+    # 索引两维状态模型与句柄所有权（纯类型/谓词，无需服务端）
+    add_executable(index_runtime_state_tests tests/test_index_runtime_state.cpp)
+    # 索引构建调度器（FIFO + 可配并发度 + 取消；注入假运行器 ⇒ 确定性测试）
+    add_executable(index_build_scheduler_tests tests/test_index_build_scheduler.cpp)
+    # 索引构建相位机（相位顺序 / 多轮追赶 / 失败绝不 PUBLIC / 阶段边界取消）
+    add_executable(index_build_task_tests tests/test_index_build_task.cpp)
+    # 每图构建服务（发布结果/异常兜底/幂等/取消排队/关图编排）
+    add_executable(index_build_service_tests tests/test_index_build_service.cpp)
+    # 索引构建闸门（准入线性化 / 关闸等在飞 / RAII 释放）
+    add_executable(index_build_gate_tests tests/test_index_build_gate.cpp)
+    target_include_directories(index_build_gate_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_gate_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        pthread
+    )
+    gtest_add_tests(TARGET index_build_gate_tests)
+
+    target_include_directories(index_build_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_service_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        pthread
+    )
+    gtest_add_tests(TARGET index_build_service_tests)
+
+    target_include_directories(index_build_task_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_task_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+    gtest_add_tests(TARGET index_build_task_tests)
+
+    target_include_directories(index_build_scheduler_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_scheduler_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+    gtest_add_tests(TARGET index_build_scheduler_tests)
+
+    target_include_directories(index_runtime_state_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_runtime_state_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+    gtest_add_tests(TARGET index_runtime_state_tests)
+
     target_include_directories(numa_topology_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME numa_topology_tests COMMAND numa_topology_tests)
 
@@ -954,6 +1001,8 @@ if(EUGRAPH_BUILD_TESTS)
                 WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
             )
             set_tests_properties(bolt_python_driver_integration_tests PROPERTIES
+                    RUN_SERIAL TRUE # 驱动测试独占运行（JVM/Node/多版本驱动 + 固定端口组，易受并发干扰）
+                    RESOURCE_LOCK "bolt_driver_port" # 三个驱动测试**互斥串行**：固定端口组不再互相踩
                 TIMEOUT 600
                 LABELS "bolt;integration;python"
                 ENVIRONMENT "BOLT_PORT=17690;THRIFT_PORT=19090"
@@ -962,9 +1011,25 @@ if(EUGRAPH_BUILD_TESTS)
             # Bolt Java driver integration test — requires eugraph-server, a JDK,
             # and the official neo4j-java-driver jars (e.g. from cypher-shell).
             find_program(JAVA_EXECUTABLE java)
-            find_file(NEO4J_JAVA_DRIVER_JAR
-                NAMES neo4j-java-driver-5.28.14.jar
-                HINTS /usr/share/cypher-shell/lib /usr/share/neo4j/lib)
+            # **不要钉死小版本**：CI 与本机镜像里的驱动版本会漂移（曾因 5.28.14 vs 5.28.15
+            # 导致该测试**静默不被注册**）。先在提示目录按 glob 取任意 5.28.x；
+            # 也可用 -DNEO4J_JAVA_DRIVER_JAR=<path> 显式指定；都找不到才回落到固定名。
+            if(NOT NEO4J_JAVA_DRIVER_JAR)
+                file(GLOB NEO4J_JAVA_DRIVER_JAR_CANDIDATES
+                    /usr/share/cypher-shell/lib/neo4j-java-driver-5.28.*.jar
+                    /usr/share/neo4j/lib/neo4j-java-driver-5.28.*.jar)
+                list(SORT NEO4J_JAVA_DRIVER_JAR_CANDIDATES)
+                list(LENGTH NEO4J_JAVA_DRIVER_JAR_CANDIDATES _neo4j_jar_n)
+                if(_neo4j_jar_n GREATER 0)
+                    list(GET NEO4J_JAVA_DRIVER_JAR_CANDIDATES -1 NEO4J_JAVA_DRIVER_JAR)
+                    message(STATUS "neo4j-java-driver jar: ${NEO4J_JAVA_DRIVER_JAR}")
+                endif()
+            endif()
+            if(NOT NEO4J_JAVA_DRIVER_JAR)
+                find_file(NEO4J_JAVA_DRIVER_JAR
+                    NAMES neo4j-java-driver-5.28.14.jar
+                    HINTS /usr/share/cypher-shell/lib /usr/share/neo4j/lib)
+            endif()
             if(JAVA_EXECUTABLE AND NEO4J_JAVA_DRIVER_JAR)
                 get_filename_component(NEO4J_JAVA_DRIVER_LIB_DIR "${NEO4J_JAVA_DRIVER_JAR}" DIRECTORY)
                 set(BOLT_JAVA_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_java_driver_integration.py")
@@ -980,6 +1045,8 @@ if(EUGRAPH_BUILD_TESTS)
                 # 每个驱动测试独占一组端口：ctest 会并行跑这几个测试，
                 # 共用端口时后启动的 server 会绑定失败，或探测连到先启动的实例。
                 set_tests_properties(bolt_java_driver_integration_tests PROPERTIES
+                    RUN_SERIAL TRUE # 驱动测试独占运行（JVM/Node/多版本驱动 + 固定端口组，易受并发干扰）
+                    RESOURCE_LOCK "bolt_driver_port" # 三个驱动测试**互斥串行**：固定端口组不再互相踩
                     TIMEOUT 600
                     LABELS "bolt;integration;java"
                     ENVIRONMENT "BOLT_PORT=17691;THRIFT_PORT=19091"
@@ -1004,6 +1071,8 @@ if(EUGRAPH_BUILD_TESTS)
                     WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
                 )
                 set_tests_properties(bolt_js_ws_driver_integration_tests PROPERTIES
+                    RUN_SERIAL TRUE # 驱动测试独占运行（JVM/Node/多版本驱动 + 固定端口组，易受并发干扰）
+                    RESOURCE_LOCK "bolt_driver_port" # 三个驱动测试**互斥串行**：固定端口组不再互相踩
                     TIMEOUT 600
                     LABELS "bolt;integration;websocket;javascript"
                     ENVIRONMENT "BOLT_PORT=17692;THRIFT_PORT=19092"

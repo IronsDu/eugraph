@@ -356,6 +356,10 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
     }
 
     LabelDef::IndexDef idx_def;
+    // **必须分配 index_id**（与顶点索引一致）。此前遗漏 ⇒ `edge_label_defs[...].index_id == 0`，
+    // 使得构建期分流把边索引写入路由到不存在的 `table:idx_delta_0` ⇒ 写入失败
+    // （此前被静默忽略，表现为"构建期插入的边在索引里缺失"，见设计 §20.12）。
+    idx_def.index_id = schema_.next_index_id++;
     idx_def.name = name;
     idx_def.prop_ids = new_prop_ids;
     idx_def.unique = unique;

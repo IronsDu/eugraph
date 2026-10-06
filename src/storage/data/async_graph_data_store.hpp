@@ -5,6 +5,8 @@
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/data/index_maintenance.hpp"
+#include "storage/index/index_build_gate.hpp"
+#include "storage/index/index_delta_codec.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/kv/value_codec.hpp"
 
@@ -26,10 +28,16 @@ namespace eugraph {
 class AsyncGraphDataStore : public IAsyncGraphDataStore {
 public:
     AsyncGraphDataStore(ISyncGraphDataStore& store, IoScheduler& io, GraphTxnHandle txn = INVALID_GRAPH_TXN)
-        : store_(store), io_(io), txn_(txn) {}
+        : store_(store), io_(io) {
+        txnRef() = txn; // 事务句柄按**线程**隔离（见下 txnRef() 的说明）
+    }
+
+    GraphTxnHandle currentTxn() const override {
+        return txnRef();
+    }
 
     void setTransaction(GraphTxnHandle txn) override {
-        txn_ = txn;
+        txnRef() = txn;
     }
 
     std::unique_ptr<IAsyncGraphDataStore> forkTransaction(GraphTxnHandle txn) override {
@@ -43,22 +51,24 @@ public:
         co_return txn;
     }
 
-    /// 结束事务后必须清掉指向它的 txn_：
-    /// txn_ 是「本对象对外暴露的当前事务」，事务一旦结束，句柄即失效。
-    /// 之前 commit/rollback 不清 txn_，导致后续任何走 txn_ 的读写都拿它去查事务表，
+    /// 结束事务后必须清掉指向它的句柄：
+    /// 该句柄是「本对象对外暴露的当前事务」，事务一旦结束即失效。
+    /// 之前 commit/rollback 不清句柄，导致后续任何走该句柄的读写都拿它去查事务表，
     /// 命中不到就返回 nullptr session（或读到已释放的表项）—— 这正是「建索引的临时事务
     /// 结束后、批量写入解析主键时崩溃」的根因。
     folly::coro::Task<bool> commitTran(GraphTxnHandle txn) override {
         auto ok = co_await io_.dispatch([this, txn]() { return store_.commitTransaction(txn); });
-        if (ok && txn_ == txn)
-            txn_ = INVALID_GRAPH_TXN;
+        if (ok && txnRef() == txn)
+            txnRef() = INVALID_GRAPH_TXN;
         co_return ok;
+        // 事务**真正结束**后，才释放该事务登记的构建闸门守卫（设计 §15.1/H2：名额覆盖整个事务）
+        IndexBuildTxnScope::releaseAll(reinterpret_cast<uint64_t>(txn));
     }
 
     folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) override {
         auto ok = co_await io_.dispatch([this, txn]() { return store_.rollbackTransaction(txn); });
-        if (txn_ == txn)
-            txn_ = INVALID_GRAPH_TXN;
+        if (txnRef() == txn)
+            txnRef() = INVALID_GRAPH_TXN;
         co_return ok;
     }
 
@@ -68,8 +78,8 @@ public:
     /// the loop is far cheaper than leaking its session forever.
     bool rollbackTranNow(GraphTxnHandle txn) override {
         bool ok = store_.rollbackTransaction(txn);
-        if (txn_ == txn)
-            txn_ = INVALID_GRAPH_TXN;
+        if (txnRef() == txn)
+            txnRef() = INVALID_GRAPH_TXN;
         return ok;
     }
 
@@ -88,7 +98,7 @@ public:
     // ==================== Vertex Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto result = co_await io_.dispatch(
             [this, txn, vid, label_id]() { return store_.getVertexProperties(txn, vid, label_id); });
         co_return std::move(result);
@@ -96,7 +106,7 @@ public:
 
     folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id,
                                                                      const std::vector<uint16_t>& projection) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto proj = projection; // copy to avoid dangling reference in IO-dispatched lambda
         auto result =
             co_await io_.dispatch([this, txn, vid, label_id, proj = std::move(proj)]() -> std::optional<Properties> {
@@ -123,13 +133,13 @@ public:
     }
 
     folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto result = co_await io_.dispatch([this, txn, vid]() { return store_.getVertexLabels(txn, vid); });
         co_return result;
     }
 
     folly::coro::Task<std::vector<LabelIdSet>> getVertexLabelsBatch(const std::vector<VertexId>& vids) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ids = vids;
         auto result = co_await io_.dispatch(
             [this, txn, ids = std::move(ids)]() { return store_.getVertexLabelsBatch(txn, ids); });
@@ -139,7 +149,7 @@ public:
     folly::coro::Task<std::vector<std::optional<Properties>>>
     batchGetVertexProperties(const std::vector<VertexId>& vids, LabelId label_id,
                              const std::vector<uint16_t>& projection) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ids = vids;
         auto proj = projection;
         auto result = co_await io_.dispatch([this, txn, label_id, ids = std::move(ids), proj = std::move(proj)]() {
@@ -156,7 +166,7 @@ public:
     // ==================== Edge Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto result = co_await io_.dispatch(
             [this, txn, label_id, eid]() { return store_.getEdgeProperties(txn, label_id, eid); });
         co_return std::move(result);
@@ -164,7 +174,7 @@ public:
 
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid,
                                                                    const std::vector<uint16_t>& projection) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto proj = projection;
         auto result =
             co_await io_.dispatch([this, txn, label_id, eid, proj = std::move(proj)]() -> std::optional<Properties> {
@@ -192,7 +202,7 @@ public:
 
     folly::coro::Task<std::vector<std::optional<PropertyValue>>>
     getEdgePropertyBatch(EdgeLabelId label_id, const std::vector<EdgeId>& edge_ids, uint16_t prop_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ids = edge_ids;
         auto result = co_await io_.dispatch([this, txn, label_id, ids = std::move(ids), prop_id]() {
             return store_.getEdgePropertyBatch(txn, label_id, ids, prop_id);
@@ -204,7 +214,7 @@ public:
 
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByLabel(LabelId label_id) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         // The scan cursor belongs to the session of the IO thread that creates it. Handing the
         // cursor to another IO thread would touch that session concurrently with its owner's
         // work -- the shared-session race that WiredTiger aborts on
@@ -244,7 +254,7 @@ public:
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanAllVertices() override {
         // 与 scanVerticesByLabel 同样的游标式流：vid 升序、每点一次，内存只有一个批。
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
         folly::EventBase* bound_evb = nullptr;
         auto cursor = co_await io_.dispatch([this, txn, &bound_evb]() {
@@ -275,7 +285,7 @@ public:
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) override {
         constexpr size_t BATCH = 65536;
-        auto txn = txn_;
+        auto txn = txnRef();
         // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
         folly::EventBase* bound_evb = nullptr;
         auto cursor = co_await io_.dispatch([this, txn, vid, direction, label_filter, &bound_evb]() {
@@ -306,7 +316,7 @@ public:
     scanEdgesBatch(const std::vector<VertexId>& src_ids, Direction direction,
                    std::optional<EdgeLabelId> label_filter) override {
         constexpr size_t BATCH = 65536;
-        auto txn = txn_;
+        auto txn = txnRef();
         auto vids = src_ids;
         auto dir = direction;
         auto filter = label_filter;
@@ -340,7 +350,7 @@ public:
     scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter,
                     std::optional<VertexId> dst_filter) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
         folly::EventBase* bound_evb = nullptr;
         auto cursor = co_await io_.dispatch([this, txn, label_id, src_filter, dst_filter, &bound_evb]() {
@@ -371,7 +381,7 @@ public:
 
     folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
                                               const PropertyValue& value) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, vid, label_id, prop_id, val = std::move(val)]() {
             return store_.putVertexProperty(txn, vid, label_id, prop_id, val);
@@ -380,7 +390,7 @@ public:
     }
 
     folly::coro::Task<bool> putVertexProperties(VertexId vid, LabelId label_id, const Properties& props) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto p = props;
         auto ok = co_await io_.dispatch([this, txn, vid, label_id, p = std::move(p)]() {
             return store_.putVertexProperties(txn, vid, label_id, p);
@@ -389,7 +399,7 @@ public:
     }
 
     folly::coro::Task<bool> deleteVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ok = co_await io_.dispatch(
             [this, txn, vid, label_id, prop_id]() { return store_.deleteVertexProperty(txn, vid, label_id, prop_id); });
         co_return ok;
@@ -398,14 +408,14 @@ public:
     // ==================== Vertex Label Write ====================
 
     folly::coro::Task<bool> addVertexLabel(VertexId vid, LabelId label_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ok =
             co_await io_.dispatch([this, txn, vid, label_id]() { return store_.addVertexLabel(txn, vid, label_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> removeVertexLabel(VertexId vid, LabelId label_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ok = co_await io_.dispatch(
             [this, txn, vid, label_id]() { return store_.removeVertexLabel(txn, vid, label_id); });
         co_return ok;
@@ -415,7 +425,7 @@ public:
 
     folly::coro::Task<bool> insertVertex(VertexId vid,
                                          std::span<const std::pair<LabelId, Properties>> label_props) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto result = co_await io_.dispatch(
             [this, txn, vid, label_props]() -> bool { return store_.insertVertex(txn, vid, label_props); });
         co_return result;
@@ -423,7 +433,7 @@ public:
 
     folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id, uint64_t seq,
                                        const Properties& props) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto p = props;
         auto result =
             co_await io_.dispatch([this, txn, eid, src_id, dst_id, label_id, seq, p = std::move(p)]() -> bool {
@@ -446,9 +456,67 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> putDeltaEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                          uint64_t entity_id, bool is_delete) override {
+        auto txn = txnRef();
+        auto t = table;
+        auto vals = values;
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id, is_delete]() {
+            return store_.putDeltaEntry(txn, t, vals, entity_id, is_delete);
+        });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> putDeltaEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                          uint64_t entity_id, bool is_delete, std::string_view payload) override {
+        auto txn = txnRef();
+        auto t = table;
+        auto vals = values;
+        auto pl = std::string(payload);
+        auto ok = co_await io_.dispatch(
+            [this, txn, t = std::move(t), vals = std::move(vals), entity_id, is_delete, pl = std::move(pl)]() {
+                return store_.putDeltaEntry(txn, t, vals, entity_id, is_delete, pl);
+            });
+        co_return ok;
+    }
+
+    folly::coro::Task<size_t> replayDeltaBatch(const std::string& index_table, const std::string& delta_table,
+                                               size_t max_rows, std::string& last_key) override {
+        auto txn = txnRef();
+        auto idx_table = index_table;
+        auto d_table = delta_table;
+        auto start_after = last_key;
+        auto result = co_await io_.dispatch([this, txn, idx_table = std::move(idx_table), d_table = std::move(d_table),
+                                             max_rows, start_after = std::move(start_after)]() {
+            size_t applied = 0;
+            std::string next_key = start_after;
+            bool ok = store_.scanDeltaWithKey(
+                txn, d_table,
+                [&](uint64_t /*entity_id*/, std::string_view key, std::string_view raw) {
+                    bool is_delete = false;
+                    std::string_view payload;
+                    if (!decodeDeltaValue(raw, is_delete, payload))
+                        return true; // 损坏记录跳过（不阻塞追赶）
+                    if (is_delete)
+                        store_.deleteIndexEntryByKey(txn, idx_table, key);
+                    else
+                        store_.putIndexEntryByKey(txn, idx_table, key, payload);
+                    // **应用后从变更表删除**（设计 §6.1 方案①）：否则变更表永不排空，追赶无法终止。
+                    store_.deleteIndexEntryByKey(txn, d_table, key);
+                    ++applied;
+                    return applied < max_rows;
+                },
+                start_after, &next_key);
+            (void)ok;
+            return std::pair<size_t, std::string>{applied, next_key};
+        });
+        last_key = std::move(result.second);
+        co_return result.first;
+    }
+
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val), entity_id]() {
@@ -459,7 +527,7 @@ public:
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto vals = values;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id]() {
@@ -470,7 +538,7 @@ public:
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
                                              std::string payload) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto val = value;
         auto ok = co_await io_.dispatch(
@@ -482,7 +550,7 @@ public:
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id, std::string payload) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto vals = values;
         auto ok = co_await io_.dispatch(
@@ -494,7 +562,7 @@ public:
 
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val), entity_id]() {
@@ -505,7 +573,7 @@ public:
 
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto vals = values;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id]() {
@@ -515,7 +583,7 @@ public:
     }
 
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val)]() {
@@ -526,7 +594,7 @@ public:
 
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table,
                                                   const std::vector<PropertyValue>& values) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto t = table;
         auto vals = values;
         auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals)]() {
@@ -540,7 +608,7 @@ public:
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,
                                                                            const PropertyValue& value) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = vidxTable(label_id, prop_id);
         auto val = value;
         // The synchronous index APIs do not expose a resumable cursor. Collect
@@ -563,7 +631,7 @@ public:
     scanVerticesByIndexComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
                                  const std::vector<PropertyValue>& values) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto vals = values;
         std::vector<VertexId> all;
@@ -584,7 +652,7 @@ public:
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                              const std::optional<PropertyValue>& end) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = vidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
@@ -607,7 +675,7 @@ public:
                                       const std::optional<std::vector<PropertyValue>>& start,
                                       const std::optional<std::vector<PropertyValue>>& end) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
@@ -628,7 +696,7 @@ public:
     folly::coro::AsyncGenerator<std::vector<VertexId>>
     scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = vidxTableById(index_id);
         auto vals = values;
         std::vector<VertexId> all;
@@ -647,7 +715,7 @@ public:
 
     folly::coro::Task<std::optional<VertexId>>
     lookupVertexByPrimaryKey(uint32_t index_id, const std::vector<PropertyValue>& values) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = vidxTableById(index_id);
         auto vals = values;
         std::optional<VertexId> best;
@@ -666,7 +734,7 @@ public:
     scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
                                const std::optional<std::vector<PropertyValue>>& end) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = vidxTableById(index_id);
         auto s = start;
         auto e = end;
@@ -689,26 +757,34 @@ public:
     folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
     scanEdgesByIndex(EdgeLabelId label_id, uint16_t prop_id, const PropertyValue& value) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = eidxTable(label_id, prop_id);
         auto val = value;
+        // 续扫位置：上一批最后一个键。缺了它每批都会从头重扫、满批即停 ⇒ >1 批的结果被静默截断。
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &val, &batch]() {
-                store_.scanIndexEqualityWithValue(txn, table, val, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &val, &batch, &last_key, &next_key]() {
+                store_.scanIndexEqualityWithValue(
+                    txn, table, val,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
             if (batch.empty())
                 co_return;
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 
@@ -716,26 +792,34 @@ public:
     scanEdgesByIndexComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
                               const std::vector<PropertyValue>& values) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = eidxCompositeTable(label_id, prop_ids);
         auto vals = values;
+        // 续扫位置：上一批最后一个键（缺了它每批从头重扫 ⇒ >1 批结果被静默截断）
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
-                store_.scanIndexEqualityWithValue(txn, table, vals, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch, &last_key, &next_key]() {
+                store_.scanIndexEqualityWithValue(
+                    txn, table, vals,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
             if (batch.empty())
                 co_return;
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 
@@ -743,27 +827,35 @@ public:
     scanEdgesByIndexRange(EdgeLabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                           const std::optional<PropertyValue>& end) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = eidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
+        // 续扫位置：上一批最后一个键（缺了它每批从头重扫 ⇒ >1 批结果被静默截断）
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch, &last_key, &next_key]() {
+                store_.scanIndexRangeWithValue(
+                    txn, table, s, e,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
             if (batch.empty())
                 co_return;
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 
@@ -772,41 +864,49 @@ public:
                                    const std::optional<std::vector<PropertyValue>>& start,
                                    const std::optional<std::vector<PropertyValue>>& end) override {
         constexpr size_t BATCH = 1024;
-        auto txn = txn_;
+        auto txn = txnRef();
         std::string table = eidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
+        // 续扫位置：上一批最后一个键（缺了它每批从头重扫 ⇒ >1 批结果被静默截断）
+        std::string last_key;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
-                    EdgeIndexScanEntry entry;
-                    entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
-                    batch.push_back(entry);
-                    return batch.size() < BATCH;
-                });
+            std::string next_key;
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch, &last_key, &next_key]() {
+                store_.scanIndexRangeWithValue(
+                    txn, table, s, e,
+                    [&](uint64_t entity_id, std::string_view v) {
+                        EdgeIndexScanEntry entry;
+                        entry.edge_id = entity_id;
+                        ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                        batch.push_back(entry);
+                        return batch.size() < BATCH;
+                    },
+                    last_key, &next_key);
             });
             if (batch.empty())
                 co_return;
+            const bool full = batch.size() == BATCH; // 必须在 move 之前取长度（moved-from 的 size() 不可靠）
+            last_key = std::move(next_key);
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+            if (!full)
+                co_return; // 满批 ⇒ 从 last_key 之后继续（真正推进）
         }
     }
 
     // ==================== Delete Operations ====================
 
     folly::coro::Task<bool> deleteVertex(VertexId vid) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ok = co_await io_.dispatch([this, txn, vid]() { return store_.deleteVertex(txn, vid); });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteEdge(EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id,
                                        uint64_t seq) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ok = co_await io_.dispatch([this, txn, eid, label_id, src_id, dst_id, seq]() {
             return store_.deleteEdge(txn, eid, label_id, src_id, dst_id, seq);
         });
@@ -814,7 +914,7 @@ public:
     }
 
     folly::coro::Task<bool> deleteEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto ok = co_await io_.dispatch(
             [this, txn, eid, label_id, prop_id]() { return store_.deleteEdgeProperty(txn, label_id, eid, prop_id); });
         co_return ok;
@@ -822,7 +922,7 @@ public:
 
     folly::coro::Task<bool> putEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id,
                                             const PropertyValue& value) override {
-        auto txn = txn_;
+        auto txn = txnRef();
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, eid, label_id, prop_id, val = std::move(val)]() {
             return store_.putEdgeProperty(txn, label_id, eid, prop_id, val);
@@ -865,7 +965,19 @@ public:
 private:
     ISyncGraphDataStore& store_;
     IoScheduler& io_;
-    GraphTxnHandle txn_;
+    /// **按线程隔离**的事务句柄（与不变量 I10"session 永不共享"一致）。
+    /// 此前它是 per-store 成员 ⇒ 后台构建线程与查询线程会共用同一个 txn/session
+    /// ⇒ WT `session_dhandle` 损坏 + SIGSEGV（实测，设计 §20.17/§20.18）。
+    GraphTxnHandle& txnRef() {
+        static thread_local std::unordered_map<const AsyncGraphDataStore*, GraphTxnHandle> per_thread;
+        return per_thread[this];
+    }
+    const GraphTxnHandle& txnRef() const {
+        static thread_local std::unordered_map<const AsyncGraphDataStore*, GraphTxnHandle> per_thread;
+        auto it = per_thread.find(this);
+        return it == per_thread.end() ? kNoTxn_ : it->second;
+    }
+    static inline const GraphTxnHandle kNoTxn_ = INVALID_GRAPH_TXN;
 };
 
 } // namespace eugraph
