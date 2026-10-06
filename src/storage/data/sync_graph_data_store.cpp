@@ -113,8 +113,14 @@ bool SyncGraphDataStore::commitTransaction(GraphTxnHandle txn) {
     {
         std::lock_guard<std::mutex> lock(txnMutex_);
         auto it = txns_.find(txn);
-        if (it == txns_.end())
+        if (it == txns_.end()) {
+            // **不再静默**：句柄不在本 store 的事务表 ⇒ 要么 store 实例不匹配（如新建库后会话仍持旧实例），
+            // 要么事务已被提前结束（重复提交）。此前这里是 `return false` 的静默失败，
+            // 上层又把返回值丢掉 ⇒ 表现为"语句成功但数据没落库"（数据丢失级）。
+            spdlog::error("commitTransaction: 句柄不在本 store 事务表（store={} handle={} 表内事务数={}）",
+                          static_cast<const void*>(this), static_cast<const void*>(txn), txns_.size());
             return false;
+        }
         ts = it->second.get();
     }
 
