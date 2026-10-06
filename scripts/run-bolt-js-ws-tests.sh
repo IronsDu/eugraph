@@ -29,7 +29,9 @@ PROBE="$(dirname "$(readlink -f "$0")")/bolt_ready_probe.py"
 cleanup() {
     local rc=$?
     if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        kill "$SERVER_PID" 2>/dev/null || true
+        kill -TERM -- "-$SERVER_PID" 2>/dev/null || kill "$SERVER_PID" 2>/dev/null || true
+        sleep 1
+        kill -KILL -- "-$SERVER_PID" 2>/dev/null || true
     fi
     # **失败时保留 WORK_DIR**（内含 bolt-server.log）便于诊断；成功才清理。
     # 并且**必须 `exit $rc`**：否则 trap 里最后一条成功命令会把脚本退出码覆盖成 0 ⇒ 包装脚本谎报成功。
@@ -44,7 +46,7 @@ trap cleanup EXIT
 
 mkdir -p "$WORK_DIR"
 
-"$SERVER" --thrift-port "$THRIFT_PORT" --bolt-port "$BOLT_PORT" --data-dir "$WORK_DIR/data" \
+setsid "$SERVER" --thrift-port "$THRIFT_PORT" --bolt-port "$BOLT_PORT" --data-dir "$WORK_DIR/data" \
     > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 
@@ -74,4 +76,4 @@ export EUGRAPH_BOLT_PORT="$BOLT_PORT"
 export NODE_EXECUTABLE="$NODE"
 export NPM_EXECUTABLE="$NPM"
 
-"$PYTEST" "$TEST_SCRIPT" -v
+timeout -k 5 "${BOLT_TEST_TIMEOUT:-300}" "$PYTEST" "$TEST_SCRIPT" -v  # 硬超时：保证 JVM/Node 子进程一定退出，否则其继承的 stdout/stderr 管道会让 ctest 在超时后仍阻塞 ✗
