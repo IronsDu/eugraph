@@ -134,7 +134,11 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         co_yield std::move(thrift_batch);
     }
     if (ctx->should_commit) {
-        co_await ctx->store.commitTran(ctx->txn);
+        const bool committed = co_await ctx->store.commitTran(ctx->txn);
+        if (!committed) {
+            spdlog::error("[handler] 提交失败（存储引擎错误）⇒ 明确报错，绝不静默丢写入");
+            throw std::runtime_error("Transaction commit failed (storage engine error)");
+        }
     }
     abandon_rollback.markFinished();
     spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);
