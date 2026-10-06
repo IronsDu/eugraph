@@ -1009,9 +1009,25 @@ if(EUGRAPH_BUILD_TESTS)
             # Bolt Java driver integration test — requires eugraph-server, a JDK,
             # and the official neo4j-java-driver jars (e.g. from cypher-shell).
             find_program(JAVA_EXECUTABLE java)
-            find_file(NEO4J_JAVA_DRIVER_JAR
-                NAMES neo4j-java-driver-5.28.14.jar
-                HINTS /usr/share/cypher-shell/lib /usr/share/neo4j/lib)
+            # **不要钉死小版本**：CI 与本机镜像里的驱动版本会漂移（曾因 5.28.14 vs 5.28.15
+            # 导致该测试**静默不被注册**）。先在提示目录按 glob 取任意 5.28.x；
+            # 也可用 -DNEO4J_JAVA_DRIVER_JAR=<path> 显式指定；都找不到才回落到固定名。
+            if(NOT NEO4J_JAVA_DRIVER_JAR)
+                file(GLOB NEO4J_JAVA_DRIVER_JAR_CANDIDATES
+                    /usr/share/cypher-shell/lib/neo4j-java-driver-5.28.*.jar
+                    /usr/share/neo4j/lib/neo4j-java-driver-5.28.*.jar)
+                list(SORT NEO4J_JAVA_DRIVER_JAR_CANDIDATES)
+                list(LENGTH NEO4J_JAVA_DRIVER_JAR_CANDIDATES _neo4j_jar_n)
+                if(_neo4j_jar_n GREATER 0)
+                    list(GET NEO4J_JAVA_DRIVER_JAR_CANDIDATES -1 NEO4J_JAVA_DRIVER_JAR)
+                    message(STATUS "neo4j-java-driver jar: ${NEO4J_JAVA_DRIVER_JAR}")
+                endif()
+            endif()
+            if(NOT NEO4J_JAVA_DRIVER_JAR)
+                find_file(NEO4J_JAVA_DRIVER_JAR
+                    NAMES neo4j-java-driver-5.28.14.jar
+                    HINTS /usr/share/cypher-shell/lib /usr/share/neo4j/lib)
+            endif()
             if(JAVA_EXECUTABLE AND NEO4J_JAVA_DRIVER_JAR)
                 get_filename_component(NEO4J_JAVA_DRIVER_LIB_DIR "${NEO4J_JAVA_DRIVER_JAR}" DIRECTORY)
                 set(BOLT_JAVA_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_java_driver_integration.py")
