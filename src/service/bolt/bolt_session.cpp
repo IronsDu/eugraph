@@ -643,7 +643,13 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
 
         // Commit auto-commit transaction
         if (!stream_in_txn && stream_should_commit) {
-            co_await stream_store.commitTran(stream_txn);
+            // **必须检查提交结果**：WT 连接若已 PANIC（例如 DROP DATABASE 关闭连接时仍有在飞使用者），
+            // 提交会失败而此前的写法把返回值丢弃 ⇒ **静默丢写入**（数据丢失级，实测见设计文档）。
+            const bool committed = co_await stream_store.commitTran(stream_txn);
+            if (!committed) {
+                spdlog::error("[bolt] 自动提交失败（存储引擎错误，如 WT PANIC）⇒ 明确报错，绝不静默丢写入");
+                co_return makeFailure("DatabaseError", "Transaction commit failed (storage engine error)");
+            }
         }
 
         // Save transaction handle for explicit transaction commits
@@ -732,9 +738,15 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleCommit() {
     }
 
     if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_) {
-        co_await pending_store_->commitTran(pending_txn_);
+        const bool committed = co_await pending_store_->commitTran(pending_txn_);
         pending_txn_ = INVALID_GRAPH_TXN;
         pending_store_ = nullptr;
+        if (!committed) {
+            in_transaction_ = false;
+            state_ = SessionState::READY;
+            spdlog::error("[bolt] COMMIT 失败（存储引擎错误）⇒ 明确报错");
+            co_return makeFailure("DatabaseError", "COMMIT failed (storage engine error)");
+        }
     }
 
     in_transaction_ = false;
