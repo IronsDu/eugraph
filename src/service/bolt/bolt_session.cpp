@@ -645,7 +645,9 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         if (!stream_in_txn && stream_should_commit) {
             // **必须检查提交结果**：WT 连接若已 PANIC（例如 DROP DATABASE 关闭连接时仍有在飞使用者），
             // 提交会失败而此前的写法把返回值丢弃 ⇒ **静默丢写入**（数据丢失级，实测见设计文档）。
-            const bool committed = co_await stream_store.commitTran(stream_txn);
+            // 空句柄 = 该语句没有事务（只读等）⇒ 无提交可言，跳过；非空失败才报错。
+            const bool committed =
+                (stream_txn == INVALID_GRAPH_TXN) ? true : co_await stream_store.commitTran(stream_txn);
             if (!committed) {
                 spdlog::error("[bolt] 自动提交失败（存储引擎错误，如 WT PANIC）⇒ 明确报错，绝不静默丢写入");
                 co_return makeFailure("DatabaseError", "Transaction commit failed (storage engine error)");

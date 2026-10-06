@@ -1,4 +1,5 @@
 #include "service/thrift/eugraph_handler.hpp"
+#include "common/types/graph_types.hpp"
 
 #include "common/types/temporal_value.hpp"
 #include "query/parser/cypher_parser.hpp"
@@ -134,7 +135,8 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         co_yield std::move(thrift_batch);
     }
     if (ctx->should_commit) {
-        const bool committed = co_await ctx->store.commitTran(ctx->txn);
+        const bool committed =
+            (ctx->txn == eugraph::INVALID_GRAPH_TXN) ? true : co_await ctx->store.commitTran(ctx->txn);
         if (!committed) {
             spdlog::error("[handler] 提交失败（存储引擎错误）⇒ 明确报错，绝不静默丢写入");
             throw std::runtime_error("Transaction commit failed (storage engine error)");
