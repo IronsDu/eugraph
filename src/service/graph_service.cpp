@@ -210,11 +210,16 @@ folly::Executor* GraphService::computeExecutor() {
     return inst && inst->executor ? inst->executor->computeExecutor() : nullptr;
 }
 
-GraphInstance* GraphService::resolveGraph(const std::string& name) {
+GraphService::GraphLease GraphService::resolveGraph(const std::string& name) {
     auto* inst = gm_.getGraph(name);
     if (!inst)
         throw std::runtime_error("Graph not found: " + name);
-    return inst;
+    // **准入**：拿到租约才算"在飞使用者"；若该图正在 DROP（已关闸）⇒ 明确报错，
+    // 绝不把即将被关闭的连接交给语句使用（否则 WT PANIC）。
+    auto guard = inst->usage->tryEnter();
+    if (!guard)
+        throw std::runtime_error("Graph is being dropped: " + name);
+    return GraphLease{inst, std::move(guard)};
 }
 
 GraphEntry GraphService::createGraph(const std::string& name) {
@@ -234,7 +239,8 @@ folly::coro::Task<LabelDef> GraphService::createLabel(const std::string& name,
                                                       const std::string& graph_name,
                                                       const std::vector<std::string>& pk_props,
                                                       const std::vector<PropertyDef>& merge_properties) {
-    auto* inst = resolveGraph(graph_name);
+    auto _lease1 = resolveGraph(graph_name);
+    auto* inst = _lease1.inst;
 
     if (!merge_properties.empty()) {
         std::vector<std::pair<std::string, PropertyType>> defs;
@@ -273,7 +279,8 @@ folly::coro::Task<LabelDef> GraphService::createLabel(const std::string& name,
 }
 
 folly::coro::Task<std::vector<LabelDef>> GraphService::listLabels(const std::string& graph_name) {
-    auto* inst = resolveGraph(graph_name);
+    auto _lease2 = resolveGraph(graph_name);
+    auto* inst = _lease2.inst;
     auto labels = co_await inst->async_meta->listLabels();
     std::vector<LabelDef> result;
     for (const auto& l : labels) {
@@ -286,7 +293,8 @@ folly::coro::Task<std::vector<LabelDef>> GraphService::listLabels(const std::str
 folly::coro::Task<EdgeLabelDef> GraphService::createEdgeLabel(const std::string& name,
                                                               const std::vector<PropertyDef>& properties,
                                                               const std::string& graph_name) {
-    auto* inst = resolveGraph(graph_name);
+    auto _lease3 = resolveGraph(graph_name);
+    auto* inst = _lease3.inst;
     auto label_id = co_await inst->async_meta->createEdgeLabel(name, properties);
     if (label_id == INVALID_EDGE_LABEL_ID) {
         EdgeLabelDef def;
@@ -305,7 +313,8 @@ folly::coro::Task<EdgeLabelDef> GraphService::createEdgeLabel(const std::string&
 }
 
 folly::coro::Task<std::vector<EdgeLabelDef>> GraphService::listEdgeLabels(const std::string& graph_name) {
-    auto* inst = resolveGraph(graph_name);
+    auto _lease4 = resolveGraph(graph_name);
+    auto* inst = _lease4.inst;
     auto labels = co_await inst->async_meta->listEdgeLabels();
     co_return labels;
 }
@@ -330,13 +339,21 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
     // instead of failing the statement.
     auto ddl_stmt = DatabaseDdlParser::tryParse(query);
     if (ddl_stmt.has_value()) {
-        auto* ddl_inst = gm_.getGraph(resolved_graph);
-        if (!ddl_inst)
-            ddl_inst = resolveGraph(GraphManager::kDefaultGraphName);
-        co_return co_await handleDatabaseDdl(*ddl_stmt, *ddl_inst);
+        // 同样**持租约**（跨 co_await 存活于协程帧）⇒ DROP 不会在我们使用期间关闭连接。
+        GraphLease ddl_lease;
+        if (auto* selected = gm_.getGraph(resolved_graph)) {
+            auto guard = selected->usage->tryEnter();
+            if (!guard)
+                throw std::runtime_error("Graph is being dropped: " + resolved_graph);
+            ddl_lease = GraphLease{selected, std::move(guard)};
+        } else {
+            ddl_lease = resolveGraph(GraphManager::kDefaultGraphName);
+        }
+        co_return co_await handleDatabaseDdl(*ddl_stmt, *ddl_lease.inst);
     }
 
-    auto* inst = resolveGraph(resolved_graph);
+    auto _lease5 = resolveGraph(resolved_graph);
+    auto* inst = _lease5.inst;
 
     auto ctx = co_await inst->executor->prepareStream(query, params, std::move(cancel));
 
@@ -362,7 +379,8 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
 folly::coro::Task<GraphService::BatchInsertVerticesOutcome>
 GraphService::batchInsertVertices(const std::string& label_name, std::vector<BatchVertexEntry> entries,
                                   const std::string& graph_name) {
-    auto* inst = resolveGraph(graph_name);
+    auto _lease6 = resolveGraph(graph_name);
+    auto* inst = _lease6.inst;
 
     auto label_id_opt = co_await inst->async_meta->getLabelId(label_name);
     if (!label_id_opt.has_value()) {
@@ -451,7 +469,8 @@ GraphService::batchInsertVertices(const std::string& label_name, std::vector<Bat
 folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(const std::string& edge_label_name,
                                                                               std::vector<BatchEdgeEntry> entries,
                                                                               const std::string& graph_name) {
-    auto* inst = resolveGraph(graph_name);
+    auto _lease7 = resolveGraph(graph_name);
+    auto* inst = _lease7.inst;
 
     auto elabel_id_opt = co_await inst->async_meta->getEdgeLabelId(edge_label_name);
     if (!elabel_id_opt.has_value()) {
