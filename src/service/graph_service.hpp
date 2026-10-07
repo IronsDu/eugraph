@@ -33,7 +33,19 @@ class GraphService {
 public:
     explicit GraphService(GraphManager& gm) : gm_(gm) {}
 
-    GraphInstance* resolveGraph(const std::string& name);
+    /// 图实例**租约**：持有期间禁止该图被 DROP（DROP 会关闸并等在飞租约归零后再关 WT 连接）。
+    /// 调用方必须把租约作为局部变量持有到本次操作结束（协程里即整条语句的生命周期）。
+    struct GraphLease {
+        GraphInstance* inst = nullptr;
+        GraphUsageGate::Guard guard;
+        explicit operator bool() const {
+            return inst != nullptr;
+        }
+        GraphInstance* operator->() const {
+            return inst;
+        }
+    };
+    GraphLease resolveGraph(const std::string& name);
     /// Executor used for Cypher evaluation; Bolt uses it to run query
     /// coroutines off the socket EventBase.
     folly::Executor* computeExecutor();
