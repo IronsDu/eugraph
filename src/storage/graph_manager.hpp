@@ -5,6 +5,7 @@
 #include "storage/catalog/catalog_store.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/graph_usage_gate.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
@@ -21,6 +22,8 @@
 namespace eugraph {
 
 struct GraphInstance {
+    /// 使用闸门：DROP DATABASE 必须先关闸并等在飞使用者归零，再关闭 WT 连接（否则 WT PANIC）
+    std::shared_ptr<GraphUsageGate> usage = std::make_shared<GraphUsageGate>();
     uint32_t graph_id;
     std::string name;
     std::unique_ptr<SyncGraphDataStore> sync_data;
