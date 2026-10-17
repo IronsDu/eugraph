@@ -162,6 +162,16 @@ cmake --build --preset debug
 ctest --preset debug --output-on-failure
 ```
 
+### 测试环境约定（BLOCKING）
+
+- **禁止把测试数据目录放在 tmpfs 上** ✗（`/tmp` 在多数发行版上默认就是 tmpfs ✗）。
+  WT 在空间不足时会以 `WiredTiger.turtle: fatal turtle file update error: Disk…` 触发 **WT_PANIC**，
+  随后表现为"空结果 / 提交失败 / 表打不开 / 首轮必败次轮通过"等**极难归因的假失败** ✗。
+  ⇒ 用 `TMPDIR=<磁盘目录>`、或显式指定数据目录；并保证**数 GB 余量**。
+- **ASan 构建用低并行**（如 `-j 2`）✗：ASan 放大内存占用，`-j 8` 在 15GB 机器上会被 OOM 杀掉。
+- 测试若在**同一进程/同一服务端**上重复执行，必须保证**数据隔离**（唯一库名/唯一前缀 ✓），
+  否则"第二轮才通过"之类的现象会被误判为产品缺陷 ✗。
+
 ### 特定变更
 - **修改 `grammar/*.g4`**：`./scripts/gen-grammar.sh`，并按 [docs/build/build-guide.md](docs/build/build-guide.md) 校验生成文件。
 - **修改 `proto/eugraph.thrift`**：按 [docs/build/build-guide.md](docs/build/build-guide.md) 重新生成 gen-cpp2 代码，并校验 include 路径。
