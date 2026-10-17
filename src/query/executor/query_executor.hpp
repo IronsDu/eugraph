@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/types/index_state.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
@@ -22,6 +23,8 @@
 #include <variant>
 
 namespace eugraph {
+
+class IndexBuildService; // 前向声明（实现细节见 .cpp，保持编译防火墙）
 namespace compute {
 
 struct StreamContext {
@@ -58,6 +61,9 @@ struct StreamContext {
 /// Depends only on async interfaces — no direct sync store dependency.
 class QueryExecutor {
 public:
+    /// 注入"每图索引构建服务"：注入后 CREATE INDEX 走**后台异步**构建；未注入则走同步路径（既有行为）。
+    void setIndexBuildService(std::shared_ptr<IndexBuildService> service);
+
     struct Config {
         size_t compute_threads = 4;
         Config() = default;
@@ -78,7 +84,33 @@ public:
     }
 
 private:
+    std::shared_ptr<IndexBuildService> index_builds_;
     folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
+
+    /// 顶点索引的 accessor 解析结果（原为 handleIndexDdl 内的局部结构体，抽出以便协程参数化）
+    struct ResolvedIndexAccessor {
+        bool is_strong = false;
+        LabelId source_label_id = 0;
+        uint16_t source_prop_id = UINT16_MAX;
+        std::string property_name;
+    };
+
+    /// 顶点索引回填 + 提交（**不落状态**：由调用方或发布回调落，保持两库提交顺序）。
+    /// 抽成协程的原因：同步路径与后台构建任务需要**同一份实现**（P1-④）。
+    /// P2 追赶 + **近似关闸**：重放变更表追平 → **先翻 `PUBLIC`**（此后新写入直写索引）→ **再排空一次**
+    /// （收走"翻状态瞬间仍在飞"的写入）。返回 false 表示状态翻转失败（构建应置 ERROR）。
+    /// 严格版关闸（per-index 闸门 + 在飞写者计数）见设计 §7.1/§15.1，尚未实现。
+    folly::coro::Task<bool> catchUpAndPublish(const std::string& index_table, const std::string& index_name);
+
+    /// `cancelled` 为可选取消令牌：**逐批检查**（构建中 DROP 时据此尽快退出，而不是把整个回填跑完）。
+    folly::coro::Task<IndexBuildResult> backfillVertexIndex(IndexDdlStatement stmt, std::string table, LabelId label_id,
+                                                            std::vector<ResolvedIndexAccessor> resolved,
+                                                            std::function<bool()> cancelled = {});
+
+    /// 边索引回填 + 提交（同样**不落状态**）
+    folly::coro::Task<IndexBuildResult> backfillEdgeIndex(IndexDdlStatement stmt, std::string table,
+                                                          EdgeLabelId edge_label_id, std::vector<uint16_t> prop_ids,
+                                                          std::function<bool()> cancelled = {});
     IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;

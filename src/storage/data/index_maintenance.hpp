@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
+#include "common/types/index_state.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 
 #include <spdlog/spdlog.h>
@@ -76,8 +77,10 @@ inline std::optional<PropertyValue> resolveWeakAccessor(const std::unordered_map
     return found;
 }
 
+/// 写路径是否维护该索引。**唯一判据**（原先散落在多处手写 `state==WRITE_ONLY||state==PUBLIC`）：
+/// P2 之前"构建中与已发布都维护"（与既有行为逐位一致）；P2 起按 BuildState 决定**去向**（变更表/索引）。
 inline bool indexIsLive(const LabelDef::IndexDef& idx) {
-    return idx.state == IndexState::WRITE_ONLY || idx.state == IndexState::PUBLIC;
+    return indexWriteMaintained(idx.state);
 }
 
 } // namespace index_maint_detail

@@ -698,6 +698,27 @@ static std::vector<EdgeLabelId> collectStaticEdgePruneLabels(PlanContext& ctx, c
     return labels;
 }
 
+/// 用静态剪枝提示**收窄**显式标签集合：**只收窄，绝不拓宽**。
+/// 提示来自 `x IS NOT NULL` 这类谓词，含义是"定义该属性的标签"，**可能包含模式里没写的标签**；
+/// 直接覆盖会把扫描范围放大 ⇒ 静默错结果（实测 `MATCH ()-[r:KNOWS]->() WHERE r.creationDate IS NOT NULL`
+/// 因被拓宽为 KNOWS+LIKES，count 从 14,074 变成 123,514）。
+/// 规则：目标为空 ⇒ 采用提示；否则取交集；**交集为空 ⇒ 保留原集合**（宁可不剪枝，不可放宽）。
+static void narrowEdgeLabels(std::vector<EdgeLabelId>& target, const std::vector<EdgeLabelId>& hint) {
+    if (hint.empty())
+        return;
+    if (target.empty()) {
+        target = hint;
+        return;
+    }
+    std::vector<EdgeLabelId> narrowed;
+    for (EdgeLabelId elid : target) {
+        if (std::find(hint.begin(), hint.end(), elid) != hint.end())
+            narrowed.push_back(elid);
+    }
+    if (!narrowed.empty())
+        target = std::move(narrowed);
+}
+
 static void collectStaticPruneHints(const binder::BoundExpression& expr, PlanContext& ctx,
                                     std::unordered_map<std::string, PlanContext::StaticPruneHint>& hints) {
     if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
@@ -1126,8 +1147,11 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                                      std::move(composite_start), std::move(composite_end), std::move(output_types));
         }
 
+        // 必须发布**真实的槽布局**（父算子用 getColumnIndex(slot) 解析变量所在列；空布局 ⇒ -1 ⇒ 求值为 NULL），
+        // 并经 ProjectionExtract 收尾（把 lowering 产生的匿名 PE 列物化出来）。
+        TupleSlotLayout slot_layout = makeSlotLayout(output_schema, ctx);
         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
-                                              std::move(result_output_types), TupleSlotLayout{}};
+                                              std::move(result_output_types), std::move(slot_layout)};
         plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
         return plan_result;
     }
@@ -1236,8 +1260,14 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
                 std::move(output_types), store, ctx.edge_label_defs);
         }
 
-        return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types),
-                                  TupleSlotLayout{}};
+        // 与顶点分支一致：必须经过 ProjectionExtract 收尾。
+        // 谓词/投影被 lowering 成**匿名 PE 列**（如槽 2147483649），若这里直接返回，父算子解析该槽失败(-1)
+        // ⇒ 求值为 NULL ⇒ `count(r)`/`RETURN r`/`id(r)` 静默为空（P0，见设计文档 §17）。
+        TupleSlotLayout slot_layout = makeSlotLayout(output_schema, ctx);
+        auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                              std::move(result_output_types), std::move(slot_layout)};
+        plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+        return plan_result;
     }
     return std::nullopt;
 }
@@ -2546,11 +2576,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         if (expand_ptr && *expand_ptr && !(*expand_ptr)->edge_variable.empty()) {
                             auto hint = ctx.static_prune_hints.find((*expand_ptr)->edge_variable);
                             if (hint != ctx.static_prune_hints.end() && !hint->second.edge_labels.empty()) {
-                                (*expand_ptr)->edge_label_ids = hint->second.edge_labels;
+                                narrowEdgeLabels((*expand_ptr)->edge_label_ids, hint->second.edge_labels);
                             } else {
                                 auto edge_labels = collectStaticEdgePruneLabels(ctx, v.predicate);
-                                if (!edge_labels.empty())
-                                    (*expand_ptr)->edge_label_ids = std::move(edge_labels);
+                                narrowEdgeLabels((*expand_ptr)->edge_label_ids, edge_labels);
                             }
                         }
                     }

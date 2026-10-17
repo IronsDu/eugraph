@@ -44,6 +44,11 @@ inline std::string vidxTableById(uint32_t index_id) {
 inline std::string eidxTableById(uint32_t index_id) {
     return "table:eidx_" + std::to_string(index_id);
 }
+/// 变更表（delta）：一索引一表，随索引生命周期创建/删除（设计 §5.0）
+inline std::string idxDeltaTable(uint32_t index_id) {
+    return "table:idx_delta_" + std::to_string(index_id);
+}
+
 inline std::string eidxTable(EdgeLabelId label_id, uint16_t prop_id) {
     return "table:eidx_" + std::to_string(label_id) + "_" + std::to_string(prop_id);
 }

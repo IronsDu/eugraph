@@ -5,6 +5,8 @@
 #include "storage/catalog/catalog_store.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_build_service.hpp"
+#include "storage/graph_usage_gate.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
@@ -21,6 +23,8 @@
 namespace eugraph {
 
 struct GraphInstance {
+    /// 使用闸门：DROP DATABASE 必须先关闸并等在飞使用者归零，再关闭 WT 连接（否则 WT PANIC）
+    std::shared_ptr<GraphUsageGate> usage = std::make_shared<GraphUsageGate>();
     uint32_t graph_id;
     std::string name;
     std::unique_ptr<SyncGraphDataStore> sync_data;
@@ -28,6 +32,9 @@ struct GraphInstance {
     std::unique_ptr<AsyncGraphDataStore> async_data;
     std::unique_ptr<AsyncGraphMetaStore> async_meta;
     std::unique_ptr<compute::QueryExecutor> executor;
+    /// 每图索引构建服务：**声明在 executor 之后** ⇒ 反向析构时它**先**析构，
+    /// 从而在 store 仍存活时把后台构建任务排空（关图顺序，见设计 §16 / H17）。
+    std::shared_ptr<IndexBuildService> index_builds;
 };
 
 class GraphManager {

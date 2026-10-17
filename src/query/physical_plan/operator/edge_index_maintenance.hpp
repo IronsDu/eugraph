@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
+#include "common/types/index_state.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 
 #include <folly/coro/Task.h>
@@ -32,7 +33,7 @@ collectEdgeIndexEntries(IAsyncGraphDataStore& store,
 
     auto props = co_await store.getEdgeProperties(elid, eid);
     for (const auto& idx : def_it->second.indexes) {
-        if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+        if (!indexWriteMaintained(idx.state))
             continue;
 
         std::vector<PropertyValue> values;

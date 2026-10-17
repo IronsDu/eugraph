@@ -198,6 +198,23 @@ public:
     // 索引条目写入/删除/唯一性检查都必须在**调用方的事务**里完成：
     // 否则条目与实体数据落在不同事务，批量导入时会出现「顶点已提交、索引没跟上」
     // 或者并发装载下唯一性预检读到旧快照（first-wins 语义失效）。
+    // ==================== 变更表（delta，设计 §5.0 / P2）====================
+    /// 写一条变更：op 编码在值里（见 index_delta_codec.hpp）。与实体写入**同事务**。
+    virtual bool putDeltaEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                               uint64_t entity_id, bool is_delete, std::string_view payload = {}) = 0;
+    virtual bool putDeltaEntry(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,
+                               uint64_t entity_id, bool is_delete, std::string_view payload = {}) = 0;
+
+    /// 重放用：**按键**写入/删除索引条目（复用变更表里的原始键，无需解码属性值）
+    virtual bool putIndexEntryByKey(GraphTxnHandle txn, const std::string& table, std::string_view key,
+                                    std::string_view payload = {}) = 0;
+    virtual bool deleteIndexEntryByKey(GraphTxnHandle txn, const std::string& table, std::string_view key) = 0;
+
+    /// 变更表扫描：**按键序**、可续扫、把原始键交给回调（重放主循环）
+    virtual bool scanDeltaWithKey(GraphTxnHandle txn, const std::string& table,
+                                  const std::function<bool(uint64_t, std::string_view, std::string_view)>& callback,
+                                  std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
+
     virtual bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                   uint64_t entity_id) = 0;
     virtual bool insertIndexEntry(GraphTxnHandle txn, const std::string& table,
@@ -230,20 +247,27 @@ public:
                                 const std::optional<std::vector<PropertyValue>>& end,
                                 const std::function<bool(uint64_t)>& callback) = 0;
 
-    // Index scan that also returns the stored value (for edge indexes with adjacency info)
+    // 带存储值的索引扫描（边索引用它取邻接信息）。
+    // **分批续扫**：`start_after` 非空 ⇒ 从该键**之后**继续；`last_key_out` 非空 ⇒ 回填本次最后交给回调的键。
+    // 二者都可选（默认不启用），因此既有调用点无需改动。
+    // 背景：先前每批都从头重扫且满批即停 ⇒ 只交付第一批（BATCH=1024），>1 批的结果被静默截断。
     virtual void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
-                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                            const std::function<bool(uint64_t, std::string_view)>& callback,
+                                            std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
     virtual void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table,
                                             const std::vector<PropertyValue>& values,
-                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                            const std::function<bool(uint64_t, std::string_view)>& callback,
+                                            std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
     virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
                                          const std::optional<PropertyValue>& start,
                                          const std::optional<PropertyValue>& end,
-                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         const std::function<bool(uint64_t, std::string_view)>& callback,
+                                         std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
     virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
                                          const std::optional<std::vector<PropertyValue>>& start,
                                          const std::optional<std::vector<PropertyValue>>& end,
-                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         const std::function<bool(uint64_t, std::string_view)>& callback,
+                                         std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
 
     // ==================== Index Cleanup ====================
 

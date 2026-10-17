@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
+#include "common/types/index_state.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 
 #include <folly/coro/Task.h>
@@ -20,6 +21,12 @@ struct VertexIndexEntry {
     std::vector<PropertyValue> values;
     VertexId vid;
     bool unique = false;
+    /// 索引处于 BUILDING 时，维护写入改去**变更表**（此时 table 已是 delta 表名）；
+    /// PUBLIC 时直写索引（设计 I2 / §4 写路径分流）。默认 false ⇒ 既有聚合初始化不受影响。
+    bool to_delta = false;
+    /// 索引表名 + 索引 id：闸门关闭（构建收尾中）时，写者必须**直写索引**而不是变更表（设计 §7.1）
+    std::string index_table;
+    uint32_t index_id = 0;
 };
 
 /// Collect all index entries the vertex currently contributes to.
@@ -39,7 +46,7 @@ collectVertexIndexEntries(IAsyncGraphDataStore& store, const std::unordered_map<
             continue;
 
         for (const auto& idx : def_it->second.indexes) {
-            if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+            if (!indexWriteMaintained(idx.state))
                 continue;
 
             std::vector<PropertyValue> values;
@@ -112,7 +119,10 @@ collectVertexIndexEntries(IAsyncGraphDataStore& store, const std::unordered_map<
                 continue;
 
             if (idx.index_id != 0)
-                entries.push_back(VertexIndexEntry{vidxTableById(idx.index_id), values, vid, idx.unique});
+                entries.push_back(VertexIndexEntry{idx.state == IndexState::WRITE_ONLY ? idxDeltaTable(idx.index_id)
+                                                                                       : vidxTableById(idx.index_id),
+                                                   values, vid, idx.unique, idx.state == IndexState::WRITE_ONLY,
+                                                   vidxTableById(idx.index_id), idx.index_id});
         }
     }
 
@@ -136,7 +146,7 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
         if (def_it == label_defs.end())
             continue;
         for (const auto& idx : def_it->second.indexes) {
-            if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+            if (!indexWriteMaintained(idx.state))
                 continue;
             if (idx.index_id == 0)
                 continue;
@@ -192,7 +202,10 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
                 }
             }
             if (all_present)
-                entries.push_back(VertexIndexEntry{vidxTableById(idx.index_id), std::move(values), vid, idx.unique});
+                entries.push_back(VertexIndexEntry{
+                    idx.state == IndexState::WRITE_ONLY ? idxDeltaTable(idx.index_id) : vidxTableById(idx.index_id),
+                    std::move(values), vid, idx.unique, idx.state == IndexState::WRITE_ONLY,
+                    vidxTableById(idx.index_id), idx.index_id});
         }
     }
     return entries;
@@ -201,7 +214,10 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
 inline folly::coro::Task<void> deleteVertexIndexEntries(IAsyncGraphDataStore& store,
                                                         const std::vector<VertexIndexEntry>& entries) {
     for (const auto& entry : entries)
-        co_await store.deleteIndexEntry(entry.table, entry.values, entry.vid);
+        if (entry.to_delta)
+            co_await store.putDeltaEntry(entry.table, entry.values, entry.vid, /*is_delete=*/true);
+        else
+            co_await store.deleteIndexEntry(entry.table, entry.values, entry.vid);
 }
 
 inline folly::coro::Task<bool> insertVertexIndexEntriesChecked(IAsyncGraphDataStore& store,
@@ -214,7 +230,10 @@ inline folly::coro::Task<bool> insertVertexIndexEntriesChecked(IAsyncGraphDataSt
                 co_return false;
             }
         }
-        co_await store.insertIndexEntry(entry.table, entry.values, entry.vid);
+        if (entry.to_delta)
+            co_await store.putDeltaEntry(entry.table, entry.values, entry.vid, /*is_delete=*/false);
+        else
+            co_await store.insertIndexEntry(entry.table, entry.values, entry.vid);
     }
     co_return true;
 }

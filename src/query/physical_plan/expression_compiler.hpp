@@ -4,6 +4,7 @@
 #include "query/planner/binder/join_equality.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_expression/bound_quantifier_expr.hpp"
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {

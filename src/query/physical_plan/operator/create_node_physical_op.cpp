@@ -5,6 +5,7 @@
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include "query/physical_plan/operator/vertex_index_maintenance.hpp"
+#include "storage/index/index_build_gate.hpp"
 #include <spdlog/spdlog.h>
 
 namespace {
@@ -372,7 +373,11 @@ CreateNodePhysicalOp::buildLabelProps(ExpressionEvaluator& evaluator, const Data
 
 folly::coro::Task<bool>
 CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props) {
-    auto planned_entries = collectVertexIndexEntriesFromLabelProps(label_defs_, label_props, vid);
+    // **必须用实时模式**：构建期间新建的索引若不在快照里，写入会既不入索引也不入变更表 ⇒
+    // 构建完成后该行在索引里缺失（实测 §20.4/§20.5：构建期插入 0 vs 全表扫 5）。
+    // 算子已持有 `meta_`，故直接读实时 schema（算子持有的 `label_defs_` 是计划期快照）。
+    const auto& live_label_defs = meta_.schema().labels;
+    auto planned_entries = collectVertexIndexEntriesFromLabelProps(live_label_defs, label_props, vid);
 
     bool ok = true;
     for (const auto& entry : planned_entries) {
@@ -390,8 +395,33 @@ CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<Lab
         ok = co_await store_.insertVertex(vid, label_props);
 
     if (ok) {
-        for (const auto& entry : planned_entries)
-            co_await store_.insertIndexEntry(entry.table, entry.values, entry.vid);
+        for (const auto& entry : planned_entries) {
+            // BUILDING ⇒ 写**变更表**（构建器随后追赶重放）。**关键**：不能直写索引表——
+            // 回填正持有长事务在同一张表上，直写会撞 WT 写冲突而**静默失败**
+            // （实测：构建期插入在索引里缺失 0 vs 全表扫 5，见设计 §20.4/§20.6）。
+            // BUILDING ⇒ 先尝试进入**构建闸门**：成功 ⇒ 写变更表（构建器会排空）；
+            // 闸门已关（收尾中/已发布）⇒ 直写索引（§7.1：关闸后不再有写入进变更表 ⇒ 排空即终局）。
+            bool use_delta = entry.to_delta;
+            IndexBuildGate::Guard gate;
+            if (use_delta && entry.index_id != 0) {
+                gate = IndexBuildGateRegistry::instance().gate(entry.index_id != 0)->tryEnter();
+                use_delta = static_cast<bool>(gate);
+                if (use_delta) {
+                    // **把守卫绑定到用户事务**：名额覆盖到 commit/rollback 才释放（§15.1 / H2），
+                    // 否则"写入变更表后、提交前"的行会被排空错过 ⇒ 构建结束后永久留在变更表 ⇒ 丢写。
+                    IndexBuildTxnScope::attach(reinterpret_cast<uint64_t>(store_.currentTxn()), std::move(gate));
+                }
+            }
+            const std::string& write_table = use_delta ? entry.table : entry.index_table;
+            const bool wrote = use_delta ? co_await store_.putDeltaEntry(write_table, entry.values, entry.vid,
+                                                                         /*is_delete=*/false)
+                                         : co_await store_.insertIndexEntry(write_table, entry.values, entry.vid);
+            if (!wrote) {
+                spdlog::error("索引条目写入失败：table={} vid={}（to_delta={}）", entry.table, entry.vid,
+                              entry.to_delta);
+                ok = false; // 不再静默忽略：写入失败必须让语句失败，否则索引与数据不一致
+            }
+        }
     }
     co_return ok;
 }

@@ -211,6 +211,50 @@ Bolt 连接把整个 session 消息处理放到 Compute 池，以便 socket Even
 代价是 IO 线程写出的 chunk 可能被另一个核读取（**跨核搬运 dirty line**；同节点 L3 仍命中）。
 不消除它的原因：唯一干净做法是"同核生产+消费"= 存储内联，实测 −4.3%；而钉核会恶化 P99。
 
+### 跨线程使用的边界：同会话多 cursor / 串行交接（口头结论成文）
+
+**粒度是 session，不是 cursor。** 线程亲和性的单位是 `WT_SESSION`；由它派生的**所有** cursor
+（哪怕"同一时刻只用一把"）都继承同一份会话私有状态，因此：
+
+| 会话私有状态 | 两个线程各用一把 cursor（同会话）会怎样 |
+|---|---|
+| 当前事务（一个 session 同时只能有一个 txn） | 两把 cursor 实际共用同一事务 ⇒ 快照/读位置/写集互相踩 |
+| cursor 列表 / 缓存的 dhandle | 每次 open/close/reposition 都改它 ⇒ 链表损坏 ⇒ **SIGSEGV**（实测 `session_dhandle.c:77`） |
+| hazard pointer 数组 + pin 住的页 | 会话的 hazard 槽位是**固定数组** ⇒ 互相覆盖 ⇒ 页被驱逐而仍被引用 ⇒ use-after-free |
+| scratch 缓冲 / 错误状态 | 键值解码、reconcile、错误码互相污染 |
+
+⇒ **同一 session 的多个 cursor 只能串行使用**；要真正并发，只能**多开 session**（每线程/每流一把）。
+WT 的检测也印证粒度在会话：`WT_SESSION.open_cursor: lock_success == 0`（报的是 `WT_SESSION.*`）。
+
+**串行化后的"跨线程交接"在 WT 层面是合法的**（契约是"**同一时刻一个线程**"，不是"一个线程终身"），
+但必须同时满足三条，否则检测不到的地方会**静默损坏**：
+
+1. **真串行 + 真 happens-before**：mutex 释放/获取、future 完成、join 或原子 acquire-release 之一，
+   把"线程 A 已不再使用"与"线程 B 开始使用"隔开（不能依赖 WT 的并发检测）；
+2. **事务随会话走**：游标属于 `session->txn`，交接时必须传**同一个事务句柄**，新线程不得用**自己的**
+   session/txn 去操作它（否则报"cursor 不属于本会话事务"/取不到 session）；
+3. **生命周期不被打断**：交接窗口内该 cursor/会话不得被 close、`reset()`、缓存淘汰或其它路径释放。
+
+**我们仍不采用交接**（三条理由，均已在代码/实测中体现）：
+
+* 本仓库 `getSession(INVALID_GRAPH_TXN)` 返回**调用线程自己的**会话 ⇒ 游标是 A 线程会话的产物，
+  混用等于"游标在 A 的会话里、操作走 B 的会话"，语义直接错；
+* **I10 的收益正来自"会话=线程独占资源"**：唯此 KV 原语才能全程无锁（删掉共享 `defaultSession_` 后
+  存储 8 线程吞吐 0.65 → **4.88 M/s**）；允许交接就必须引入交接协议/锁，等于把锁装回去；
+* 我们已用 `io_.dispatch`（送达**会话属主的 EventBase**）**免费**获得串行化，无需证明任何事。
+
+**替代范式（我们实际使用的两种）**：
+
+| 范式 | 做法 | 代价 | 用在哪 |
+|---|---|---|---|
+| **钉在属主 EventBase**（保留 cursor） | 记下创建 cursor 的 `bound_evb`，每批 `co_viaIfAsync(bound_evb, …)` 回原线程续扫 | 该线程被这条流占用一部分（失衡） | 流式扫描（续扫 O(1)、零锁），见 R3 |
+| **按键续扫**（交接"位置"而非 cursor） | 关 cursor → 用**上一批最后一个键**作位置凭证 → 新线程重新 open + `set_key`/`search_near` | 每批多一次重定位（非 O(1)） | 变更表重放、索引扫描（`scanDeltaWithKey(…, start_after, last_key_out)`） |
+
+**与事务句柄的关系**：事务句柄也必须**按线程隔离**（`AsyncGraphDataStore::txnRef()`，thread-local）。
+异步索引构建曾因"后台构建线程与查询线程共享同一 txn/session"而在 `__session_add_dhandle` **SIGSEGV**；
+修法是按线程隔离句柄，而非"证明交接合法"——**把问题从"需要证明串行"降级为"结构上不可能并发"**。
+详见 [storage/online-index-build-design.md](../storage/online-index-build-design.md) §20.19。
+
 ### 待定议题：**短命 cursor 场景**是否值得引入 cursor 池（需实测，尚未做）
 
 上面"不做跨调用池化"的结论有**明确的适用边界**，不要外推：
@@ -361,3 +405,43 @@ Handler::co_createLabel(name, props):
 | ------ | ----------------------------------- | ------------------ |
 | 存算一体   | SyncGraphDataStore + SyncGraphMetaStore + IoScheduler + Compute | 单机部署，本地计算，零 RPC 开销 |
 | 全功能节点  | 上述 + fbthrift Server + Shell         | 单机全功能 / 分布式协调节点    |
+
+## 索引子系统（在线构建）
+
+**设计全文**见 [storage/online-index-build-design.md](../storage/online-index-build-design.md)（§1–§20；含并发矩阵、
+危险清单 H1–H20、实施阶段与验收判据）。此处只记**对外契约**与**当前实现状态**。
+
+### 状态模型：两个正交维度
+
+| 维度 | 取值 | 决定什么 |
+|---|---|---|
+| **BuildState** | `BUILDING`(phase SCAN/CATCHUP) / `FINALIZING` / `PUBLIC` / `ERROR` | **写路径去向**与构建进度 |
+| **Lifecycle** | `ACTIVE` / `DROPPING` / `PENDING_PURGE` / `PURGING` | 规划器可选性、维护是否继续、何时物理删除 |
+
+* **读路径唯一判据**：`BuildState == PUBLIC ∧ Lifecycle == ACTIVE`（I1）——半成品索引永不被规划器选中；
+* **写路径**：`BUILDING` ⇒ 写**变更表**（受构建闸门保护）；`PUBLIC` ⇒ 直写索引（I2）。
+
+### 在线构建的三件套
+
+1. **变更表**（`table:idx_delta_<index_id>`）：键 `(索引键, 实体 id)` ⇒ 按键序、可续扫、同键覆盖天然去重；
+   与实体写入**同事务**；应用后逐行删除（保证追赶可终止）；
+2. **构建闸门**（`IndexBuildGateRegistry`，进程内按 `index_id`）：写者两阶段准入（`inflight++` → 复查 `closed`）；
+   构建器收尾 `closeAndWait()` ⇒ 追平变更表 ⇒ 翻 `PUBLIC` ⇒ **排空即终局**（不存在"关闸后仍写变更表"的写入）；
+3. **追赶**（`replayDeltaBatch`）：IO 线程上整批"按键序取 + 逐行应用(PUT/DEL) + 删行"。
+
+### DDL 与生命周期
+
+* `CREATE INDEX`：建定义（`BUILDING`）→ 建索引表与**变更表** → 回填 → 追赶 →（关闸）→ `PUBLIC`；
+  **默认异步**（后台任务 + `IndexBuildService`；开关 `kEnableAsyncIndexBuild=true`）；
+* `DROP INDEX`：**定义总是删除**；表删除**尽力而为**，失败则降级为**孤儿表**（避免"属性集永久无法重建索引"）；
+  **构建中的索引拒绝 DROP**（返回明确错误）；
+* **启动恢复**：`BUILDING` 状态的索引一律置 `ERROR`（不置 `PUBLIC`，可 DROP 后重建）。
+
+### 当前实现状态与已知限制
+
+| 项 | 状态 |
+|---|---|
+| 状态模型 / 分流 / 变更表 / 追赶 / 守卫 / 启动恢复 / 判据（顶点 5==5、边 6==6） | ✅ 已实现并验证 |
+| **异步构建** | ✅ **已启用**：事务句柄改为**按线程隔离**（`txnRef()`，与 I10 一致）后，WT 会话竞态消除；ASan 活体冒烟（异步路径）**0 报告 / 0 崩溃**，构建期写入双判据通过 |
+| 孤儿表回收 | ⏳ 待做（启动时扫描并删除无对应定义的 `vidx_*/eidx_*/idx_delta_*`） |
+
