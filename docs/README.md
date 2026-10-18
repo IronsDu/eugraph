@@ -194,4 +194,5 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [TCK 测试执行指南](tests/tck-guide.md) | 构建与运行 openCypher TCK 兼容性测试 |
+| [Bolt 驱动集成测试：设施与排查记录](tests/bolt-driver-integration-notes.md) | 三个官方驱动兼容性测试的设施约定（端口组/互斥/超时/日志保留/jar 探测）与一次完整根因链排查记录 |
 | [TCK 测试结果报告](tests/tck-results.md) | 测试结果分类、失败原因分析、修复进度 |

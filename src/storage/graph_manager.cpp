@@ -175,6 +175,14 @@ bool GraphManager::dropGraph(const std::string& name) {
         graphs_.erase(it);
         catalog_.dropGraph(name);
     }
+    // **先关闸再等在飞使用者归零**：否则并发使用同一 WT 连接 ⇒ `__conn_close` 失败 ⇒ WT_PANIC
+    // ⇒ 此后进程内写入静默丢失、后续 CREATE DATABASE 打不开图实例（实测，见
+    // docs/tests/bolt-driver-integration-notes.md）。
+    inst->usage->close();
+    if (!inst->usage->waitDrained(/*timeout_ms=*/10000)) {
+        spdlog::error("dropGraph '{}': 仍有 {} 个在飞使用者，超时后继续关闭（可能触发 WT PANIC）", name,
+                      inst->usage->inflight());
+    }
     // lock released — safe to block on I/O; inst owns the GraphInstance
 
     folly::coro::blockingWait(inst->async_meta->close());
