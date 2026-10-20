@@ -227,7 +227,7 @@ WiredTiger 没有 thread-local 状态（hazard pointer 数组在 session 内）�
 | 手段 | 结果 |
 |---|---|
 | 单元测试 | `tests/common/numa_topology_test.cpp`（ctest，7 组断言：cpulist 解析与节点归属，脱离 WT/硬件） |
-| **TSan 闸门** `scripts/check_tsan.sh` | **2026-09 记录（重构前）**：8 线程 × 15s 混合查询 ⇒ 未抑制报告 0、存储/session/cursor 相关行 0、服务端存活 ⇒ PASS；抑制清单只覆盖 folly/thrift 外部噪声。**会话池重构后尚未重跑 TSan**，是当前并发验证缺口 |
+| **TSan 闸门** `scripts/check_tsan.sh` | **2026-10-20 复跑（会话池重构后）**：`build/tsan`、8 线程 × 20s 混合查询 ⇒ 未抑制报告 0、存储/session/cursor 相关行 0、服务端存活 ⇒ **PASS**；抑制清单只覆盖 folly/thrift 外部噪声 |
 | 结果一致性 | 2026-10-20 复测：原始语料 327,588 点 / 1,477,965 边，LDBC 查询两引擎行数全部一致（见 [benchmark §9.1/§9.3](../benchmark/ldbc-snb-sf0.1-comparison.md)） |
 | 性能 | 2026-10-20 复测：complex-9 4/8 client 6.89 / 9.87–9.99 ops/s（旧记录 6.10/8.41，见 benchmark §9.4） |
 
@@ -235,7 +235,7 @@ WiredTiger 没有 thread-local 状态（hazard pointer 数组在 session 内）�
 **优雅关闭**服务端（强杀后库需 recovery）；TCK 验证必须用 **CI 同款 feature 集**
 （`third_party/openCypher/tck/features` + `tests/tck/features-eugraph`）。
 
-**遗留**：多节点机器验证 NUMA 收益；TSan 闸门挂 CI 且**重构后需重跑**（见上表）。
+**遗留**：多节点机器验证 NUMA 收益；TSan 闸门挂 CI（当前为本地手工跑，2026-10-20 已复跑 PASS）。
 其余 2026-09 记录的引擎遗留项（`Memo::copyIn` 深链爆栈、WT checkpoint 崩溃、谓词多属性成本等）
 以 [known-defects-todo.md](../query/known-defects-todo.md) 的当前状态为准；未在其中列出的视为历史记录。
 
