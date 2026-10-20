@@ -1,13 +1,14 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "graph/graph_manager.hpp"
 #include "query/executor/query_executor.hpp"
 #include "query/parser/database_ddl_parser.hpp"
-#include "storage/graph_manager.hpp"
 
 #include <folly/coro/Task.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -33,19 +34,17 @@ class GraphService {
 public:
     explicit GraphService(GraphManager& gm) : gm_(gm) {}
 
-    /// 图实例**租约**：持有期间禁止该图被 DROP（DROP 会关闸并等在飞租约归零后再关 WT 连接）。
+    /// 图实例**租约**（定义见 graph/graph_manager.hpp）：持有期间禁止该图被 DROP。
     /// 调用方必须把租约作为局部变量持有到本次操作结束（协程里即整条语句的生命周期）。
-    struct GraphLease {
-        GraphInstance* inst = nullptr;
-        GraphUsageGate::Guard guard;
-        explicit operator bool() const {
-            return inst != nullptr;
-        }
-        GraphInstance* operator->() const {
-            return inst;
-        }
-    };
     GraphLease resolveGraph(const std::string& name);
+
+    /// 显式事务的会话作用域（Bolt BEGIN…COMMIT ✓）：持图租约 ⇒ DROP 不会在用期间关连接 ✓；
+    /// 持会话租约 ⇒ 事务跨多条语句存活 ✓。会话已 begin_write ✓。
+    struct SessionScope {
+        GraphLease graph;
+        SessionLease session;
+    };
+    std::optional<SessionScope> beginSession(const std::string& graph_name);
     /// Executor used for Cypher evaluation; Bolt uses it to run query
     /// coroutines off the socket EventBase.
     folly::Executor* computeExecutor();
@@ -77,10 +76,12 @@ public:
     /// `cancel` (optional) lets the protocol layer stop the statement when the client
     /// goes away; it lives in the statement's QueryContext and the operators check it
     /// as they consume each upstream chunk.
+    /// `existing_session` 非空 ⇒ 语句加入调用方已开启的显式事务（不由语句 begin/commit ✓）。
     folly::coro::Task<CypherExecutionContext> executeCypher(const std::string& query,
                                                             const std::unordered_map<std::string, Value>& params,
                                                             const std::string& graph_name,
-                                                            compute::QueryCancel cancel = nullptr);
+                                                            compute::QueryCancel cancel = nullptr,
+                                                            SessionRef existing_session = std::nullopt);
 
     /// Batch insert vertices. entries[i].props corresponds to primary label
     /// property positions; entries[i].extra_labels are added as pure labels

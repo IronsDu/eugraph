@@ -18,16 +18,18 @@
 namespace eugraph {
 namespace compute {
 
-QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, Config config)
+QueryExecutor::QueryExecutor(AsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta,
+                             SessionPool& session_pool, Config config)
     : async_data_(async_data), async_meta_(async_meta), config_(config),
-      compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)) {}
+      compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)),
+      session_pool_(session_pool) {}
 
 QueryExecutor::~QueryExecutor() = default;
 
 folly::coro::Task<std::shared_ptr<StreamContext>>
 QueryExecutor::prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params,
-                             QueryCancel cancel) {
-    auto ctx = std::make_shared<StreamContext>(async_data_);
+                             QueryCancel cancel, SessionRef existing_session) {
+    auto ctx = std::make_shared<StreamContext>();
 
     // 0. Quick guard: skip DDL if query starts with EXPLAIN (so DDL isn't executed for EXPLAIN queries)
     // The actual EXPLAIN handling is in the grammar/AST below.
@@ -126,26 +128,42 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     ctx->catalog = std::move(catalog);
     ctx->func_registry = std::move(func_registry);
 
-    // Begin transaction. Fork a dedicated store wrapper so concurrent
-    // queries can never overwrite each other's transaction handle.
-    GraphTxnHandle txn = co_await async_data_.beginTran();
-    if (txn == INVALID_GRAPH_TXN) {
-        // Fail loudly. Continuing would run the query through the store's shared
-        // default session in autocommit mode: writes would land one row at a time
-        // with nothing to roll back, which is exactly what a transaction is for.
-        ctx->error = "Failed to begin transaction";
-        spdlog::error("[QueryExecutor] beginTran failed; refusing to run '{}'", cypher_query);
+    // 会话驱动（§2/§4）：取租约 → begin → 执行 → 由语句边界 commit/rollback ✓。
+    // 显式事务（Bolt BEGIN…COMMIT）由调用方传入已开启的会话 ⇒ 本语句不 begin/commit ✓。
+    SessionRef active_session = existing_session;
+    if (!active_session) {
+        auto lease = session_pool_.acquire();
+        if (!lease) {
+            ctx->error = "Failed to acquire a session (pool exhausted)";
+            spdlog::error("[QueryExecutor] session pool exhausted; refusing to run '{}'", cypher_query);
+            co_return ctx;
+        }
+        GraphSession& session = **lease;
+        const bool write = binder.ctx().has_mutation;
+        const bool begun = write ? session.begin_write() : session.begin_read();
+        if (!begun) {
+            ctx->error = "Failed to begin transaction";
+            spdlog::error("[QueryExecutor] begin_transaction failed; refusing to run '{}'", cypher_query);
+            co_return ctx;
+        }
+        active_session = std::ref(session);
+        ctx->session = std::move(*lease); // 租约随 ctx 存活；析构 ⇒ 池 put（未提交自动回滚 ✓）
+    } else if (!active_session->get().active()) {
+        ctx->error = "Explicit transaction session is not active";
         co_return ctx;
+    } else {
+        ctx->should_commit = false; // 显式事务：语句不提交，由 BEGIN/COMMIT 边界负责 ✓
     }
+
     // Statement execution context: the one place statement-scoped state (today the
     // cancellation flag, later deadlines/budgets) belongs. Operators hold it through
     // a shared_ptr, and the store stays unaware of it -- cancellation is observed on
     // the operator side, where upstream chunks are consumed.
     auto query_ctx = std::make_shared<QueryContext>(std::move(cancel));
     ctx->query_context = query_ctx;
-    auto query_store = async_data_.forkTransaction(txn);
-    IAsyncGraphDataStore& query_data = *query_store;
-    ctx->query_store = std::move(query_store);
+    // 构造一个绑定 THIS statement session 的轻量异步门面：并发语句不会共享会话 ✓。
+    ctx->query_store.emplace(async_data_.for_session(active_session->get()));
+    IAsyncGraphDataStore& query_data = *ctx->query_store;
 
     // Store label/edge_label defs + name→id maps in StreamContext so physical operator
     // raw pointers remain valid throughout streaming consumption
@@ -233,7 +251,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     }
     if (std::holds_alternative<std::string>(phys_result)) {
         ctx->error = std::get<std::string>(phys_result);
-        co_await query_data.rollbackTran(txn);
+        ctx->rollback();
         co_return ctx;
     }
     auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
@@ -316,7 +334,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
 
         ctx->gen = wrapRowsToChunkGenerator(std::move(plan_rows));
 
-        co_await query_data.rollbackTran(txn);
+        ctx->rollback();
         ctx->should_commit = false;
         co_return ctx;
     }
@@ -325,7 +343,6 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // One attach call reaches the whole tree (base class recurses over children).
     ctx->phys_op->setQueryContext(ctx->query_context);
     ctx->gen = ctx->phys_op->executeChunk();
-    ctx->txn = txn;
 
     co_return ctx;
 }
@@ -419,21 +436,33 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         // Backfill.
         bool hasConflict = false;
         {
-            GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
+            auto lease = session_pool_.acquire();
+            if (!lease) {
+                ok = false;
+                result.error = "Failed to acquire a session for index backfill (pool exhausted)";
+                co_return;
+            }
+            GraphSession& session = **lease;
+            if (!session.begin_write()) {
+                ok = false;
+                result.error = "Failed to begin index backfill transaction";
+                co_return;
+            }
+            auto bound_store = async_data_.for_session(session);
+            IAsyncGraphDataStore& ds = bound_store;
 
             {
-                auto gen = async_data_.scanVerticesByLabel(label_def->id);
+                auto gen = ds.scanVerticesByLabel(label_def->id);
                 while (auto batch = co_await gen.next()) {
                     for (auto vid : *batch) {
                         std::vector<PropertyValue> values;
                         bool allPresent = true;
                         bool conflict = false;
 
-                        auto vertex_labels = co_await async_data_.getVertexLabels(vid);
+                        auto vertex_labels = co_await ds.getVertexLabels(vid);
                         for (const auto& ra : resolved) {
                             if (ra.is_strong) {
-                                auto props_opt = co_await async_data_.getVertexProperties(vid, ra.source_label_id);
+                                auto props_opt = co_await ds.getVertexProperties(vid, ra.source_label_id);
                                 if (!props_opt || ra.source_prop_id >= props_opt->size() ||
                                     !(*props_opt)[ra.source_prop_id].has_value()) {
                                     allPresent = false;
@@ -455,7 +484,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                     }
                                     if (pid == UINT16_MAX)
                                         continue;
-                                    auto props_opt = co_await async_data_.getVertexProperties(vid, lid);
+                                    auto props_opt = co_await ds.getVertexProperties(vid, lid);
                                     if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
                                         continue;
                                     const auto& candidate = (*props_opt)[pid].value();
@@ -489,7 +518,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                             continue;
 
                         if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                            bool constraint_ok = co_await ds.checkUniqueConstraint(table, values);
                             if (!constraint_ok) {
                                 spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
                                              stmt.index_name, vid);
@@ -497,7 +526,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                 break;
                             }
                         }
-                        co_await async_data_.insertIndexEntry(table, values, vid);
+                        co_await ds.insertIndexEntry(table, values, vid);
                     }
                     if (hasConflict)
                         break;
@@ -506,7 +535,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
             // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
             // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = co_await async_data_.commitTran(txn);
+            const bool committed = session.commit().committed();
             if (!committed) {
                 ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
                 result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
@@ -574,14 +603,26 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         // Backfill: scan existing edges and insert index entries
         bool hasConflict = false;
         {
-            GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
+            auto lease = session_pool_.acquire();
+            if (!lease) {
+                ok = false;
+                result.error = "Failed to acquire a session for index backfill (pool exhausted)";
+                co_return;
+            }
+            GraphSession& session = **lease;
+            if (!session.begin_write()) {
+                ok = false;
+                result.error = "Failed to begin index backfill transaction";
+                co_return;
+            }
+            auto bound_store = async_data_.for_session(session);
+            IAsyncGraphDataStore& ds = bound_store;
 
             {
-                auto gen = async_data_.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
+                auto gen = ds.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
                 while (auto batch = co_await gen.next()) {
                     for (const auto& entry : *batch) {
-                        auto props_opt = co_await async_data_.getEdgeProperties(edge_label_def->id, entry.edge_id);
+                        auto props_opt = co_await ds.getEdgeProperties(edge_label_def->id, entry.edge_id);
                         // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
                         // For now skip properties; index entries will be created when properties API is added
                         if (!props_opt.has_value())
@@ -602,7 +643,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                             continue;
 
                         if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                            bool constraint_ok = co_await ds.checkUniqueConstraint(table, values);
                             if (!constraint_ok) {
                                 spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
                                              stmt.index_name, entry.edge_id);
@@ -612,7 +653,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                         }
                         auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
                                                                          entry.seq, edge_label_def->id);
-                        co_await async_data_.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
+                        co_await ds.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
                     }
                     if (hasConflict)
                         break;
@@ -621,7 +662,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
             // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
             // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = co_await async_data_.commitTran(txn);
+            const bool committed = session.commit().committed();
             if (!committed) {
                 ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
                 result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "

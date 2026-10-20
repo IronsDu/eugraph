@@ -113,8 +113,8 @@ add_library(eugraph_lib STATIC
     src/storage/kv/index_key_codec.cpp
     src/storage/wt_cursor.cpp
     src/storage/wt_session.cpp
-    src/storage/wt_connection.cpp
-    src/storage/wt_store_base.cpp
+    src/storage/wt_table_ops.cpp
+    src/storage/schema_ddl.cpp
     src/storage/data/sync_graph_data_store.cpp
     src/storage/meta/sync_graph_meta_store.cpp
     src/storage/meta/meta_codec.cpp
@@ -368,7 +368,7 @@ add_library(eugraph_shell_lib STATIC
     src/program/shell/rpc_client.cpp
     src/service/thrift/eugraph_handler.cpp
     src/service/graph_service.cpp
-    src/storage/graph_manager.cpp
+    src/graph/graph_manager.cpp
     third_party/linenoise/linenoise.c
 )
 
@@ -493,6 +493,36 @@ if(EUGRAPH_BUILD_TESTS)
     include(GoogleTest)
     gtest_add_tests(TARGET eugraph_tests)
     # 单元测试：NUMA 拓扑解析与节点归属（纯函数，无需 libnuma / NUMA 硬件）
+    # 会话池 / 事务结局（纯逻辑，不依赖 WiredTiger ⇒ 可用假句柄单测 ✓）
+    add_executable(session_pool_tests
+        tests/test_session_pool.cpp
+        tests/test_txn_controller.cpp
+        tests/test_graph_session.cpp
+        tests/test_session_lease.cpp
+        tests/test_cursor_provider.cpp
+    )
+    target_include_directories(session_pool_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        "${WT_INSTALL_DIR}/include")
+    target_link_libraries(session_pool_tests PRIVATE spdlog::spdlog)
+    target_link_libraries(session_pool_tests PRIVATE eugraph_lib GTest::gtest GTest::gtest_main spdlog::spdlog pthread)
+    gtest_add_tests(TARGET session_pool_tests)
+
+    add_executable(graph_session_pool_tests tests/test_graph_session_pool.cpp)
+    target_include_directories(graph_session_pool_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(graph_session_pool_tests PRIVATE
+        eugraph_lib GTest::gtest GTest::gtest_main spdlog::spdlog pthread)
+    gtest_add_tests(TARGET graph_session_pool_tests)
+
+
+    add_executable(wt_connection_store_tests tests/test_wt_connection_store.cpp)
+    target_include_directories(wt_connection_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        "${WT_INSTALL_DIR}/include")
+    target_link_libraries(wt_connection_store_tests PRIVATE
+        eugraph_lib GTest::gtest GTest::gtest_main spdlog::spdlog pthread)
+    gtest_add_tests(TARGET wt_connection_store_tests)
+
     add_executable(numa_topology_tests tests/common/numa_topology_test.cpp)
     target_include_directories(numa_topology_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME numa_topology_tests COMMAND numa_topology_tests)

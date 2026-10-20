@@ -12,6 +12,7 @@
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
 #include "test_chunk_helpers.hpp"
+#include "test_sync_store.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -25,6 +26,10 @@ using namespace folly::coro;
 
 namespace {
 
+std::shared_ptr<SessionPool> makeTestPool(test::TestSyncGraphDataStore& store) {
+    return std::make_shared<SessionPool>(32, [&store]() { return store.conn().make_session(); });
+}
+
 std::string getTestDbPath() {
     return "/tmp/eugraph_executor_test_" + std::to_string(getpid());
 }
@@ -32,11 +37,13 @@ std::string getTestDbPath() {
 class QueryExecutorTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> sync_data_;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<test::TestSyncGraphDataStore> sync_data_;
+    std::unique_ptr<test::TestSyncGraphMetaStore> sync_meta_;
     std::unique_ptr<AsyncGraphMetaStore> async_meta_;
     std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<GraphSession> async_session_; // 共享 async 门面的构造锚点（测试）
     std::unique_ptr<AsyncGraphDataStore> async_data_;
+    std::shared_ptr<SessionPool> session_pool_;
     std::unique_ptr<QueryExecutor> executor_;
 
     LabelId PERSON_LABEL = INVALID_LABEL_ID;
@@ -50,15 +57,18 @@ protected:
         std::filesystem::create_directories(db_path_ + "/data");
         std::filesystem::create_directories(db_path_ + "/meta");
 
-        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        sync_data_ = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
 
-        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        sync_meta_ = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        session_pool_ = makeTestPool(*sync_data_);
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
         io_scheduler_ = std::make_unique<IoScheduler>(2);
-        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+        async_session_ = std::make_unique<GraphSession>(sync_data_->conn().make_session());
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_, *async_session_);
 
         auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
@@ -93,14 +103,17 @@ protected:
         blockingWait(async_meta_->nextVertexIdRange(100));
         blockingWait(async_meta_->nextEdgeIdRange(100));
 
-        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+        executor_ =
+            std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     }
 
     void TearDown() override {
         executor_.reset();
         async_data_.reset();
+        async_session_.reset();
         io_scheduler_.reset();
         blockingWait(async_meta_->close());
+        session_pool_.reset(); // ★ 会话先于连接销毁 ✓
         sync_data_->close();
         sync_meta_->close();
         std::filesystem::remove_all(db_path_);
@@ -183,7 +196,7 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
                 }
             }
             if (ctx->should_commit) {
-                co_await ctx->store.commitTran(ctx->txn);
+                ctx->commit();
             }
         } catch (const std::exception& e) {
             result.error = e.what();
@@ -211,7 +224,7 @@ ExecutionResult execSyncParams(QueryExecutor& executor, const std::string& query
                 }
             }
             if (ctx->should_commit) {
-                co_await ctx->store.commitTran(ctx->txn);
+                ctx->commit();
             }
         } catch (const std::exception& e) {
             result.error = e.what();
@@ -1010,7 +1023,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodePropertyAccess) {
 
     // Recreate executor so new catalog picks up __anon__ label
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     // Create unlabeled node and return its property
     auto result = execSync(*executor_, "CREATE ({name: 'hello'})");
@@ -1030,7 +1043,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeReturnWholeVertex) {
     blockingWait(async_data_->createLabel(anon_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     execSync(*executor_, "CREATE ({name: 'whole'})");
     auto rows = execSync(*executor_, "MATCH (n) RETURN n").rows;
@@ -1046,7 +1059,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeWhereFilter) {
     blockingWait(async_data_->createLabel(anon_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     execSync(*executor_, "CREATE ({name: 'target'}), ({name: 'other'})");
     auto rows = execSync(*executor_, "MATCH (n) WHERE n.name = 'target' RETURN n.name").rows;
@@ -1062,7 +1075,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCrossProductWithLabeled) {
     blockingWait(async_data_->createLabel(anon_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     insertTestVertices(); // 5 Person nodes
     execSync(*executor_, "CREATE ({name: 'anon'})");
@@ -1089,7 +1102,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeAutoRegisterProperty) {
     blockingWait(async_data_->createLabel(anon_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     // CREATE with a property not yet registered → pending_props triggers DDL
     auto result = execSync(*executor_, "CREATE ({name: 'auto'})");
@@ -1109,7 +1122,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeTwoProperties) {
     blockingWait(async_data_->createLabel(anon_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto result = execSync(*executor_, "CREATE ({name: 'hello', age: 42})");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -1129,7 +1142,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeSamePropNameDifferentTypes) {
     blockingWait(async_data_->createLabel(anon_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     // First node: prop1 is INT64
     auto r1 = execSync(*executor_, "CREATE ({prop1: 42})");
@@ -1165,7 +1178,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndReturnProperty) {
     blockingWait(async_data_->createLabel(anon_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     // Single query: CREATE with property + RETURN that property
     auto result = execSync(*executor_, "CREATE (n {new_prop: 'foo'}) RETURN n.new_prop");
@@ -1187,7 +1200,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCreatePropertyWithExistingLabelProp) {
     blockingWait(async_data_->createLabel(dog_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     // Create a labeled node with 'name' property
     auto dog_result = execSync(*executor_, "CREATE (:Dog {name: 'Buddy'})");
@@ -1213,7 +1226,7 @@ TEST_F(QueryExecutorTest, NamedLabelCreatePropertyWithExistingLabelProp) {
     blockingWait(async_data_->createLabel(dog_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     // Create a labeled node with 'name' property
     auto dog_result = execSync(*executor_, "CREATE (:Dog {name: 'Buddy'})");
@@ -1281,14 +1294,16 @@ TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
 
     // ====== Phase 1: Write data, then shut down ======
     {
-        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        auto sync_data = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data->open(db_path + "/data"));
+        auto session_pool = makeTestPool(*sync_data);
 
-        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        auto sync_meta = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
 
         auto io = std::make_unique<IoScheduler>(2);
-        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_session = std::make_unique<GraphSession>(sync_data->conn().make_session());
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io, *async_session);
         auto async_meta = std::make_unique<AsyncGraphMetaStore>();
         ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
 
@@ -1300,7 +1315,8 @@ TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
         blockingWait(async_data->createLabel(person_label_id));
         blockingWait(async_data->createEdgeLabel(knows_label_id));
 
-        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+        auto executor =
+            std::make_unique<QueryExecutor>(*async_data, *async_meta, *session_pool, QueryExecutor::Config{});
 
         auto r1 = execSync(*executor, "CREATE (n:Person)");
         ASSERT_TRUE(r1.error.empty()) << "CREATE error: " << r1.error;
@@ -1314,22 +1330,26 @@ TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
 
         executor.reset();
         async_data.reset();
+        async_session.reset();
         io.reset();
         blockingWait(async_meta->close());
+        session_pool.reset(); // ★ 会话先于连接销毁 ✓
         sync_data->close();
         sync_meta->close();
     }
 
     // ====== Phase 2: Restart from same data dir, query ======
     {
-        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        auto sync_data = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data->open(db_path + "/data"));
+        auto session_pool = makeTestPool(*sync_data);
 
-        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        auto sync_meta = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
 
         auto io = std::make_unique<IoScheduler>(2);
-        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_session = std::make_unique<GraphSession>(sync_data->conn().make_session());
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io, *async_session);
         auto async_meta = std::make_unique<AsyncGraphMetaStore>();
         ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
 
@@ -1341,7 +1361,8 @@ TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
         ASSERT_TRUE(edge_label_opt.has_value()) << "EdgeLabel 'KNOWS' should survive restart";
         EXPECT_EQ(*edge_label_opt, knows_label_id);
 
-        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+        auto executor =
+            std::make_unique<QueryExecutor>(*async_data, *async_meta, *session_pool, QueryExecutor::Config{});
 
         auto after = execSync(*executor, "MATCH (n:Person) RETURN n");
         EXPECT_TRUE(after.error.empty()) << "MATCH after restart error: " << after.error;
@@ -1355,8 +1376,10 @@ TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
 
         executor.reset();
         async_data.reset();
+        async_session.reset();
         io.reset();
         blockingWait(async_meta->close());
+        session_pool.reset(); // ★ 会话先于连接销毁 ✓
         sync_data->close();
         sync_meta->close();
     }
@@ -1372,14 +1395,16 @@ TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
 
     // ====== Phase 1: Write vertices with properties ======
     {
-        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        auto sync_data = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data->open(db_path + "/data"));
+        auto session_pool = makeTestPool(*sync_data);
 
-        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        auto sync_meta = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
 
         auto io = std::make_unique<IoScheduler>(2);
-        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_session = std::make_unique<GraphSession>(sync_data->conn().make_session());
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io, *async_session);
         auto async_meta = std::make_unique<AsyncGraphMetaStore>();
         ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
 
@@ -1393,7 +1418,8 @@ TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
         blockingWait(async_data->createLabel(label_id));
         blockingWait(async_data->createEdgeLabel(edge_label_id));
 
-        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+        auto executor =
+            std::make_unique<QueryExecutor>(*async_data, *async_meta, *session_pool, QueryExecutor::Config{});
 
         auto r1 = execSync(*executor, "CREATE (n:Person {name: 'Alice'})");
         ASSERT_TRUE(r1.error.empty()) << r1.error;
@@ -1402,26 +1428,31 @@ TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
 
         executor.reset();
         async_data.reset();
+        async_session.reset();
         io.reset();
         blockingWait(async_meta->close());
+        session_pool.reset(); // ★ 会话先于连接销毁 ✓
         sync_data->close();
         sync_meta->close();
     }
 
     // ====== Phase 2: Restart, query properties ======
     {
-        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        auto sync_data = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data->open(db_path + "/data"));
+        auto session_pool = makeTestPool(*sync_data);
 
-        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        auto sync_meta = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
 
         auto io = std::make_unique<IoScheduler>(2);
-        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_session = std::make_unique<GraphSession>(sync_data->conn().make_session());
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io, *async_session);
         auto async_meta = std::make_unique<AsyncGraphMetaStore>();
         ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
 
-        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+        auto executor =
+            std::make_unique<QueryExecutor>(*async_data, *async_meta, *session_pool, QueryExecutor::Config{});
 
         auto result = execSync(*executor, "MATCH (n:Person) RETURN n.name ORDER BY n.name");
         EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1429,8 +1460,10 @@ TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
 
         executor.reset();
         async_data.reset();
+        async_session.reset();
         io.reset();
         blockingWait(async_meta->close());
+        session_pool.reset(); // ★ 会话先于连接销毁 ✓
         sync_data->close();
         sync_meta->close();
     }
@@ -1446,14 +1479,16 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
 
     // ====== Phase 1: Create vertices and edges ======
     {
-        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        auto sync_data = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data->open(db_path + "/data"));
+        auto session_pool = makeTestPool(*sync_data);
 
-        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        auto sync_meta = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
 
         auto io = std::make_unique<IoScheduler>(2);
-        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_session = std::make_unique<GraphSession>(sync_data->conn().make_session());
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io, *async_session);
         auto async_meta = std::make_unique<AsyncGraphMetaStore>();
         ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
 
@@ -1465,7 +1500,8 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
         blockingWait(async_data->createLabel(label_id));
         blockingWait(async_data->createEdgeLabel(edge_label_id));
 
-        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+        auto executor =
+            std::make_unique<QueryExecutor>(*async_data, *async_meta, *session_pool, QueryExecutor::Config{});
 
         auto r1 = execSync(*executor, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
         ASSERT_TRUE(r1.error.empty()) << r1.error;
@@ -1477,26 +1513,31 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
 
         executor.reset();
         async_data.reset();
+        async_session.reset();
         io.reset();
         blockingWait(async_meta->close());
+        session_pool.reset(); // ★ 会话先于连接销毁 ✓
         sync_data->close();
         sync_meta->close();
     }
 
     // ====== Phase 2: Restart, query edges ======
     {
-        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        auto sync_data = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data->open(db_path + "/data"));
+        auto session_pool = makeTestPool(*sync_data);
 
-        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        auto sync_meta = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
 
         auto io = std::make_unique<IoScheduler>(2);
-        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_session = std::make_unique<GraphSession>(sync_data->conn().make_session());
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io, *async_session);
         auto async_meta = std::make_unique<AsyncGraphMetaStore>();
         ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
 
-        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+        auto executor =
+            std::make_unique<QueryExecutor>(*async_data, *async_meta, *session_pool, QueryExecutor::Config{});
 
         auto result = execSync(*executor, "MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, b");
         EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1507,8 +1548,10 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
 
         executor.reset();
         async_data.reset();
+        async_session.reset();
         io.reset();
         blockingWait(async_meta->close());
+        session_pool.reset(); // ★ 会话先于连接销毁 ✓
         sync_data->close();
         sync_meta->close();
     }
@@ -1851,11 +1894,13 @@ TEST_F(QueryExecutorTest, DistinctWithOrderBy) {
 class QueryExecutorAggTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> sync_data_;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<test::TestSyncGraphDataStore> sync_data_;
+    std::unique_ptr<test::TestSyncGraphMetaStore> sync_meta_;
     std::unique_ptr<AsyncGraphMetaStore> async_meta_;
     std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<GraphSession> async_session_; // 共享 async 门面的构造锚点（测试）
     std::unique_ptr<AsyncGraphDataStore> async_data_;
+    std::shared_ptr<SessionPool> session_pool_;
     std::unique_ptr<QueryExecutor> executor_;
 
     LabelId PERSON_LABEL = INVALID_LABEL_ID;
@@ -1867,15 +1912,18 @@ protected:
         std::filesystem::create_directories(db_path_ + "/data");
         std::filesystem::create_directories(db_path_ + "/meta");
 
-        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        sync_data_ = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
 
-        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        sync_meta_ = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        session_pool_ = makeTestPool(*sync_data_);
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
         io_scheduler_ = std::make_unique<IoScheduler>(2);
-        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+        async_session_ = std::make_unique<GraphSession>(sync_data_->conn().make_session());
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_, *async_session_);
 
         auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
@@ -1892,14 +1940,17 @@ protected:
         blockingWait(async_data_->createLabel(PERSON_LABEL));
         blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
 
-        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+        executor_ =
+            std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     }
 
     void TearDown() override {
         executor_.reset();
         async_data_.reset();
+        async_session_.reset();
         io_scheduler_.reset();
         blockingWait(async_meta_->close());
+        session_pool_.reset(); // ★ 会话先于连接销毁 ✓
         sync_data_->close();
         sync_meta_->close();
         std::filesystem::remove_all(db_path_);
@@ -2034,11 +2085,13 @@ TEST_F(QueryExecutorAggTest, AggregateWithSkipLimit) {
 class QueryExecutorMultiLabelTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> sync_data_;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<test::TestSyncGraphDataStore> sync_data_;
+    std::unique_ptr<test::TestSyncGraphMetaStore> sync_meta_;
     std::unique_ptr<AsyncGraphMetaStore> async_meta_;
     std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<GraphSession> async_session_; // 共享 async 门面的构造锚点（测试）
     std::unique_ptr<AsyncGraphDataStore> async_data_;
+    std::shared_ptr<SessionPool> session_pool_;
     std::unique_ptr<QueryExecutor> executor_;
 
     LabelId PERSON_LABEL = INVALID_LABEL_ID;
@@ -2051,15 +2104,18 @@ protected:
         std::filesystem::create_directories(db_path_ + "/data");
         std::filesystem::create_directories(db_path_ + "/meta");
 
-        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        sync_data_ = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
 
-        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        sync_meta_ = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        session_pool_ = makeTestPool(*sync_data_);
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
         io_scheduler_ = std::make_unique<IoScheduler>(2);
-        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+        async_session_ = std::make_unique<GraphSession>(sync_data_->conn().make_session());
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_, *async_session_);
 
         auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
@@ -2094,14 +2150,17 @@ protected:
         blockingWait(async_data_->createLabel(VIP_LABEL));
         blockingWait(async_data_->createLabel(anon_def));
 
-        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+        executor_ =
+            std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     }
 
     void TearDown() override {
         executor_.reset();
         async_data_.reset();
+        async_session_.reset();
         io_scheduler_.reset();
         blockingWait(async_meta_->close());
+        session_pool_.reset(); // ★ 会话先于连接销毁 ✓
         sync_data_->close();
         sync_meta_->close();
         std::filesystem::remove_all(db_path_);
@@ -2405,7 +2464,7 @@ TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime
         while (auto chunk = co_await ctx->gen.next()) {
             count += chunk->numRows();
         }
-        co_await ctx->store.commitTran(ctx->txn);
+        ctx->commit();
         co_return count;
     };
     size_t row_count = blockingWait(consumeStream());
@@ -2542,7 +2601,7 @@ TEST_F(QueryExecutorTest, PropertyNamedIdReturnsStoredValue) {
     ASSERT_TRUE(blockingWait(async_data_->createLabel(item_label)));
 
     // Create executor with updated schema
-    QueryExecutor executor(*async_data_, *async_meta_, {});
+    QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
 
     // Create vertices: internal ID != stored property "id" value
     execSync(executor, "CREATE (n:Item {id: 100})");
@@ -2581,7 +2640,7 @@ TEST_F(QueryExecutorTest, PropertyNamedIdWorksWithInlineFilter) {
     ASSERT_NE(item_label, INVALID_LABEL_ID);
     ASSERT_TRUE(blockingWait(async_data_->createLabel(item_label)));
 
-    QueryExecutor executor(*async_data_, *async_meta_, {});
+    QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
 
     execSync(executor, "CREATE (n:Product {id: 500})");
     execSync(executor, "CREATE (n:Product {id: 600})");
@@ -2609,7 +2668,7 @@ TEST_F(QueryExecutorTest, CreateEdgeMaintainsIndex) {
     ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(edge_label_id)));
 
     // Create index on edge property
-    QueryExecutor executor(*async_data_, *async_meta_, {});
+    QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
     auto ddl = execSync(executor, "CREATE INDEX idx_rated_weight FOR ()-[r:RATED]-() ON (r.weight)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
@@ -2643,7 +2702,7 @@ TEST_F(QueryExecutorTest, CreateEdgeViolatesUniqueEdgeIndex) {
     ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
     ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(edge_label_id)));
 
-    QueryExecutor executor(*async_data_, *async_meta_, {});
+    QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
 
     // Create unique edge index
     auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_reviewed_since FOR ()-[r:REVIEWED]-() ON (r.since)");
@@ -2671,7 +2730,7 @@ TEST_F(QueryExecutorTest, OutputSchemaReturnPropertyOnly) {
     ASSERT_NE(label, INVALID_LABEL_ID);
     ASSERT_TRUE(blockingWait(async_data_->createLabel(label)));
 
-    QueryExecutor executor(*async_data_, *async_meta_, {});
+    QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
     execSync(executor, "CREATE (n:Item {name: 'test'})");
 
     auto result = execSync(executor, "MATCH (n:Item) RETURN n.name");
@@ -2694,7 +2753,7 @@ TEST_F(QueryExecutorTest, OutputSchemaReturnMultipleProperties) {
     ASSERT_NE(label, INVALID_LABEL_ID);
     ASSERT_TRUE(blockingWait(async_data_->createLabel(label)));
 
-    QueryExecutor executor(*async_data_, *async_meta_, {});
+    QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
     execSync(executor, "CREATE (n:Product {name: 'x', val: 1})");
 
     auto result = execSync(executor, "MATCH (n:Product) RETURN n.name, n.val");
@@ -2716,11 +2775,13 @@ TEST_F(QueryExecutorTest, OutputSchemaReturnAggregate) {
 class QueryExecutorWithTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> sync_data_;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<test::TestSyncGraphDataStore> sync_data_;
+    std::unique_ptr<test::TestSyncGraphMetaStore> sync_meta_;
     std::unique_ptr<AsyncGraphMetaStore> async_meta_;
     std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<GraphSession> async_session_; // 共享 async 门面的构造锚点（测试）
     std::unique_ptr<AsyncGraphDataStore> async_data_;
+    std::shared_ptr<SessionPool> session_pool_;
     std::unique_ptr<QueryExecutor> executor_;
 
     LabelId PERSON_LABEL = INVALID_LABEL_ID;
@@ -2733,15 +2794,18 @@ protected:
         std::filesystem::create_directories(db_path_ + "/data");
         std::filesystem::create_directories(db_path_ + "/meta");
 
-        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        sync_data_ = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
 
-        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        sync_meta_ = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        session_pool_ = makeTestPool(*sync_data_);
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
         io_scheduler_ = std::make_unique<IoScheduler>(2);
-        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+        async_session_ = std::make_unique<GraphSession>(sync_data_->conn().make_session());
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_, *async_session_);
 
         auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
@@ -2760,14 +2824,17 @@ protected:
         blockingWait(async_data_->createLabel(CITY_LABEL));
         blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
 
-        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+        executor_ =
+            std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     }
 
     void TearDown() override {
         executor_.reset();
         async_data_.reset();
+        async_session_.reset();
         io_scheduler_.reset();
         blockingWait(async_meta_->close());
+        session_pool_.reset(); // ★ 会话先于连接销毁 ✓
         sync_data_->close();
         sync_meta_->close();
         std::filesystem::remove_all(db_path_);
@@ -3360,7 +3427,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateOnMatchSetDynamicEdgeProp) {
     blockingWait(async_data_->createLabel(b_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(
         *executor_, "CREATE (a:A {id: 1}), (b:B {id: 2}) CREATE (a)-[:TYPE]->(b) CREATE (:A {id: 3}), (:B {id: 4})");
@@ -3412,7 +3479,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicVertexProp) {
     blockingWait(async_data_->createLabel(b_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (:A), (:B)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -3456,7 +3523,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
     blockingWait(async_data_->createLabel(b_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -3489,7 +3556,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
 TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
     // Reproduces Merge5 [11]: UNDIRECTED MERGE should create edge startNode=a endNode=b
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (a {id: 2}), (b {id: 1}) RETURN a, b");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -3519,7 +3586,7 @@ TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
 TEST_F(QueryExecutorTest, MergeUndirectedMatch) {
     // Reproduces Merge5 [12]: pre-existing edge a(1)→b(2). Query MATCH a(2),b(1) MERGE (a)-[r:KNOWS]-(b) should match.
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (a {id: 1}), (b {id: 2}) "
                                       "CREATE (a)-[:KNOWS]->(b)");
@@ -3550,7 +3617,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
     blockingWait(async_data_->createLabel(b_id));
 
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -4477,7 +4544,7 @@ TEST_F(QueryExecutorTest, CaseInWhere) {
 // Bob(2)   -[:KNOWS]-> David(4)
 // Charlie(3) -[:KNOWS]-> David(4)
 // Eve(5)   (isolated, no edges)
-void insertExistsTestGraph(SyncGraphDataStore& sync_data, LabelId person_label, EdgeLabelId knows_label) {
+void insertExistsTestGraph(test::TestSyncGraphDataStore& sync_data, LabelId person_label, EdgeLabelId knows_label) {
     auto txn = sync_data.beginTransaction();
     for (VertexId vid = 1; vid <= 5; ++vid) {
         std::vector<std::pair<LabelId, Properties>> label_props = {
@@ -4986,7 +5053,7 @@ TEST_F(QueryExecutorTest, PropertiesVertex) {
     auto person_id = blockingWait(async_meta_->createLabel("PersonWithProps", {name_pd, age_pd}));
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     auto create = execSync(*executor_, "CREATE (:PersonWithProps {name: 'Alice', age: 30})");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -5009,7 +5076,7 @@ TEST_F(QueryExecutorTest, PropertiesVertexEmpty) {
     auto person_id = blockingWait(async_meta_->createLabel("PersonEmpty", {name_pd}));
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     auto create = execSync(*executor_, "CREATE (:PersonEmpty)");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -5029,7 +5096,7 @@ TEST_F(QueryExecutorTest, PropertiesEdge) {
     auto knows_id = blockingWait(async_meta_->createEdgeLabel("KNOWS_WITH_PROPS", {since_pd}));
     ASSERT_NE(knows_id, INVALID_EDGE_LABEL_ID);
     blockingWait(async_data_->createEdgeLabel(knows_id));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     auto c1 = execSync(*executor_, "CREATE (:Person)-[:KNOWS_WITH_PROPS {since: 2020}]->(:Person)");
     ASSERT_TRUE(c1.error.empty()) << c1.error;
@@ -5048,7 +5115,7 @@ TEST_F(QueryExecutorTest, KeysMap) {
     auto person_id = blockingWait(async_meta_->createLabel("KeyMapTest", {name_pd}));
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     auto create = execSync(*executor_, "CREATE (:KeyMapTest {name: 'test'})");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -5082,7 +5149,7 @@ TEST_F(QueryExecutorTest, PropertiesInWhere) {
     auto person_id = blockingWait(async_meta_->createLabel("PersonWhere", {name_pd}));
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     auto c1 = execSync(*executor_, "CREATE (:PersonWhere {name: 'Alice'})");
     ASSERT_TRUE(c1.error.empty()) << c1.error;
@@ -7266,7 +7333,7 @@ TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
     // Reproduces the regression where p.name comes back as null instead of
     // the value just SET.
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     // Build $props = [{login: 'login1', name: 'name1'}, {login: 'login2', name: 'name2'}]
     ListValue props;
@@ -7293,7 +7360,7 @@ TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
                 result.rows.push_back(std::move(row));
         }
         if (ctx->should_commit)
-            co_await ctx->store.commitTran(ctx->txn);
+            ctx->commit();
     }));
 
     ASSERT_EQ(result.rows.size(), 2u) << "expected 2 rows, got " << result.rows.size();
@@ -7370,7 +7437,7 @@ TEST_F(QueryExecutorTest, TckReturn6Scenario12CountingPerGroup) {
     ASSERT_NE(l_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(l_id));
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (a:L), (b1), (b2) CREATE (a)-[:A]->(b1), (a)-[:A]->(b2)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -7403,7 +7470,7 @@ TEST_F(QueryExecutorTest, TckDoubleAliasExistingNode) {
     ASSERT_NE(x_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(x_id));
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (a:X)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -7421,7 +7488,7 @@ TEST_F(QueryExecutorTest, TckDistinctInsideAggregation) {
     ASSERT_NE(x_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(x_id));
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (:X {p:1}), (:X {p:2})");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -7446,7 +7513,7 @@ TEST_F(QueryExecutorTest, TckMixedRelPatterns) {
     ASSERT_NE(x_el_id, INVALID_EDGE_LABEL_ID);
     blockingWait(async_data_->createEdgeLabel(x_el_id));
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (a:Y), (b), (c) CREATE (a)-[:R]->(b), (a)-[:X]->(c)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -7463,7 +7530,7 @@ TEST_F(QueryExecutorTest, TckLabelsOnAnyType) {
     ASSERT_NE(z_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(z_id));
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (:Z)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -7481,7 +7548,7 @@ TEST_F(QueryExecutorTest, TckProjectingListOfNodes) {
     ASSERT_NE(p_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(p_id));
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE (:P), (:P)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -7502,7 +7569,7 @@ TEST_F(QueryExecutorTest, TckCreateAndDeleteSameQuery) {
     // as column 0 of the *layout*, but physical column 1 of the chunk. DELETE
     // then read column 0 (the anonymous VertexRef) and silently skipped.
     compute::QueryExecutor::Config config;
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
 
     auto setup = execSync(*executor_, "CREATE ()");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -7771,7 +7838,7 @@ TEST_F(QueryExecutorTest, MultiLabelCreateAndMatch) {
     blockingWait(async_data_->createLabel(lb));
     blockingWait(async_data_->createLabel(lc));
     // Recreate executor to pick up new labels
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     // Create nodes with multiple labels
     auto r1 = execSync(*executor_, "CREATE (:A:B:C), (:A:B), (:A:C), (:B:C), (:A), (:B), (:C)");
@@ -7789,7 +7856,7 @@ TEST_F(QueryExecutorTest, MultiLabelMatchWithProperty) {
     auto lb = blockingWait(async_meta_->createLabel("B"));
     blockingWait(async_data_->createLabel(la));
     blockingWait(async_data_->createLabel(lb));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     auto r1 =
         execSync(*executor_, "CREATE (:A:B {name: 'ab'}), (:A:B {name: 'ab2'}), (:A {name: 'a'}), (:B {name: 'b'})");
@@ -7808,7 +7875,7 @@ TEST_F(QueryExecutorTest, MultiLabelMatchSingleLabelSubset) {
     auto lb = blockingWait(async_meta_->createLabel("B"));
     blockingWait(async_data_->createLabel(la));
     blockingWait(async_data_->createLabel(lb));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     // (:A) should NOT be matched by MATCH (n:A:B)
     auto r1 = execSync(*executor_, "CREATE (:A), (:B), (:A:B)");
@@ -7830,7 +7897,7 @@ TEST_F(QueryExecutorTest, MultiLabelCreateWithExpand) {
     auto lb = blockingWait(async_meta_->createLabel("B"));
     blockingWait(async_data_->createLabel(la));
     blockingWait(async_data_->createLabel(lb));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     auto r1 = execSync(*executor_, "CREATE (:A:B {name: 'ab'})-[:KNOWS]->(:B {name: 'b'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
@@ -7858,7 +7925,7 @@ TEST_F(QueryExecutorTest, UnwindNullWithBooleanOr) {
 TEST_F(QueryExecutorTest, MergeCreateNodeWithReturn) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     auto result = execSync(*executor_, "MERGE (n:M {name: 'Alice'}) RETURN n.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
@@ -7870,7 +7937,7 @@ TEST_F(QueryExecutorTest, MergeCreateNodeWithReturn) {
 TEST_F(QueryExecutorTest, MergeIdempotentReadOwnWrites) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     execSync(*executor_, "MERGE (n:M {name: 'Bob'})");
     execSync(*executor_, "MERGE (n:M {name: 'Bob'})");
     auto check = execSync(*executor_, "MATCH (n:M {name: 'Bob'}) RETURN count(*) AS c");
@@ -7883,7 +7950,7 @@ TEST_F(QueryExecutorTest, MergeIdempotentReadOwnWrites) {
 TEST_F(QueryExecutorTest, UnwindMergeReadOwnWrites) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     auto result = execSync(*executor_, "UNWIND [1, 1, 2] AS x MERGE (n:M {name: 'val'}) RETURN x");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 3);
@@ -7893,7 +7960,7 @@ TEST_F(QueryExecutorTest, UnwindMergeReadOwnWrites) {
 TEST_F(QueryExecutorTest, MatchWhereCreateEdge) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     execSync(*executor_, "CREATE (:M {name: 'src'})");
     execSync(*executor_, "CREATE (:M {name: 'dst'})");
     auto before = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN count(*) AS c");
@@ -7909,7 +7976,7 @@ TEST_F(QueryExecutorTest, MatchWhereCreateEdge) {
 TEST_F(QueryExecutorTest, MergeEdgeEndpointAutoCreation) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     auto result = execSync(*executor_, "MERGE (a:M {name: 'Charlie'})-[:KNOWS]->(b:M {name: 'Diana'}) "
                                        "RETURN a.name, b.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -7920,7 +7987,7 @@ TEST_F(QueryExecutorTest, MergeEdgeEndpointAutoCreation) {
 TEST_F(QueryExecutorTest, MergeOnCreateSet) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     auto result = execSync(*executor_, "MERGE (n:M {name: 'oncreate'}) ON CREATE SET n.name = 'Created' "
                                        "RETURN n.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -7945,7 +8012,7 @@ TEST_F(QueryExecutorTest, MergeMultiRelTypeFails) {
 TEST_F(QueryExecutorTest, MergeVariableAlreadyBoundFails) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     execSync(*executor_, "CREATE (n:M {name: 'prebound'})");
     auto result = execSync(*executor_, "MATCH (n:M {name: 'prebound'}) MERGE (n:M {name: 'other'})");
     EXPECT_FALSE(result.error.empty());
@@ -7965,7 +8032,7 @@ TEST_F(QueryExecutorTest, FilterOnExpandDstMultiLabel) {
     blockingWait(async_data_->createLabel(text_id));
     blockingWait(async_data_->createLabel(int_id));
     blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     execSync(*executor_, "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0}) "
                          "CREATE (root)-[:KNOWS]->(child1), (root)-[:KNOWS]->(child2)");
@@ -7974,6 +8041,29 @@ TEST_F(QueryExecutorTest, FilterOnExpandDstMultiLabel) {
     auto r5 = execSync(*executor_, "MATCH (:Root)-->(i:TextNode) RETURN i");
     ASSERT_TRUE(r5.error.empty()) << r5.error;
     EXPECT_EQ(r5.rows.size(), 1u);
+}
+
+// ★ 回归：边标签只有元数据、没有数据表时，CREATE 必须幂等补齐数据表 ✓
+// （旧实现只对“新建标签”建表；已存在标签走 insertEdge 失败后静默提交部分索引写入 ✗）
+TEST_F(QueryExecutorTest, CreateEdgeLabelExistingMetadataEnsuresDataTable) {
+    blockingWait(async_meta_->createLabel("M"));
+    blockingWait(async_meta_->createLabel("N"));
+    auto rel = blockingWait(async_meta_->createEdgeLabel("R2"));
+    ASSERT_NE(rel, INVALID_EDGE_LABEL_ID);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+
+    auto created = execSync(*executor_, "CREATE (:M)-[:R2]->(:N)");
+    ASSERT_TRUE(created.error.empty()) << created.error;
+
+    // 物理表必须存在：存在 ⇒ 扫描 cursor 非空；缺失 ⇒ nullptr 且会话被粘住 ✓
+    auto txn = sync_data_->beginTransaction();
+    auto cursor = sync_data_->createEdgeTypeScanCursor(txn, rel, std::nullopt, std::nullopt);
+    EXPECT_NE(cursor, nullptr) << "CREATE 必须补齐边标签数据表";
+    EXPECT_TRUE(sync_data_->rollbackTransaction(txn));
+
+    auto matched = execSync(*executor_, "MATCH (:M)-[r:R2]->(:N) RETURN r");
+    ASSERT_TRUE(matched.error.empty()) << matched.error;
+    EXPECT_EQ(matched.rows.size(), 1u);
 }
 
 // Repro for With7 scenario 1: bound endpoint + bound edge after WITH aliasing.
@@ -8366,7 +8456,8 @@ protected:
         ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, 0, Properties{PropertyValue(int64_t{2021})}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
-        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+        executor_ =
+            std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
     }
 
     // Run EXPLAIN and extract operator names from the plan tree.
@@ -9429,7 +9520,7 @@ TEST_F(QueryExecutorTest, ForeachMergeIsIdempotent) {
     // a CREATE feature, and MERGE does not auto-register `:FT_T {v: ...}`.
     auto lid = blockingWait(async_meta_->createLabel("FT_T", {PropertyDef{0, "v", PropertyType::INT64, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
 
     ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN [1, 1, 2] | MERGE (:FT_T {v: x}))").error.empty());
     EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 2);

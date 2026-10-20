@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "storage/data/sync_graph_data_store.hpp"
+#include "test_sync_store.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -12,12 +13,12 @@ using namespace eugraph;
 class WTGraphStoreTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> store_;
+    std::unique_ptr<test::TestSyncGraphDataStore> store_;
 
     void SetUp() override {
         db_path_ = "/tmp/eugraph_wt_graph_test_" + std::to_string(::getpid()) + "_" +
                    ::testing::UnitTest::GetInstance()->current_test_info()->name();
-        store_ = std::make_unique<SyncGraphDataStore>();
+        store_ = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(store_->open(db_path_));
 
         // Pre-create commonly used labels and edge labels
@@ -44,13 +45,13 @@ protected:
         return props;
     }
 
-    GraphTxnHandle writeTxn() {
+    std::reference_wrapper<GraphSession> writeTxn() {
         auto txn = store_->beginTransaction();
-        EXPECT_NE(txn, INVALID_GRAPH_TXN);
+        EXPECT_TRUE(txn.get().active());
         return txn;
     }
 
-    void commit(GraphTxnHandle txn) {
+    void commit(std::reference_wrapper<GraphSession> txn) {
         EXPECT_TRUE(store_->commitTransaction(txn));
     }
 };
@@ -67,17 +68,17 @@ TEST_F(WTGraphStoreTest, CreateAndDropLabel) {
     commit(txn);
 
     // Verify vertex is visible
-    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, label_id), 1u);
+    EXPECT_EQ(store_->countVerticesByLabel(store_->autoSession(), label_id), 1u);
 
     // Drop the label
     ASSERT_TRUE(store_->dropLabel(label_id));
 
     // Verify vertex scan returns empty (table dropped)
-    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, label_id), 0u);
+    EXPECT_EQ(store_->countVerticesByLabel(store_->autoSession(), label_id), 0u);
 
     // Re-create label should work
     ASSERT_TRUE(store_->createLabel(label_id));
-    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, label_id), 0u);
+    EXPECT_EQ(store_->countVerticesByLabel(store_->autoSession(), label_id), 0u);
 }
 
 TEST_F(WTGraphStoreTest, CreateAndDropEdgeLabel) {
@@ -92,7 +93,7 @@ TEST_F(WTGraphStoreTest, CreateAndDropEdgeLabel) {
     ASSERT_TRUE(store_->dropEdgeLabel(elabel_id));
 
     // Edge properties and type index should be gone
-    auto props = store_->getEdgeProperties(INVALID_GRAPH_TXN, elabel_id, 2000);
+    auto props = store_->getEdgeProperties(store_->autoSession(), elabel_id, 2000);
     EXPECT_FALSE(props.has_value());
 }
 
@@ -117,13 +118,13 @@ TEST_F(WTGraphStoreTest, DropLabelDoesNotAffectOtherLabels) {
     ASSERT_TRUE(store_->dropLabel(1));
 
     // Vertex properties under label 2 should still be accessible
-    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, 500, 2);
+    auto result = store_->getVertexProperties(store_->autoSession(), 500, 2);
     ASSERT_TRUE(result.has_value());
     ASSERT_TRUE((*result)[0].has_value());
     EXPECT_EQ(std::get<std::string>((*result)[0].value()), "under_label_2");
 
     // Vertex properties under label 1 should be gone
-    auto result1 = store_->getVertexProperties(INVALID_GRAPH_TXN, 500, 1);
+    auto result1 = store_->getVertexProperties(store_->autoSession(), 500, 1);
     EXPECT_FALSE(result1.has_value());
 }
 
@@ -141,7 +142,7 @@ TEST_F(WTGraphStoreTest, DropLabelTombstoneFiltering) {
     // via GraphSchema, not by the sync data store.
     // After dropping label 1, the label_fwd entry may still exist but
     // per-label property tables are gone.
-    auto props_result = store_->getVertexProperties(INVALID_GRAPH_TXN, 600, 1);
+    auto props_result = store_->getVertexProperties(store_->autoSession(), 600, 1);
     EXPECT_FALSE(props_result.has_value());
 }
 
@@ -156,7 +157,7 @@ TEST_F(WTGraphStoreTest, InsertAndGetVertex) {
     ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}));
     commit(txn);
 
-    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
+    auto result = store_->getVertexProperties(store_->autoSession(), vid, label_id);
     ASSERT_TRUE(result.has_value());
     ASSERT_EQ(result->size(), 2u);
     ASSERT_TRUE((*result)[0].has_value());
@@ -178,7 +179,7 @@ TEST_F(WTGraphStoreTest, DeleteVertex) {
     ASSERT_TRUE(store_->deleteVertex(txn2, vid));
     commit(txn2);
 
-    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
+    auto result = store_->getVertexProperties(store_->autoSession(), vid, label_id);
     EXPECT_FALSE(result.has_value());
 }
 
@@ -192,7 +193,7 @@ TEST_F(WTGraphStoreTest, ScanVerticesByLabel) {
     commit(txn);
 
     std::vector<VertexId> found;
-    store_->scanVerticesByLabel(INVALID_GRAPH_TXN, label_id, [&](VertexId v) {
+    store_->scanVerticesByLabel(store_->autoSession(), label_id, [&](VertexId v) {
         found.push_back(v);
         return true;
     });
@@ -213,7 +214,7 @@ TEST_F(WTGraphStoreTest, InsertAndGetEdge) {
     ASSERT_TRUE(store_->insertEdge(txn, eid, 1, 2, label_id, 0, props));
     commit(txn);
 
-    auto result = store_->getEdgeProperties(INVALID_GRAPH_TXN, label_id, eid);
+    auto result = store_->getEdgeProperties(store_->autoSession(), label_id, eid);
     ASSERT_TRUE(result.has_value());
     ASSERT_EQ(result->size(), 2u);
     ASSERT_TRUE((*result)[0].has_value());
@@ -231,7 +232,7 @@ TEST_F(WTGraphStoreTest, ScanOutEdges) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, std::nullopt,
+    store_->scanEdges(store_->autoSession(), 1, Direction::OUT, std::nullopt,
                       [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
                           found.push_back(e.edge_id);
                           return true;
@@ -255,7 +256,7 @@ TEST_F(WTGraphStoreTest, DeleteVertexWithLabels) {
     commit(txn2);
 
     std::vector<VertexId> found;
-    store_->scanVerticesByLabel(INVALID_GRAPH_TXN, label_id, [&](VertexId v) {
+    store_->scanVerticesByLabel(store_->autoSession(), label_id, [&](VertexId v) {
         found.push_back(v);
         return true;
     });
@@ -271,7 +272,7 @@ TEST_F(WTGraphStoreTest, PutAndGetVertexProperty) {
     ASSERT_TRUE(store_->putVertexProperty(txn, vid, label_id, 0, std::string("Charlie")));
     commit(txn);
 
-    auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, label_id, 0);
+    auto val = store_->getVertexProperty(store_->autoSession(), vid, label_id, 0);
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<std::string>(*val), "Charlie");
 }
@@ -289,10 +290,10 @@ TEST_F(WTGraphStoreTest, DeleteVertexProperty) {
     ASSERT_TRUE(store_->deleteVertexProperty(txn2, vid, label_id, 0));
     commit(txn2);
 
-    auto deleted = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, label_id, 0);
+    auto deleted = store_->getVertexProperty(store_->autoSession(), vid, label_id, 0);
     EXPECT_FALSE(deleted.has_value());
 
-    auto remaining = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, label_id, 1);
+    auto remaining = store_->getVertexProperty(store_->autoSession(), vid, label_id, 1);
     ASSERT_TRUE(remaining.has_value());
     EXPECT_EQ(std::get<int64_t>(*remaining), 25);
 }
@@ -306,7 +307,7 @@ TEST_F(WTGraphStoreTest, UpdateVertexProperty) {
     ASSERT_TRUE(store_->putVertexProperty(txn, vid, label_id, 0, int64_t(20)));
     commit(txn);
 
-    auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, label_id, 0);
+    auto val = store_->getVertexProperty(store_->autoSession(), vid, label_id, 0);
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<int64_t>(*val), 20);
 }
@@ -322,12 +323,12 @@ TEST_F(WTGraphStoreTest, MultiLabelProperties) {
                                      std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}}));
     commit(txn);
 
-    auto r1 = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label1);
+    auto r1 = store_->getVertexProperties(store_->autoSession(), vid, label1);
     ASSERT_TRUE(r1.has_value());
     ASSERT_TRUE((*r1)[0].has_value());
     EXPECT_EQ(std::get<std::string>((*r1)[0].value()), "Alice");
 
-    auto r2 = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label2);
+    auto r2 = store_->getVertexProperties(store_->autoSession(), vid, label2);
     ASSERT_TRUE(r2.has_value());
     ASSERT_TRUE((*r2)[0].has_value());
     EXPECT_EQ(std::get<int64_t>((*r2)[0].value()), 999);
@@ -341,11 +342,11 @@ TEST_F(WTGraphStoreTest, InsertVertexWithoutLabels) {
     commit(txn);
 
     // No labels
-    auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
+    auto labels = store_->getVertexLabels(store_->autoSession(), vid);
     EXPECT_TRUE(labels.empty());
 
     // No properties
-    auto props = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, 1);
+    auto props = store_->getVertexProperties(store_->autoSession(), vid, 1);
     EXPECT_FALSE(props.has_value());
 
     // Can add label afterwards
@@ -354,11 +355,11 @@ TEST_F(WTGraphStoreTest, InsertVertexWithoutLabels) {
     ASSERT_TRUE(store_->putVertexProperty(txn2, vid, 1, 0, std::string("late_prop")));
     commit(txn2);
 
-    labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
+    labels = store_->getVertexLabels(store_->autoSession(), vid);
     EXPECT_EQ(labels.size(), 1u);
     EXPECT_TRUE(labels.contains(1));
 
-    auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0);
+    auto val = store_->getVertexProperty(store_->autoSession(), vid, 1, 0);
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<std::string>(*val), "late_prop");
 }
@@ -375,7 +376,7 @@ TEST_F(WTGraphStoreTest, PutVertexProperties) {
     ASSERT_TRUE(store_->putVertexProperties(txn, vid, label_id, props));
     commit(txn);
 
-    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
+    auto result = store_->getVertexProperties(store_->autoSession(), vid, label_id);
     ASSERT_TRUE(result.has_value());
     ASSERT_EQ(result->size(), 3u);
     ASSERT_TRUE((*result)[0].has_value());
@@ -398,7 +399,7 @@ TEST_F(WTGraphStoreTest, PutVertexPropertiesOverwrite) {
     ASSERT_TRUE(store_->putVertexProperties(txn, vid, label_id, updated));
     commit(txn);
 
-    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
+    auto result = store_->getVertexProperties(store_->autoSession(), vid, label_id);
     ASSERT_TRUE(result.has_value());
     ASSERT_TRUE((*result)[0].has_value());
     EXPECT_EQ(std::get<std::string>((*result)[0].value()), "new_name");
@@ -416,7 +417,7 @@ TEST_F(WTGraphStoreTest, GetVertexLabels) {
         txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}, {2, Properties{}}}));
     commit(txn);
 
-    auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
+    auto labels = store_->getVertexLabels(store_->autoSession(), vid);
     EXPECT_EQ(labels.size(), 2u);
     EXPECT_TRUE(labels.contains(1));
     EXPECT_TRUE(labels.contains(2));
@@ -430,7 +431,7 @@ TEST_F(WTGraphStoreTest, AddVertexLabel) {
     ASSERT_TRUE(store_->addVertexLabel(txn, vid, 2));
     commit(txn);
 
-    auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
+    auto labels = store_->getVertexLabels(store_->autoSession(), vid);
     EXPECT_EQ(labels.size(), 2u);
     EXPECT_TRUE(labels.contains(2));
 }
@@ -450,14 +451,14 @@ TEST_F(WTGraphStoreTest, RemoveVertexLabel) {
     ASSERT_TRUE(store_->removeVertexLabel(txn2, vid, label1));
     commit(txn2);
 
-    auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
+    auto labels = store_->getVertexLabels(store_->autoSession(), vid);
     EXPECT_EQ(labels.size(), 1u);
     EXPECT_TRUE(labels.contains(label2));
 
-    auto r1 = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label1);
+    auto r1 = store_->getVertexProperties(store_->autoSession(), vid, label1);
     EXPECT_FALSE(r1.has_value());
 
-    auto r2 = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label2);
+    auto r2 = store_->getVertexProperties(store_->autoSession(), vid, label2);
     ASSERT_TRUE(r2.has_value());
     ASSERT_TRUE((*r2)[0].has_value());
     EXPECT_EQ(std::get<int64_t>((*r2)[0].value()), 42);
@@ -478,11 +479,11 @@ TEST_F(WTGraphStoreTest, DeleteEdge) {
     ASSERT_TRUE(store_->deleteEdge(txn2, eid, label_id, 1, 2, 0));
     commit(txn2);
 
-    auto result = store_->getEdgeProperties(INVALID_GRAPH_TXN, label_id, eid);
+    auto result = store_->getEdgeProperties(store_->autoSession(), label_id, eid);
     EXPECT_FALSE(result.has_value());
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id,
+    store_->scanEdges(store_->autoSession(), 1, Direction::OUT, label_id,
                       [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
                           found.push_back(e.edge_id);
                           return true;
@@ -499,7 +500,7 @@ TEST_F(WTGraphStoreTest, EdgePropertyCRUD) {
     ASSERT_TRUE(store_->putEdgeProperty(txn, label_id, eid, 0, std::string("active")));
     commit(txn);
 
-    auto val = store_->getEdgeProperty(INVALID_GRAPH_TXN, label_id, eid, 0);
+    auto val = store_->getEdgeProperty(store_->autoSession(), label_id, eid, 0);
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<std::string>(*val), "active");
 
@@ -507,7 +508,7 @@ TEST_F(WTGraphStoreTest, EdgePropertyCRUD) {
     ASSERT_TRUE(store_->deleteEdgeProperty(txn2, label_id, eid, 0));
     commit(txn2);
 
-    auto deleted = store_->getEdgeProperty(INVALID_GRAPH_TXN, label_id, eid, 0);
+    auto deleted = store_->getEdgeProperty(store_->autoSession(), label_id, eid, 0);
     EXPECT_FALSE(deleted.has_value());
 }
 
@@ -522,7 +523,7 @@ TEST_F(WTGraphStoreTest, ScanInEdges) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 5, Direction::IN, std::nullopt,
+    store_->scanEdges(store_->autoSession(), 5, Direction::IN, std::nullopt,
                       [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
                           found.push_back(e.edge_id);
                           return true;
@@ -540,7 +541,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesWithLabelFilter) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, 1, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+    store_->scanEdges(store_->autoSession(), 1, Direction::OUT, 1, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
         found.push_back(e.edge_id);
         return true;
     });
@@ -559,7 +560,7 @@ TEST_F(WTGraphStoreTest, MultipleEdgesSamePair) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id,
+    store_->scanEdges(store_->autoSession(), 1, Direction::OUT, label_id,
                       [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
                           found.push_back(e.edge_id);
                           return true;
@@ -583,9 +584,9 @@ TEST_F(WTGraphStoreTest, CountVerticesByLabel) {
     store_->insertVertex(txn, 602, std::vector<std::pair<LabelId, Properties>>{{21, Properties{}}});
     commit(txn);
 
-    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, label_id), 2u);
-    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, 21), 1u);
-    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, 99), 0u);
+    EXPECT_EQ(store_->countVerticesByLabel(store_->autoSession(), label_id), 2u);
+    EXPECT_EQ(store_->countVerticesByLabel(store_->autoSession(), 21), 1u);
+    EXPECT_EQ(store_->countVerticesByLabel(store_->autoSession(), 99), 0u);
 }
 
 TEST_F(WTGraphStoreTest, CountDegree) {
@@ -595,9 +596,9 @@ TEST_F(WTGraphStoreTest, CountDegree) {
     store_->insertEdge(txn, 502, 1, 4, 2, 0, Properties{});
     commit(txn);
 
-    EXPECT_EQ(store_->countDegree(INVALID_GRAPH_TXN, 1, Direction::OUT, std::nullopt), 3u);
-    EXPECT_EQ(store_->countDegree(INVALID_GRAPH_TXN, 1, Direction::OUT, 1), 2u);
-    EXPECT_EQ(store_->countDegree(INVALID_GRAPH_TXN, 2, Direction::IN, std::nullopt), 1u);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1, Direction::OUT, std::nullopt), 3u);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1, Direction::OUT, 1), 2u);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 2, Direction::IN, std::nullopt), 1u);
 }
 
 // ==================== Edge Type Index Scan ====================
@@ -612,7 +613,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByType) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdgesByType(INVALID_GRAPH_TXN, label1, std::nullopt, std::nullopt,
+    store_->scanEdgesByType(store_->autoSession(), label1, std::nullopt, std::nullopt,
                             [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e.edge_id);
                                 return true;
@@ -633,7 +634,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeWithSrcFilter) {
     commit(txn);
 
     std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> found;
-    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, VertexId(10), std::nullopt,
+    store_->scanEdgesByType(store_->autoSession(), label_id, VertexId(10), std::nullopt,
                             [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e);
                                 return true;
@@ -655,7 +656,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeWithSrcDstFilter) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, VertexId(10), VertexId(20),
+    store_->scanEdgesByType(store_->autoSession(), label_id, VertexId(10), VertexId(20),
                             [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e.edge_id);
                                 return true;
@@ -678,7 +679,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeAfterDelete) {
     commit(txn2);
 
     std::vector<EdgeId> found;
-    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, std::nullopt, std::nullopt,
+    store_->scanEdgesByType(store_->autoSession(), label_id, std::nullopt, std::nullopt,
                             [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e.edge_id);
                                 return true;
@@ -694,7 +695,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeReturnsEntryInfo) {
     commit(txn);
 
     std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> found;
-    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, std::nullopt, std::nullopt,
+    store_->scanEdgesByType(store_->autoSession(), label_id, std::nullopt, std::nullopt,
                             [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e);
                                 return true;
@@ -715,7 +716,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesReturnsNeighborInfo) {
     commit(txn);
 
     std::vector<ISyncGraphDataStore::EdgeIndexEntry> entries;
-    store_->scanEdges(INVALID_GRAPH_TXN, 10, Direction::OUT, std::nullopt,
+    store_->scanEdges(store_->autoSession(), 10, Direction::OUT, std::nullopt,
                       [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
                           entries.push_back(e);
                           return true;
@@ -738,7 +739,7 @@ TEST_F(WTGraphStoreTest, TxnRollback) {
         txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("rollback_test")}})}}));
     ASSERT_TRUE(store_->rollbackTransaction(txn));
 
-    auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0);
+    auto val = store_->getVertexProperty(store_->autoSession(), vid, 1, 0);
     EXPECT_FALSE(val.has_value());
 }
 
@@ -750,16 +751,57 @@ TEST_F(WTGraphStoreTest, TxnCommit) {
         txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("txn_test")}})}}));
     commit(txn);
 
-    auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0);
+    auto val = store_->getVertexProperty(store_->autoSession(), vid, 1, 0);
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<std::string>(*val), "txn_test");
 }
 
+// ★ 失败可见性链路：scan cursor 打开失败 ⇒ 粘到会话 ⇒ commit 被拒绝 ✓
+TEST_F(WTGraphStoreTest, ScanCursorOpenFailureIsVisibleAndBlocksCommit) {
+    auto txn = writeTxn();
+    EXPECT_EQ(store_->createVertexScanCursor(txn, /*label_id=*/999), nullptr);
+    EXPECT_TRUE(txn.get().transaction_failed()) << "打开失败必须粘到事务 ✓";
+    EXPECT_FALSE(store_->commitTransaction(txn)) << "失败后绝不允许提交 ✓";
+}
+
+// ★ 回归：批量前缀扫描在「下一个 vid 的 key」处必须正常结束（ret==0），不得误判为错误 ✓
+TEST_F(WTGraphStoreTest, BatchVertexLabelsStopsCleanlyAtNextVertex) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 800, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}, {2, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, 801, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    commit(txn);
+
+    auto labels = store_->getVertexLabelsBatch(store_->autoSession(), {800, 801});
+    ASSERT_EQ(labels.size(), 2u);
+    EXPECT_EQ(labels[0].size(), 2u) << "跨 vid 边界不得误判失败";
+    EXPECT_EQ(labels[1].size(), 1u);
+}
+
+// ★ 回归：批量属性前缀扫描同上 ✓
+TEST_F(WTGraphStoreTest, BatchVertexPropertiesStopsCleanlyAtNextVertex) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 810,
+        std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("a")}, {1, std::string("b")}})}}));
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 811, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("c")}})}}));
+    commit(txn);
+
+    auto props = store_->getVertexPropertiesBatch(store_->autoSession(), 1, {810, 811});
+    ASSERT_EQ(props.size(), 2u);
+    ASSERT_TRUE(props[0].has_value());
+    EXPECT_EQ(props[0]->size(), 2u);
+    ASSERT_TRUE(props[1].has_value());
+    ASSERT_TRUE((*props[1])[0].has_value());
+    EXPECT_EQ(std::get<std::string>((*props[1])[0].value()), "c");
+}
+
 TEST_F(WTGraphStoreTest, TxnVisibility) {
     VertexId vid = 702;
-    ASSERT_TRUE(store_->putVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0, std::string("no_txn")));
+    ASSERT_TRUE(store_->putVertexProperty(store_->autoSession(), vid, 1, 0, std::string("no_txn")));
 
-    auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0);
+    auto val = store_->getVertexProperty(store_->autoSession(), vid, 1, 0);
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<std::string>(*val), "no_txn");
 }

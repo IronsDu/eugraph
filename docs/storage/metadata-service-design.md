@@ -14,56 +14,20 @@
 
 文件：`src/storage/meta/i_async_graph_meta_store.hpp`
 
-```cpp
-class IAsyncGraphMetaStore {
-    // 生命周期
-    virtual folly::coro::Task<bool> open(ISyncGraphMetaStore& store, IoScheduler& io) = 0;
-    virtual folly::coro::Task<void> close() = 0;
-
-    // Label 管理
-    virtual folly::coro::Task<LabelId> createLabel(name, properties) = 0;
-    virtual folly::coro::Task<optional<LabelId>> getLabelId(name) = 0;
-    virtual folly::coro::Task<optional<string>> getLabelName(id) = 0;
-    virtual folly::coro::Task<optional<LabelDef>> getLabelDef(name) = 0;
-    virtual folly::coro::Task<optional<LabelDef>> getLabelDefById(id) = 0;
-    virtual folly::coro::Task<vector<LabelDef>> listLabels() = 0;
-
-    // __anon__ 轻量属性分配
-    virtual folly::coro::Task<uint16_t> getOrCreateAnonPropId(prop_name, prop_type) = 0;
-
-    // EdgeLabel 管理
-    virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(name, properties) = 0;
-    virtual folly::coro::Task<bool> addEdgeLabelProperties(name, prop_names) = 0;
-    virtual folly::coro::Task<optional<EdgeLabelId>> getEdgeLabelId(name) = 0;
-    virtual folly::coro::Task<optional<string>> getEdgeLabelName(id) = 0;
-    virtual folly::coro::Task<optional<EdgeLabelDef>> getEdgeLabelDef(name) = 0;
-    virtual folly::coro::Task<optional<EdgeLabelDef>> getEdgeLabelDefById(id) = 0;
-    virtual folly::coro::Task<vector<EdgeLabelDef>> listEdgeLabels() = 0;
-
-    // ID 分配
-    virtual folly::coro::Task<VertexId> nextVertexId() = 0;
-    virtual folly::coro::Task<EdgeId> nextEdgeId() = 0;
-    virtual folly::coro::Task<vector<VertexId>> nextVertexIdRange(count) = 0;
-    virtual folly::coro::Task<vector<EdgeId>> nextEdgeIdRange(count) = 0;
-
-    // 索引管理
-    virtual folly::coro::Task<bool> createVertexIndex(name, label_name, prop_name, unique) = 0;
-    virtual folly::coro::Task<bool> createEdgeIndex(name, edge_label_name, prop_name, unique) = 0;
-    virtual folly::coro::Task<bool> updateIndexState(name, new_state) = 0;
-    virtual folly::coro::Task<bool> dropIndex(name) = 0;
-    virtual folly::coro::Task<vector<IndexInfo>> listIndexes() = 0;
-    virtual folly::coro::Task<optional<IndexInfo>> getIndex(name) = 0;
-
-    // Schema 访问
-    virtual const GraphSchema& schema() const = 0;
-};
-```
+> **接口摘要**（完整签名、默认参数与返回类型以 `i_async_graph_meta_store.hpp` 为准，避免复制整份接口造成漂移）：
+>
+> * 生命周期：`open(ISyncGraphMetaStore&, IoScheduler&)` / `close()`；
+> * Label / EdgeLabel：创建（含 `pk_props`、`merge_properties` 增量合并）、按名/按 id 查询、列表；
+> * `getOrCreateAnonPropId`：`__anon__` 的轻量 prop_id 分配；
+> * ID 分配：`nextVertexId` / `nextEdgeId` 与区间预留 `nextVertexIdRange(uint64_t)` / `nextEdgeIdRange(uint64_t)`；
+> * 索引：创建（含 `IndexAccessorDef` 形态）、更新状态、删除、列表/查询；
+> * `schema()`：返回内存 `GraphSchema` 的只读视图。
 
 ---
 
 ## 三、GraphSchema
 
-文件：`src/storage/graph_schema.hpp`
+文件：`src/common/schema/graph_schema.hpp`
 
 ```cpp
 struct GraphSchema {

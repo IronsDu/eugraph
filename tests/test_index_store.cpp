@@ -4,6 +4,7 @@
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/kv/index_key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
+#include "test_sync_store.hpp"
 
 #include <filesystem>
 #include <spdlog/spdlog.h>
@@ -22,7 +23,7 @@ class IndexStoreTest : public ::testing::Test {
 protected:
     void SetUp() override {
         db_path_ = makeTempDir(testing::UnitTest::GetInstance()->current_test_info()->name());
-        store_ = std::make_unique<SyncGraphDataStore>();
+        store_ = std::make_unique<test::TestSyncGraphDataStore>();
         ASSERT_TRUE(store_->open(db_path_));
     }
 
@@ -33,22 +34,22 @@ protected:
 
     /// 索引条目操作现在都带事务句柄（与实体数据同事务）。测试里每次取一个新事务，
     /// 在测试结束时统一提交，语义与「写入后可见」一致。
-    GraphTxnHandle txn() {
-        if (txn_ == nullptr)
+    std::reference_wrapper<GraphSession> txn() {
+        if (!txn_)
             txn_ = store_->beginTransaction();
-        return txn_;
+        return *txn_;
     }
 
     void commit() {
-        if (txn_ != nullptr) {
-            store_->commitTransaction(txn_);
-            txn_ = nullptr;
+        if (txn_) {
+            store_->commitTransaction(*txn_);
+            txn_.reset();
         }
     }
 
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> store_;
-    GraphTxnHandle txn_ = nullptr;
+    std::unique_ptr<test::TestSyncGraphDataStore> store_;
+    std::optional<std::reference_wrapper<GraphSession>> txn_;
 };
 
 TEST_F(IndexStoreTest, CreateAndDropIndex) {
@@ -177,30 +178,6 @@ TEST_F(IndexStoreTest, StringIndexScan) {
     store_->commitTransaction(txn);
 
     ASSERT_EQ(results.size(), 2u);
-    commit();
-}
-
-TEST_F(IndexStoreTest, DropAllEntries) {
-    auto table = vidxTable(1, 0);
-    ASSERT_TRUE(store_->createIndex(table));
-
-    EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(10), 1));
-    EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(20), 2));
-    EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(30), 3));
-
-    // 先把写入提交，再做清空（否则清空作用在未提交数据上，行为未定义）
-    commit();
-    store_->dropAllIndexEntries(table);
-
-    // Scan should find nothing
-    std::vector<uint64_t> results;
-    auto txn = store_->beginTransaction();
-    store_->scanIndexEquality(txn, table, int64_t(10), [&](uint64_t entity_id) {
-        results.push_back(entity_id);
-        return true;
-    });
-    store_->commitTransaction(txn);
-    EXPECT_TRUE(results.empty());
     commit();
 }
 

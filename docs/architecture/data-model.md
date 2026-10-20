@@ -49,7 +49,7 @@
 - 每个索引有独立的状态机：WRITE_ONLY → PUBLIC / DELETE_ONLY
 - 等值查询和范围查询
 - 唯一索引（UNIQUE 约束）
-- 详细见 [index_design.md](index_design.md)
+- 详细见 [index_design.md](../storage/index_design.md)
 
 ---
 

@@ -355,8 +355,9 @@ python3 scripts/prepare_ldbc_official_csv.py \
     --load --host 127.0.0.1 --port 9090
 ```
 
-加载完成后**重启实例**（loader 建的索引只写入 catalog，运行中的实例内存里没有；
+加载完成后**重启实例**（这是 **2026-09-25 旧实现**的现象：索引只写入 catalog、运行中实例内存里没有；
 未重启时 `MATCH (t:Tag {name:'Shakira'})` 需 51630 ms，重启后 45 ms）。
+**2026-10-20 复测**：当前分支装载后索引即可用、**不需要重启**（见 §9.1）。
 
 ### 7.2 官方 driver（§2.3）
 
@@ -423,8 +424,8 @@ python3 scripts/bench_ldbc_interactive.py \
 
 | # | 问题 | 证据 | 影响 | 状态 |
 |---|---|---|---|---|
-| A1 | **`CREATE INDEX` 回填阶段 SIGSEGV，服务端崩溃** | 大标签建索引时日志为 `Created vertex index 'idx_msg_cd' (id=12) on Message.(creationDate)` 紧接 `*** Signal 11 (SIGSEGV) ... ***` | catalog 先提交、回填崩溃 → 留下**空索引**；服务端随后无响应 | 未修，见 [known-defects-todo §8](../query/known-defects-todo.md) |
-| A2 | **空索引不报错，点查静默退化为全标签扫描** | `Message{id}` 946 ms（索引完好 4 ms）、`Post{id}` 461 ms、`Comment{id}` 495 ms；小标签因回填能完成仍是 1 ms | 症状是"**只在大表上慢**"；所有 `MATCH (... {id: ...})` 类读数可能整体反向 | 未修（与 A1 同源，需 catalog/回填两阶段化） |
+| A1 | **`CREATE INDEX` 回填阶段 SIGSEGV，服务端崩溃** | 大标签建索引时日志为 `Created vertex index 'idx_msg_cd' (id=12) on Message.(creationDate)` 紧接 `*** Signal 11 (SIGSEGV) ... ***` | catalog 先提交、回填崩溃 → 留下**空索引**；服务端随后无响应 | 2026-10-20 复测未复现（见 §9.1）；根因分析保留在 [known-defects-todo §8](../query/known-defects-todo.md) |
+| A2 | **空索引不报错，点查静默退化为全标签扫描** | `Message{id}` 946 ms（索引完好 4 ms）、`Post{id}` 461 ms、`Comment{id}` 495 ms；小标签因回填能完成仍是 1 ms | 症状是"**只在大表上慢**"；所有 `MATCH (... {id: ...})` 类读数可能整体反向 | 2026-10-20 复测未复现；仍需“上线前校验条目数”兜底（与 A1 同源） |
 | A3 | **loader 的 DDL 用 30 s 超时且失败只 warn** | `src/program/shell/rpc_client.cpp:47` `channel->setTimeout(30000)`；`csv_loader.cpp:782` 仅 `spdlog::warn` | "加载成功"的实例可能带着一堆空索引，加载流程结束也不校验索引可用性 | 未修 |
 | A4 | **complex-5 在官方参数下挂死** | personId=15393162790207 / minDate=1344643200000，单线程 **>400 s 不返回**，多个 compute 线程持续满载；官方 driver 跑到该查询整个 run 停滞 | 官方 benchmark 无法完整跑完 | 未修，见 §5.2 |
 | A5 | **规划器对多标签扫描拒绝用索引** | `physical_planner.cpp:2487`：`// Index scan only when single label (multi-label requires runtime intersection)` + `if (scan_op.label_ids.size() == 1)` | `Message`（`Post:Message`/`Comment:Message` 超类）上的属性点查永远不走索引 | 未修（设计取舍，需运行期标签交集校验后才能放开） |
@@ -495,3 +496,121 @@ python3 scripts/bench_ldbc_interactive.py \
 | D5 | **端口/实例对应关系搞错** | 曾把官方 driver 指向"原始 CSV 加载、无官方 schema"的实例，读数 0.02 op/s，差点误判为引擎极慢 | 多实例并行时，把"端口 ↔ 数据目录 ↔ schema 状态"记在纸面上再测 |
 | D6 | **CPU 频率漂移与跨会话比较** | 本机同一二进制跨会话可差约 2× | 性能结论必须同机交错 A/B；绝对值只在注明条件下引用 |
 | D7 | **跨引擎"0 行/行数不符"未必是缺陷** | 多次遇到 eugraph 0 行 vs neo4j N 行，最终查明分别是：neo4j 缺派生标签（B4）、neo4j 字段为字符串（B4）、我的脚本关系类型写错（B2）、文件默认参数指向不存在的 id | 先核**双方输入是否等价**，再判引擎对错 |
+
+---
+
+## 9. 2026-10-20 复测（当前分支：连接 / 会话 / 事务 / cursor 重构后）
+
+> 本轮目的：验证 `docs/storage/session-cursor-pool-design.md` 重构后的 Release 构建在 LDBC sf0.1
+> 上的装载、查询性能与 neo4j Browser 连通性；同时复核 2026-09-25 的基线是否仍成立。
+> **口径仍是同机交错 A/B**（`scripts/bench_ldbc_ab.py`，15 轮取 min），跨会话绝对值只作参考。
+
+### 9.1 装载（官方 CsvBasic 原版语料）
+
+| 项 | 值 |
+|---|---|
+| 语料 | `social_network-sf0.1-CsvBasic-LongDateFormatter`（官方原版，`params.ini` 同目录） |
+| schema | `docs/program/design/ldbc-sf01.schema.json`（**CsvBasic 适配版**） |
+| 服务端 | `build-release/eugraph-server`，`--compute-threads 4 --storage-io-threads 4 --thrift-io-threads 4 --wt-cache-size-mb 256 --wt-evict-threads-max 4 --wt-txn-sync fsync` |
+| loader | `build-release/eugraph-loader --batch-size 2000 --rpc-connections 4 --parallel-files 4` |
+| 装载耗时 | **约 19 s**（`19:55:46` → `19:56:05`） |
+| 顶点 / 边 | **327,588 / 1,477,965**，与 8 个顶点 CSV、23 个边 CSV 的**行数逐项相等**（0 skipped） |
+| 标签计数 | Person 1,528 / Message 286,744（Post 135,701 + Comment 151,043）/ Tag 16,080 / Forum 13,750 / Organisation 7,955 / Place 1,460（City 1,343 + Country 111 + Continent 6）/ TagClass 71 |
+
+说明：
+
+* 本目录**没有** `loader-schema.json`；同级的 `social_network-sf0.1-CsvComposite-LongDateFormatter/loader-schema.json`
+  面向 Composite 表头（含 `language`/`email`、端点列按名字区分），直接用于 CsvBasic 会因缺列与同名端点列报错。
+  本轮使用 `docs/program/design/ldbc-sf01.schema.json`（其注释明确声明面向 CsvBasic：忽略
+  `person_email_*` / `person_speaks_language`，端点同名列用 `{"index": N}`）。
+* loader 只为**主键标签**建唯一索引（8 个）；LDBC short-4/5/6/7 的 `Message{id}` 点查需要额外索引：
+  `CREATE INDEX idx_message_id FOR (n:Message) ON (n.id)`。该 DDL 在重构后**正常完成并回填**
+  （无 2026-09-25 记录的 SIGSEGV / 空索引问题），建完后 `Message{id}` 点查为 **~1 ms**。
+* 索引在本实例上**装载后即可用**，无需重启（§7.1 的“加载后重启”警告是旧实现的状态；本轮已复核）。
+
+### 9.2 Neo4j Browser 连通性
+
+本机 Neo4j Browser（`http://127.0.0.1:7474/browser/`）连接 eugraph：
+
+* 连接地址 `bolt://localhost:7688`，用户名 `neo4j`，密码 `eugraph`（eugraph 的 BASIC 口令约定）；
+* Browser 页面返回 200，Bolt **WebSocket upgrade 返回 101**；
+* 实测 Browser 连接成功：`connection status: connected` / `Connected to bolt://localhost:7688`。
+
+复测中发现并修复了一个阻塞 Browser 登录的缺陷：Browser 的元数据查询（`SHOW CURRENT USER`,
+`SHOW DATABASES`, `CALL dbms.components()`…）使用**显式事务**并指定 `db=system`，而 `system`/`neo4j`
+到 default 图的别名此前只写在 `GraphService::executeCypher` 里；显式事务走
+`GraphService::beginSession → resolveGraph("system")`，未做别名 ⇒ `Graph not found: system`。
+修复：别名收敛到 `GraphService::resolveGraph`（所有入口共用的单点）。回归：`rpc_integration_tests` 26/26。
+
+### 9.3 同机交错 A/B（单位 ms）
+
+| 查询 | 行数 eg/neo | eg min | eg p50 | neo min | neo p50 | vs neo4j | 旧 eg min | 相对旧版 |
+|---|---:|---:|---:|---:|---:|:---:|---:|---:|
+| short-1 | 1/1 | 1.00 | 1.35 | 1.52 | 2.10 | 1.51× | 1.11 | -9.5% |
+| short-2 | 10/10 | 4.07 | 4.41 | 2.69 | 3.30 | 0.66× | 4.49 | -9.4% |
+| short-3 | 3/3 | 1.13 | 1.37 | 1.52 | 2.12 | 1.34× | 1.47 | -22.8% |
+| short-4 | 1/1 | 1.17 | 1.28 | 84.63 | 89.12 | 72.19× | 1.35 | -13.2% |
+| short-5 | 1/1 | 1.21 | 1.33 | 161.01 | 167.02 | 132.67× | 1.53 | -20.7% |
+| short-6 | 1/1 | 1.56 | 1.82 | 85.05 | 87.44 | 54.37× | 2.01 | -22.2% |
+| short-7 | 0/0 | 1.74 | 1.96 | 120.15 | 123.17 | 68.95× | 2.34 | -25.5% |
+| complex-2 | 20/20 | 18.54 | 20.07 | 4.06 | 4.75 | 0.22× | 22.05 | -15.9% |
+| complex-3 | 0/0 | 474.91 | 486.30 | 27.99 | 29.14 | 0.06× | 527.80 | -10.0% |
+| complex-4 | 0/0 | 12.81 | 14.26 | 3.43 | 3.88 | 0.27× | 13.45 | -4.7% |
+| complex-7 | 7/7 | 6.77 | 7.13 | 2.99 | 3.29 | 0.44× | 6.92 | -2.2% |
+| complex-8 | 20/20 | 5.55 | 6.24 | 2.78 | 3.41 | 0.50× | 6.51 | -14.8% |
+| complex-10 | 10/10 | 62.76 | 66.31 | 7.24 | 8.66 | 0.12× | 67.21 | -6.6% |
+| complex-11 | 4/4 | 8.72 | 9.32 | 3.64 | 4.25 | 0.42× | 9.95 | -12.3% |
+| complex-12 | 3/3 | 422.23 | 439.14 | 118.47 | 125.36 | 0.28× | 459.26 | -8.1% |
+
+`vs neo4j = neo_min / eg_min`（>1 表示 eugraph 更快）；`相对旧版 = (新 eg_min - 旧 eg_min)/旧 eg_min`。
+
+### 9.4 并发 QPS（对照 aa7cd5ca 的并发优化）
+
+工作负载：`interactive-complex-9.cypher`（`personId=933`、`maxDate=1289908800000`、database `default`）。
+N 个 client = N 条长连接（每 client 一个 driver）；每 client 先 warmup 2 次，barrier 对齐后连续执行
+`--duration` 秒；QPS = 完成批次数 / wall。脚本：`scripts/bench_bolt_qps.py`（本轮新增，保持长连接，
+与每查询新建连接的 `bench_ldbc_ab.py` 刻意区分）。
+
+| clients | compute_threads | QPS | p50 ms | p95 ms | 旧基线（aa7cd5ca，complex-9） |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 4 | 2.15 | 464 | 480 | — |
+| 4 | 4 | **6.89** | 570 | 604 | 6.10（4 threads） |
+| 8 | 4 | 6.58 | 1174 | 1423 | 5.51（8 线程、compute=4 的引擎 QPS） |
+| 4 | 8 | 6.63 | 597 | 646 | — |
+| 8 | 8 | **9.87** | 796 | 869 | 8.41（8 threads） |
+| 8 | 8 | **9.99**（30 s 稳定性复跑） | 792 | 858 | — |
+
+结论：
+
+* **4 client / compute=4**：6.89 vs 旧 6.10（**+13%**）；**8 client / compute=8**：9.87–9.99 vs 旧 8.41
+  （**+17%~+19%**），也高于 aa7cd5ca 记录的通用 9.36。相对优化前的 2.51 / 5.51 仍是 **2.7× / 1.8×**。
+* **compute_threads ≥ clients** 的旧结论仍成立：8 client 在 compute=4 时饱和在 6.58（p95 1.42 s），
+  切到 compute=8 后升到 9.87（p95 0.87 s）。4 client 时 compute=4 与 8 基本同档（6.89 / 6.63，噪声内）。
+* **稳定性**：30 s × 8 client 共 305 次 complex-9，无错误、无连接断开（20 s 与 30 s 两次结果 9.87/9.99）。
+  本轮没有跑官方 driver 的长连接矩阵（见 §8 C1），长跑结论仍以那条为准。
+* **存储层微基准**（`tests/tools/concurrency_bench.cpp`：每线程独立事务，`Comment.creationDate`，
+  每线程 20,000 次查找，3 轮取 min）：8 线程 **15.80 M/s（小工作集）/ 14.23 M/s（大工作集）**，
+  旧记录为 4.88 M/s；1→2→4→8 线程为 3.09→5.96→10.32→15.80 M/s（小工作集），仍随线程数上升。
+  **口径提醒**：新实现的 point get 复用会话级 cursor（旧版每次 open/close），路径更短，
+  因此这个数字只能作方向性验证（没有并发退化），不能与 4.88 M/s 当作严格 A/B。
+  该工具在本轮之前已无法编译（`SessionPool::acquire(node)` 与 `store.close()` 均已删除），
+  本轮一并修复为当前 API。
+
+### 9.5 结论
+
+* **行数两引擎全部一致**（包括 complex-3 / complex-4 的 0 行）——A/B 可用的前提成立。
+* **绝对值**：15 条全部不高于旧文档（−2.2% ~ −25.5%）。跨会话绝对值受 CPU 频率影响，
+  只作方向参考；本轮同机 neo4j 的读数也比旧文档慢 10–30%，进一步说明不能拿“旧 neo4j / 新 eugraph”直接相减。
+* **相对差距全面收窄**：complex-3 21.4×→17.0×、complex-12 5.0×→3.6×、complex-10 8.9×→8.3×、
+  complex-2 5.8×→4.6×、complex-11 3.2×→2.4×、complex-8 2.4×→2.0×；short-4/5/6/7 分别快
+  72×/133×/54×/69×（旧文档 52×/93×/34×/48×）。short-1/3 仍略快于 neo4j，short-2 仍慢约 1.5×。
+* **剩余大头**仍是 complex-3（~17×）与 complex-12（~3.6×），形态与旧文档 §2.1 一致：
+  具名起点多跳 + 中间结果放大；没有因本轮重构而恶化。
+* **并发无回退、且优于旧基线**：complex-9 4/8 client 为 6.89 / 9.87–9.99 ops/s（旧 6.10 / 8.41），
+  详见 §9.4；存储层 8 线程 15.80 / 14.23 M/s（方向性）。
+* **数据计数差异**：neo4j 实例为 330,130 点 / 1,478,003 边，比原始语料多 2,542 点 / 38 边；
+  多出部分来自历史测试标签（`CT`、`CPerson`、`UT_*`、`M1*` 等），LDBC 相关标签计数与查询行数均一致，
+  不影响本轮对照。旧文档 eugraph 的 330,126 / 1,478,002 未在本轮复现；本轮以原始语料行数为准。
+
+**复现命令**：见 §7.3（A/B）、本轮 §9.1（loader）与 §9.4（`scripts/bench_bolt_qps.py`）；
+A/B 可用 `--json` 保存原始结果（本轮结果未入库）。

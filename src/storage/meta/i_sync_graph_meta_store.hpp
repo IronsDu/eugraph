@@ -10,22 +10,13 @@
 namespace eugraph {
 
 /// Synchronous graph metadata storage interface.
-/// Provides metadata raw KV operations and DDL for metadata-level management.
+///
+/// 连接由 `WtConnectionStore` 拥有 ✓；本接口只做元数据 KV 与管理类操作 ✓。
+/// 元数据是**管理类**访问（schema 变更 / 启动扫描 / ID 高水位持久化），
+/// 每次操作用单次 admin session ✓（与用户事务严格分离 ✓）。
 class ISyncGraphMetaStore {
 public:
     virtual ~ISyncGraphMetaStore() = default;
-
-    // ==================== Lifecycle ====================
-
-    virtual bool open(const std::string& db_path) = 0;
-    virtual void close() = 0;
-    virtual bool isOpen() const = 0;
-
-    // ==================== Transaction ====================
-
-    virtual GraphTxnHandle beginTransaction() = 0;
-    virtual bool commitTransaction(GraphTxnHandle txn) = 0;
-    virtual bool rollbackTransaction(GraphTxnHandle txn) = 0;
 
     // ==================== Metadata Raw KV ====================
 
@@ -34,18 +25,6 @@ public:
     virtual bool metadataDel(std::string_view key) = 0;
     virtual void metadataScan(std::string_view prefix,
                               const std::function<bool(std::string_view, std::string_view)>& callback) = 0;
-
-    // ==================== DDL ====================
-
-    virtual bool createLabel(LabelId label_id) = 0;
-    virtual bool dropLabel(LabelId label_id) = 0;
-    virtual bool createEdgeLabel(EdgeLabelId edge_label_id) = 0;
-    virtual bool addEdgeLabelProperties(EdgeLabelId edge_label_id, const std::vector<std::string>& prop_names) = 0;
-    virtual bool dropEdgeLabel(EdgeLabelId edge_label_id) = 0;
-
-    // ==================== Durability ====================
-
-    virtual bool checkpoint() = 0;
 };
 
 } // namespace eugraph

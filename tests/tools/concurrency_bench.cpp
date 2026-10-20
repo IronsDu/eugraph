@@ -8,12 +8,15 @@
 // 同时测两个工作集档位（小/大），用于区分：
 //   「小工作集（可驻留 cache）仍下降」= WT 内部争用
 //   「仅大工作集下降」                = 缓存/内存带宽
+#include "storage/data/session_pool.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/wt_connection_store.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <sys/resource.h>
 #include <thread>
@@ -44,8 +47,8 @@ struct RunResult {
     double cpu_us_per_lookup;
 };
 
-RunResult run_once(SyncGraphDataStore& store, LabelId label, uint16_t prop, const std::vector<VertexId>& vids,
-                   const Config& cfg, size_t per_thread, bool use_txn) {
+RunResult run_once(SyncGraphDataStore& store, SessionPool& pool, LabelId label, uint16_t prop,
+                   const std::vector<VertexId>& vids, const Config& cfg, size_t per_thread, bool use_txn) {
     std::atomic<size_t> hits{0};
     double cpu0 = procCpuSeconds();
     auto t0 = Clock::now();
@@ -53,15 +56,20 @@ RunResult run_once(SyncGraphDataStore& store, LabelId label, uint16_t prop, cons
     th.reserve(cfg.threads);
     for (int t = 0; t < cfg.threads; ++t) {
         th.emplace_back([&, t]() {
-            GraphTxnHandle txn = use_txn ? store.beginTransaction() : INVALID_GRAPH_TXN;
+            auto lease = pool.acquire();
             size_t local = 0;
-            for (size_t i = 0; i < per_thread; ++i) {
-                VertexId v = vids[(i + static_cast<size_t>(t) * 977) % cfg.working_set];
-                if (store.getVertexProperty(txn, v, label, prop).has_value())
-                    ++local;
+            if (lease) {
+                GraphSession& session = **lease;
+                if (use_txn && !session.begin_write())
+                    return;
+                for (size_t i = 0; i < per_thread; ++i) {
+                    VertexId v = vids[(i + static_cast<size_t>(t) * 977) % cfg.working_set];
+                    if (store.getVertexProperty(session, v, label, prop).has_value())
+                        ++local;
+                }
+                if (use_txn)
+                    (void)session.commit();
             }
-            if (use_txn)
-                store.commitTransaction(txn);
             hits.fetch_add(local);
         });
     }
@@ -84,18 +92,32 @@ int main(int argc, char** argv) {
     const size_t per_thread = argc > 4 ? std::stoul(argv[4]) : 20000;
     const int rounds = argc > 5 ? std::stoi(argv[5]) : 3;
 
-    SyncGraphDataStore store;
-    if (!store.open(dir)) {
+    WtConnectionStore conn;
+    if (!conn.open(dir)) {
         std::printf("open failed\n");
         return 1;
     }
+    SyncGraphDataStore store;
+    store.bind_connection(conn);
+    if (!store.ensure_tables()) {
+        std::printf("ensure tables failed\n");
+        return 1;
+    }
+    SessionPool pool(32, [&conn]() { return conn.make_session(); });
 
     std::vector<VertexId> all;
     all.reserve(60000);
-    store.scanVerticesByLabel(INVALID_GRAPH_TXN, label, [&](VertexId v) {
-        all.push_back(v);
-        return all.size() < 60000;
-    });
+    {
+        auto lease = pool.acquire();
+        if (!lease) {
+            std::printf("session pool exhausted\n");
+            return 1;
+        }
+        store.scanVerticesByLabel(**lease, label, [&](VertexId v) {
+            all.push_back(v);
+            return all.size() < 60000;
+        });
+    }
     if (all.empty()) {
         std::printf("no vids\n");
         return 1;
@@ -115,7 +137,7 @@ int main(int argc, char** argv) {
         for (int r = 0; r < rounds; ++r) {
             for (size_t k = 0; k < thread_counts.size(); ++k) {
                 Config cfg{thread_counts[k], ws};
-                RunResult rr = run_once(store, label, prop, all, cfg, per_thread, true);
+                RunResult rr = run_once(store, pool, label, prop, all, cfg, per_thread, true);
                 if (rr.wall_us_per_lookup < best[k]) {
                     best[k] = rr.wall_us_per_lookup;
                     best_cpu[k] = rr.cpu_us_per_lookup;
@@ -131,6 +153,5 @@ int main(int argc, char** argv) {
             std::printf("\n");
         }
     }
-    store.close();
     return 0;
 }

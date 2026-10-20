@@ -3,6 +3,11 @@
 > 适用：`bolt_python_driver_integration_tests` / `bolt_java_driver_integration_tests` /
 > `bolt_js_ws_driver_integration_tests`（三个官方驱动兼容性测试）。
 > 本文记录**测试设施**约定与一次完整排查的根因链，避免后续重复踩坑。
+>
+> **历史记录（2026-10）**：第二节保留当时的事务句柄/账本 API 名（`commitTran`、`txns_`、
+> `INVALID_GRAPH_TXN` 等）用于说明根因；这些机制已在会话池重构中**删除**，当前会话/事务模型见
+> [storage/session-cursor-pool-design.md](../storage/session-cursor-pool-design.md)。不要把本节
+> 的 API 名当作现行接口。
 
 ## 一、测试设施约定
 
@@ -80,7 +85,8 @@ connection: the process must exit and restart: WT_PANIC
 
 `GraphManager::dropGraph` 在锁外关闭 store；在飞协程可能仍持有该图 ⇒ 并发使用同一 WT 连接 ⇒
 `__conn_close … failure during close` ⇒ PANIC。**已修**：新增 `GraphUsageGate`（两阶段准入 +
-`close()` + `waitDrained()`），`GraphService::resolveGraph` 返回**租约**并在协程帧内持有，
+`close()` + `waitDrained()`），`GraphManager::acquireGraph` 在 shared_lock 内完成准入、
+`GraphService::resolveGraph` 返回**租约**并在协程帧内持有，
 `dropGraph` 改为 **关闸 → 等在飞归零（10s）→ 再关连接** ✓。
 
 ### 3.4 最终验收（本分支，`build/bolt-fix`）
@@ -92,13 +98,13 @@ connection: the process must exit and restart: WT_PANIC
 | Python 驱动测试连续两遍 | **36 passed / 36 passed** ✓ |
 | ctest 三个驱动测试 | **3/3 Passed**（py 6.06s / java 5.61s / js_ws 4.94s）✓ |
 
-## 四、取代关系（避免二次返工）
+## 四、与当前模型的关系
 
-本分支的两处产品侧改动将**被重构取代**（不必在此继续打磨 ✗）：
-
-* `GraphUsageGate`（§14.4 的排空）与 `commitTran` 的 `bool` 契约（§20.15 的 fail-fast）
-  ⇒ 将由 [session-cursor-pool-design.md](../storage/session-cursor-pool-design.md) 的
-  `IWriteTxn` / `TransactionGuard` / 资源管理器（§15/§16）统一取代 ✓；
+* `GraphUsageGate` **仍在使用**：`GraphService::GraphLease` 持使用租约，`StreamContext::graph_guard`
+  让图活到流销毁；DROP 仍走“关闸 → 等归零 → 关连接”。
+* 事务提交的 `bool` 契约已由 `GraphSession::commit()` 的 `TxnOutcome` + `StickyError` 取代：
+  提交失败会毒化会话且不会被静默忽略。当前模型见
+  [session-cursor-pool-design.md](../storage/session-cursor-pool-design.md)。
 * 本文件记录的是**排查方法与设施约定**（端口组、日志保留、退出码、进程组、磁盘余量预检 ✓），
   这些与重构无关、长期有效 ✓。
 

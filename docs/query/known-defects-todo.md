@@ -122,6 +122,11 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
 
 ## 8. `CREATE INDEX` 回填阶段 SIGSEGV，并留下空索引
 
+> **2026-10-20 状态**：当前分支**未复现**——`CREATE INDEX idx_message_id FOR (n:Message) ON (n.id)`
+> 正常完成并回填，short-4/5/6/7 点查 1.2–1.7 ms（见
+> [benchmark §9.1](../benchmark/ldbc-snb-sf0.1-comparison.md)）。下面保留 2026-09 的根因分析；
+> “回填分块提交 / 上线前校验条目数”仍待补。
+
 **现象**：在 135k–287k 行的大标签上执行 `CREATE INDEX` / `CREATE UNIQUE INDEX`，服务端日志：
 
 ```

@@ -18,7 +18,7 @@ EuGraph 采用 WiredTiger 多表隔离设计。每个标签（Label）拥有独�
 
 当前实现中，无标签顶点（如 `CREATE (n {name: 'Alice'})`）被分配一个内部隐藏标签 `__anon__`：
 
-- `GraphManager::openGraphInstance()` 启动时自动创建 `__anon__` 标签（`src/storage/graph_manager.cpp:220-233`）
+- `GraphManager::openGraphInstance()` 启动时自动创建 `__anon__` 标签（`src/graph/graph_manager.cpp:220-233`）
 - `Catalog::load()` 将 `__anon__` 从用户可见的标签映射中隐藏（`src/query/catalog/catalog.cpp:16-21`）
 - Binder 对无标签的 CREATE 节点自动使用 `catalog_.getAnonLabelId()`（`src/query/planner/binder/bind_mutation.cpp:33`）
 

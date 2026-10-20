@@ -28,10 +28,9 @@ int64_t nowMs() {
 /// Ends a query's transaction when its result stream is abandoned.
 ///
 /// Destroying a fbthrift stream destroys this generator's frame. Without this the
-/// statement's GraphTxnHandle would simply be dropped, leaving its WT session, its
-/// snapshot and any uncommitted writes alive for the life of the process -- enough
-/// abandoned streams and opening a session starts failing, after which queries
-/// silently lose transaction semantics. Same contract as
+/// statement's session lease would be returned without an explicit rollback; the
+/// pool does roll back on put, but destroying the operator tree first is what keeps
+/// its cursors from outliving the session. Same contract as
 /// BoltSession::abandonStream(), for the Thrift/RPC path.
 class StreamAbandonRollback {
 public:
@@ -40,16 +39,13 @@ public:
     ~StreamAbandonRollback() {
         if (!ctx_ || finished_)
             return;
-        const eugraph::GraphTxnHandle txn = ctx_->txn;
-        eugraph::IAsyncGraphDataStore& store = ctx_->store;
-        const bool rollback = ctx_->should_commit;
         // Order matters: destroy the operator tree (and the cursors it still holds)
-        // while the transaction is alive, then end the transaction.
+        // while the session is alive, then roll back the statement's transaction.
         ctx_->gen = folly::coro::AsyncGenerator<eugraph::DataChunk>{};
         ctx_->phys_op.reset();
+        if (ctx_->should_commit)
+            ctx_->rollback();
         ctx_.reset();
-        if (rollback && txn != eugraph::INVALID_GRAPH_TXN)
-            store.rollbackTranNow(txn);
     }
 
     /// The stream ran to completion and committed; there is nothing to roll back.
@@ -134,13 +130,9 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         total_rows += chunk_rows;
         co_yield std::move(thrift_batch);
     }
-    if (ctx->should_commit) {
-        const bool committed =
-            (ctx->txn == eugraph::INVALID_GRAPH_TXN) ? true : co_await ctx->store.commitTran(ctx->txn);
-        if (!committed) {
-            spdlog::error("[handler] 提交失败（存储引擎错误）⇒ 明确报错，绝不静默丢写入");
-            throw std::runtime_error("Transaction commit failed (storage engine error)");
-        }
+    if (!ctx->commit()) {
+        spdlog::error("[handler] 提交失败（存储引擎错误）⇒ 明确报错，绝不静默丢写入");
+        throw std::runtime_error("Transaction commit failed (storage engine error)");
     }
     abandon_rollback.markFinished();
     spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);

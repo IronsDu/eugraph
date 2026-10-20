@@ -61,63 +61,33 @@ public:
 
     /// Ends the current stream AND ends the transaction it still owns.
     ///
-    /// Dropping the stream's transaction handle without commit/rollback leaks its
-    /// WT session and snapshot for the lifetime of the process; enough of those and
-    /// opening a session starts failing, at which point queries silently lose
-    /// transaction semantics. So every path that abandons an unfinished stream
-    /// comes through here (Bolt teardown, DISCARD, RESET, GOODBYE, a new RUN, and
-    /// the error path).
+    /// Every path that abandons an unfinished stream comes through here (Bolt
+    /// teardown, DISCARD, RESET, GOODBYE, a new RUN, and the error path).
     ///
-    /// `rollback_explicit` also rolls back a parked explicit transaction: a dead
+    /// `rollback_explicit` also rolls back the explicit transaction: a dead
     /// connection, GOODBYE or RESET must not leave it behind, while DISCARD and a
     /// new RUN must keep it for the client's later COMMIT.
     ///
     /// Order matters: the operator tree (and the cursors it still holds) is
-    /// destroyed before the transaction is ended, never after -- ending the
-    /// transaction first frees the session those cursors live in.
+    /// destroyed before the session is ended, never after.
     void abandonStream(bool rollback_explicit) {
-        // Take the stream out first: endStream() drops it, but its transaction and
-        // store are exactly what has to be ended properly.
         std::shared_ptr<compute::StreamContext> ctx = std::move(stream_ctx_);
         endStream();
 
-        GraphTxnHandle stream_txn = INVALID_GRAPH_TXN;
         if (ctx) {
-            stream_txn = ctx->txn;
-            // Bound to the graph's store, which outlives the stream.
-            IAsyncGraphDataStore& store = ctx->store;
-            // A stream inside an explicit transaction has parked its statement
-            // transaction; unless the client is gone (or resetting), that one is
-            // still going to be committed.
-            const bool rollback = ctx->should_commit && (!in_transaction_ || rollback_explicit);
-            // Destroy the operator tree (closing the cursors it still holds) BEFORE
-            // ending the transaction: ending it first frees the session those cursors
-            // live in.
+            // 算子树/游标先销毁 ✓，再结束本语句的事务（自动提交语句 ✓）
+            ctx->gen = folly::coro::AsyncGenerator<DataChunk>{};
+            ctx->phys_op.reset();
+            if (ctx->session && ctx->should_commit)
+                ctx->rollback();
             ctx.reset();
-            if (rollback && stream_txn != INVALID_GRAPH_TXN)
-                store.rollbackTranNow(stream_txn);
         }
-        // A parked transaction has to be ended too when the client is gone -- but
-        // not twice, in case the stream was the one that parked it.
-        if (rollback_explicit && pending_txn_ != INVALID_GRAPH_TXN && pending_store_ && pending_txn_ != stream_txn) {
-            pending_store_->rollbackTranNow(pending_txn_);
+        if (rollback_explicit && explicit_txn_) {
+            explicit_txn_->session->rollback();
+            explicit_txn_.reset();
         }
-        if (rollback_explicit) {
-            pending_txn_ = INVALID_GRAPH_TXN;
-            pending_store_ = nullptr;
+        if (rollback_explicit)
             in_transaction_ = false;
-        }
-    }
-
-    /// Parks a statement transaction for the client's later COMMIT. The session
-    /// keeps a single pending handle, so a different handle already parked can
-    /// never be committed any more: its writes are invisible either way, but if it
-    /// is simply overwritten its session leaks, so end it here.
-    void parkTxn(GraphTxnHandle txn, IAsyncGraphDataStore& store) {
-        if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_ && pending_txn_ != txn)
-            pending_store_->rollbackTranNow(pending_txn_);
-        pending_txn_ = txn;
-        pending_store_ = &store;
     }
 
     /// True when the result being streamed must not be completed: either the client
@@ -196,10 +166,8 @@ private:
     // Explicit transaction state
     bool in_transaction_ = false;
 
-    // Pending transaction handle for explicit transactions (saved before
-    // stream_ctx_ is reset in PULL/DISCARD, committed/rolled back later).
-    GraphTxnHandle pending_txn_ = INVALID_GRAPH_TXN;
-    class IAsyncGraphDataStore* pending_store_ = nullptr;
+    // Explicit transaction (BEGIN…COMMIT): 一条语句一个会话租约，事务跨语句存活 ✓
+    std::optional<GraphService::SessionScope> explicit_txn_;
 
     // Current database name (from HELLO db field or RUN extra metadata)
     std::string current_database_ = "default";

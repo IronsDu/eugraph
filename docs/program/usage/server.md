@@ -1,6 +1,6 @@
 # Server 使用指南
 
-> [当前实现] 参见 [README.md](../README.md) 返回文档导航
+> [当前实现] 参见 [README.md](../../README.md) 返回文档导航
 
 ---
 

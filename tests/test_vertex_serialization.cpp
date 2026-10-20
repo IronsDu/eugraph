@@ -1,12 +1,12 @@
 #include <gtest/gtest.h>
 
 #include "common/types/graph_types.hpp"
+#include "graph/graph_manager.hpp"
 #include "query/dataset/row.hpp"
 #include "service/graph_service.hpp"
 #include "service/thrift/eugraph_handler.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
-#include "storage/graph_manager.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"

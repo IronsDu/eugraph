@@ -5,6 +5,7 @@
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/meta_codec.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "test_sync_store.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -27,7 +28,7 @@ PropertyDef prop(const std::string& name, PropertyType type, bool required = fal
 class MetadataServiceTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<test::TestSyncGraphMetaStore> sync_meta_;
     std::unique_ptr<IoScheduler> io_scheduler_;
     std::unique_ptr<AsyncGraphMetaStore> async_meta_;
 
@@ -36,7 +37,7 @@ protected:
         std::filesystem::remove_all(db_path_);
         std::filesystem::create_directories(db_path_ + "/meta");
 
-        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        sync_meta_ = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
@@ -273,7 +274,7 @@ TEST_F(MetadataServiceTest, PersistenceAcrossRestart) {
     sync_meta_->close();
 
     // Reopen
-    sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+    sync_meta_ = std::make_unique<test::TestSyncGraphMetaStore>();
     ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
     async_meta_ = std::make_unique<AsyncGraphMetaStore>();
     io_scheduler_ = std::make_unique<IoScheduler>(2);
@@ -420,4 +421,37 @@ TEST(MetadataCodecTest, PropertyValueAllTypes) {
     testRoundTrip(PropertyValue(std::vector<int64_t>{1, 2, 3}));
     testRoundTrip(PropertyValue(std::vector<double>{1.1, 2.2}));
     testRoundTrip(PropertyValue(std::vector<std::string>{"a", "bb", "ccc"}));
+}
+
+// ==================== Persistence failure ====================
+
+namespace {
+
+/// 所有元数据写入都失败的 store（读取为空）⇒ createLabel 必须失败且不得更新内存 schema。
+class FailingMetaStore final : public ISyncGraphMetaStore {
+public:
+    bool metadataPut(std::string_view, std::string_view) override {
+        return false;
+    }
+    std::optional<std::string> metadataGet(std::string_view) override {
+        return std::nullopt;
+    }
+    bool metadataDel(std::string_view) override {
+        return false;
+    }
+    void metadataScan(std::string_view, const std::function<bool(std::string_view, std::string_view)>&) override {}
+};
+
+} // namespace
+
+TEST(MetadataPersistenceTest, CreateLabelFailsWhenMetadataWriteFails) {
+    FailingMetaStore store;
+    IoScheduler io(2);
+    AsyncGraphMetaStore meta;
+    ASSERT_TRUE(blockingWait(meta.open(store, io)));
+
+    EXPECT_THROW(blockingWait(meta.createLabel("Person")), std::runtime_error);
+    EXPECT_FALSE(blockingWait(meta.getLabelId("Person")).has_value()) << "持久化失败后不得把 label 留在内存 schema 中";
+
+    blockingWait(meta.close());
 }

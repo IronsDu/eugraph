@@ -1,6 +1,6 @@
 #pragma once
 
-#include "storage/graph_schema.hpp"
+#include "common/schema/graph_schema.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
@@ -99,7 +99,7 @@ private:
     folly::coro::Mutex refill_mu_;
 
     // Lightweight __anon__ prop_id allocation
-    std::mutex anon_prop_mu_;
+    folly::coro::Mutex anon_prop_mu_;
     std::unordered_map<std::string, uint16_t> anon_prop_cache_;
 };
 

@@ -37,17 +37,4 @@ WtSession& WtSession::operator=(WtSession&& other) noexcept {
     return *this;
 }
 
-WtCursor WtSession::openCursor(const std::string& table_name) {
-    return WtCursor(session_, table_name);
-}
-
-bool WtSession::createTable(const char* name, const char* config) {
-    int ret = session_->create(session_, name, config);
-    if (ret != 0 && ret != EBUSY) {
-        spdlog::error("Failed to create table {}: error {}", name, ret);
-        return false;
-    }
-    return true;
-}
-
 } // namespace eugraph

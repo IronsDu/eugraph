@@ -1,6 +1,6 @@
 # CSV Loader 使用指南
 
-> [当前实现] 参见 [README.md](../README.md) 返回文档导航
+> [当前实现] 参见 [README.md](../../README.md) 返回文档导航
 
 批量 CSV 数据装载工具（`eugraph-loader`），通过 RPC 连接 eugraph server，将 CSV 数据导入图数据库。
 

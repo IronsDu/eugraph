@@ -69,8 +69,10 @@ namespace {
 
 void persistLabelDef(ISyncGraphMetaStore& store, const LabelDef& def) {
     auto encoded = MetadataCodec::encodeLabelDef(def);
-    store.metadataPut(std::string("M|label:") + def.name, encoded);
-    store.metadataPut(std::string("M|label_id:") + std::to_string(def.id), encoded);
+    const bool ok = store.metadataPut(std::string("M|label:") + def.name, encoded) &&
+                    store.metadataPut(std::string("M|label_id:") + std::to_string(def.id), encoded);
+    if (!ok)
+        throw std::runtime_error("Failed to persist label definition '" + def.name + "'");
 }
 
 } // namespace
@@ -115,7 +117,12 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
                 auto& s = store_->get();
                 auto& i = io_->get();
                 const LabelDef snapshot = def;
-                co_await i.dispatchVoid([&s, &snapshot]() { persistLabelDef(s, snapshot); });
+                try {
+                    co_await i.dispatchVoid([&s, &snapshot]() { persistLabelDef(s, snapshot); });
+                } catch (...) {
+                    schema_.labels[existing_id] = before; // 持久化失败 ⇒ 回滚内存 schema ✓
+                    throw;
+                }
                 spdlog::info("Merged properties into label '{}' ({} -> {} properties)", name, before.properties.size(),
                              snapshot.properties.size());
             }
@@ -181,10 +188,10 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
     std::string name_key = std::string("M|label:") + name;
     std::string id_key = std::string("M|label_id:") + std::to_string(id);
 
-    co_await i.dispatchVoid([&]() {
-        s.metadataPut(name_key, encoded);
-        s.metadataPut(id_key, encoded);
-    });
+    const bool persisted =
+        co_await i.dispatch([&]() { return s.metadataPut(name_key, encoded) && s.metadataPut(id_key, encoded); });
+    if (!persisted)
+        throw std::runtime_error("Failed to persist label definition '" + name + "'");
     co_await saveNextIds();
 
     // NOTE: No longer calls store.createLabel(id) — data table creation is the handler's responsibility.
@@ -202,8 +209,10 @@ namespace {
 
 void persistEdgeLabelDef(ISyncGraphMetaStore& store, const EdgeLabelDef& def) {
     auto encoded = MetadataCodec::encodeEdgeLabelDef(def);
-    store.metadataPut(std::string("M|edge_label:") + def.name, encoded);
-    store.metadataPut(std::string("M|edge_label_id:") + std::to_string(def.id), encoded);
+    const bool ok = store.metadataPut(std::string("M|edge_label:") + def.name, encoded) &&
+                    store.metadataPut(std::string("M|edge_label_id:") + std::to_string(def.id), encoded);
+    if (!ok)
+        throw std::runtime_error("Failed to persist edge label definition '" + def.name + "'");
 }
 
 std::optional<uint16_t> findPropId(const std::vector<PropertyDef>& props, const std::string& name) {
@@ -289,30 +298,37 @@ AsyncGraphMetaStore::createVertexIndexWithAccessors(const std::string& name, con
         }
     }
 
+    const LabelDef before_label = schema_.labels[label_opt->id];
     schema_.labels[label_opt->id].indexes.push_back(idx_def);
 
     auto& s = store_->get();
     auto& i = io_->get();
-    co_await i.dispatchVoid([&]() {
-        persistLabelDef(s, schema_.labels[label_opt->id]);
-        std::string idx_key = std::string("M|index:") + name;
-        std::string idx_val;
-        idx_val.push_back(static_cast<char>(label_opt->id >> 8));
-        idx_val.push_back(static_cast<char>(label_opt->id & 0xFF));
-        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(idx_def.accessors.size()) >> 8));
-        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(idx_def.accessors.size()) & 0xFF));
-        for (const auto& acc : idx_def.accessors) {
-            idx_val.push_back(static_cast<char>(acc.is_strong ? 1 : 0));
-            idx_val.push_back(static_cast<char>(acc.source_label_id >> 8));
-            idx_val.push_back(static_cast<char>(acc.source_label_id & 0xFF));
-            idx_val.push_back(static_cast<char>(acc.property_name.size()));
-            for (unsigned char ch : acc.property_name)
-                idx_val.push_back(static_cast<char>(ch));
-        }
-        idx_val.push_back(static_cast<char>(0)); // is_edge = false
-        s.metadataPut(idx_key, idx_val);
-    });
-    co_await saveNextIds();
+    try {
+        co_await i.dispatchVoid([&]() {
+            persistLabelDef(s, schema_.labels[label_opt->id]);
+            std::string idx_key = std::string("M|index:") + name;
+            std::string idx_val;
+            idx_val.push_back(static_cast<char>(label_opt->id >> 8));
+            idx_val.push_back(static_cast<char>(label_opt->id & 0xFF));
+            idx_val.push_back(static_cast<char>(static_cast<uint16_t>(idx_def.accessors.size()) >> 8));
+            idx_val.push_back(static_cast<char>(static_cast<uint16_t>(idx_def.accessors.size()) & 0xFF));
+            for (const auto& acc : idx_def.accessors) {
+                idx_val.push_back(static_cast<char>(acc.is_strong ? 1 : 0));
+                idx_val.push_back(static_cast<char>(acc.source_label_id >> 8));
+                idx_val.push_back(static_cast<char>(acc.source_label_id & 0xFF));
+                idx_val.push_back(static_cast<char>(acc.property_name.size()));
+                for (unsigned char ch : acc.property_name)
+                    idx_val.push_back(static_cast<char>(ch));
+            }
+            idx_val.push_back(static_cast<char>(0)); // is_edge = false
+            if (!s.metadataPut(idx_key, idx_val))
+                throw std::runtime_error("Failed to persist index definition '" + name + "'");
+        });
+        co_await saveNextIds();
+    } catch (...) {
+        schema_.labels[label_opt->id] = before_label;
+        throw;
+    }
 
     std::string prop_list;
     for (size_t i = 0; i < idx_def.accessors.size(); ++i) {
@@ -361,25 +377,32 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
     idx_def.unique = unique;
     idx_def.state = IndexState::WRITE_ONLY;
 
+    const EdgeLabelDef before_elabel = schema_.edge_labels[elabel_opt->id];
     schema_.edge_labels[elabel_opt->id].indexes.push_back(idx_def);
 
     auto& s = store_->get();
     auto& i = io_->get();
-    co_await i.dispatchVoid([&]() {
-        persistEdgeLabelDef(s, schema_.edge_labels[elabel_opt->id]);
-        std::string idx_key = std::string("M|index:") + name;
-        std::string idx_val;
-        idx_val.push_back(static_cast<char>(elabel_opt->id >> 8));
-        idx_val.push_back(static_cast<char>(elabel_opt->id & 0xFF));
-        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) >> 8));
-        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) & 0xFF));
-        for (auto pid : new_prop_ids) {
-            idx_val.push_back(static_cast<char>(pid >> 8));
-            idx_val.push_back(static_cast<char>(pid & 0xFF));
-        }
-        idx_val.push_back(static_cast<char>(1)); // is_edge = true
-        s.metadataPut(idx_key, idx_val);
-    });
+    try {
+        co_await i.dispatchVoid([&]() {
+            persistEdgeLabelDef(s, schema_.edge_labels[elabel_opt->id]);
+            std::string idx_key = std::string("M|index:") + name;
+            std::string idx_val;
+            idx_val.push_back(static_cast<char>(elabel_opt->id >> 8));
+            idx_val.push_back(static_cast<char>(elabel_opt->id & 0xFF));
+            idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) >> 8));
+            idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) & 0xFF));
+            for (auto pid : new_prop_ids) {
+                idx_val.push_back(static_cast<char>(pid >> 8));
+                idx_val.push_back(static_cast<char>(pid & 0xFF));
+            }
+            idx_val.push_back(static_cast<char>(1)); // is_edge = true
+            if (!s.metadataPut(idx_key, idx_val))
+                throw std::runtime_error("Failed to persist edge index definition '" + name + "'");
+        });
+    } catch (...) {
+        schema_.edge_labels[elabel_opt->id] = before_elabel;
+        throw;
+    }
 
     std::string edge_prop_list;
     for (size_t i = 0; i < prop_names.size(); ++i) {
@@ -397,8 +420,14 @@ folly::coro::Task<bool> AsyncGraphMetaStore::updateIndexState(const std::string&
     for (auto& [lid, label] : schema_.labels) {
         for (auto& idx : label.indexes) {
             if (idx.name == name) {
+                const IndexState before = idx.state;
                 idx.state = new_state;
-                co_await i.dispatchVoid([&]() { persistLabelDef(s, label); });
+                try {
+                    co_await i.dispatchVoid([&]() { persistLabelDef(s, label); });
+                } catch (...) {
+                    idx.state = before;
+                    throw;
+                }
                 co_return true;
             }
         }
@@ -406,8 +435,14 @@ folly::coro::Task<bool> AsyncGraphMetaStore::updateIndexState(const std::string&
     for (auto& [elid, elabel] : schema_.edge_labels) {
         for (auto& idx : elabel.indexes) {
             if (idx.name == name) {
+                const IndexState before = idx.state;
                 idx.state = new_state;
-                co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, elabel); });
+                try {
+                    co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, elabel); });
+                } catch (...) {
+                    idx.state = before;
+                    throw;
+                }
                 co_return true;
             }
         }
@@ -422,11 +457,18 @@ folly::coro::Task<bool> AsyncGraphMetaStore::dropIndex(const std::string& name) 
     for (auto& [lid, label] : schema_.labels) {
         for (auto it = label.indexes.begin(); it != label.indexes.end(); ++it) {
             if (it->name == name) {
+                const LabelDef before = label;
                 label.indexes.erase(it);
-                co_await i.dispatchVoid([&]() {
-                    persistLabelDef(s, label);
-                    s.metadataDel(std::string("M|index:") + name);
-                });
+                try {
+                    co_await i.dispatchVoid([&]() {
+                        persistLabelDef(s, label);
+                        if (!s.metadataDel(std::string("M|index:") + name))
+                            throw std::runtime_error("Failed to delete index metadata '" + name + "'");
+                    });
+                } catch (...) {
+                    schema_.labels[lid] = before;
+                    throw;
+                }
                 co_return true;
             }
         }
@@ -434,11 +476,18 @@ folly::coro::Task<bool> AsyncGraphMetaStore::dropIndex(const std::string& name) 
     for (auto& [elid, elabel] : schema_.edge_labels) {
         for (auto it = elabel.indexes.begin(); it != elabel.indexes.end(); ++it) {
             if (it->name == name) {
+                const EdgeLabelDef before = elabel;
                 elabel.indexes.erase(it);
-                co_await i.dispatchVoid([&]() {
-                    persistEdgeLabelDef(s, elabel);
-                    s.metadataDel(std::string("M|index:") + name);
-                });
+                try {
+                    co_await i.dispatchVoid([&]() {
+                        persistEdgeLabelDef(s, elabel);
+                        if (!s.metadataDel(std::string("M|index:") + name))
+                            throw std::runtime_error("Failed to delete index metadata '" + name + "'");
+                    });
+                } catch (...) {
+                    schema_.edge_labels[elid] = before;
+                    throw;
+                }
                 co_return true;
             }
         }
@@ -563,10 +612,10 @@ folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::s
     std::string name_key = std::string("M|edge_label:") + name;
     std::string id_key = std::string("M|edge_label_id:") + std::to_string(id);
 
-    co_await i.dispatchVoid([&]() {
-        s.metadataPut(name_key, encoded);
-        s.metadataPut(id_key, encoded);
-    });
+    const bool persisted =
+        co_await i.dispatch([&]() { return s.metadataPut(name_key, encoded) && s.metadataPut(id_key, encoded); });
+    if (!persisted)
+        throw std::runtime_error("Failed to persist edge label definition '" + name + "'");
     co_await saveNextIds();
 
     // NOTE: No longer calls store.createEdgeLabel(id).
@@ -587,6 +636,7 @@ AsyncGraphMetaStore::addVertexLabelProperties(const std::string& name,
         co_return false;
     }
     auto& def = schema_.labels[label_opt->id];
+    const LabelDef before = def;
     uint16_t next_prop_id = static_cast<uint16_t>(def.properties.size());
     for (const auto& [pname, ptype] : prop_defs) {
         if (findPropId(def.properties, pname)) {
@@ -602,7 +652,12 @@ AsyncGraphMetaStore::addVertexLabelProperties(const std::string& name,
 
     auto& s = store_->get();
     auto& i = io_->get();
-    co_await i.dispatchVoid([&]() { persistLabelDef(s, def); });
+    try {
+        co_await i.dispatchVoid([&]() { persistLabelDef(s, def); });
+    } catch (...) {
+        schema_.labels[label_opt->id] = before;
+        throw;
+    }
 
     spdlog::info("Added {} properties to label '{}'", prop_defs.size(), name);
     co_return true;
@@ -617,6 +672,7 @@ AsyncGraphMetaStore::addEdgeLabelProperties(const std::string& name,
         co_return false;
     }
     auto& def = schema_.edge_labels[label_opt->id];
+    const EdgeLabelDef before = def;
     uint16_t next_prop_id = static_cast<uint16_t>(def.properties.size());
     for (const auto& [pname, ptype] : prop_defs) {
         if (findPropId(def.properties, pname)) {
@@ -632,7 +688,12 @@ AsyncGraphMetaStore::addEdgeLabelProperties(const std::string& name,
 
     auto& s = store_->get();
     auto& i = io_->get();
-    co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, def); });
+    try {
+        co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, def); });
+    } catch (...) {
+        schema_.edge_labels[label_opt->id] = before;
+        throw;
+    }
 
     spdlog::info("Added {} properties to edge_label '{}'", prop_defs.size(), name);
     co_return true;
@@ -768,7 +829,7 @@ folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std
     auto& def = schema_.labels[anon_id];
 
     {
-        std::lock_guard lock(anon_prop_mu_);
+        auto lock = co_await anon_prop_mu_.co_scoped_lock();
         // LabelDef is the primary source of truth for property IDs.
         // The cache was removed: stale entries from a previous
         // scenario could persist a property-id order that differs from
@@ -781,6 +842,7 @@ folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std
         }
 
         // Allocate new prop_id — LabelDef order preserves creation order.
+        const LabelDef before = def;
         uint16_t new_id = static_cast<uint16_t>(def.properties.size());
         PropertyDef pd;
         pd.id = new_id;
@@ -788,10 +850,14 @@ folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std
         pd.type = prop_type;
         def.properties.push_back(std::move(pd));
 
-        // Async persist (fire-and-forget)
         auto& s = store_->get();
         auto& i = io_->get();
-        co_await i.dispatchVoid([&s, &def]() { persistLabelDef(s, def); });
+        try {
+            co_await i.dispatchVoid([&s, &def]() { persistLabelDef(s, def); });
+        } catch (...) {
+            schema_.labels[anon_id] = before;
+            throw;
+        }
 
         co_return new_id;
     }
@@ -844,12 +910,14 @@ folly::coro::Task<void> AsyncGraphMetaStore::refillEdgeIdCache(uint64_t count) {
 }
 
 folly::coro::Task<void> AsyncGraphMetaStore::saveNextIds() {
-    co_await io_->get().dispatchVoid([this]() {
+    const bool persisted = co_await io_->get().dispatch([this]() {
         std::lock_guard<std::mutex> lock(id_mu_);
         auto encoded = MetadataCodec::encodeNextIds(schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
                                                     schema_.next_edge_label_id, schema_.next_index_id);
-        store_->get().metadataPut("M|next_ids", encoded);
+        return store_->get().metadataPut("M|next_ids", encoded);
     });
+    if (!persisted)
+        throw std::runtime_error("Failed to persist next ids");
 }
 
 } // namespace eugraph

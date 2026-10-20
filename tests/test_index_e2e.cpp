@@ -7,9 +7,11 @@
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
+#include "storage/kv/value_codec.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
 #include "test_chunk_helpers.hpp"
+#include "test_sync_store.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -28,16 +30,18 @@ std::string makeTempDir(const std::string& suffix) {
 
 struct TestEnv {
     std::string db_path;
-    std::unique_ptr<SyncGraphDataStore> data_store;
-    std::unique_ptr<SyncGraphMetaStore> meta_store;
+    std::unique_ptr<test::TestSyncGraphDataStore> data_store;
+    std::unique_ptr<test::TestSyncGraphMetaStore> meta_store;
+    std::shared_ptr<SessionPool> session_pool;
     std::unique_ptr<IoScheduler> io;
     std::unique_ptr<AsyncGraphMetaStore> async_meta;
+    std::unique_ptr<GraphSession> async_session;
     std::unique_ptr<AsyncGraphDataStore> async_data;
 
     void init(const std::string& name) {
         db_path = makeTempDir(name);
-        data_store = std::make_unique<SyncGraphDataStore>();
-        meta_store = std::make_unique<SyncGraphMetaStore>();
+        data_store = std::make_unique<test::TestSyncGraphDataStore>();
+        meta_store = std::make_unique<test::TestSyncGraphMetaStore>();
         ASSERT_TRUE(data_store->open(db_path + "/data"));
         ASSERT_TRUE(meta_store->open(db_path + "/meta"));
 
@@ -47,14 +51,18 @@ struct TestEnv {
         auto ok = blockingWait(async_meta->open(*meta_store, *io));
         ASSERT_TRUE(ok);
 
-        async_data = std::make_unique<AsyncGraphDataStore>(*data_store, *io);
+        async_session = std::make_unique<GraphSession>(data_store->conn().make_session());
+        async_data = std::make_unique<AsyncGraphDataStore>(*data_store, *io, *async_session);
+        session_pool = std::make_shared<SessionPool>(8, [this]() { return data_store->conn().make_session(); });
     }
 
     void shutdown() {
         async_data.reset();
+        async_session.reset();
         blockingWait(async_meta->close());
         async_meta.reset();
         io.reset();
+        session_pool.reset(); // ★ 会话先于连接销毁 ✓
         data_store->close();
         meta_store->close();
         std::filesystem::remove_all(db_path);
@@ -74,6 +82,14 @@ protected:
     }
 };
 
+// 把 AsyncGenerator<vector<T>> 全部消费掉并计数（不保留结果 ⇒ 只验证流式扫描不丢条）
+template <typename T> size_t drain_batches(folly::coro::AsyncGenerator<std::vector<T>> gen) {
+    size_t count = 0;
+    while (auto batch = blockingWait(gen.next()))
+        count += batch->size();
+    return count;
+}
+
 // Helper: drain prepareStream into ExecutionResult
 static ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
     auto ctx = blockingWait(executor.prepareStream(query));
@@ -92,7 +108,7 @@ static ExecutionResult execSync(QueryExecutor& executor, const std::string& quer
             }
         }
         if (ctx->should_commit) {
-            co_await ctx->store.commitTran(ctx->txn);
+            ctx->commit();
         }
     }));
     return result;
@@ -115,7 +131,7 @@ static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& que
             }
         }
         if (ctx->should_commit) {
-            co_await ctx->store.commitTran(ctx->txn);
+            ctx->commit();
         }
     }));
     return result.rows;
@@ -214,7 +230,7 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
     }
 
     // Now query with WHERE n.age = 30 — should use index scan
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 30 RETURN n");
 
     ASSERT_EQ(rows.size(), 1u);
@@ -236,7 +252,7 @@ TEST_F(IndexE2ETest, QueryWithoutIndexUsesLabelScan) {
     ASSERT_TRUE(label_def.has_value());
 
     // Insert data via Cypher
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     runQuery(executor, "CREATE (n:Person {name: 'alice', age: 25})");
     runQuery(executor, "CREATE (n:Person {name: 'bob', age: 30})");
 
@@ -400,7 +416,7 @@ TEST_F(IndexE2ETest, DdlCreateIndexViaExecutor) {
                     {0, "age", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto result = execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
 
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -422,7 +438,7 @@ TEST_F(IndexE2ETest, DdlShowIndexesViaExecutor) {
                     {0, "age", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // No indexes initially
     auto result = execSync(executor, "SHOW INDEXES");
@@ -451,7 +467,7 @@ TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
                     {0, "age", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
 
     // Drop it
@@ -465,7 +481,7 @@ TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
 }
 
 TEST_F(IndexE2ETest, DdlCreateIndexLabelNotFound) {
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto result = execSync(executor, "CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("Label not found"), std::string::npos);
@@ -478,7 +494,7 @@ TEST_F(IndexE2ETest, DdlCreateWeakIndexBackfillAcrossLabels) {
                     {0, "creationDate", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
 
@@ -515,7 +531,7 @@ TEST_F(IndexE2ETest, WeakIndexMaintainsOnLabelAddRemove) {
                     {0, "creationDate", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
@@ -562,7 +578,7 @@ TEST_F(IndexE2ETest, WeakIndexMaintainsOnPropertySetRemove) {
                     {0, "creationDate", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
@@ -613,7 +629,7 @@ TEST_F(IndexE2ETest, WeakIndexRemovedOnVertexDelete) {
                     {0, "creationDate", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
@@ -646,7 +662,7 @@ TEST_F(IndexE2ETest, EdgeIndexMaintainsOnPropertySetRemove) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (a:Person {name:'alice'}), (b:Person {name:'bob'}), "
                                      "(a)-[:KNOWS {since:123}]->(b)");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -696,7 +712,7 @@ TEST_F(IndexE2ETest, UniqueIndexSetRollsBackProperty) {
                     {0, "name", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_person_name FOR (n:Person) ON (n.name)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
     auto create = execSync(executor, "CREATE (a:Person {name:'alice'}), (b:Person {name:'bob'})");
@@ -725,7 +741,7 @@ TEST_F(IndexE2ETest, WeakIndexUsedWhenNodeCreatedAfterIndex) {
                     {0, "id", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_id FOR (n:Message) ON (n.id)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
@@ -745,7 +761,7 @@ TEST_F(IndexE2ETest, StrongIndexPointLookup) {
                     {0, "creationDate", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_pdate FOR (n:Message) ON (n::Post.creationDate)");
@@ -765,7 +781,7 @@ TEST_F(IndexE2ETest, MixedStrongWeakCompositeIndexQuery) {
                     {1, "browserUsed", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123, browserUsed: 'Firefox'})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_mix FOR (n:Message) ON "
@@ -786,7 +802,7 @@ TEST_F(IndexE2ETest, StrongIndexRejectsMissingSourceProperty) {
                     {0, "creationDate", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_bad FOR (n:Message) ON (n::Post.missing)");
     EXPECT_FALSE(ddl.error.empty());
 }
@@ -824,7 +840,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillConflictSetsError) {
     ASSERT_TRUE(env.data_store->insertVertex(txn, 1, label_props));
     env.data_store->commitTransaction(txn);
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
     EXPECT_FALSE(ddl.error.empty());
     EXPECT_NE(ddl.error.find("conflicting"), std::string::npos);
@@ -841,7 +857,7 @@ TEST_F(IndexE2ETest, DdlCreateStrongIndexBackfill) {
                     {0, "creationDate", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
 
@@ -873,7 +889,7 @@ TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
                     {0, "age", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Insert data
     runQuery(executor, "CREATE (n:Person {name: 'alice', age: 25})");
@@ -907,7 +923,7 @@ TEST_F(IndexE2ETest, DdlCreateDuplicateIndex) {
                     {0, "age", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // First index on name should succeed
     auto result = execSync(executor, "CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
@@ -934,7 +950,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithDuplicateData) {
                     {0, "name", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Insert two vertices with the same name
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
@@ -957,7 +973,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithUniqueData) {
                     {0, "name", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Insert two vertices with different names
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
@@ -982,7 +998,7 @@ TEST_F(IndexE2ETest, InsertDuplicateValueOnUniqueIndex) {
                     {0, "name", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Create unique index on clean data
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
@@ -1037,7 +1053,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeIndexViaExecutor) {
                     {0, "city", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Insert some data first
     runQuery(executor, "CREATE (n:Person {name: 'alice', age: 30, city: 'NYC'})");
@@ -1075,7 +1091,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeUniqueIndexNoConflict) {
                     {0, "email", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Insert data with unique (id, email) pairs
     runQuery(executor, "CREATE (n:User {id: 1, email: 'a@b.com'})");
@@ -1099,7 +1115,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeUniqueIndexDuplicate) {
                     {0, "email", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Insert two vertices with the same (id, email) pair
     runQuery(executor, "CREATE (n:User {id: 1, email: 'dup@test.com'})");
@@ -1123,7 +1139,7 @@ TEST_F(IndexE2ETest, InsertViolatesCompositeUniqueConstraint) {
                     {0, "email", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     // Create composite unique index on clean data
     runQuery(executor, "CREATE (n:User {id: 1, email: 'a@b.com'})");
@@ -1146,7 +1162,7 @@ TEST_F(IndexE2ETest, ShowCompositeIndex) {
                     {0, "age", PropertyType::INT64, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     execSync(executor, "CREATE INDEX idx_age_name FOR (n:Person) ON (n.age, n.name)");
 
@@ -1172,7 +1188,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexViaExecutor) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     auto result = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1191,7 +1207,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexLabelNotFound) {
                     {0, "name", PropertyType::STRING, false, std::nullopt},
                 });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     auto result = execSync(executor, "CREATE INDEX idx_bad FOR ()-[r:NONEXISTENT]-() ON (r.prop)");
     EXPECT_FALSE(result.error.empty());
@@ -1208,7 +1224,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexPropertyNotFound) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     auto result = execSync(executor, "CREATE INDEX idx_bad FOR ()-[r:KNOWS]-() ON (r.nonexistent)");
     EXPECT_FALSE(result.error.empty());
@@ -1225,7 +1241,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexBackfill) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     runQuery(executor, "CREATE (n:Person {name: 'Alice'})");
     runQuery(executor, "CREATE (n:Person {name: 'Bob'})");
@@ -1249,7 +1265,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueEdgeIndexNoConflict) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     auto result = execSync(executor, "CREATE UNIQUE INDEX idx_uknows_since FOR ()-[r:KNOWS]-() ON (r.since)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1270,7 +1286,7 @@ TEST_F(IndexE2ETest, ShowEdgeIndexes) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
 
     auto result = execSync(executor, "SHOW INDEXES");
@@ -1293,7 +1309,7 @@ TEST_F(IndexE2ETest, DropEdgeIndex) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
 
     auto drop_result = execSync(executor, "DROP INDEX idx_knows_since");
@@ -1314,7 +1330,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeEdgeIndex) {
                         {0, "weight", PropertyType::DOUBLE, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     auto result = execSync(executor, "CREATE INDEX idx_knows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1340,7 +1356,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeUniqueEdgeIndex) {
                         {0, "weight", PropertyType::DOUBLE, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     auto result = execSync(executor, "CREATE UNIQUE INDEX idx_uknows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1361,7 +1377,7 @@ TEST_F(IndexE2ETest, DdlCreateDuplicateEdgeIndex) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
     auto result = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
@@ -1389,7 +1405,7 @@ TEST_F(IndexE2ETest, WeakIndexPointLookupWithDisagreeingSourcePropIds) {
                  {2, "id", PropertyType::INT64, false, std::nullopt}});
     createLabel(env, "Message", {});
 
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     ASSERT_TRUE(execSync(executor, "CREATE (n:Comment:Message {id: 7, content: 'hi'})").error.empty());
     ASSERT_TRUE(
         execSync(executor, "CREATE (n:Post:Message {imageFile: 'p.jpg', language: 'en', id: 7})").error.empty());
@@ -1427,7 +1443,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillAcrossTwoSourceLabels) {
                  {1, "language", PropertyType::STRING, false, std::nullopt},
                  {2, "id", PropertyType::INT64, false, std::nullopt}});
     createLabel(env, "Message", {});
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
     ASSERT_TRUE(execSync(executor, "CREATE (n:Comment:Message {id: 7, content: 'hi'})").error.empty());
     ASSERT_TRUE(
         execSync(executor, "CREATE (n:Post:Message {imageFile: 'p.jpg', language: 'en', id: 7})").error.empty());
@@ -1471,7 +1487,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
                 {{0, "id", PropertyType::INT64, false, std::nullopt},
                  {1, "content", PropertyType::STRING, false, std::nullopt}});
     createLabel(env, "Message", {});
-    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
 
     const int N = 3000;
     for (int i = 0; i < N; ++i) {
@@ -1494,4 +1510,83 @@ TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
     env.data_store->commitTransaction(txn);
     std::printf("[scale] N=%d 索引命中=%zu（期望 %d）\n", N, hits, N);
     EXPECT_EQ(hits, static_cast<size_t>(N)) << "回填不完整";
+}
+
+// ==================== 索引扫描流式回归（结果数 > BATCH 1024）====================
+
+TEST_F(IndexE2ETest, VertexIndexEqualityScanStreamsBeyondBatch) {
+    constexpr size_t N = 3000; // > 1024
+    auto lid =
+        blockingWait(env.async_meta->createLabel("Bulk", {PropertyDef{0, "k", PropertyType::STRING, false, {}}}));
+    ASSERT_NE(lid, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(env.async_data->createLabel(lid)));
+    const std::string table = vidxTable(lid, 0);
+    ASSERT_TRUE(env.data_store->createIndex(table));
+
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    for (size_t i = 0; i < N; ++i)
+        ASSERT_TRUE(env.data_store->insertIndexEntry(session, table, std::string("dup"), i));
+    ASSERT_TRUE(session.commit().committed());
+
+    ASSERT_TRUE(session.begin_read());
+    auto bound = env.async_data->for_session(session);
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndex(lid, 0, std::string("dup"))), N)
+        << "索引等值扫描必须流式返回全部命中，不得截断或 OOM";
+    EXPECT_TRUE(session.commit().committed());
+}
+
+TEST_F(IndexE2ETest, VertexIndexRangeScanStreamsBeyondBatch) {
+    constexpr size_t N = 3000; // > 1024
+    auto lid =
+        blockingWait(env.async_meta->createLabel("BulkRange", {PropertyDef{0, "k", PropertyType::INT64, false, {}}}));
+    ASSERT_NE(lid, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(env.async_data->createLabel(lid)));
+    const std::string table = vidxTable(lid, 0);
+    ASSERT_TRUE(env.data_store->createIndex(table));
+
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    for (size_t i = 0; i < N; ++i)
+        ASSERT_TRUE(env.data_store->insertIndexEntry(session, table, static_cast<int64_t>(i), i));
+    ASSERT_TRUE(session.commit().committed());
+
+    ASSERT_TRUE(session.begin_read());
+    auto bound = env.async_data->for_session(session);
+    // range 下界是**排他**的（与既有 scanIndexRange 语义一致）⇒ 用 -1 覆盖 0..N-1
+    const std::optional<PropertyValue> start = PropertyValue{static_cast<int64_t>(-1)};
+    const std::optional<PropertyValue> end = PropertyValue{static_cast<int64_t>(N)};
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndexRange(lid, 0, start, end)), N)
+        << "索引 range 扫描必须流式返回全部命中";
+    EXPECT_TRUE(session.commit().committed());
+}
+
+TEST_F(IndexE2ETest, EdgeIndexScanStreamsBeyondBatch) {
+    constexpr size_t N = 3000; // > 1024
+    auto elid = blockingWait(
+        env.async_meta->createEdgeLabel("BulkRel", {PropertyDef{0, "k", PropertyType::STRING, false, {}}}));
+    ASSERT_NE(elid, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(env.async_data->createEdgeLabel(elid)));
+    const std::string table = eidxTable(elid, 0);
+    ASSERT_TRUE(env.data_store->createIndex(table));
+
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    for (size_t i = 0; i < N; ++i) {
+        auto payload = ValueCodec::encodeEdgeAdjacency(static_cast<VertexId>(i), static_cast<VertexId>(i + 1), 0, elid);
+        ASSERT_TRUE(env.data_store->insertIndexEntry(session, table, std::string("dup"), i, payload));
+    }
+    ASSERT_TRUE(session.commit().committed());
+
+    ASSERT_TRUE(session.begin_read());
+    auto bound = env.async_data->for_session(session);
+    EXPECT_EQ(drain_batches(bound.scanEdgesByIndex(elid, 0, std::string("dup"))), N)
+        << "边索引扫描必须流式返回全部命中（旧实现会截断）";
+    EXPECT_TRUE(session.commit().committed());
 }

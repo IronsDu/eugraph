@@ -254,7 +254,11 @@ protected:
 
     /// Metadata of the currently opened graph, for arranging schema in tests.
     AsyncGraphMetaStore& meta() {
-        return *gm_->getGraph("default")->async_meta;
+        auto lease = gm_->acquireGraph("default");
+        if (!lease)
+            throw std::runtime_error("default graph is not available");
+        // default 图禁止 DROP ⇒ lease 释放后引用仍有效
+        return *lease->inst->async_meta;
     }
 
     /// Collect the single string column of a result set.
