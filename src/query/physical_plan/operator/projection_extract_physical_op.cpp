@@ -217,6 +217,64 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             }
         }
 
+        // Batch-prefetch single-property / label reads as well: LoadVertexProp
+        // used to issue one co_await per row, so an Expand of 52k messages with
+        // friend.firstName/lastName meant 100k+ async point reads. Collect the
+        // unique ids per spec, issue one batch per spec, then fan the results
+        // back out to rows.
+        std::vector<std::vector<std::optional<PropertyValue>>> vertex_prop_cache(n_specs);
+        std::vector<std::vector<std::optional<LabelIdSet>>> vertex_labels_cache(n_specs);
+        for (size_t i = 0; i < n_specs; ++i) {
+            const auto& spec = specs_[i];
+            if (spec.kind != ColumnSpec::Kind::LoadVertexProp && spec.kind != ColumnSpec::Kind::LoadVertexLabels)
+                continue;
+
+            std::vector<VertexId> ids;
+            std::vector<size_t> value_for_row(row_count, SIZE_MAX);
+            std::unordered_map<VertexId, size_t> index_of;
+            index_of.reserve(row_count);
+            for (size_t row = 0; row < row_count; ++row) {
+                // resolveVertexId caches by column only; a fresh pair per row is
+                // required here because this loop runs before the per-row cache.
+                size_t vid_cache_col = SIZE_MAX;
+                VertexId vid_cache = INVALID_VERTEX_ID;
+                VertexId vid = resolveVertexId(*chunk, spec.source_col, row, vid_cache_col, vid_cache);
+                if (vid == INVALID_VERTEX_ID)
+                    continue;
+                auto [it, inserted] = index_of.try_emplace(vid, ids.size());
+                if (inserted)
+                    ids.push_back(vid);
+                value_for_row[row] = it->second;
+            }
+            if (ids.empty())
+                continue;
+
+            if (spec.kind == ColumnSpec::Kind::LoadVertexProp) {
+                auto values =
+                    co_await store_.batchGetVertexProperties(ids, spec.label_id, std::vector<uint16_t>{spec.prop_id});
+                vertex_prop_cache[i].resize(row_count);
+                for (size_t row = 0; row < row_count; ++row) {
+                    const size_t idx = value_for_row[row];
+                    if (idx == SIZE_MAX || idx >= values.size() || !values[idx].has_value())
+                        continue;
+                    const auto& props = *values[idx];
+                    if (props.size() > spec.prop_id && props[spec.prop_id].has_value())
+                        vertex_prop_cache[i][row] = props[spec.prop_id];
+                }
+            } else {
+                auto labels = co_await store_.getVertexLabelsBatch(ids);
+                vertex_labels_cache[i].resize(row_count);
+                for (size_t row = 0; row < row_count; ++row) {
+                    const size_t idx = value_for_row[row];
+                    if (idx == SIZE_MAX || idx >= labels.size())
+                        continue;
+                    LabelIdSet ids_set = labels[idx];
+                    ids_set.erase(INVALID_LABEL_ID);
+                    vertex_labels_cache[i][row] = std::move(ids_set);
+                }
+            }
+        }
+
         // Prefetch coalesced multi-candidate vertex properties. Each row may
         // have values from several present labels; the runtime semantics are
         // scalar if exactly one label has the property, or a list if multiple
@@ -446,16 +504,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexProp: {
-                    VertexId vid = resolveVertexId(*chunk, spec.source_col, row, rc.vid_col, rc.vid);
-                    if (vid != INVALID_VERTEX_ID) {
-                        auto pv = co_await store_.getVertexProperty(vid, spec.label_id, spec.prop_id);
-                        if (pv.has_value())
-                            output.columns[i].setValue(row, propertyValueToValue(*pv));
-                        else
-                            output.columns[i].setNull(row);
-                    } else {
+                    if (row < vertex_prop_cache[i].size() && vertex_prop_cache[i][row].has_value())
+                        output.columns[i].setValue(row, propertyValueToValue(*vertex_prop_cache[i][row]));
+                    else
                         output.columns[i].setNull(row);
-                    }
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
@@ -494,17 +546,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexLabels: {
-                    VertexId vid = resolveVertexId(*chunk, spec.source_col, row, rc.vid_col, rc.vid);
-                    if (vid == INVALID_VERTEX_ID)
+                    if (row >= vertex_labels_cache[i].size() || !vertex_labels_cache[i][row].has_value())
                         break;
-                    auto lit = rc.labels.find(spec.source_col);
-                    if (lit == rc.labels.end()) {
-                        auto labels = co_await store_.getVertexLabels(vid);
-                        labels.erase(INVALID_LABEL_ID);
-                        lit = rc.labels.emplace(spec.source_col, std::move(labels)).first;
-                    }
                     ListValue lv;
-                    for (auto lid : lit->second) {
+                    for (auto lid : *vertex_labels_cache[i][row]) {
                         auto nit = vertex_label_names_.find(lid);
                         if (nit != vertex_label_names_.end())
                             lv.elements.push_back(ValueStorage{Value(nit->second)});

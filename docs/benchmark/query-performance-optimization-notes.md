@@ -200,18 +200,20 @@ source 都要一次 `search_near`，52k source ≈ 30–40 ms。
   灾难计划（CrossProduct），不要用简单 pattern 重排替代 CBO；
 - 索引本身是额外写入成本，要按 workload 评估。
 
-### 5.4 补齐 `LoadVertexProp` / `LoadVertexLabels` 的批处理
+### 5.4 `LoadVertexProp` / `LoadVertexLabels` 批处理（已落地）
 
-`ConstructVertex` 和 `LoadVertexPropCoalesce` 已经按 chunk 批量预取，但
-`LoadVertexProp` / `LoadVertexLabels` 仍是**逐行** `co_await`（point read）。对于
-`RETURN n.age` 这类只读单个属性的查询，这是明确的剩余优化点：可以复用
-`getVertexPropertiesBatchProjected` / `getVertexLabelsBatch` 的批量能力，按
-`(source_col, label, prop)` 在 chunk 内预取。
+`ConstructVertex` / `LoadVertexPropCoalesce` 之外，`LoadVertexProp` / `LoadVertexLabels`
+原先仍是逐行 `co_await`（point read）。本轮已改为按 chunk 收集唯一 vid、一次 batch 调用
+（`batchGetVertexPropertiesProjected` / `getVertexLabelsBatch`），再按行回填（重复 vid
+只占一个结果槽，避免 52k 行 × 2 属性 = 10 万次 async 点读）。
 
-同时，coalesce 路径每个 chunk 会发多次 async dispatch（labels 一次、每个候选 label
-的属性一次），可合并为一个 `getVertexPropCoalesce(vids, candidates)` 的 sync 方法，
-在**一次 IO dispatch** 内完成 labels + property 查询。预期收益主要是协程/调度开销
-（~10–20 ms 量级），WT search 次数不变；两者都适合作为低风险后续项。
+效果（八条 complex 查询复测，详见 [§11](ldbc-snb-sf0.1-comparison.md#11-八条-complex-查询复测2026-10-21)）：
+complex-12 396→337 ms、complex-10 34→30 ms、complex-2 15.7→13.7 ms、complex-4/7/8 也各有下降。
+
+**仍可继续的合并**：coalesce 路径每个 chunk 会发多次 async dispatch（labels 一次、每个候选
+label 的属性一次），可合并为一个 `getVertexPropCoalesce(vids, candidates)` 的 sync 方法，
+在**一次 IO dispatch** 内完成 labels + property 查询；预期收益主要是协程/调度开销
+（~10–20 ms 量级），WT search 次数不变，属于低风险后续项。
 
 ### 5.5 不要做的事
 

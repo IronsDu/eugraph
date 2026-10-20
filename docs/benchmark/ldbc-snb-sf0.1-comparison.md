@@ -707,3 +707,54 @@ Expand(All) (friend)<-[:HAS_CREATOR]-(message)      52,475 rows
   `scanEdgesBatch` 复用一把 cursor 只能省 open/close（本轮实测 <5%，未保留）。
   要再降需要**按源连续的邻接存储**（per-vertex adjacency row/table）或覆盖索引，同属存储布局变更。
 * 本轮未改变结果语义；`build-release` 全量 ctest **1294/1294** 通过（含 tck）。
+
+
+---
+
+## 11. 八条 complex 查询复测（2026-10-21）
+
+> 在 §10 的三项改动（batch 去重、共享 VertexValue、跳过无属性边空查）之外，本轮又把
+> `LoadVertexProp` / `LoadVertexLabels` 从逐行点读改为按 chunk 批量预取。对 §9 中差距较大的
+> 8 条 complex 查询重跑同机交错 A/B。
+
+### 11.1 方法
+
+```bash
+python3 scripts/bench_ldbc_ab.py \
+  --queries-dir /path/to/ldbc_snb_interactive_v1_impls/cypher/queries \
+  --only 'complex-2,complex-3,complex-4,complex-7,complex-8,complex-10,complex-11,complex-12' \
+  --rounds 10 --warmup 2 --neo4j-fix-types
+```
+
+- 同机交错，每查询 2 warmup + 10 轮，取 min/p50；
+- eugraph 跑原版文本；neo4j 侧按 §1.1 的 `--neo4j-fix-types` 处理 `LIKES.creationDate` /
+  `WORK_AT.workFrom` 的 STRING 差异；
+- 行数两边逐条核对，全部一致（complex-3 / complex-4 为 0 行）。
+
+### 11.2 结果
+
+| 查询 | 行数 eg/neo | eg min / p50 (ms) | neo min / p50 (ms) | eg/neo | 旧 eg min | 变化 |
+|---|---:|---:|---:|---:|---:|---:|
+| complex-2 | 20/20 | 13.73 / 15.41 | 4.67 / 4.85 | 2.94× | 18.54 | **-25.9%** |
+| complex-3 | 0/0 | **131.50 / 136.69** | 26.63 / 27.10 | 4.94× | 474.91 | **-72.3%** |
+| complex-4 | 0/0 | 7.59 / 8.28 | 3.95 / 4.58 | 1.92× | 12.81 | **-40.7%** |
+| complex-7 | 7/7 | 4.82 / 5.53 | 4.27 / 4.72 | 1.13× | 6.77 | **-28.8%** |
+| complex-8 | 20/20 | **3.53 / 3.78** | 3.74 / 4.02 | **0.94×（快）** | 5.55 | **-36.4%** |
+| complex-10 | 10/10 | 30.44 / 31.62 | 9.26 / 9.87 | 3.29× | 62.76 | **-51.5%** |
+| complex-11 | 4/4 | 7.02 / 7.79 | 4.16 / 4.73 | 1.69× | 8.72 | **-19.5%** |
+| complex-12 | 3/3 | **337.00 / 348.49** | 97.98 / 104.01 | 3.44× | 422.23 | **-20.2%** |
+
+`eg/neo = eg_min / neo_min`（>1 表示 eugraph 更慢，<1 表示更快）；“旧 eg min”取 §9.5 的表，
+仅作同口径历史参考（neo4j 本轮读数也受机器状态影响，跨会话绝对值不要直接比）。
+
+### 11.3 结论
+
+- **8 条全部比上一轮 eugraph 绝对值下降 19–72%**：complex-3 从 475→131 ms，complex-10
+  从 63→30 ms，complex-12 从 422→337 ms；
+- **complex-8 已快于 neo4j**（3.53 vs 3.74 ms），complex-7 基本持平（1.13×）；
+- 仍落后的主要是 **complex-3（4.9×）**、**complex-12（3.4×）**、**complex-10（3.3×）**、
+  **complex-2（2.9×）**；
+- complex-12 的 GDB 采样显示 `createEdgeScanCursor` / `EdgeScanCursorImpl` 约一半 active
+  样本，叠加 tag 层次 VLE 的 65k 路径与 14 候选 `tag.name` coalesce。下一步应优先做
+  **可复用的邻接扫描**（一次 cursor 覆盖整个 VLE 遍历）或按源连续邻接存储，而不是继续
+  优化单条查询的算子。

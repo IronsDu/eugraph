@@ -181,12 +181,12 @@ Phase 4: 表达式改写
 输入：子算子的拓扑输出（含 `VertexRef` / `EdgeKey` / `VertexValue` 等）。输出：按 `ColumnSpec[]` 定义的列。执行流程：
 
 1. 从子算子拉取 chunk
-2. 遍历每个 ColumnSpec；**ConstructVertex / ConstructEdge / LoadVertexPropCoalesce 按 chunk
-   批量预取**，其余仍逐行读取（这是当前已知的剩余批处理缺口）：
+2. 遍历每个 ColumnSpec；**所有按行读取都按 chunk 批量预取**（unique vid + 行映射 + 一次
+   batch 调用）：
    - `Passthrough`：整体复制上游列（共享 `VertexValuePtr`，不深拷贝）
-   - `LoadVertexProp` / `LoadEdgeProp`：逐行 `co_await getVertexProperty/getEdgeProperty`
-     （point read，复用会话级 cursor 缓存；尚未批处理化）
-   - `LoadVertexLabels`：逐行 `getVertexLabels`（行内按 `source_col` 缓存；尚未批处理化）
+   - `LoadVertexProp` / `LoadEdgeProp`：收集 chunk 内唯一 id，一次
+     `batchGetVertexPropertiesProjected` / `getEdgePropertyBatch`，再按行回填
+   - `LoadVertexLabels`：一次 `getVertexLabelsBatch`，再按行回填
    - `LoadEdgeType`：内存查字典 `edge_label_id → name`
    - `LoadVertexPropCoalesce`：一次批量读 labels，再按候选 `(label, prop)` 批量读属性
    - `ConstructVertex`：批量预取 labels + 全部属性；**同一 vid 在批内共享一个
