@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "graph/graph_manager.hpp"
 #include "storage/catalog/catalog_store.hpp"
-#include "storage/graph_manager.hpp"
 
 #include <filesystem>
 
@@ -166,8 +166,10 @@ TEST_F(GraphManagerTest, InitCreatesDefaultGraph) {
     ASSERT_EQ(graphs.size(), 1u);
     EXPECT_EQ(graphs[0].name, "default");
 
-    auto* inst = gm.getGraph("default");
-    ASSERT_NE(inst, nullptr);
+    auto lease = gm.acquireGraph("default");
+    ASSERT_TRUE(lease);
+    EXPECT_EQ(lease->inst->name, "default");
+    lease.reset(); // 租约必须先于 shutdown 释放 ✓
 
     gm.shutdown();
 }
@@ -180,9 +182,10 @@ TEST_F(GraphManagerTest, CreateGraph) {
     EXPECT_EQ(entry.name, "social");
     EXPECT_GT(entry.graph_id, 0u);
 
-    auto* inst = gm.getGraph("social");
-    ASSERT_NE(inst, nullptr);
-    EXPECT_EQ(inst->name, "social");
+    auto lease = gm.acquireGraph("social");
+    ASSERT_TRUE(lease);
+    EXPECT_EQ(lease->inst->name, "social");
+    lease.reset();
 
     gm.shutdown();
 }
@@ -204,7 +207,7 @@ TEST_F(GraphManagerTest, DropGraph) {
 
     gm.createGraph("temp");
     EXPECT_TRUE(gm.dropGraph("temp"));
-    EXPECT_EQ(gm.getGraph("temp"), nullptr);
+    EXPECT_FALSE(gm.acquireGraph("temp").has_value());
 
     gm.shutdown();
 }
@@ -247,12 +250,14 @@ TEST_F(GraphManagerTest, MultiGraphIsolation) {
     gm.createGraph("graph_a");
     gm.createGraph("graph_b");
 
-    auto* a = gm.getGraph("graph_a");
-    auto* b = gm.getGraph("graph_b");
-    ASSERT_NE(a, nullptr);
-    ASSERT_NE(b, nullptr);
-    EXPECT_NE(a->async_meta.get(), b->async_meta.get());
-    EXPECT_NE(a->async_data.get(), b->async_data.get());
+    auto a = gm.acquireGraph("graph_a");
+    auto b = gm.acquireGraph("graph_b");
+    ASSERT_TRUE(a);
+    ASSERT_TRUE(b);
+    EXPECT_NE(a->inst->async_meta.get(), b->inst->async_meta.get());
+    EXPECT_NE(a->inst->async_data.get(), b->inst->async_data.get());
+    a.reset();
+    b.reset();
 
     gm.shutdown();
 }
@@ -261,7 +266,7 @@ TEST_F(GraphManagerTest, GetNonExistentGraph) {
     GraphManager gm;
     ASSERT_TRUE(gm.init(db_path_, 2, 2));
 
-    EXPECT_EQ(gm.getGraph("nonexistent"), nullptr);
+    EXPECT_FALSE(gm.acquireGraph("nonexistent").has_value());
 
     gm.shutdown();
 }
@@ -294,9 +299,10 @@ TEST_F(GraphManagerTest, RestartLoadsGraphs) {
     auto graphs = gm2.listGraphs();
     EXPECT_GE(graphs.size(), 2u);
 
-    auto* inst = gm2.getGraph("persistent_graph");
-    ASSERT_NE(inst, nullptr);
-    EXPECT_EQ(inst->name, "persistent_graph");
+    auto lease = gm2.acquireGraph("persistent_graph");
+    ASSERT_TRUE(lease);
+    EXPECT_EQ(lease->inst->name, "persistent_graph");
+    lease.reset();
 
     gm2.shutdown();
 }

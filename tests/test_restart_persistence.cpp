@@ -14,6 +14,7 @@
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "test_sync_store.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -30,25 +31,27 @@ std::string getTestDbPath() {
 
 // Re-usable helper to bootstrap a full storage stack from a db_path.
 struct StorageStack {
-    std::unique_ptr<SyncGraphDataStore> sync_data;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta;
+    std::unique_ptr<test::TestSyncGraphDataStore> sync_data;
+    std::unique_ptr<test::TestSyncGraphMetaStore> sync_meta;
     std::unique_ptr<IoScheduler> io;
     std::unique_ptr<AsyncGraphMetaStore> async_meta;
+    std::unique_ptr<GraphSession> async_session;
     std::unique_ptr<AsyncGraphDataStore> async_data;
 
     static std::unique_ptr<StorageStack> open(const std::string& db_path) {
         auto s = std::make_unique<StorageStack>();
 
-        s->sync_data = std::make_unique<SyncGraphDataStore>();
+        s->sync_data = std::make_unique<test::TestSyncGraphDataStore>();
         if (!s->sync_data->open(db_path + "/data"))
             return nullptr;
 
-        s->sync_meta = std::make_unique<SyncGraphMetaStore>();
+        s->sync_meta = std::make_unique<test::TestSyncGraphMetaStore>();
         if (!s->sync_meta->open(db_path + "/meta"))
             return nullptr;
 
         s->io = std::make_unique<IoScheduler>(2);
-        s->async_data = std::make_unique<AsyncGraphDataStore>(*s->sync_data, *s->io);
+        s->async_session = std::make_unique<GraphSession>(s->sync_data->conn().make_session());
+        s->async_data = std::make_unique<AsyncGraphDataStore>(*s->sync_data, *s->io, *s->async_session);
 
         s->async_meta = std::make_unique<AsyncGraphMetaStore>();
         if (!blockingWait(s->async_meta->open(*s->sync_meta, *s->io)))
@@ -59,6 +62,7 @@ struct StorageStack {
 
     void close() {
         async_data.reset();
+        async_session.reset();
         io.reset();
         blockingWait(async_meta->close());
         sync_data->close();
@@ -161,7 +165,7 @@ TEST_F(RestartPersistenceTest, VertexDataPersistsAcrossRestart) {
         ASSERT_TRUE(s->sync_data->commitTransaction(txn));
 
         // Verify immediately
-        EXPECT_EQ(s->sync_data->countVerticesByLabel(INVALID_GRAPH_TXN, person_label), 3u);
+        EXPECT_EQ(s->sync_data->countVerticesByLabel(s->sync_data->autoSession(), person_label), 3u);
 
         s->close();
     }
@@ -180,7 +184,7 @@ TEST_F(RestartPersistenceTest, VertexDataPersistsAcrossRestart) {
         // still exist. WiredTiger tables persist on disk, so they should be usable
         // without re-creating them.
         uint64_t count = 0;
-        s->sync_data->scanVerticesByLabel(INVALID_GRAPH_TXN, person_label, [&](VertexId vid) {
+        s->sync_data->scanVerticesByLabel(s->sync_data->autoSession(), person_label, [&](VertexId vid) {
             EXPECT_GE(vid, 1u);
             EXPECT_LE(vid, 3u);
             ++count;
@@ -189,7 +193,7 @@ TEST_F(RestartPersistenceTest, VertexDataPersistsAcrossRestart) {
         EXPECT_EQ(count, 3u);
 
         // Verify properties survive
-        auto props = s->sync_data->getVertexProperties(INVALID_GRAPH_TXN, 1, person_label);
+        auto props = s->sync_data->getVertexProperties(s->sync_data->autoSession(), 1, person_label);
         ASSERT_TRUE(props.has_value());
         ASSERT_GE(props->size(), 2u);
         ASSERT_TRUE((*props)[0].has_value());
@@ -246,7 +250,7 @@ TEST_F(RestartPersistenceTest, EdgeDataPersistsAcrossRestart) {
 
         // Verify edge traversal
         std::vector<ISyncGraphDataStore::EdgeIndexEntry> edges;
-        s->sync_data->scanEdges(INVALID_GRAPH_TXN, /*vid=*/1, Direction::OUT, std::nullopt,
+        s->sync_data->scanEdges(s->sync_data->autoSession(), /*vid=*/1, Direction::OUT, std::nullopt,
                                 [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
                                     edges.push_back(e);
                                     return true;
@@ -256,7 +260,7 @@ TEST_F(RestartPersistenceTest, EdgeDataPersistsAcrossRestart) {
         EXPECT_EQ(edges[0].edge_label_id, knows_label);
 
         // Verify edge properties
-        auto eprops = s->sync_data->getEdgeProperties(INVALID_GRAPH_TXN, knows_label, edges[0].edge_id);
+        auto eprops = s->sync_data->getEdgeProperties(s->sync_data->autoSession(), knows_label, edges[0].edge_id);
         ASSERT_TRUE(eprops.has_value());
         ASSERT_GE(eprops->size(), 1u);
         ASSERT_TRUE((*eprops)[0].has_value());

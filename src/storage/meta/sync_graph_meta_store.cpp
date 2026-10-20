@@ -1,159 +1,51 @@
 #include "storage/meta/sync_graph_meta_store.hpp"
 
+#include "storage/wt_table_ops.hpp"
+
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
 
-// ==================== Lifecycle ====================
+// ==================== DDL ====================
 
-SyncGraphMetaStore::~SyncGraphMetaStore() {
-    close();
-}
-
-bool SyncGraphMetaStore::open(const std::string& db_path) {
-    if (!openConnection(db_path))
-        return false;
-
-    if (!ensureGlobalTable(TABLE_METADATA)) {
-        close();
+bool SyncGraphMetaStore::ensure_tables() {
+    if (!isOpen()) {
+        spdlog::error("SyncGraphMetaStore::ensure_tables: connection not bound");
         return false;
     }
-
-    spdlog::info("Opened meta store at: {}", db_path);
-    return true;
-}
-
-void SyncGraphMetaStore::close() {
-    closeConnection();
-    spdlog::info("Closed meta store");
-}
-
-bool SyncGraphMetaStore::isOpen() const {
-    return WtStoreBase::isOpen();
-}
-
-// ==================== Transaction ====================
-
-GraphTxnHandle SyncGraphMetaStore::beginTransaction() {
-    if (!conn_)
-        return INVALID_GRAPH_TXN;
-
-    auto ts = std::make_unique<TxnState>();
-    ts->session = conn_.openSession();
-    if (!ts->session) {
-        spdlog::error("Failed to open transaction session");
-        return INVALID_GRAPH_TXN;
-    }
-
-    int ret = ts->session->begin_transaction(ts->session.get(), "isolation=snapshot");
-    if (ret != 0) {
-        spdlog::error("Failed to begin transaction: error {}", ret);
-        return INVALID_GRAPH_TXN;
-    }
-
-    auto handle = static_cast<GraphTxnHandle>(ts.get());
-    std::lock_guard<std::mutex> lock(txnMutex_);
-    txns_.emplace(handle, std::move(ts));
-    return handle;
-}
-
-bool SyncGraphMetaStore::commitTransaction(GraphTxnHandle txn) {
-    TxnState* ts = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(txnMutex_);
-        auto it = txns_.find(txn);
-        if (it == txns_.end())
-            return false;
-        ts = it->second.get();
-    }
-
-    int ret = ts->session->commit_transaction(ts->session.get(), nullptr);
-    closeTxnCursors(ts);
-    // WtSession destructor auto-closes session when TxnState is erased
-
-    std::lock_guard<std::mutex> lock(txnMutex_);
-    txns_.erase(txn);
-
-    if (ret != 0) {
-        spdlog::error("Meta store commit failed: error {}", ret);
-        return false;
-    }
-    return true;
-}
-
-bool SyncGraphMetaStore::rollbackTransaction(GraphTxnHandle txn) {
-    TxnState* ts = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(txnMutex_);
-        auto it = txns_.find(txn);
-        if (it == txns_.end())
-            return false;
-        ts = it->second.get();
-    }
-
-    int ret = ts->session->rollback_transaction(ts->session.get(), nullptr);
-    closeTxnCursors(ts);
-    // WtSession destructor auto-closes session when TxnState is erased
-
-    std::lock_guard<std::mutex> lock(txnMutex_);
-    txns_.erase(txn);
-
-    if (ret != 0) {
-        spdlog::error("Meta store rollback failed: error {}", ret);
-        return false;
-    }
-    return true;
+    WtSession session = conn().make_session();
+    return schema_ddl_.ensure_tables(session, {TABLE_METADATA});
 }
 
 // ==================== Metadata Raw KV ====================
 
 bool SyncGraphMetaStore::metadataPut(std::string_view key, std::string_view value) {
-    return tablePut(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key, value);
+    WtSession session = conn().make_session();
+    if (!session)
+        return false;
+    return wt::table_put(session.get(), TABLE_METADATA, key, value);
 }
 
 std::optional<std::string> SyncGraphMetaStore::metadataGet(std::string_view key) {
-    return tableGet(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key);
+    WtSession session = conn().make_session();
+    if (!session)
+        return std::nullopt;
+    return wt::table_get(session.get(), TABLE_METADATA, key);
 }
 
 bool SyncGraphMetaStore::metadataDel(std::string_view key) {
-    return tableDel(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key);
+    WtSession session = conn().make_session();
+    if (!session)
+        return false;
+    return wt::table_del(session.get(), TABLE_METADATA, key);
 }
 
 void SyncGraphMetaStore::metadataScan(std::string_view prefix,
                                       const std::function<bool(std::string_view, std::string_view)>& callback) {
-    tableScan(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, prefix, callback);
-}
-
-// ==================== DDL ====================
-
-bool SyncGraphMetaStore::createLabel(LabelId /*label_id*/) {
-    // Metadata-level DDL: no additional tables needed in meta store.
-    // Metadata persistence is handled by metadataPut.
-    return true;
-}
-
-bool SyncGraphMetaStore::dropLabel(LabelId /*label_id*/) {
-    // Metadata-level DDL: no additional cleanup in meta store.
-    return true;
-}
-
-bool SyncGraphMetaStore::createEdgeLabel(EdgeLabelId /*edge_label_id*/) {
-    return true;
-}
-
-bool SyncGraphMetaStore::addEdgeLabelProperties(EdgeLabelId /*edge_label_id*/,
-                                                const std::vector<std::string>& /*prop_names*/) {
-    return true;
-}
-
-bool SyncGraphMetaStore::dropEdgeLabel(EdgeLabelId /*edge_label_id*/) {
-    return true;
-}
-
-// ==================== Durability ====================
-
-bool SyncGraphMetaStore::checkpoint() {
-    return WtStoreBase::checkpoint();
+    WtSession session = conn().make_session();
+    if (!session)
+        return;
+    wt::table_scan(session.get(), TABLE_METADATA, prefix, callback);
 }
 
 } // namespace eugraph

@@ -1545,7 +1545,8 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
         written += *resp.inserted();
         skipped += *resp.skipped_unresolved();
     }
-    spdlog::info("[loader] Loaded edges for '{}' ({} skipped: endpoint unresolved)", where, written, skipped);
+    spdlog::info("[loader] Loaded edges for '{}' ({} written, {} skipped: endpoint unresolved)", where, written,
+                 skipped);
 }
 
 } // namespace

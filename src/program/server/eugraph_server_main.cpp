@@ -1,8 +1,8 @@
+#include "graph/graph_manager.hpp"
 #include "service/bolt/bolt_server.hpp"
 #include "service/graph_service.hpp"
 #include "service/thrift/eugraph_handler.hpp"
 #include "service/thrift/gen-cpp2/EuGraphService.h"
-#include "storage/graph_manager.hpp"
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 

@@ -163,6 +163,14 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                 auto def_it = edge_label_defs_.find(effective_label_id);
                 if (def_it != edge_label_defs_.end())
                     edge_label_def = &def_it->second;
+
+                // 幂等确保物理表存在 ✓：标签可能只有元数据（DDL 已声明，但数据表尚未建）。
+                // `createEdgeLabel` 对已存在的表返回 EBUSY 并视为成功，所以每条语句只做一次 ✓。
+                // 若缺失且不补齐，insertEdge 会在 etype 表上失败 —— 旧实现会静默提交部分索引写入 ✗。
+                const bool ensured = co_await store_.createEdgeLabel(effective_label_id);
+                if (!ensured)
+                    spdlog::error("[CreateEdge] failed to ensure data tables for edge label {}",
+                                  static_cast<uint64_t>(effective_label_id));
             }
 
             // Register pending edge properties with the edge label definition

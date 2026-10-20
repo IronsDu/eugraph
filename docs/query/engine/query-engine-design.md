@@ -601,7 +601,7 @@ class PhysicalOperator {
 3. 加载元数据: listLabels() + listEdgeLabels() → 构建 Catalog + FunctionRegistry
 4. bind: AST → BoundLogicalPlan（Binder 语义绑定，符号解析，类型推断）
 5. optimize: LogicalOptimizer 优化 BoundLogicalPlan（Filter 下推等规则）
-6. beginTran + setTransaction
+6. 取会话租约 + begin_read/begin_write + for_session(session)
 7. planBound: BoundLogicalPlan → PhysicalOperator（ID 解析，存储引用绑定）
 8. 若 EXPLAIN: 收集物理算子 toString，rollback，返回
 9. executeChunk: AsyncGenerator<DataChunk> 由调用方 drain

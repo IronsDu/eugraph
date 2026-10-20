@@ -37,11 +37,12 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 类型系统 | 基础类型定义 | `VertexId`, `EdgeId`, `Properties`, `PropertyValue`, `IndexState` | `src/common/types/` | [architecture/type-definitions.md] |
 | Sync 数据存储 | WiredTiger 同步 CRUD，物理表管理，事务 | `ISyncGraphDataStore`, `SyncGraphDataStore` | `src/storage/data/` | [storage/interfaces.md] |
 | Async 数据存储 | 协程包装，IO 线程池调度 | `IAsyncGraphDataStore`, `AsyncGraphDataStore` | `src/storage/data/` | [storage/interfaces.md] |
-| Sync 元数据存储 | 元数据 KV 持久化（独立 WT 连接） | `ISyncGraphMetaStore`, `SyncGraphMetaStore` | `src/storage/meta/` | [storage/interfaces.md], [storage/metadata-service-design.md] |
-| Async 元数据服务 | Label/EdgeLabel/索引管理、ID 分配、GraphSchema | `IAsyncGraphMetaStore`, `AsyncGraphMetaStore`, `GraphSchema` | `src/storage/meta/`, `src/storage/graph_schema.hpp` | [storage/metadata-service-design.md] |
+| **会话 / 游标 / 事务归属** | **显式所有权**：连接归 `WtConnectionStore`、事务归 `GraphSession`、池拥有会话 + 非拥有 `SessionLease`、cursor 归 `CursorProvider`（move-only `CursorHandle`，打开失败可见）、`StickyError` + `TxnErrorClass`（失败禁止提交、Busy 不毒化、**无 TLS / 无 cursor 池**）；含多副本就绪性决策（暂缓） | `WtConnectionStore`, `SessionPool`, `SessionLease`, `GraphSession`, `TxnController`, `CursorProvider`, `CursorHandle` | `src/storage/data/`, `src/storage/wt_connection_store.hpp`, `src/storage/wt_error.hpp` | [storage/session-cursor-pool-design.md](storage/session-cursor-pool-design.md) |
+| Sync 元数据存储 | 元数据 KV 持久化（连接归 `WtConnectionStore`） | `ISyncGraphMetaStore`, `SyncGraphMetaStore` | `src/storage/meta/` | [storage/interfaces.md], [storage/metadata-service-design.md] |
+| Async 元数据服务 | Label/EdgeLabel/索引管理、ID 分配、GraphSchema | `IAsyncGraphMetaStore`, `AsyncGraphMetaStore`, `GraphSchema` | `src/storage/meta/`, `src/common/schema/graph_schema.hpp` | [storage/metadata-service-design.md] |
 | KV 编解码 | Key/Value 序列化（多表 WT，无前缀字节） | `KeyCodec`, `ValueCodec`, `IndexKeyCodec` | `src/storage/kv/` | [storage/kv-encoding.md] |
 | IO 调度器 | IO 线程池封装，协程调度 | `IoScheduler` | `src/storage/io_scheduler.hpp` | [architecture/system-architecture.md] |
-| 存储基类 | WT 连接管理、每执行上下文独占的 WT_SESSION | `WtStoreBase` | `src/storage/wt_store_base.hpp` | [architecture/system-architecture.md] |
+| 存储原语 / Schema DDL | 表级 KV、统一 `scanRange`、单连接 DDL 序列（锁 + 失败清理） | `wt::table_*`, `SchemaDdl` | `src/storage/wt_table_ops.hpp`, `src/storage/schema_ddl.hpp` | [storage/session-cursor-pool-design.md](storage/session-cursor-pool-design.md) |
 | 线程基础设施 | NUMA 拓扑发现与线程绑节点（可选，默认关闭） | `NumaTopology`, `NumaThreadFactory` | `src/common/thread/` | [architecture/system-architecture.md] |
 | Cypher 解析器 | ANTLR4 语法，Parse Tree → AST | `CypherQueryParser`, `AstBuilder` | `src/query/parser/` | [query/syntax/cypher-parser-design.md] |
 | 语义绑定 | AST → `BoundStatement`（符号解析，类型推断） | `Binder`, `BoundLogicalOperator`, `ColumnResolver` | `src/query/planner/`, `src/query/planner/binder/` | [query/engine/query-engine-design.md] |
@@ -53,7 +54,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | RPC 服务 | fbthrift 服务端，DDL 协调，流式 DML，图管理 | `EuGraphHandler` | `src/program/server/` | [service/rpc-service.md] |
 | Shell | 交互式 REPL（RPC 连接 server，图切换） | `ShellRepl`, `EuGraphRpcClient` | `src/program/shell/` | [program/design/server-shell-design.md] |
 | Catalog | 全局图目录（WT 独立数据库） | `CatalogStore` | `src/storage/catalog/` | [storage/multi-graph.md] |
-| 图管理器 | 多图生命周期、连接管理 | `GraphManager` | `src/storage/graph_manager.hpp` | [storage/multi-graph.md] |
+| 图管理器 | 多图生命周期、连接管理 | `GraphManager` | `src/graph/graph_manager.hpp` | [storage/multi-graph.md] |
 | Thrift IDL | RPC 接口定义 | - | `proto/eugraph.thrift` | [service/rpc-service.md] |
 | Thrift 格式化 | ResultValue/PropertyType 格式化（Shell + TCK 共用） | `formatResultValue`, `propertyTypeToString` | `src/service/thrift/` | — |
 
@@ -67,7 +68,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md] | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
 | 添加 DDL 操作 | [storage/ddl.md], [storage/metadata-service-design.md] | `src/storage/meta/` |
-| 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/storage/graph_manager.hpp` |
+| 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/graph/graph_manager.hpp` |
 | 修改类型系统 | [architecture/type-definitions.md], [storage/kv-encoding.md] | `src/common/types/` |
 | 添加/修改 RPC 接口 | [service/rpc-service.md] | `proto/eugraph.thrift`, `src/program/server/` |
 | Neo4j Bolt 协议支持 | [service/neo4j-bolt-protocol.md] | `src/service/bolt/`, `src/service/graph_service.*` |
@@ -77,7 +78,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 主键/外部键引用（loader 主键化） | [program/design/loader-design.md] | `src/program/loader/`, `proto/eugraph.thrift`, `src/storage/data/` |
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md] | `src/storage/` |
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
-| 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/storage/graph_schema.hpp` |
+| 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/common/schema/graph_schema.hpp` |
 | 表达式求值相关 | [query/syntax/cypher-syntax.md], [query/engine/query-engine-design.md] | `executor/vectorized_evaluator.cpp`, `binder/` |
 | 时间类型/时间运算语义 | [query/engine/temporal-semantics.md] | `src/common/types/temporal_value.*`, `function/scalar/temporal_functions.hpp` |
 | 查询错误分类/状态码 | [query/engine/error-model.md] | `src/common/types/query_error.*`, `src/service/bolt/bolt_session.cpp` |

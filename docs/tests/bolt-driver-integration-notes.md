@@ -80,7 +80,8 @@ connection: the process must exit and restart: WT_PANIC
 
 `GraphManager::dropGraph` 在锁外关闭 store；在飞协程可能仍持有该图 ⇒ 并发使用同一 WT 连接 ⇒
 `__conn_close … failure during close` ⇒ PANIC。**已修**：新增 `GraphUsageGate`（两阶段准入 +
-`close()` + `waitDrained()`），`GraphService::resolveGraph` 返回**租约**并在协程帧内持有，
+`close()` + `waitDrained()`），`GraphManager::acquireGraph` 在 shared_lock 内完成准入、
+`GraphService::resolveGraph` 返回**租约**并在协程帧内持有，
 `dropGraph` 改为 **关闸 → 等在飞归零（10s）→ 再关连接** ✓。
 
 ### 3.4 最终验收（本分支，`build/bolt-fix`）

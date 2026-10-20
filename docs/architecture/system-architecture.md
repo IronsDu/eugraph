@@ -42,11 +42,12 @@
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                       Sync Layer (WiredTiger)                          │  │
 │  │                                                                       │  │
-│  │  SyncGraphDataStore              SyncGraphMetaStore                    │  │
-│  │  ├─ 独立 WT 连接 ({db}/data/)    ├─ 独立 WT 连接 ({db}/meta/)          │  │
+│  │  WtConnectionStore data_conn    WtConnectionStore meta_conn           │  │
+│  │  └─ ({db}/data/)                 └─ ({db}/meta/)                       │  │
+│  │  SyncGraphDataStore (bind)       SyncGraphMetaStore (bind)             │  │
 │  │  ├─ 数据表: label_fwd_, vprop_   ├─ 元数据表: table:metadata          │  │
 │  │  ├─ 边表: etype_, eprop_         └─ KV: M|label:*, M|edge_label:*     │  │
-│  │  └─ 继承 WtStoreBase                                                  │  │
+│  │  └─ op(GraphSession&, …)         └─ 管理类 KV 操作                    │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -59,14 +60,16 @@
 
 | 类 | 文件 | 职责 |
 |----|------|------|
-| `WtStoreBase` | `storage/wt_store_base.hpp` | 共享 WT 基类（连接管理、session/cursor 缓存、KV 操作） |
-| `SyncGraphDataStore` | `storage/data/` | 图数据 CRUD、事务、DDL（创建物理表）、扫描 |
+| `wt::table_*` | `storage/wt_table_ops.hpp` | WT 表级原语（无状态自由函数：表级 KV、统一 `scan_range`；session 显式传入）；**不创建会话、不持有事务表、不做 DDL 序列** |
+| `SchemaDdl` | `storage/schema_ddl.hpp` | 单连接内 DDL 唯一入口（接收 `WtSession&`；内部 schema 锁 + 建/删/ensure；建表失败只回滚本次新建） |
+| `SyncGraphDataStore` | `storage/data/` | 图数据 CRUD + 扫描（`op(GraphSession&, …)`）+ DDL（创建/删除物理表） |
 | `SyncGraphMetaStore` | `storage/meta/` | 元数据 KV 操作（metadataPut/Get/Scan） |
 
 关键设计：
-- **独立 WT 连接**：meta store 在 `{db}/meta/`，data store 在 `{db}/data/`
-- **事务模型**：每个事务持有独立的 WT session 和 cursor 缓存
-- `WtStoreBase` 提供连接管理、表操作、KV 读写等共享基础设施
+- **连接所有者唯一**：`GraphInstance` 持有 `WtConnectionStore data_conn / meta_conn`（`{db}/data/`、`{db}/meta/`）；store 只绑定连接
+- **事务模型**：`SessionPool` 拥有 `GraphSession`（独立 WT session + 可变事务 + 会话级 cursor 缓存），
+  语句通过非拥有 `SessionLease` 借用；未提交释放 ⇒ 自动回滚
+- `wt::table_*` 提供无状态表操作/KV；`SchemaDdl` 接收调用方传入的 `WtSession&`，统一 DDL 序列与失败清理
 
 ### IO Layer（IO 层 / Async 层）
 
@@ -75,9 +78,9 @@
 | 类 | 文件 | 职责 |
 |----|------|------|
 | `IoScheduler` | `storage/io_scheduler.hpp` | IO 线程池封装，dispatch/dispatchVoid |
-| `AsyncGraphDataStore` | `storage/data/` | IAsyncGraphDataStore 实现：事务、DDL、Vertex/Edge 异步操作 |
+| `AsyncGraphDataStore` | `storage/data/` | IAsyncGraphDataStore 实现：构造即绑定语句会话的异步 dispatch、DDL、Vertex/Edge 异步操作；`for_session()` 返回轻量值 |
 | `AsyncGraphMetaStore` | `storage/meta/` | IAsyncGraphMetaStore 实现：Label/EdgeLabel 管理、ID 分配、GraphSchema |
-| `GraphSchema` | `storage/graph_schema.hpp` | 内存 schema 对象（label/edge_label 定义、tombstone、ID 计数器） |
+| `GraphSchema` | `common/schema/graph_schema.hpp` | 内存 schema 对象（label/edge_label 定义、tombstone、ID 计数器） |
 
 关键设计：
 - **IoScheduler**：`dispatch()` 将同步调用调度到 IO 线程池，协程挂起直到完成
@@ -87,6 +90,21 @@
   `co_viaIfAsync` 回到**创建其 cursor 的那个具体 `EventBase`**（`co_viaIfAsync(池)` 不足以保证）
 - **GraphSchema**：元数据服务维护的内存 schema，避免计算层直接访问元数据存储
 - 所有 async 方法返回 `folly::coro::Task` 或 `AsyncGenerator`
+
+### Graph Layer（图实例组合层）
+
+图级生命周期与组合根：每个图持有连接、sync/async store、会话池和查询执行器。
+
+| 类 | 文件 | 职责 |
+|----|------|------|
+| `GraphManager` | `graph/graph_manager.hpp` | 多图生命周期、Catalog、checkpoint 线程、`acquireGraph()` 准入 |
+| `GraphInstance` | `graph/graph_manager.hpp` | 单图的连接/store/session_pool/`QueryExecutor` 聚合，按声明逆序安全析构 |
+| `GraphLease` | `graph/graph_manager.hpp` | `GraphInstance*` + `GraphUsageGate::Guard`，保证 DROP 等租约归零 |
+
+关键设计：
+- **合法向上依赖**：`graph/` 可以同时依赖 `storage/`、`common/` 和 `query/`；`storage/` **不** include `query/` 或 `graph/`
+- **executor 归属**：`QueryExecutor` 是图级组合对象；`GraphInstance` 的 `session_pool` 声明在 `executor` 之前，析构时 executor 先于 pool/stores/connections 销毁
+- **共享原语下沉**：`GraphUsageGate` 放 `common/concurrency/`（query 的 StreamContext 也持有 Guard）；`GraphSchema` 放 `common/schema/`（storage/meta 的 `AsyncGraphMetaStore` 与 query 共用）
 
 ### Compute Layer（计算层）
 
@@ -103,7 +121,9 @@
 
 关键设计：
 - **只依赖 async 接口**：`IAsyncGraphDataStore` + `IAsyncGraphMetaStore`
-- **事务通过 async 接口**：`beginTran/commitTran/rollbackTran`
+- **图查找即准入**：`GraphManager::acquireGraph()` 在同一把 shared_lock 内完成“查表 + usage->tryEnter”，
+  返回 `GraphLease`（指针 + guard）；禁止先取裸指针再 `tryEnter`（DROP 竞态 ⇒ UAF）
+- **事务通过会话**：`QueryExecutor` 从 `SessionPool` 取非拥有租约，`for_session(GraphSession&)` 绑定本次语句
 - **协程管道**：Pull-based 火山模型，批量 `AsyncGenerator<DataChunk>`（列存，1024 行/批）
 
 ### Server Layer（服务层）
@@ -261,25 +281,25 @@ while (offset < vids.size() && batch.size() < BATCH) {
 > `tablePut/tableGet/tableDel/tableScan` **不加任何锁**；并发控制由**业务级锁**承担
 > （`schemaMutex_` 只保护 DDL/生命周期序列）。
 
-**session 的三个来源**（全部满足 I10）：
+**session 的两个来源**（全部满足 I10）：
 
 | 来源 | 用途 | 生命周期 |
 |---|---|---|
-| `getSession(INVALID_GRAPH_TXN)` → `threadSession()` | **全部 KV 数据路径**：点查/属性、边与索引读写、元数据（label/计数）、图目录（catalog） | 每线程一把，长期；`closeThreadSessions()` 在 `conn_.close()` 之前统一关闭 |
-| `getSession(txn)` | 事务内访问 | 随事务 |
-| `openAdminSession()` | **DDL/生命周期**：`ensureGlobalTable`、`dropIndex`、`dropLabel`、`dropEdgeLabel`、`checkpoint`、`closeConnection` | 单次调用内创建并关闭（RAII） |
+| `SessionPool::acquire()` → `GraphSession`（非拥有租约 ✓） | **全部用户数据路径**：语句事务、批量导入、索引回填 | 一条语句/一个批量事务；`~SessionLease` ⇒ `pool.put`（未提交自动回滚 ✓） |
+| `openAdminSession()` | **DDL/生命周期**：`ensureGlobalTable`、`dropIndex`、`dropLabel`、`dropEdgeLabel`、checkpoint、catalog/元数据 KV | 单次调用内创建并关闭（RAII） |
+
+**无 TLS** ✓（不存在 per-thread session / 线程本地缓存）；**无 cursor 池** ✓（cursor 按**会话**缓存，
+随会话关闭；扫描用独立 cursor）。池每个 acquire/put 只取一次 mutex，热路径（每次 op）不加锁。
 
 **业务级锁**：`schemaMutex_`（`std::recursive_mutex`）只被 DDL/生命周期序列持有
-（`ensureGlobalTable` / `dropIndex` / `dropLabel` / `dropEdgeLabel` / `checkpoint` / `closeConnection`），
+（`ensureGlobalTable` / `dropIndex` / `dropLabel` / `dropEdgeLabel` / `checkpoint`），
 它保证的是 **create/drop 序列不交错**（否则"判定已存在"会被并发 drop 作废），**而非 session 内存**。
 热路径（每次存储调用）**完全不涉及任何锁**。
 
-**历史（供追溯）**：本仓库曾用"共享 `defaultSession_` + 全局锁"，随后改为"每线程 session + 条件加锁
-（`isSharedSession` 判定只有共享 session 才取锁）"。条件加锁是一次**折中**：它同时带来
-① 每次调用一次原子读+分支、② **契约由显式变隐式**（"要不要加锁"由运行期数据而非 API 表达，
-曾因此产生一次 CI 回归：`defaultSession_` 仍被 21 处显式传入已解锁的原语，导致
-`WT_SESSION.open_cursor: lock_success == 0` → `__wt_abort`）、③ 一个函数承担两种所有权语义。
-**现已彻底移除**：不存在共享 session，因此不存在条件判断，也不需要审计"谁会把共享 session 传进来"。
+**历史（供追溯）**：本仓库曾用"共享 `defaultSession_` + 全局锁"，随后改为"每线程 session + 条件加锁"，
+最后统一为"会话池 + 非拥有租约"（见 [storage/session-cursor-pool-design.md](../storage/session-cursor-pool-design.md)）。
+条件加锁的折中带来 ① 每次调用一次原子读+分支、② **契约由显式变隐式**、③ 一个函数承担两种所有权语义；
+**现已随 per-thread session 一起彻底移除**。
 
 **DDL 与长流的交互（仍需注意）**：`WT_SESSION::drop` 要求目标表上**没有打开的 cursor**。
 跨批次持有 cursor 的长流（`scanVerticesByLabel` 等 4 条）若正在扫该表，drop 可能 `EBUSY`
@@ -307,7 +327,7 @@ while (offset < vids.size() && batch.size() < BATCH) {
 | 删除 | `defaultSession_`、`sharedSessionSnapshot_`、`setDefaultSession()`、`isSharedSession()`、四原语中的条件加锁 |
 | 重命名 | `sessionMutex_` → `schemaMutex_`（语义由"保护 session 内存"变为"保护 DDL/生命周期序列"） |
 | 新增 | `openAdminSession()`：单次管理/DDL 操作用一把临时 session（RAII 关闭） |
-| 数据/元数据/目录路径 | 一律改用 `getSession(INVALID_GRAPH_TXN)`（**每线程**，不每次开——索引条目写入是每条被索引的点/边一次的高频路径） |
+| 数据路径 | 用 `SessionPool` 分发的会话（每语句一个租约；索引条目写入与实体写同一会话/事务） |
 | **简化** | `dropLabel`/`dropEdgeLabel` 里"关闭默认 session → drop → 重开默认 session"的舞蹈**整体删除**：它从来没能静默任何东西（其它线程各有自己的 session），而它正是共享 session 的来源 |
 
 **实施中发现并修复的缺陷（记录以免重犯）**：`closeConnection()` 原先靠 `if (defaultSession_)` 隐式

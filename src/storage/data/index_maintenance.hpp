@@ -166,31 +166,31 @@ inline std::vector<EdgeIndexEntry> collectEdgeIndexEntries(const std::unordered_
 }
 
 /// 写入顶点索引条目。unique 索引冲突时跳过并返回冲突计数（不抛异常）。
-inline int insertVertexIndexEntries(ISyncGraphDataStore& store, GraphTxnHandle txn,
+inline int insertVertexIndexEntries(ISyncGraphDataStore& store, GraphSession& session,
                                     const std::vector<VertexIndexEntry>& entries) {
     int conflicts = 0;
     for (const auto& entry : entries) {
-        if (entry.unique && !store.checkUniqueConstraint(txn, entry.table, entry.values)) {
+        if (entry.unique && !store.checkUniqueConstraint(session, entry.table, entry.values)) {
             spdlog::warn("Unique index constraint violated while maintaining index entry for vertex {}", entry.vid);
             ++conflicts;
             continue;
         }
-        store.insertIndexEntry(txn, entry.table, entry.values, entry.vid);
+        store.insertIndexEntry(session, entry.table, entry.values, entry.vid);
     }
     return conflicts;
 }
 
 /// 写入边索引条目。unique 索引冲突时跳过并返回冲突计数（不抛异常）。
-inline int insertEdgeIndexEntries(ISyncGraphDataStore& store, GraphTxnHandle txn,
+inline int insertEdgeIndexEntries(ISyncGraphDataStore& store, GraphSession& session,
                                   const std::vector<EdgeIndexEntry>& entries) {
     int conflicts = 0;
     for (const auto& entry : entries) {
-        if (entry.unique && !store.checkUniqueConstraint(txn, entry.table, entry.values)) {
+        if (entry.unique && !store.checkUniqueConstraint(session, entry.table, entry.values)) {
             spdlog::warn("Unique edge index constraint violated while maintaining index entry for edge {}", entry.eid);
             ++conflicts;
             continue;
         }
-        store.insertIndexEntry(txn, entry.table, entry.values, entry.eid);
+        store.insertIndexEntry(session, entry.table, entry.values, entry.eid);
     }
     return conflicts;
 }

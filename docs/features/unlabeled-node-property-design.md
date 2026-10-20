@@ -286,7 +286,7 @@ MATCH (n) RETURN n.name
 | `src/query/planner/bound_expression/bound_dynamic_property_ref.hpp` | **新文件**：BoundDynamicPropertyRef 结构体 |
 | `src/query/planner/bound_expression/bound_expression_fwd.hpp` | variant 加入 `std::unique_ptr<BoundDynamicPropertyRef>` |
 | `src/query/catalog/catalog.hpp` | 新增 `getAnonLabelId()` 方法，`load()` 中识别并保存 |
-| `src/storage/graph_manager.cpp` | `createGraph` 时自动创建 `__anon__` 标签 |
+| `src/graph/graph_manager.cpp` | `createGraph` 时自动创建 `__anon__` 标签 |
 | `src/query/planner/binder.cpp` | (1) 弱类型属性查找失败时创建 `BoundDynamicPropertyRef` (2) `bindCreate`：`INVALID_LABEL_ID` → `__anon__id` (3) `applyProjectionPushdown`：跳过动态属性 |
 | `src/query/executor/vectorized_evaluator.cpp` | 新增 `evalDynamicPropertyRef` |
 | `src/query/planner/column_resolver.cpp` | 新增 `BoundDynamicPropertyRef` 分支 |

@@ -63,7 +63,7 @@ class IAsyncGraphMetaStore {
 
 ## 三、GraphSchema
 
-文件：`src/storage/graph_schema.hpp`
+文件：`src/common/schema/graph_schema.hpp`
 
 ```cpp
 struct GraphSchema {

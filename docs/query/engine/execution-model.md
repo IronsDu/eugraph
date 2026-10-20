@@ -43,7 +43,7 @@ Server 进程内有 4 个可配置线程池（另有 WiredTiger 自身的 evicti
 | Storage IO | `IOThreadPoolExecutor`（`IoScheduler` 内部） | `--storage-io-threads` | 所有 WiredTiger 调用（scan、get、insert、commit） |
 | Bolt EventBase | `BoltServer` | `--bolt-io-threads` | Bolt 连接的网络 EventBase |
 
-Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 内部创建 `IoScheduler`，由后者自持一个 `IOThreadPoolExecutor`（`src/storage/graph_manager.cpp`）；Thrift 的池则在 `src/program/server/eugraph_server_main.cpp` 单独创建。二者默认值相同（均为 4），但互不共享。
+Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 内部创建 `IoScheduler`，由后者自持一个 `IOThreadPoolExecutor`（`src/graph/graph_manager.cpp`）；Thrift 的池则在 `src/program/server/eugraph_server_main.cpp` 单独创建。二者默认值相同（均为 4），但互不共享。
 
 ### IoScheduler
 
@@ -78,7 +78,7 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 **待办 1：Compute 池目前每图一个，应改为进程一个。**
 
-`GraphManager::openGraphInstance` 按 `compute_threads_` 为每个图实例各建一个 `CPUThreadPoolExecutor`（`src/storage/graph_manager.cpp`），因此 G 个图 = `G × --compute-threads` 个线程，而 Bolt 只用得到当前图那一个。改法是让 `GraphManager` 持有一个共享池（与既有的 `io_scheduler_` 同样做法），经 `QueryExecutor::Config` 注入。参考实现见提交 `f2b3884`（该提交同时含下方待办 2 的失败尝试，回退时被一并撤销）。
+`GraphManager::openGraphInstance` 按 `compute_threads_` 为每个图实例各建一个 `CPUThreadPoolExecutor`（`src/graph/graph_manager.cpp`），因此 G 个图 = `G × --compute-threads` 个线程，而 Bolt 只用得到当前图那一个。改法是让 `GraphManager` 持有一个共享池（与既有的 `io_scheduler_` 同样做法），经 `QueryExecutor::Config` 注入。参考实现见提交 `f2b3884`（该提交同时含下方待办 2 的失败尝试，回退时被一并撤销）。
 
 **待办 2：把 Thrift 的查询执行移出 IO 线程（暂缓，风险已知）。**
 
@@ -101,9 +101,10 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 - `phys_op` — 物理算子树（unique_ptr，StreamContext 持有所有权）
 - `gen` — 从 `phys_op->execute()` 创建的 AsyncGenerator
-- `txn` — 事务句柄
-- `store` — 数据存储引用（用于结束时 commit）
-- `query_store` — 本查询 `forkTransaction()` 出来的 store 包装器，物理算子实际使用的就是它；它同时承载本查询的取消标志
+- `session` — 本语句的 `SessionLease`（**声明在 phys_op/gen 之前 ⇒ 最后销毁**）
+- `store` — 共享的异步门面引用（只用于 DDL；数据路径用 `query_store`）
+- `query_store` — 本查询 `for_session(*session)` 出来的会话绑定 facade，物理算子实际使用的就是它；它同时承载本查询的取消标志
+- `graph_guard` — 图使用租约，保证流消费期间图不被 DROP
 - `query_context` — 每语句一份的 `QueryContext`（取消令牌等），算子通过 `shared_ptr` 共享；由 `setQueryContext()` 在规划完成后一次性挂到算子树根上
 - `label_defs` / `edge_label_defs` — 被物理算子通过裸指针引用，StreamContext 持有所有权
 
@@ -124,10 +125,12 @@ AsyncGenerator<DataChunk>
 
 ### 事务生命周期
 
-- 流正常结束：generator 耗尽后 `commitTran`
-- 客户端断连：generator 销毁，事务隐式回滚（WT session 关闭）
-- 执行期错误：generator 提前结束，隐式回滚
+- 流正常结束：销毁算子树（关游标）后 `StreamContext::commit()`；提交失败必须报错
+- 客户端断连：销毁算子树后 `StreamContext::rollback()`，租约归还池
+- 执行期错误：generator 提前结束，回滚
 - 查询被取消：按“未正常完成”处理，必须回滚而不是提交（见下）
+- 显式事务（Bolt BEGIN…COMMIT）：语句通过 `SessionRef` 加入调用方已开启的会话，语句不 commit；
+  由 COMMIT/ROLLBACK 边界负责
 
 ### 查询取消（协作式）
 
@@ -183,10 +186,10 @@ AsyncGenerator<DataChunk>
 
 4. **`co_viaIfAsync` 跨池不内联**：Thrift IO 池与 Storage IO 池是两个独立 executor，每次存储调用都会跳转到 Storage IO 池。Thrift / RPC 模式下物理算子树在这两个 IO 池之间切换执行，无计算隔离，且 Compute 池不被使用；只有 Bolt 模式会把 session 处理放到 Compute 池。
 
-5. **GraphTxnHandle 是 `void*`**：指向堆上 `TxnState`，commit/rollback 后释放。任何后续访问是 use-after-free。
+5. **事务不再有句柄**：`GraphSession` 由池拥有、租约非拥有；会话归还后不得再使用其 `wt_session()`/cursor。
 
 6. **CREATE INDEX 同步回填**：当前阻塞用户请求直到回填完成，大表会很慢。
 
 7. **先销毁算子树，再结束事务**（顺序红线）：`endStream()` / 析构 `StreamContext` 之前**不要** commit/rollback。顶层 generator 返回空并不代表所有游标都已关闭——`LIMIT` 等提前返回的算子会把子生成器留在 `co_yield` 上，活游标跟着那些协程帧一直活到算子树被销毁。先结束事务会释放 WT session 与游标，随后析构 `WtCursor` 时 `cursor_->close()` 打在已释放内存上（实测 SIGSEGV：`~WtCursor` ← `~VertexScanCursorImpl`）。正确顺序：**销毁流（关游标）→ commit/rollback**。Bolt 侧见 [neo4j-bolt-protocol.md](../../service/neo4j-bolt-protocol.md) 第 10 节。
 
-8. **放弃流就必须结束它的事务**：`GraphTxnHandle` 只被 commit/rollback 从 `txns_` 里摘除，句柄一丢，事务的 WT session、快照与未提交修改就活到进程结束。累积约 185 个泄漏的事务后 `open_session()` 失败，`beginTran()` 返回 `INVALID_GRAPH_TXN`，`getSession(INVALID_GRAPH_TXN)` 兜底到共享 `defaultSession_`（autocommit）——**查询静默失去事务语义，写操作逐行提交且无法回滚**，最终 WT 断言 `lock_success == 0` 崩溃。因此"丢弃流"的路径必须调用 `rollbackTranNow()`：Bolt 用 `BoltSession::abandonStream()`，Thrift/RPC 用 `eugraph_handler.cpp` 里的 `StreamAbandonRollback`；`prepareStream()` 也改为在 `beginTran()` 失败时直接报错而不是降级。
+8. **放弃流就必须回滚**：会话租约随 `StreamContext` 返回池，`GraphSession::close()` 会兜底回滚未提交事务；但"丢弃流"的路径仍必须显式销毁算子树后调用 `StreamContext::rollback()`（Bolt 用 `BoltSession::abandonStream()`，Thrift/RPC 用 `StreamAbandonRollback`），否则游标可能晚于会话释放。池耗尽时 `prepareStream()` 直接报错，绝不降级到无事务执行。

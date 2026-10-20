@@ -3,7 +3,7 @@
 //
 // 对照（同一批顶点、同一属性、同为点查）：
 //   A: N × getVertexProperty        —— 每次调用 openCursor + search + close（现状）
-//   B: 1 × pocPointGetBatchReuseCursor —— 一次 openCursor + N 次 search（候选方案）
+//   B: 1 × getVertexPropertiesBatchProjected —— 一次 open_cursor + N 次 search（会话内复用）
 // 两者每次查找的 CPU 时间差 ≈ cursor 开关的开销（也是 POC-2 的收益上限）。
 //
 // 手工编译（不在 CMake 目标里）：
@@ -15,7 +15,9 @@
 //       -Wl,--end-group $LIBS -ldl -lpthread -lgcc_s
 //
 // ⚠️ 服务端必须先停（同一 WT 库不能两个进程同时打开）；数据根目录指向 <graph>/data。
+#include "storage/data/session_pool.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/wt_connection_store.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -44,15 +46,32 @@ int main(int argc, char** argv) {
     const size_t n = argc > 4 ? std::stoul(argv[4]) : 20000;
     const int rounds = argc > 5 ? std::stoi(argv[5]) : 3;
 
-    SyncGraphDataStore store;
-    if (!store.open(dir)) {
+    WtConnectionStore conn;
+    if (!conn.open(dir)) {
         std::printf("open failed: %s\n", dir.c_str());
+        return 1;
+    }
+    SyncGraphDataStore store;
+    store.bind_connection(conn);
+    if (!store.ensure_tables()) {
+        std::printf("ensure tables failed: %s\n", dir.c_str());
+        return 1;
+    }
+    SessionPool pool(8, [&conn]() { return conn.make_session(); });
+    auto lease = pool.acquire();
+    if (!lease) {
+        std::printf("session pool exhausted\n");
+        return 1;
+    }
+    GraphSession& session = **lease;
+    if (!session.begin_read()) {
+        std::printf("begin_read failed\n");
         return 1;
     }
 
     std::vector<VertexId> vids;
     vids.reserve(n);
-    store.scanVerticesByLabel(INVALID_GRAPH_TXN, label, [&](VertexId v) {
+    store.scanVerticesByLabel(session, label, [&](VertexId v) {
         vids.push_back(v);
         return vids.size() < n;
     });
@@ -71,7 +90,7 @@ int main(int argc, char** argv) {
             const double c0 = procCpuSeconds();
             auto t0 = Clock::now();
             for (VertexId v : vids)
-                if (store.getVertexProperty(INVALID_GRAPH_TXN, v, label, prop).has_value())
+                if (store.getVertexProperty(session, v, label, prop).has_value())
                     ++hits;
             auto t1 = Clock::now();
             const double cpu = (procCpuSeconds() - c0) * 1e6 / vids.size();
@@ -83,9 +102,12 @@ int main(int argc, char** argv) {
         {
             const double c0 = procCpuSeconds();
             auto t0 = Clock::now();
-            auto out = store.pocPointGetBatchReuseCursor(INVALID_GRAPH_TXN, label, prop, vids);
+            auto out = store.getVertexPropertiesBatchProjected(session, label, vids, {prop});
             auto t1 = Clock::now();
-            const size_t hits = std::count_if(out.begin(), out.end(), [](const auto& o) { return o.has_value(); });
+            size_t hits = 0;
+            for (const auto& props : out)
+                if (props && prop < props->size() && (*props)[prop].has_value())
+                    ++hits;
             const double cpu = (procCpuSeconds() - c0) * 1e6 / vids.size();
             const double wall = std::chrono::duration<double, std::micro>(t1 - t0).count() / vids.size();
             best_b = std::min(best_b, cpu);
@@ -98,6 +120,6 @@ int main(int argc, char** argv) {
                 best_a > 0 ? (best_a - best_b) / best_a * 100.0 : 0.0, best_a - best_b);
     if (hits_a != hits_b)
         std::printf("  ⚠️ 两者命中数不同（%zu vs %zu）——结果不可比，先修正确性\n", hits_a, hits_b);
-    store.close();
+    (void)session.commit();
     return 0;
 }

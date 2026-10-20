@@ -1,19 +1,22 @@
 #pragma once
 
+#include "common/concurrency/graph_usage_gate.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/executor/query_executor.hpp"
 #include "storage/catalog/catalog_store.hpp"
 #include "storage/data/async_graph_data_store.hpp"
+#include "storage/data/session_pool.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
-#include "storage/graph_usage_gate.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "storage/wt_connection_store.hpp"
 
 #include <atomic>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -26,11 +29,33 @@ struct GraphInstance {
     std::shared_ptr<GraphUsageGate> usage = std::make_shared<GraphUsageGate>();
     uint32_t graph_id;
     std::string name;
+    /// 连接所有者（§3.5 第 7 条 ✓）：声明在 store 之前 ⇒ **晚于** store 销毁 ✓
+    WtConnectionStore data_conn;
+    WtConnectionStore meta_conn;
     std::unique_ptr<SyncGraphDataStore> sync_data;
     std::unique_ptr<SyncGraphMetaStore> sync_meta;
+    /// 共享 async 门面的数据会话锚点（只有 for_session() 会用它，数据 op 用语句会话）。
+    std::unique_ptr<GraphSession> async_session;
     std::unique_ptr<AsyncGraphDataStore> async_data;
     std::unique_ptr<AsyncGraphMetaStore> async_meta;
+
+    /// 会话池（图级 ✓）：**声明在最后 ⇒ 最先销毁** ✓ ⇒ 池内 session 在 WT 连接关闭前被 close ✓（§3.2.1）
+    std::shared_ptr<SessionPool> session_pool;
+    /// 查询执行器（持有 pool/stores 引用）：声明在 pool 之后 ⇒ **比 pool 先销毁** ✓
     std::unique_ptr<compute::QueryExecutor> executor;
+};
+
+/// 图实例**生命周期租约**：持有期间 DROP 会关闸并等待租约归零后再销毁连接。
+struct GraphLease {
+    GraphInstance* inst = nullptr;
+    GraphUsageGate::Guard guard;
+
+    explicit operator bool() const {
+        return inst != nullptr;
+    }
+    GraphInstance* operator->() const {
+        return inst;
+    }
 };
 
 class GraphManager {
@@ -52,7 +77,9 @@ public:
     bool dropGraph(const std::string& name);
     std::vector<GraphEntry> listGraphs();
 
-    GraphInstance* getGraph(const std::string& name);
+    /// 在 shared_lock 内完成“查表 + tryEnter” ⇒ 返回的指针在 guard 存活期间有效 ✓
+    /// 图不存在 / 正在 DROP ⇒ nullopt
+    std::optional<GraphLease> acquireGraph(const std::string& name);
 
 private:
     /// Opens a graph's stores; never throws (logs and returns nullptr on failure).

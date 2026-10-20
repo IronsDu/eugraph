@@ -26,7 +26,7 @@ EuGraph 使用 fbthrift 作为 RPC 框架，定义在 `proto/eugraph.thrift`。�
 | `co_createLabel` | Thrift PropertyDef → 内部 PropertyDef，`async_meta_.createLabel()` → `async_data_.createLabel()` |
 | `co_createEdgeLabel` | 同上，额外设置 `directed = true` |
 | `co_listLabels` / `co_listEdgeLabels` | `async_meta_.listLabels/EdgeLabels()` → 转换为 Thrift 类型 |
-| `co_executeCypher` | 接收可选 `parameters`（`map<string, string>`，值为 Cypher 字面值表达式如 `"42"`、`"'hello'"`），解析为 `Value` 后传给 `executor_.prepareStream()` → `StreamContext` → `makeStreamGenerator`（逐行 Value→Thrift 转换，流式 `co_yield ResultRowBatch`；流结束时 `commitTran`） |
+| `co_executeCypher` | 接收可选 `parameters`（`map<string, string>`，值为 Cypher 字面值表达式如 `"42"`、`"'hello'"`），解析为 `Value` 后传给 `executor_.prepareStream()` → `StreamContext` → `makeStreamGenerator`（逐行 Value→Thrift 转换，流式 `co_yield ResultRowBatch`；流结束时 `StreamContext::commit()`） |
 | `co_batchInsertVertices` | 查 label_id → `async_meta_.nextVertexIdRange(count)` 批量分配 ID → `async_data_.batchInsertVertices()`（独立事务） |
 | `co_batchInsertEdges` | 同上，`nextEdgeIdRange` + `batchInsertEdges` |
 
@@ -34,9 +34,9 @@ EuGraph 使用 fbthrift 作为 RPC 框架，定义在 `proto/eugraph.thrift`。�
 
 `co_executeCypher` 返回 `ResponseAndServerStream<QueryStreamMeta, ResultRowBatch>`：
 
-1. `prepareStream()` 返回 `shared_ptr<StreamContext>`（含物理算子树 + AsyncGenerator + 事务）
+1. `prepareStream()` 返回 `shared_ptr<StreamContext>`（含物理算子树 + AsyncGenerator + 会话租约）
 2. `makeStreamGenerator` 将 `AsyncGenerator<DataChunk>` 包装：逐批转换 Value → Thrift 类型，`co_yield ResultRowBatch`
-3. 流正常结束时 `commitTran`；客户端断连则隐式回滚
+3. 流正常结束时销毁算子树后 `StreamContext::commit()`；客户端断连则 `rollback()`（租约归还池）
 
 详细见 [query/engine/execution-model.md](query/engine/execution-model.md)。
 

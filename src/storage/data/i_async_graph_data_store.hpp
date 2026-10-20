@@ -14,27 +14,20 @@
 
 namespace eugraph {
 
+class GraphSession;
+
 /// Async graph data store interface.
 /// Compute layer depends on this interface instead of sync types.
+///
+/// 只做异步门面（docs/storage/session-cursor-pool-design.md §2 / §3）：
+///  - 实现**构造即绑定语句会话**（每个语句一个轻量实例）；DDL 内部走 admin session ✓
+///  - 本接口**不**开/提交/回滚事务 ✗（归 GraphSession ✓）、**不**管池 ✗（归 GraphInstance ✓）
 class IAsyncGraphDataStore {
 public:
     virtual ~IAsyncGraphDataStore() = default;
 
-    // ==================== Transaction ====================
-
-    virtual folly::coro::Task<GraphTxnHandle> beginTran() = 0;
-    virtual folly::coro::Task<bool> commitTran(GraphTxnHandle txn) = 0;
-    virtual folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) = 0;
-    /// Roll back without a coroutine, for teardown paths that run on a network
-    /// EventBase thread where nothing can be awaited. A transaction whose handle is
-    /// dropped without being ended keeps its WT session and snapshot alive forever,
-    /// so every path that abandons a stream must call this (or rollbackTran).
-    /// Safe from any thread; the store guards its transaction table with a mutex.
-    virtual bool rollbackTranNow(GraphTxnHandle txn) = 0;
-    virtual void setTransaction(GraphTxnHandle txn) = 0;
-    /// Create an isolated view bound to one transaction. Concurrent query
-    /// streams each own one so transaction handles never leak across calls.
-    virtual std::unique_ptr<IAsyncGraphDataStore> forkTransaction(GraphTxnHandle txn) = 0;
+    // 数据 op 由**构造即绑定会话**的实现执行（见 AsyncGraphDataStore）：
+    // 每个语句一个轻量实例，不共享会话；DDL 仍走内部 admin session ✓。
 
     // ==================== DDL ====================
 

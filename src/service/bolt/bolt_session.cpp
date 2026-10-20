@@ -452,7 +452,18 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         // Hand the connection's liveness flag to the query. If the socket dies
         // mid-execution the operators stop at their next batch boundary instead of
         // scanning the rest of the graph for a client that is no longer there.
-        auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name, connection_closed_);
+        // Explicit transaction: one session spans every statement until COMMIT/ROLLBACK.
+        SessionRef txn_session;
+        if (in_transaction_) {
+            if (!explicit_txn_) {
+                auto scope = service_.beginSession(db_name);
+                if (!scope)
+                    throw std::runtime_error("Failed to begin explicit transaction");
+                explicit_txn_ = std::move(*scope);
+            }
+            txn_session = std::ref(*explicit_txn_->session);
+        }
+        auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name, connection_closed_, txn_session);
 
         // Handle USE <graph> — update session database context
         if (!exec_ctx.switched_database.empty())
@@ -484,6 +495,12 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         co_return makeSuccess(meta);
     } catch (const std::exception& e) {
         spdlog::error("[bolt] RUN failed db='{}' query='{}' error='{}'", db_name, msg.query, e.what());
+        // A failed statement invalidates the explicit transaction.
+        if (explicit_txn_) {
+            explicit_txn_->session->rollback();
+            explicit_txn_.reset();
+            in_transaction_ = false;
+        }
         state_ = SessionState::FAILED;
         co_return makeFailureFor(e);
     }
@@ -611,18 +628,24 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         // WtCursor objects in them -- are destroyed by endStream(). Committing or
         // rolling back first frees the WT session and its cursors, so the later
         // ~WtCursor would close freed memory.
-        const GraphTxnHandle stream_txn = stream_ctx_->txn;
-        IAsyncGraphDataStore& stream_store = stream_ctx_->store;
-        const bool stream_should_commit = stream_ctx_->should_commit;
+        auto stream = stream_ctx_;
+        const bool stream_should_commit = stream->should_commit;
         const bool stream_in_txn = in_transaction_;
 
         if (abort_reason) {
             // Nobody will read this response: release the operator tree (closing its
             // cursors), then roll back rather than commit a write the client never saw.
             endStream();
-            if (!stream_in_txn && stream_should_commit) {
-                co_await stream_store.rollbackTran(stream_txn);
+            stream->gen = folly::coro::AsyncGenerator<DataChunk>{};
+            stream->phys_op.reset();
+            stream->rollback();
+            stream.reset();
+            // An aborted statement invalidates the whole explicit transaction.
+            if (explicit_txn_) {
+                explicit_txn_->session->rollback();
+                explicit_txn_.reset();
             }
+            in_transaction_ = false;
             state_ = SessionState::FAILED;
             co_return makeFailure("DatabaseError", abort_reason);
         }
@@ -640,24 +663,15 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         // Result fully drained: drop the stream (and with it every cursor) first, so
         // the commit below cannot free a session a suspended generator still holds.
         endStream();
+        stream->gen = folly::coro::AsyncGenerator<DataChunk>{};
+        stream->phys_op.reset();
 
-        // Commit auto-commit transaction
-        if (!stream_in_txn && stream_should_commit) {
-            // **必须检查提交结果**：WT 连接若已 PANIC（例如 DROP DATABASE 关闭连接时仍有在飞使用者），
-            // 提交会失败而此前的写法把返回值丢弃 ⇒ **静默丢写入**（数据丢失级，实测见设计文档）。
-            // 空句柄 = 该语句没有事务（只读等）⇒ 无提交可言，跳过；非空失败才报错。
-            const bool committed =
-                (stream_txn == INVALID_GRAPH_TXN) ? true : co_await stream_store.commitTran(stream_txn);
-            if (!committed) {
-                spdlog::error("[bolt] 自动提交失败（存储引擎错误，如 WT PANIC）⇒ 明确报错，绝不静默丢写入");
-                co_return makeFailure("DatabaseError", "Transaction commit failed (storage engine error)");
-            }
+        // Commit auto-commit transaction (explicit transactions commit at COMMIT ✓)
+        if (!stream_in_txn && stream_should_commit && !stream->commit()) {
+            spdlog::error("[bolt] 自动提交失败（存储引擎错误，如 WT PANIC）⇒ 明确报错，绝不静默丢写入");
+            co_return makeFailure("DatabaseError", "Transaction commit failed (storage engine error)");
         }
-
-        // Save transaction handle for explicit transaction commits
-        if (stream_in_txn && stream_should_commit) {
-            parkTxn(stream_txn, stream_store);
-        }
+        stream.reset();
 
         meta["has_more"] = false;
         if (stream_should_commit && next_bookmark_fn_)
@@ -686,12 +700,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleDiscard(const Discard
     if (state_ == SessionState::FAILED) {
         co_return makeIgnored();
     }
-    // Save transaction handle for explicit transaction commits.
-    // DISCARD keeps the explicit transaction: park its statement transaction, then
-    // end the stream (which rolls back only an auto-commit statement).
-    if (in_transaction_ && stream_ctx_ && stream_ctx_->should_commit) {
-        parkTxn(stream_ctx_->txn, stream_ctx_->store);
-    }
+    // DISCARD keeps the explicit transaction: the statement's operator tree is
+    // destroyed, while the explicit session stays alive for the client's COMMIT.
     abandonStream(false);
     if (state_ == SessionState::TX_STREAMING) {
         state_ = SessionState::TX_READY;
@@ -739,10 +749,9 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleCommit() {
         co_return makeFailure("ProtocolError", "Unexpected COMMIT in current state");
     }
 
-    if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_) {
-        const bool committed = co_await pending_store_->commitTran(pending_txn_);
-        pending_txn_ = INVALID_GRAPH_TXN;
-        pending_store_ = nullptr;
+    if (explicit_txn_) {
+        const bool committed = explicit_txn_->session->commit().committed();
+        explicit_txn_.reset(); // 归还会话（提交后 close/复用 ✓）
         if (!committed) {
             in_transaction_ = false;
             state_ = SessionState::READY;
@@ -767,10 +776,9 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRollback() {
         co_return makeFailure("ProtocolError", "Unexpected ROLLBACK in current state");
     }
 
-    if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_) {
-        co_await pending_store_->rollbackTran(pending_txn_);
-        pending_txn_ = INVALID_GRAPH_TXN;
-        pending_store_ = nullptr;
+    if (explicit_txn_) {
+        explicit_txn_->session->rollback();
+        explicit_txn_.reset();
     }
 
     in_transaction_ = false;

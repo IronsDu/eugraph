@@ -206,20 +206,29 @@ std::vector<ProcedureShowEntry> builtinProcedureShowEntries() {
 } // namespace
 
 folly::Executor* GraphService::computeExecutor() {
-    auto* inst = gm_.getGraph(GraphManager::kDefaultGraphName);
-    return inst && inst->executor ? inst->executor->computeExecutor() : nullptr;
+    // default 图禁止 DROP，因此返回的 executor 指针在进程生命周期内有效。
+    auto lease = gm_.acquireGraph(GraphManager::kDefaultGraphName);
+    return lease && lease->inst && lease->inst->executor ? lease->inst->executor->computeExecutor() : nullptr;
 }
 
-GraphService::GraphLease GraphService::resolveGraph(const std::string& name) {
-    auto* inst = gm_.getGraph(name);
-    if (!inst)
-        throw std::runtime_error("Graph not found: " + name);
-    // **准入**：拿到租约才算"在飞使用者"；若该图正在 DROP（已关闸）⇒ 明确报错，
-    // 绝不把即将被关闭的连接交给语句使用（否则 WT PANIC）。
-    auto guard = inst->usage->tryEnter();
-    if (!guard)
-        throw std::runtime_error("Graph is being dropped: " + name);
-    return GraphLease{inst, std::move(guard)};
+GraphLease GraphService::resolveGraph(const std::string& name) {
+    // acquireGraph 在 shared_lock 内完成 tryEnter：图在租约存活期间不会被销毁 ✓
+    auto lease = gm_.acquireGraph(name);
+    if (!lease)
+        throw std::runtime_error("Graph not found or being dropped: " + name);
+    return std::move(*lease);
+}
+
+std::optional<GraphService::SessionScope> GraphService::beginSession(const std::string& graph_name) {
+    auto graph = resolveGraph(graph_name);
+    if (!graph.inst->session_pool)
+        throw std::runtime_error("Graph has no session pool: " + graph_name);
+    auto lease = graph.inst->session_pool->acquire();
+    if (!lease)
+        throw std::runtime_error("Session pool exhausted: " + graph_name);
+    if (!(*lease)->begin_write())
+        throw std::runtime_error("Failed to begin explicit transaction: " + graph_name);
+    return SessionScope{std::move(graph), std::move(*lease)};
 }
 
 GraphEntry GraphService::createGraph(const std::string& name) {
@@ -321,7 +330,7 @@ folly::coro::Task<std::vector<EdgeLabelDef>> GraphService::listEdgeLabels(const 
 
 folly::coro::Task<CypherExecutionContext>
 GraphService::executeCypher(const std::string& query, const std::unordered_map<std::string, Value>& params,
-                            const std::string& graph_name, compute::QueryCancel cancel) {
+                            const std::string& graph_name, compute::QueryCancel cancel, SessionRef existing_session) {
     // neo4j Browser commonly uses the default DB names `neo4j` / `system`; alias them
     // onto our single default graph. The alias applies to DDL interception too, so it
     // has to be resolved before the graph-scoped DESCRIBE family picks an instance.
@@ -341,11 +350,8 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
     if (ddl_stmt.has_value()) {
         // 同样**持租约**（跨 co_await 存活于协程帧）⇒ DROP 不会在我们使用期间关闭连接。
         GraphLease ddl_lease;
-        if (auto* selected = gm_.getGraph(resolved_graph)) {
-            auto guard = selected->usage->tryEnter();
-            if (!guard)
-                throw std::runtime_error("Graph is being dropped: " + resolved_graph);
-            ddl_lease = GraphLease{selected, std::move(guard)};
+        if (auto selected = gm_.acquireGraph(resolved_graph)) {
+            ddl_lease = std::move(*selected);
         } else {
             ddl_lease = resolveGraph(GraphManager::kDefaultGraphName);
         }
@@ -355,7 +361,7 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
     auto _lease5 = resolveGraph(resolved_graph);
     auto* inst = _lease5.inst;
 
-    auto ctx = co_await inst->executor->prepareStream(query, params, std::move(cancel));
+    auto ctx = co_await inst->executor->prepareStream(query, params, std::move(cancel), existing_session);
 
     if (!ctx->error.empty()) {
         // 绑定/解析错误的原因分类写在消息里（"Binding failed; SyntaxError: ..."），
@@ -365,6 +371,9 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
 
     auto labels = co_await inst->async_meta->listLabels();
     auto edge_labels = co_await inst->async_meta->listEdgeLabels();
+
+    // 流在 executeCypher 返回后才被消费 ⇒ 把图租约交给 ctx 持有，直到流销毁 ✓
+    ctx->graph_guard = std::move(_lease5.guard);
 
     CypherExecutionContext result;
     result.ctx = std::move(ctx);
@@ -381,6 +390,18 @@ GraphService::batchInsertVertices(const std::string& label_name, std::vector<Bat
                                   const std::string& graph_name) {
     auto _lease6 = resolveGraph(graph_name);
     auto* inst = _lease6.inst;
+
+    // 批量写：一个会话、一个事务；读预检与写同事务（MVCC：跨事务写入不可见 ✓）
+    if (!inst->session_pool)
+        throw std::runtime_error("Graph has no session pool: " + graph_name);
+    auto vertex_session = inst->session_pool->acquire();
+    if (!vertex_session)
+        throw std::runtime_error("Session pool exhausted: " + graph_name);
+    GraphSession& session = **vertex_session;
+    if (!session.begin_write())
+        throw std::runtime_error("Failed to begin batch-insert transaction: " + graph_name);
+    auto vertex_store = inst->async_data->for_session(session);
+    IAsyncGraphDataStore& data = vertex_store;
 
     auto label_id_opt = co_await inst->async_meta->getLabelId(label_name);
     if (!label_id_opt.has_value()) {
@@ -421,7 +442,7 @@ GraphService::batchInsertVertices(const std::string& label_name, std::vector<Bat
             continue;
         }
         if (pk_index_id.has_value()) {
-            auto existing = co_await inst->async_data->lookupVertexByPrimaryKey(*pk_index_id, pk);
+            auto existing = co_await data.lookupVertexByPrimaryKey(*pk_index_id, pk);
             if (existing.has_value()) {
                 ++duplicate_pk;
                 continue;
@@ -456,7 +477,9 @@ GraphService::batchInsertVertices(const std::string& label_name, std::vector<Bat
         batch_entries.push_back(std::move(entry));
     }
 
-    co_await inst->async_data->batchInsertVertices(std::move(batch_entries), label_defs);
+    co_await data.batchInsertVertices(std::move(batch_entries), label_defs);
+    if (!session.commit().committed())
+        throw std::runtime_error("Batch insert transaction failed to commit (see server log)");
 
     BatchInsertVerticesOutcome outcome;
     outcome.duplicate_pk = duplicate_pk;
@@ -471,6 +494,17 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
                                                                               const std::string& graph_name) {
     auto _lease7 = resolveGraph(graph_name);
     auto* inst = _lease7.inst;
+
+    if (!inst->session_pool)
+        throw std::runtime_error("Graph has no session pool: " + graph_name);
+    auto edge_session = inst->session_pool->acquire();
+    if (!edge_session)
+        throw std::runtime_error("Session pool exhausted: " + graph_name);
+    GraphSession& session = **edge_session;
+    if (!session.begin_write())
+        throw std::runtime_error("Failed to begin batch-insert transaction: " + graph_name);
+    auto edge_store = inst->async_data->for_session(session);
+    IAsyncGraphDataStore& data = edge_store;
 
     auto elabel_id_opt = co_await inst->async_meta->getEdgeLabelId(edge_label_name);
     if (!elabel_id_opt.has_value()) {
@@ -512,7 +546,7 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
                 co_return std::nullopt;
             if (ep.pk.size() != def.pk_prop_ids.size())
                 co_return std::nullopt; // 元组长度不符：不做部分匹配
-            co_return co_await inst->async_data->lookupVertexByPrimaryKey(idx_it->second, ep.pk);
+            co_return co_await data.lookupVertexByPrimaryKey(idx_it->second, ep.pk);
         };
 
         // 1) hint 标签
@@ -579,7 +613,9 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
             edge_label_defs.emplace(el.id, el);
 
         auto inserted_count = static_cast<int32_t>(batch_entries.size());
-        co_await inst->async_data->batchInsertEdges(elabel_id, std::move(batch_entries), edge_label_defs);
+        co_await data.batchInsertEdges(elabel_id, std::move(batch_entries), edge_label_defs);
+        if (!session.commit().committed())
+            throw std::runtime_error("Batch edge-insert transaction failed to commit (see server log)");
         co_return std::make_pair(inserted_count, skipped);
     }
 
@@ -589,7 +625,7 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
 folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const DatabaseDdlStatement& stmt,
                                                                           GraphInstance& instance) {
     CypherExecutionContext result;
-    auto ctx = std::make_shared<compute::StreamContext>(*instance.async_data);
+    auto ctx = std::make_shared<compute::StreamContext>();
     Schema columns;
     std::vector<Row> rows;
 

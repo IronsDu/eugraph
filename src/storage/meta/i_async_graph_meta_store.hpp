@@ -1,7 +1,7 @@
 #pragma once
 
+#include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
-#include "storage/graph_schema.hpp"
 
 #include <folly/coro/Task.h>
 

@@ -1,4 +1,4 @@
-#include "storage/graph_manager.hpp"
+#include "graph/graph_manager.hpp"
 
 #include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
@@ -120,11 +120,23 @@ void GraphManager::shutdown() {
         graphs_.clear();
     }
 
+    // 关闭前先关闸并等在飞使用者归零：否则会与仍在执行的协程并发使用同一 WT 连接 ⇒ WT_PANIC。
+    // 超时仍不归零 ⇒ **故意泄漏**该实例（进程即将退出；泄漏远好于 UAF/WT_PANIC ✓）。
+    for (auto& inst : instances)
+        if (inst && inst->usage)
+            inst->usage->close();
     for (auto& inst : instances) {
-        folly::coro::blockingWait(inst->async_meta->close());
-        inst->sync_data->close();
-        inst->sync_meta->close();
+        if (!inst || !inst->usage)
+            continue;
+        if (inst->usage->waitDrained(/*timeout_ms=*/10000))
+            continue;
+        spdlog::error("shutdown: 图 '{}' 仍有 {} 个在飞使用者，超时 ⇒ 泄漏该实例以避免 UAF/WT_PANIC", inst->name,
+                      inst->usage->inflight());
+        (void)inst.release(); // 有序泄漏：连接/会话/池都保持有效，直到进程退出
     }
+
+    // 图实例析构顺序保证「会话池 → store → 连接」：session_pool 声明在最后 ⇒ 最先销毁 ✓
+    instances.clear();
     catalog_.close();
 }
 
@@ -180,14 +192,27 @@ bool GraphManager::dropGraph(const std::string& name) {
     // docs/tests/bolt-driver-integration-notes.md）。
     inst->usage->close();
     if (!inst->usage->waitDrained(/*timeout_ms=*/10000)) {
-        spdlog::error("dropGraph '{}': 仍有 {} 个在飞使用者，超时后继续关闭（可能触发 WT PANIC）", name,
-                      inst->usage->inflight());
+        // 仍有执行流在用这个图的会话/连接 ⇒ **绝不能**关闭连接（UAF ⇒ WT_PANIC ⇒ 全局静默丢写）。
+        // 安全失败模式：故意泄漏实例（连接/会话池保持有效，执行流释放完租约后自然回收），
+        // 图目录也不删除（避免删掉仍被打开的数据）。catalog 条目已在锁内移除；
+        // 该目录成为孤儿数据，需要人工处理 —— 这仍然好过 UAF。
+        spdlog::error("dropGraph '{}': 仍有 {} 个在飞使用者与 {} 个借出会话，超时 ⇒ 泄漏实例以避免 UAF/WT_PANIC", name,
+                      inst->usage->inflight(), inst->session_pool ? inst->session_pool->outstanding() : 0);
+        (void)inst.release();
+        return false;
     }
     // lock released — safe to block on I/O; inst owns the GraphInstance
-
-    folly::coro::blockingWait(inst->async_meta->close());
-    inst->sync_data->close();
-    inst->sync_meta->close();
+    // 连接关闭前先清池 ✓；随后 inst 析构（session_pool → store → 连接 ✓）
+    // 双保险：usage 归零但仍有借出会话（说明租约生命周期与 usage 顺序出错）⇒ 同样不能关连接。
+    if (inst->session_pool && inst->session_pool->outstanding() != 0) {
+        spdlog::error("dropGraph '{}': usage 已归零但仍有 {} 个借出会话 ⇒ 泄漏实例以避免 UAF", name,
+                      inst->session_pool->outstanding());
+        (void)inst.release();
+        return false;
+    }
+    if (inst->session_pool)
+        inst->session_pool->clear();
+    inst.reset();
 
     std::string graph_dir = data_dir_ + "/graph_" + std::to_string(graph_id);
     std::error_code ec;
@@ -203,10 +228,17 @@ std::vector<GraphEntry> GraphManager::listGraphs() {
     return catalog_.listGraphs();
 }
 
-GraphInstance* GraphManager::getGraph(const std::string& name) {
+std::optional<GraphLease> GraphManager::acquireGraph(const std::string& name) {
+    // 关键：tryEnter 必须在 shared_lock 内完成。否则 get 返回后、tryEnter 前，
+    // dropGraph 可以移出并销毁实例 ⇒ UAF。
     std::shared_lock lock(mu_);
     auto it = graphs_.find(name);
-    return it != graphs_.end() ? it->second.get() : nullptr;
+    if (it == graphs_.end())
+        return std::nullopt;
+    auto guard = it->second->usage->tryEnter();
+    if (!guard)
+        return std::nullopt;
+    return GraphLease{it->second.get(), std::move(guard)};
 }
 
 std::unique_ptr<GraphInstance> GraphManager::openGraphInstance(uint32_t graph_id, const std::string& name) {
@@ -234,19 +266,34 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
     instance->graph_id = graph_id;
     instance->name = name;
 
+    // 连接 → WtConnectionStore（data / meta 各一）✓；store 只 bind，不拥有连接 ✓
+    if (!instance->data_conn.open(data_dir, data_wt_config_)) {
+        spdlog::error("Failed to open data connection for graph '{}' at {}", name, data_dir);
+        return nullptr;
+    }
+    if (!instance->meta_conn.open(meta_dir)) {
+        spdlog::error("Failed to open meta connection for graph '{}' at {}", name, meta_dir);
+        return nullptr;
+    }
+
     instance->sync_data = std::make_unique<SyncGraphDataStore>();
-    if (!instance->sync_data->open(data_dir, data_wt_config_)) {
-        spdlog::error("Failed to open data store for graph '{}' at {}", name, data_dir);
+    instance->sync_data->bind_connection(instance->data_conn);
+    if (!instance->sync_data->ensure_tables()) {
+        spdlog::error("Failed to ensure data tables for graph '{}' at {}", name, data_dir);
         return nullptr;
     }
 
     instance->sync_meta = std::make_unique<SyncGraphMetaStore>();
-    if (!instance->sync_meta->open(meta_dir)) {
-        spdlog::error("Failed to open meta store for graph '{}' at {}", name, meta_dir);
+    instance->sync_meta->bind_connection(instance->meta_conn);
+    if (!instance->sync_meta->ensure_tables()) {
+        spdlog::error("Failed to ensure meta tables for graph '{}' at {}", name, meta_dir);
         return nullptr;
     }
 
-    instance->async_data = std::make_unique<AsyncGraphDataStore>(*instance->sync_data, *io_scheduler_);
+    // 共享 async 门面只用于 for_session()；数据会话只作为构造锚点。
+    instance->async_session = std::make_unique<GraphSession>(instance->data_conn.make_session());
+    instance->async_data =
+        std::make_unique<AsyncGraphDataStore>(*instance->sync_data, *io_scheduler_, *instance->async_session);
 
     instance->async_meta = std::make_unique<AsyncGraphMetaStore>();
     auto opened = folly::coro::blockingWait(instance->async_meta->open(*instance->sync_meta, *io_scheduler_));
@@ -270,10 +317,15 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
         }
     }
 
+    // 会话池：工厂从**连接所有者**取 session ✓（WT 不外泄 ✓）
+    // 注：池成员声明在 GraphInstance **最后** ⇒ 最先销毁 ✓（session 在连接关闭前 close ✓，§3.2.1）
+    instance->session_pool =
+        std::make_shared<SessionPool>(32, [conn = &instance->data_conn]() { return conn->make_session(); });
+
     compute::QueryExecutor::Config executor_config;
     executor_config.compute_threads = compute_threads_;
-    instance->executor =
-        std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta, executor_config);
+    instance->executor = std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta,
+                                                                  *instance->session_pool, executor_config);
 
     return instance;
 }
@@ -282,8 +334,14 @@ void GraphManager::checkpointAll() {
     std::shared_lock lock(mu_);
     for (auto& [name, inst] : graphs_) {
         auto t0 = std::chrono::steady_clock::now();
-        inst->sync_data->checkpoint();
-        inst->sync_meta->checkpoint();
+        {
+            WtSession data_session = inst->data_conn.make_session();
+            inst->data_conn.checkpoint(data_session);
+        }
+        {
+            WtSession meta_session = inst->meta_conn.make_session();
+            inst->meta_conn.checkpoint(meta_session);
+        }
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
         spdlog::info("Periodic checkpoint for graph '{}' completed ({}ms)", name, ms);
     }

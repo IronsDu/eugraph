@@ -18,10 +18,17 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgeLabelPhysicalOp::executeChunk()
     EdgeLabelId id = co_await meta_.createEdgeLabel(label_name_, property_defs);
 
     if (id != INVALID_EDGE_LABEL_ID) {
-        // Newly created label — also create the underlying data table
+        // Newly created label — also create the underlying data tables
         co_await store_.createEdgeLabel(id);
     } else {
-        // Label already exists — register properties that aren't yet in the definition
+        // Label already exists（例如元数据已由 DDL 声明，但数据表尚未建）：
+        // 数据表创建必须**幂等补齐** ✓ —— 否则 insertEdge 会在缺失的表上失败，
+        // 旧实现还会静默提交部分索引写入 ✗。节点标签路径已由 meta.createLabel 返回既有 id 保证对称 ✓。
+        if (auto existing = co_await meta_.getEdgeLabelId(label_name_); existing.has_value()) {
+            id = *existing;
+            co_await store_.createEdgeLabel(id);
+        }
+        // Register properties that aren't yet in the definition
         if (!prop_defs_.empty()) {
             co_await meta_.addEdgeLabelProperties(label_name_, prop_defs_);
         }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/concurrency/graph_usage_gate.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
@@ -10,11 +11,15 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "query/planner/binder.hpp"
+#include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/data/session_pool.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+
+#include <spdlog/spdlog.h>
 
 #include <memory>
 #include <string>
@@ -27,12 +32,17 @@ namespace compute {
 struct StreamContext {
     Schema columns;
     std::string error;
+    /// 图租约：流在 executeCypher 返回后才被消费 ⇒ 必须让图活到流销毁 ✓（声明在 session 之前
+    /// ⇒ 比 session 后销毁 ✓）。
+    std::optional<GraphUsageGate::Guard> graph_guard;
+    /// 本语句独占的会话租约 ✓。**声明在 query_store/phys_op 之前** ⇒ 最后销毁 ✓：
+    /// 算子树/游标先释放，随后会话才 close（否则 ~WtCursor 碰已关闭的会话 ✗）。
+    std::optional<SessionLease> session;
+    /// 本语句会话绑定的异步门面（构造即绑定；算子与 EvalContext 引用它）。
+    /// **声明在 phys_op/gen 之前** ⇒ 比算子树后销毁 ✓。
+    std::optional<AsyncGraphDataStore> query_store;
     std::unique_ptr<PhysicalOperator> phys_op;
     folly::coro::AsyncGenerator<DataChunk> gen;
-    GraphTxnHandle txn = INVALID_GRAPH_TXN;
-    IAsyncGraphDataStore& store;
-    // Owns the transaction-bound store used by the physical plan.
-    std::unique_ptr<IAsyncGraphDataStore> query_store;
     /// Per-statement execution state, shared with the operator tree (see
     /// PhysicalOperator::setQueryContext). Declared after phys_op/query_store on
     /// purpose: it must not be the thing that keeps them alive during teardown.
@@ -50,7 +60,22 @@ struct StreamContext {
     // Presentation metadata: per-column label order for vertex formatting.
     std::unordered_map<std::string, std::vector<LabelId>> label_order;
 
-    explicit StreamContext(IAsyncGraphDataStore& s) : store(s) {}
+    StreamContext() = default;
+
+    /// 提交本语句的事务（无会话/显式事务 ⇒ 幂等成功 ✓）；必须检查返回值 ✓
+    bool commit() {
+        if (!session || !should_commit)
+            return true;
+        const bool ok = (*session)->commit().committed();
+        if (!ok)
+            spdlog::error("[StreamContext] commit failed: {}", (*session)->error().outcome().message);
+        return ok;
+    }
+    /// 回滚本语句的事务（幂等 ✓）
+    void rollback() noexcept {
+        if (session)
+            (*session)->rollback();
+    }
 };
 
 /// Top-level query execution engine.
@@ -63,15 +88,18 @@ public:
         Config() = default;
     };
 
-    QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, Config config);
+    QueryExecutor(AsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, SessionPool& session_pool,
+                  Config config);
     ~QueryExecutor();
 
     /// Build the streaming execution context for one query. `cancel`, when given, is
     /// armed on the query's store wrapper so that every physical operator observes it
     /// (see IAsyncGraphDataStore::cancelled); pass nullptr for non-cancellable callers.
+    /// `existing_session` 非空 ⇒ 语句加入一个**已开启**的显式事务（Bolt BEGIN…COMMIT ✓）：
+    /// 不由本语句 begin/commit，会话仍由调用方持有 ✓。
     folly::coro::Task<std::shared_ptr<StreamContext>>
     prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params = {},
-                  QueryCancel cancel = nullptr);
+                  QueryCancel cancel = nullptr, SessionRef existing_session = std::nullopt);
 
     folly::Executor* computeExecutor() const {
         return compute_pool_.get();
@@ -79,10 +107,11 @@ public:
 
 private:
     folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
-    IAsyncGraphDataStore& async_data_;
+    AsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;
     std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
+    SessionPool& session_pool_;
 };
 
 } // namespace compute

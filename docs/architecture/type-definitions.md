@@ -16,14 +16,16 @@ using LabelId = uint16_t;
 using EdgeLabelId = uint16_t;
 using LabelName = std::string;
 using EdgeLabelName = std::string;
-using GraphTxnHandle = void*;  // 不透明事务句柄，指向内部 TxnState
 
 constexpr VertexId INVALID_VERTEX_ID = 0;
 constexpr EdgeId INVALID_EDGE_ID = 0;
 constexpr LabelId INVALID_LABEL_ID = 0;
 constexpr EdgeLabelId INVALID_EDGE_LABEL_ID = 0;
-constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
 ```
+
+> 事务不再有句柄类型：事务归 `GraphSession`（见
+> [storage/session-cursor-pool-design.md](../storage/session-cursor-pool-design.md)），
+> 非拥有租约 `SessionLease` 由 `SessionPool` 分发。
 
 ---
 
