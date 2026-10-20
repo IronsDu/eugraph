@@ -751,7 +751,8 @@ python3 scripts/bench_ldbc_ab.py \
 
 - **8 条全部比上一轮 eugraph 绝对值下降 19–72%**：complex-3 从 475→131 ms，complex-10
   从 63→30 ms，complex-12 从 422→337 ms；
-- **complex-8 已快于 neo4j**（3.53 vs 3.74 ms），complex-7 基本持平（1.13×）；
+- 同参数复跑确认（10 轮）：complex-3 132.9 ms、complex-12 344.1 ms，其余在 ±10% 内；
+- **complex-8 与 neo4j 基本持平**（两次 0.94× / 0.98×），complex-7 为 0.75–0.89×（慢 1.1–1.3×）；
 - 仍落后的主要是 **complex-3（4.9×）**、**complex-12（3.4×）**、**complex-10（3.3×）**、
   **complex-2（2.9×）**；
 - complex-12 的 GDB 采样显示 `createEdgeScanCursor` / `EdgeScanCursorImpl` 约一半 active
