@@ -212,8 +212,14 @@ folly::Executor* GraphService::computeExecutor() {
 }
 
 GraphLease GraphService::resolveGraph(const std::string& name) {
+    // neo4j Browser/Driver 会用 `system` / `neo4j` 作为 home database（Browser 的
+    // SHOW…/dbms.* 元数据查询还使用显式事务 ⇒ 走 beginSession → 本函数）。
+    // 单点归一化：所有入口（executeCypher、beginSession、DDL、批量导入）都映射到 default，
+    // 避免只在 executeCypher 里别名、显式事务路径却报 "Graph not found: system"。
+    const std::string resolved =
+        (name == "neo4j" || name == "system") ? std::string(GraphManager::kDefaultGraphName) : name;
     // acquireGraph 在 shared_lock 内完成 tryEnter：图在租约存活期间不会被销毁 ✓
-    auto lease = gm_.acquireGraph(name);
+    auto lease = gm_.acquireGraph(resolved);
     if (!lease)
         throw std::runtime_error("Graph not found or being dropped: " + name);
     return std::move(*lease);
