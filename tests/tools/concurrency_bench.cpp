@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <sys/resource.h>
 #include <thread>
@@ -55,7 +56,7 @@ RunResult run_once(SyncGraphDataStore& store, SessionPool& pool, LabelId label, 
     th.reserve(cfg.threads);
     for (int t = 0; t < cfg.threads; ++t) {
         th.emplace_back([&, t]() {
-            auto lease = pool.acquire(static_cast<std::size_t>(t));
+            auto lease = pool.acquire();
             size_t local = 0;
             if (lease) {
                 GraphSession& session = **lease;
@@ -152,6 +153,5 @@ int main(int argc, char** argv) {
             std::printf("\n");
         }
     }
-    store.close();
     return 0;
 }
