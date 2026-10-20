@@ -2,7 +2,7 @@
 # TSan 并发闸门：用 TSan 构建的服务端跑一段混合并发查询，任何**未被抑制**的 data race 都判红。
 #
 # 用法: scripts/check_tsan.sh [构建目录=build/tsan] [秒数=20] [线程数=8]
-# 前置: 该构建目录需已存在（见 docs/storage/thread-bound-session-cursor-pool.md §12 的构建命令）。
+# 前置: 该构建目录需已配置为 TSan 构建（-fsanitize=thread）并已构建出 eugraph-server。
 # 说明: 抑制清单 tests/tsan/tsan.supp 只覆盖 folly/thrift 的已知噪声；storage/session/cursor
 #       相关符号一律不抑制 —— 它们出现即视为失败。
 set -u
@@ -66,7 +66,7 @@ for p in $(pgrep -x eugraph-server 2>/dev/null); do kill "$p" 2>/dev/null; done
 
 RACES=$(grep -h -c "WARNING: ThreadSanitizer" "$REPORT_DIR"/report* 2>/dev/null | paste -sd+ | bc 2>/dev/null)
 RACES=${RACES:-0}
-STORE_HITS=$(grep -h -cE "wt_store_base|sync_graph_data_store.*cursor|open_cursor" "$REPORT_DIR"/report* 2>/dev/null | paste -sd+ | bc 2>/dev/null)
+STORE_HITS=$(grep -h -cE "wt_table_ops|schema_ddl|sync_graph_data_store|async_graph_data_store|cursor_provider|graph_session|session_pool|open_cursor" "$REPORT_DIR"/report* 2>/dev/null | paste -sd+ | bc 2>/dev/null)
 STORE_HITS=${STORE_HITS:-0}
 
 echo "  服务端存活: $([ "$ALIVE" = 1 ] && echo 是 || echo 否)"
