@@ -614,3 +614,56 @@ N 个 client = N 条长连接（每 client 一个 driver）；每 client 先 war
 
 **复现命令**：见 §7.3（A/B）、本轮 §9.1（loader）与 §9.4（`scripts/bench_bolt_qps.py`）；
 A/B 可用 `--json` 保存原始结果（本轮结果未入库）。
+
+---
+
+## 10. complex-3 专项优化（2026-10-21）
+
+> 目标：complex-3 是上一轮差距最大的查询（~17–21×）。本轮用同机交错 A/B 定位并修掉了
+> 两处**逐行重复物化**，不改查询语义、不改存储格式。
+
+### 10.1 根因（按贡献排序）
+
+1. **`ProjectionExtract` 为每个输出行深拷贝 `VertexValue`**：执行
+   `WITH DISTINCT friend, countryX, countryY` 后，friend/countryX/countryY 都是完整 VERTEX；
+   随后的 `Expand(friend→message)` 把 52,475 条 message 展开，`ProjectionExtract` 对每一行
+   重新构造这 3 个顶点，深拷贝 `unordered_map<LabelId, Properties>`。
+   GDB 采样里 `VertexValue` 的构造/析构是最显眼的一类栈。
+2. **批处理 API 对重复 vid 逐个处理**：同一批 1024 行里的 friend/countryX/countryY 往往是
+   **同一个 vid 重复 1024 次**；`getVertexLabelsBatch` / `getVertexPropertiesBatch` /
+   `...Projected` 仍对每个元素做一次 WT `search_near`。
+3. **无条件 anon 属性查询**：`ProjectionExtract` 对每个 ConstructVertex 行都查一次
+   `__anon__` 属性，即使该顶点根本没有 anon 标签。
+
+### 10.2 改动
+
+| 文件 | 改动 |
+|---|---|
+| `src/storage/data/sync_graph_data_store.cpp` | 三个 batch API 先按唯一 vid 扫描、再按原顺序展开；重复 vid 只做一次 WT 查询 |
+| `src/query/physical_plan/operator/projection_extract_physical_op.cpp` | ConstructVertex 缓存改为 `VertexValuePtr`：同一 vid 在批内**共享**一个实例；ref 源按唯一 vid 物化一次；只在需要清 `INVALID_LABEL_ID` / 补 anon 时写时复制 |
+| 同上 | anon 属性只对 labels 真的包含 `__anon__` 的顶点查询 |
+
+### 10.3 同机交错 A/B（同一数据、同一客户端；baseline = 优化前 main）
+
+工作负载：`interactive-complex-3.cypher`（personId=933），每轮 3 warmup + 10 次计时，三轮交替；
+另有中间量 `MATCH (friend)<-[:HAS_CREATOR]-(message) RETURN count(message)`（52,475 行）用于隔离
+message 展开。
+
+| 指标 | baseline min / p50 | 优化后 min / p50 | 提升 |
+|---|---:|---:|---:|
+| complex-3 | 485.2 / 498.1 ms | **264.0 / 277.2 ms** | **1.84× / 1.80×** |
+| message 展开子查询 | 194.2 / 202.7 ms | **31.1 / 32.3 ms** | **6.2× / 6.3×** |
+
+complex-3 行数两端都是 0（与 §9 一致）。同轮 neo4j 为 44–62 ms（受 ctest 负载影响；安静时约 28 ms），
+即优化后 eugraph 仍慢约 **6–9×**，但已从 ~17–21× 明显收窄。
+
+### 10.4 剩余瓶颈与下一步
+
+* **~100 ms：message.creationDate 的 coalesce 读取**（`vprop-coalesce[2.2,3.0,5.2,7.2,10.2]`）。
+  它需要为 52k 条 message 读 creationDate；若能把该谓词下推到 `HAS_CREATOR` 展开的同一批
+  （或在 message 标签已知时只读一个 prop_id），可继续下降。
+* **~100 ms：message→IS_LOCATED_IN 展开与后续聚合**。当前每个 message 一次邻接探测；
+  `scanEdgesBatch` 用一把 cursor 只能省 open/close，省不掉每源一次 `search_near`（本轮实测收益 <5%，
+  因此没有保留该改动）。真正的下一步是 join 顺序/CBO（从 country 反向展开，或 creationDate 二级索引），
+  不是继续优化 cursor 复用。
+* 本轮未改变结果语义；`build-release` 全量 ctest **1294/1294** 通过（含 tck）。
