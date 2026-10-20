@@ -563,7 +563,39 @@ python3 scripts/bench_ldbc_interactive.py \
 
 `vs neo4j = neo_min / eg_min`（>1 表示 eugraph 更快）；`相对旧版 = (新 eg_min - 旧 eg_min)/旧 eg_min`。
 
-### 9.4 结论
+### 9.4 并发 QPS（对照 aa7cd5ca 的并发优化）
+
+工作负载：`interactive-complex-9.cypher`（`personId=933`、`maxDate=1289908800000`、database `default`）。
+N 个 client = N 条长连接（每 client 一个 driver）；每 client 先 warmup 2 次，barrier 对齐后连续执行
+`--duration` 秒；QPS = 完成批次数 / wall。脚本：`scripts/bench_bolt_qps.py`（本轮新增，保持长连接，
+与每查询新建连接的 `bench_ldbc_ab.py` 刻意区分）。
+
+| clients | compute_threads | QPS | p50 ms | p95 ms | 旧基线（aa7cd5ca，complex-9） |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 4 | 2.15 | 464 | 480 | — |
+| 4 | 4 | **6.89** | 570 | 604 | 6.10（4 threads） |
+| 8 | 4 | 6.58 | 1174 | 1423 | 5.51（8 线程、compute=4 的引擎 QPS） |
+| 4 | 8 | 6.63 | 597 | 646 | — |
+| 8 | 8 | **9.87** | 796 | 869 | 8.41（8 threads） |
+| 8 | 8 | **9.99**（30 s 稳定性复跑） | 792 | 858 | — |
+
+结论：
+
+* **4 client / compute=4**：6.89 vs 旧 6.10（**+13%**）；**8 client / compute=8**：9.87–9.99 vs 旧 8.41
+  （**+17%~+19%**），也高于 aa7cd5ca 记录的通用 9.36。相对优化前的 2.51 / 5.51 仍是 **2.7× / 1.8×**。
+* **compute_threads ≥ clients** 的旧结论仍成立：8 client 在 compute=4 时饱和在 6.58（p95 1.42 s），
+  切到 compute=8 后升到 9.87（p95 0.87 s）。4 client 时 compute=4 与 8 基本同档（6.89 / 6.63，噪声内）。
+* **稳定性**：30 s × 8 client 共 305 次 complex-9，无错误、无连接断开（20 s 与 30 s 两次结果 9.87/9.99）。
+  本轮没有跑官方 driver 的长连接矩阵（见 §8 C1），长跑结论仍以那条为准。
+* **存储层微基准**（`tests/tools/concurrency_bench.cpp`：每线程独立事务，`Comment.creationDate`，
+  每线程 20,000 次查找，3 轮取 min）：8 线程 **15.80 M/s（小工作集）/ 14.23 M/s（大工作集）**，
+  旧记录为 4.88 M/s；1→2→4→8 线程为 3.09→5.96→10.32→15.80 M/s（小工作集），仍随线程数上升。
+  **口径提醒**：新实现的 point get 复用会话级 cursor（旧版每次 open/close），路径更短，
+  因此这个数字只能作方向性验证（没有并发退化），不能与 4.88 M/s 当作严格 A/B。
+  该工具在本轮之前已无法编译（`SessionPool::acquire(node)` 与 `store.close()` 均已删除），
+  本轮一并修复为当前 API。
+
+### 9.5 结论
 
 * **行数两引擎全部一致**（包括 complex-3 / complex-4 的 0 行）——A/B 可用的前提成立。
 * **绝对值**：15 条全部不高于旧文档（−2.2% ~ −25.5%）。跨会话绝对值受 CPU 频率影响，
@@ -573,8 +605,11 @@ python3 scripts/bench_ldbc_interactive.py \
   72×/133×/54×/69×（旧文档 52×/93×/34×/48×）。short-1/3 仍略快于 neo4j，short-2 仍慢约 1.5×。
 * **剩余大头**仍是 complex-3（~17×）与 complex-12（~3.6×），形态与旧文档 §2.1 一致：
   具名起点多跳 + 中间结果放大；没有因本轮重构而恶化。
+* **并发无回退、且优于旧基线**：complex-9 4/8 client 为 6.89 / 9.87–9.99 ops/s（旧 6.10 / 8.41），
+  详见 §9.4；存储层 8 线程 15.80 / 14.23 M/s（方向性）。
 * **数据计数差异**：neo4j 实例为 330,130 点 / 1,478,003 边，比原始语料多 2,542 点 / 38 边；
   多出部分来自历史测试标签（`CT`、`CPerson`、`UT_*`、`M1*` 等），LDBC 相关标签计数与查询行数均一致，
   不影响本轮对照。旧文档 eugraph 的 330,126 / 1,478,002 未在本轮复现；本轮以原始语料行数为准。
 
-**复现命令**：见 §7.3（A/B）与本轮 §9.1（loader）；A/B 可用 `--json` 保存原始结果（本轮结果未入库）。
+**复现命令**：见 §7.3（A/B）、本轮 §9.1（loader）与 §9.4（`scripts/bench_bolt_qps.py`）；
+A/B 可用 `--json` 保存原始结果（本轮结果未入库）。
