@@ -91,10 +91,12 @@ public:
                                 std::unordered_map<LabelId, std::string> vertex_label_names,
                                 std::unordered_map<EdgeLabelId, std::string> edge_label_names, Schema input_schema,
                                 std::vector<binder::BoundType> output_types, std::unique_ptr<PhysicalOperator> child,
-                                LabelId anon_label_id = INVALID_LABEL_ID)
+                                LabelId anon_label_id = INVALID_LABEL_ID,
+                                std::unordered_map<EdgeLabelId, std::size_t> edge_prop_counts = {})
         : specs_(std::move(specs)), store_(store), vertex_label_names_(std::move(vertex_label_names)),
           edge_label_names_(std::move(edge_label_names)), input_schema_(std::move(input_schema)),
-          output_types_(std::move(output_types)), child_(std::move(child)), anon_label_id_(anon_label_id) {}
+          output_types_(std::move(output_types)), child_(std::move(child)), anon_label_id_(anon_label_id),
+          edge_prop_counts_(std::move(edge_prop_counts)) {}
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
@@ -118,6 +120,8 @@ private:
     /// set (REMOVE only severs the label association; it does not erase the
     /// __anon__ property rows).
     LabelId anon_label_id_ = INVALID_LABEL_ID;
+    /// EdgeLabelId → 声明的属性数；0 ⇒ ConstructEdge 不需要查 eprop 表。
+    std::unordered_map<EdgeLabelId, std::size_t> edge_prop_counts_;
 };
 
 } // namespace compute

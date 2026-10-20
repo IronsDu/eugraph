@@ -553,9 +553,15 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         if (ev.id == INVALID_EDGE_ID || ev.label_id == INVALID_EDGE_LABEL_ID)
                             break;
                         if (!ev.properties.has_value()) {
-                            auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id);
-                            if (props.has_value())
-                                ev.properties = std::move(*props);
+                            // 无属性边（如 HAS_CREATOR / IS_LOCATED_IN）不需要查 eprop 表：
+                            // 大结果集上每行一次空查会放大成数万次 WT search。
+                            auto pc = edge_prop_counts_.find(ev.label_id);
+                            const bool may_have_props = pc == edge_prop_counts_.end() || pc->second > 0;
+                            if (may_have_props) {
+                                auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id);
+                                if (props.has_value())
+                                    ev.properties = std::move(*props);
+                            }
                         }
                         rc.eid_col = spec.source_col;
                         rc.eid = ev.id;

@@ -619,8 +619,8 @@ A/B 可用 `--json` 保存原始结果（本轮结果未入库）。
 
 ## 10. complex-3 专项优化（2026-10-21）
 
-> 目标：complex-3 是上一轮差距最大的查询（~17–21×）。本轮用同机交错 A/B 定位并修掉了
-> 两处**逐行重复物化**，不改查询语义、不改存储格式。
+> 目标：complex-3 是上一轮差距最大的查询（~17–21×）。本轮用同机交错 A/B + GDB 采样定位，
+> 修掉了三处**逐行重复物化/空查询**，不改查询语义、不改存储格式。
 
 ### 10.1 根因（按贡献排序）
 
@@ -634,6 +634,8 @@ A/B 可用 `--json` 保存原始结果（本轮结果未入库）。
    `...Projected` 仍对每个元素做一次 WT `search_near`。
 3. **无条件 anon 属性查询**：`ProjectionExtract` 对每个 ConstructVertex 行都查一次
    `__anon__` 属性，即使该顶点根本没有 anon 标签。
+4. **为无属性边逐行查 eprop 表**：`ConstructEdge` 对每行都 `getEdgeProperties`，而
+   `HAS_CREATOR` / `IS_LOCATED_IN` 根本没有声明属性；52k 条 message 产生 52k 次空 WT 查询。
 
 ### 10.2 改动
 
@@ -642,6 +644,7 @@ A/B 可用 `--json` 保存原始结果（本轮结果未入库）。
 | `src/storage/data/sync_graph_data_store.cpp` | 三个 batch API 先按唯一 vid 扫描、再按原顺序展开；重复 vid 只做一次 WT 查询 |
 | `src/query/physical_plan/operator/projection_extract_physical_op.cpp` | ConstructVertex 缓存改为 `VertexValuePtr`：同一 vid 在批内**共享**一个实例；ref 源按唯一 vid 物化一次；只在需要清 `INVALID_LABEL_ID` / 补 anon 时写时复制 |
 | 同上 | anon 属性只对 labels 真的包含 `__anon__` 的顶点查询 |
+| 同上 + `physical_planner.cpp` | `ConstructEdge` 按 schema 的边属性数跳过空 eprop 查询（无属性边不再逐行查表） |
 
 ### 10.3 同机交错 A/B（同一数据、同一客户端；baseline = 优化前 main）
 
@@ -651,19 +654,54 @@ message 展开。
 
 | 指标 | baseline min / p50 | 优化后 min / p50 | 提升 |
 |---|---:|---:|---:|
-| complex-3 | 485.2 / 498.1 ms | **264.0 / 277.2 ms** | **1.84× / 1.80×** |
-| message 展开子查询 | 194.2 / 202.7 ms | **31.1 / 32.3 ms** | **6.2× / 6.3×** |
+| complex-3 | 489.8 / 497.0 ms | **136.0 / 141.9 ms** | **3.60× / 3.50×** |
+| message 展开子查询 | 199.4 / 206.0 ms | **31.1 / 32.7 ms** | **6.4× / 6.3×** |
 
-complex-3 行数两端都是 0（与 §9 一致）。同轮 neo4j 为 44–62 ms（受 ctest 负载影响；安静时约 28 ms），
-即优化后 eugraph 仍慢约 **6–9×**，但已从 ~17–21× 明显收窄。
+complex-3 行数两端都是 0（与 §9 一致）。neo4j 同查询约 **27–44 ms**（取决于机器负载），
+即优化后 eugraph 仍慢约 **3–5×**，已从 ~17–21× 收窄到同一数量级。
 
-### 10.4 剩余瓶颈与下一步
+### 10.4 与 neo4j 计划对照（关键：它**也**读了 52k 次 creationDate）
 
-* **~100 ms：message.creationDate 的 coalesce 读取**（`vprop-coalesce[2.2,3.0,5.2,7.2,10.2]`）。
-  它需要为 52k 条 message 读 creationDate；若能把该谓词下推到 `HAS_CREATOR` 展开的同一批
-  （或在 message 标签已知时只读一个 prop_id），可继续下降。
-* **~100 ms：message→IS_LOCATED_IN 展开与后续聚合**。当前每个 message 一次邻接探测；
-  `scanEdgesBatch` 用一把 cursor 只能省 open/close，省不掉每源一次 `search_near`（本轮实测收益 <5%，
-  因此没有保留该改动）。真正的下一步是 join 顺序/CBO（从 country 反向展开，或 creationDate 二级索引），
-  不是继续优化 cursor 复用。
+neo4j `PROFILE`（5.26）的算子链：
+
+```
+Expand(All) (friend)<-[:HAS_CREATOR]-(message)      52,475 rows
+  Filter (cache[message.creationDate] < end AND >= start)   DB Hits 52,475 → 787 rows
+    Expand(All) (message)-[:IS_LOCATED_IN]->(country)       787 rows / DB Hits 5,319
+      Filter country IN [countryX, countryY]                18 rows
+        Projection CASE ... → EagerAggregation → ... → CacheProperties → ProduceResults
+```
+
+要点：
+
+* **neo4j 同样对 52,475 条 message 读了 creationDate**（Filter 的 DB Hits 就是 52,475），
+  **没有**用 creationDate 索引，也**没有**把 date 谓词下推到 HAS_CREATOR 之前；
+  join 顺序与 eugraph 相同（都是 friend → message → date → country）。
+* 差别在**每次属性读取的代价**与**何时物化整顶点**：
+
+| 维度 | neo4j | eugraph（优化后） | 差距来源 |
+|---|---|---|---|
+| creationDate 读取 | 节点记录内属性指针，52,475 次 DB hits ≈ **+15.6 ms**（messages 11.5→27.1） | WT `vprop` KV：每 message 先读 labels、再按候选 prop 读值，52,475 次 ≈ **+86 ms**（messages 41→127） | 属性/标签**存储布局**：逐属性 KV + 独立 label_reverse 表 vs 节点内联 |
+| 52k HAS_CREATOR 展开 | 邻接链表，11.5 ms | WT edge index，31–41 ms | 每源一次 B-tree `search_near` vs 指针链表 |
+| 整顶点物化 | 只保留引用；`CacheProperties` 仅对最终 20 行 | 优化前每行深拷贝 friend/country；现在批内共享，但仍按行经过 ProjectionExtract | 本轮已消除深拷贝，剩余为逐行 slot/句柄成本 |
+| 无属性边 | EdgeValue 直接是引用/空属性 | 优化前逐行查 eprop（本轮修复） | 本轮已消除 |
+
+* 因此本轮先修的是**低级重复**（深拷贝、重复 vid、空 eprop 查询）；进一步缩小差距需要动
+  **存储布局/读取原语**（见下节），而不是继续调算子。
+
+### 10.5 剩余瓶颈与下一步
+
+* **~80–90 ms：creationDate 的 labels + property 两次 WT 查询**。当前 `LoadVertexPropCoalesce`
+  先 `getVertexLabelsBatch(52k)` 判断 message 是 Post 还是 Comment，再按候选 `(label,prop)`
+  读 52k 次属性。neo4j 把 labels 内联在节点记录、属性内联/指针化，天然只需一次读。
+  可选方向（按侵入性）：
+  1. **把 labels 与常用属性放在同一条 vertex KV**（`vertex_record{labels, prop_map}`），
+     读一次即可同时得到 label 与 creationDate；这是存储格式变更，需要独立设计与兼容性评审。
+  2. 若查询已能静态确定 label（强类型/单标签），只读一个 `(label,prop)`，跳过 label 查询；
+     对 `Message` 这种派生多标签不适用。
+  3. 为高选择性谓词建二级索引（如 `Message.creationDate`），由 CBO 选择“索引范围扫描 + join”；
+     但 LDBC 官方 neo4j 也未走索引，不能作为通用替代。
+* **~30–40 ms：52k HAS_CREATOR 邻接展开**。WT edge index 每源一次 `search_near`；
+  `scanEdgesBatch` 复用一把 cursor 只能省 open/close（本轮实测 <5%，未保留）。
+  要再降需要**按源连续的邻接存储**（per-vertex adjacency row/table）或覆盖索引，同属存储布局变更。
 * 本轮未改变结果语义；`build-release` 全量 ctest **1294/1294** 通过（含 tck）。

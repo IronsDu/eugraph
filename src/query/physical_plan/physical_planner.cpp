@@ -374,10 +374,14 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
     if (!any_load)
         return std::move(child_result);
 
+    std::unordered_map<EdgeLabelId, std::size_t> edge_prop_counts;
+    edge_prop_counts.reserve(ctx.edge_label_defs.size());
+    for (const auto& [eid, def] : ctx.edge_label_defs)
+        edge_prop_counts.emplace(eid, def.properties.size());
     auto op = std::make_unique<ProjectionExtractPhysicalOp>(
         std::move(specs), store, std::move(vertex_label_names), std::move(edge_label_names),
         Schema(child_result.output_schema), std::vector<binder::BoundType>(child_result.output_types),
-        std::move(child_result.op), anon_label_id);
+        std::move(child_result.op), anon_label_id, std::move(edge_prop_counts));
     // NB: build the layout in a local BEFORE moving output_schema into the
     // result. A braced-init-list evaluates left-to-right, so passing
     // makeSlotLayout(output_schema) after std::move(output_schema) would read
