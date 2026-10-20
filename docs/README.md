@@ -67,7 +67,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加优化规则 | [query/optimizer/cascades-optimizer.md] | `src/query/optimizer/` |
 | 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md] | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
-| 添加 DDL 操作 | [storage/ddl.md], [storage/metadata-service-design.md] | `src/storage/meta/` |
+| 添加 DDL 操作 | [storage/ddl.md], [storage/metadata-service-design.md], [storage/session-cursor-pool-design.md] | `src/storage/schema_ddl.*`, `src/storage/meta/`, `src/storage/data/` |
 | 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/graph/graph_manager.hpp` |
 | 修改类型系统 | [architecture/type-definitions.md], [storage/kv-encoding.md] | `src/common/types/` |
 | 添加/修改 RPC 接口 | [service/rpc-service.md] | `proto/eugraph.thrift`, `src/program/server/` |
@@ -76,7 +76,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
 | 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |
 | 主键/外部键引用（loader 主键化） | [program/design/loader-design.md] | `src/program/loader/`, `proto/eugraph.thrift`, `src/storage/data/` |
-| 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md] | `src/storage/` |
+| 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md], [storage/session-cursor-pool-design.md] | `src/storage/` |
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
 | 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/common/schema/graph_schema.hpp` |
 | 表达式求值相关 | [query/syntax/cypher-syntax.md], [query/engine/query-engine-design.md] | `executor/vectorized_evaluator.cpp`, `binder/` |
@@ -96,7 +96,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 
 | 文档 | 说明 |
 |------|------|
-| [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同机交错 A/B 耗时对比、neo4j 侧需补齐的数据差异、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`） |
+| [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同机交错 A/B 耗时对比、并发 QPS（`scripts/bench_bolt_qps.py`）、neo4j 侧需补齐的数据差异、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`） |
 | [查询值拷贝性能剖析](benchmark/query-value-copy-profiling.md) | 定位 complex-10 的真实瓶颈（值拷贝而非 VLE/推导本身）、消除深拷贝的四处改动与交替顺序 A/B 判据 |
 | [列表推导内模式推导：发现与待修缺陷](query/deferred-pattern-comprehension-findings.md) | complex-10 的根因证据、被证伪的方向、探针规范与验收口径 |
 | [模式推导缺陷排查经验](query/comprehension-defect-debugging-notes.md) | 十一轮排查的复盘：为何反复走错、哪三个动作最终定位到根因、可复用的检查清单 |

@@ -1,8 +1,8 @@
 # Server + Shell 设计
 
-> [当前实现] 参见 [README.md](README.md) 返回文档导航
+> [当前实现] 参见 [README.md](../../README.md) 返回文档导航
 
-RPC 层与通信协议见 [service/rpc-service.md](../service/rpc-service.md)。
+RPC 层与通信协议见 [service/rpc-service.md](../../service/rpc-service.md)。
 
 ## Server 启动流程
 

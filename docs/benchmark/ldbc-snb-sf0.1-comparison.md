@@ -355,8 +355,9 @@ python3 scripts/prepare_ldbc_official_csv.py \
     --load --host 127.0.0.1 --port 9090
 ```
 
-加载完成后**重启实例**（loader 建的索引只写入 catalog，运行中的实例内存里没有；
+加载完成后**重启实例**（这是 **2026-09-25 旧实现**的现象：索引只写入 catalog、运行中实例内存里没有；
 未重启时 `MATCH (t:Tag {name:'Shakira'})` 需 51630 ms，重启后 45 ms）。
+**2026-10-20 复测**：当前分支装载后索引即可用、**不需要重启**（见 §9.1）。
 
 ### 7.2 官方 driver（§2.3）
 
@@ -423,8 +424,8 @@ python3 scripts/bench_ldbc_interactive.py \
 
 | # | 问题 | 证据 | 影响 | 状态 |
 |---|---|---|---|---|
-| A1 | **`CREATE INDEX` 回填阶段 SIGSEGV，服务端崩溃** | 大标签建索引时日志为 `Created vertex index 'idx_msg_cd' (id=12) on Message.(creationDate)` 紧接 `*** Signal 11 (SIGSEGV) ... ***` | catalog 先提交、回填崩溃 → 留下**空索引**；服务端随后无响应 | 未修，见 [known-defects-todo §8](../query/known-defects-todo.md) |
-| A2 | **空索引不报错，点查静默退化为全标签扫描** | `Message{id}` 946 ms（索引完好 4 ms）、`Post{id}` 461 ms、`Comment{id}` 495 ms；小标签因回填能完成仍是 1 ms | 症状是"**只在大表上慢**"；所有 `MATCH (... {id: ...})` 类读数可能整体反向 | 未修（与 A1 同源，需 catalog/回填两阶段化） |
+| A1 | **`CREATE INDEX` 回填阶段 SIGSEGV，服务端崩溃** | 大标签建索引时日志为 `Created vertex index 'idx_msg_cd' (id=12) on Message.(creationDate)` 紧接 `*** Signal 11 (SIGSEGV) ... ***` | catalog 先提交、回填崩溃 → 留下**空索引**；服务端随后无响应 | 2026-10-20 复测未复现（见 §9.1）；根因分析保留在 [known-defects-todo §8](../query/known-defects-todo.md) |
+| A2 | **空索引不报错，点查静默退化为全标签扫描** | `Message{id}` 946 ms（索引完好 4 ms）、`Post{id}` 461 ms、`Comment{id}` 495 ms；小标签因回填能完成仍是 1 ms | 症状是"**只在大表上慢**"；所有 `MATCH (... {id: ...})` 类读数可能整体反向 | 2026-10-20 复测未复现；仍需“上线前校验条目数”兜底（与 A1 同源） |
 | A3 | **loader 的 DDL 用 30 s 超时且失败只 warn** | `src/program/shell/rpc_client.cpp:47` `channel->setTimeout(30000)`；`csv_loader.cpp:782` 仅 `spdlog::warn` | "加载成功"的实例可能带着一堆空索引，加载流程结束也不校验索引可用性 | 未修 |
 | A4 | **complex-5 在官方参数下挂死** | personId=15393162790207 / minDate=1344643200000，单线程 **>400 s 不返回**，多个 compute 线程持续满载；官方 driver 跑到该查询整个 run 停滞 | 官方 benchmark 无法完整跑完 | 未修，见 §5.2 |
 | A5 | **规划器对多标签扫描拒绝用索引** | `physical_planner.cpp:2487`：`// Index scan only when single label (multi-label requires runtime intersection)` + `if (scan_op.label_ids.size() == 1)` | `Message`（`Post:Message`/`Comment:Message` 超类）上的属性点查永远不走索引 | 未修（设计取舍，需运行期标签交集校验后才能放开） |

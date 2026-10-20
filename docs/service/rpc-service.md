@@ -1,6 +1,6 @@
 # RPC 服务层设计
 
-> [当前实现] 参见 [README.md](README.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 EuGraph 使用 fbthrift 作为 RPC 框架，定义在 `proto/eugraph.thrift`。服务端 `EuGraphHandler` 实现 Thrift 接口，客户端 `EuGraphRpcClient` 封装连接与调用。
 
@@ -38,7 +38,7 @@ EuGraph 使用 fbthrift 作为 RPC 框架，定义在 `proto/eugraph.thrift`。�
 2. `makeStreamGenerator` 将 `AsyncGenerator<DataChunk>` 包装：逐批转换 Value → Thrift 类型，`co_yield ResultRowBatch`
 3. 流正常结束时销毁算子树后 `StreamContext::commit()`；客户端断连则 `rollback()`（租约归还池）
 
-详细见 [query/engine/execution-model.md](query/engine/execution-model.md)。
+详细见 [query/engine/execution-model.md](../query/engine/execution-model.md)。
 
 ## 参数化查询
 

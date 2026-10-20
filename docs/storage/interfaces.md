@@ -24,6 +24,9 @@
                     └──────────────────────────────┘
 ```
 
+> **维护约定**：本文只保留**设计意图 + 关键签名**；完整/最新签名以 `src/storage/**/*.hpp` 为准。
+> 接口变更时先改头文件，再同步这里的摘要（避免复制整份接口导致的长期漂移）。
+
 ## 数据存储接口
 
 ### ISyncGraphDataStore
@@ -36,10 +39,10 @@
 ```cpp
 class ISyncGraphDataStore {
 public:
-    // DDL — 管理类操作（调用方显式创建 WtSession 并传入；不得是用户事务）
-    virtual bool createLabel(WtSession& session, LabelId label_id) = 0;
-    virtual bool dropLabel(WtSession& session, LabelId label_id) = 0;
-    virtual bool createEdgeLabel(WtSession& session, EdgeLabelId edge_label_id) = 0;
+    // DDL — 管理类操作（接口不带 session；store 内部 make_session() 后交给 SchemaDdl）
+    virtual bool createLabel(LabelId label_id) = 0;
+    virtual bool dropLabel(LabelId label_id) = 0;
+    virtual bool createEdgeLabel(EdgeLabelId edge_label_id) = 0;
     virtual bool dropEdgeLabel(EdgeLabelId edge_label_id) = 0;
 
     // 每个数据操作都吃调用方的会话（不建 session、不开/提交事务、不持事务表）
@@ -62,7 +65,7 @@ public:
 - 内部只用 `session.wt_session()` 与 `session.acquire_cursor(table)`；point 读写复用会话级 cursor 缓存，
   扫描用 `acquire_scan_cursor()` 的独立 cursor（同表嵌套扫描/边扫边删是真实路径）。
 - cursor 打开失败由 `CursorHandle::valid()/error()` 显式可见；区间迭代统一走 `wt::scan_range()`。
-- DDL 统一走 `SchemaDdl(WtSession&, …)`（session 由调用方显式创建；内部 schema 锁；建表失败只回滚本次新建，drop 把 ENOENT 视为成功）。
+- DDL 统一走 `SchemaDdl(WtSession&, …)`：store 在方法内部 `make_session()` 创建局部 `WtSession` 后传入；`SchemaDdl` 内部 schema 锁、建表失败只回滚本次新建、drop 把 ENOENT 视为成功。
 - 索引扫描走可恢复的 `IIndexScanCursor`（equality/range × 单值/复合）：async 层每批只拉 1024 条，
   内存 O(batch)，不再先物化全集；range 的 `start` 是**排他**下界（与既有语义一致）。
   `lookupVertexByPrimaryKey` 利用“同一 sortable value 下 key 按 entity_id 升序”直接取首条。
@@ -119,15 +122,11 @@ public:
     virtual bool metadataDel(std::string_view key) = 0;
     virtual void metadataScan(std::string_view prefix,
                               const std::function<bool(std::string_view, std::string_view)>& callback) = 0;
-
-    // DDL（仅元数据；物理表由 data store 负责）
-    virtual bool createLabel(LabelId label_id) = 0;
-    virtual bool dropLabel(LabelId label_id) = 0;
-    virtual bool createEdgeLabel(EdgeLabelId edge_label_id) = 0;
-    virtual bool addEdgeLabelProperties(EdgeLabelId edge_label_id, const std::vector<std::string>& prop_names) = 0;
-    virtual bool dropEdgeLabel(EdgeLabelId edge_label_id) = 0;
 };
 ```
+
+> 元数据 DDL（创建/删除标签、边类型、索引）**不经过本接口**：`AsyncGraphMetaStore` 直接把
+> `LabelDef`/`EdgeLabelDef`/索引条目编码成 `metadataPut` 写入；物理表由 data store 的 `SchemaDdl` 创建。
 
 ### IAsyncGraphMetaStore
 
@@ -140,9 +139,13 @@ public:
     virtual folly::coro::Task<bool> open(ISyncGraphMetaStore& store, IoScheduler& io) = 0;
     virtual folly::coro::Task<void> close() = 0;
 
-    // Label 管理
+    // Label 管理（完整签名以 i_async_graph_meta_store.hpp 为准）
     virtual folly::coro::Task<LabelId> createLabel(const std::string& name,
-                                                   const std::vector<PropertyDef>& properties = {}) = 0;
+                                                   const std::vector<PropertyDef>& properties = {},
+                                                   const std::vector<std::string>& pk_props = {},
+                                                   bool merge_properties = false) = 0;
+    virtual folly::coro::Task<uint16_t> getOrCreateAnonPropId(const std::string& prop_name,
+                                                              PropertyType prop_type) = 0;
     virtual folly::coro::Task<std::optional<LabelId>> getLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getLabelName(LabelId id) = 0;
     virtual folly::coro::Task<std::optional<LabelDef>> getLabelDef(const std::string& name) = 0;
@@ -152,8 +155,9 @@ public:
     // EdgeLabel 管理
     virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(const std::string& name,
                                                            const std::vector<PropertyDef>& properties = {}) = 0;
-    virtual folly::coro::Task<bool> addEdgeLabelProperties(const std::string& name,
-                                                           const std::vector<std::string>& prop_names) = 0;
+    virtual folly::coro::Task<bool>
+    addEdgeLabelProperties(const std::string& name,
+                           const std::vector<std::pair<std::string, PropertyType>>& prop_defs) = 0;
     virtual folly::coro::Task<std::optional<EdgeLabelId>> getEdgeLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getEdgeLabelName(EdgeLabelId id) = 0;
     virtual folly::coro::Task<std::optional<EdgeLabelDef>> getEdgeLabelDef(const std::string& name) = 0;
@@ -163,14 +167,17 @@ public:
     // ID 分配
     virtual folly::coro::Task<VertexId> nextVertexId() = 0;
     virtual folly::coro::Task<EdgeId> nextEdgeId() = 0;
-    virtual folly::coro::Task<std::vector<VertexId>> nextVertexIdRange(size_t count) = 0;
-    virtual folly::coro::Task<std::vector<EdgeId>> nextEdgeIdRange(size_t count) = 0;
+    virtual folly::coro::Task<VertexId> nextVertexIdRange(uint64_t count) = 0;
+    virtual folly::coro::Task<EdgeId> nextEdgeIdRange(uint64_t count) = 0;
 
     // 索引管理
     virtual folly::coro::Task<bool> createVertexIndex(const std::string& name, const std::string& label_name,
-                                                      const std::string& prop_name, bool unique) = 0;
+                                                      const std::vector<std::string>& prop_names, bool unique) = 0;
+    virtual folly::coro::Task<bool>
+    createVertexIndexWithAccessors(const std::string& name, const std::string& label_name,
+                                   const std::vector<IndexAccessorDef>& accessors, bool unique) = 0;
     virtual folly::coro::Task<bool> createEdgeIndex(const std::string& name, const std::string& edge_label_name,
-                                                    const std::string& prop_name, bool unique) = 0;
+                                                    const std::vector<std::string>& prop_names, bool unique) = 0;
     virtual folly::coro::Task<bool> updateIndexState(const std::string& name, IndexState new_state) = 0;
     virtual folly::coro::Task<bool> dropIndex(const std::string& name) = 0;
     virtual folly::coro::Task<std::vector<IndexInfo>> listIndexes() = 0;

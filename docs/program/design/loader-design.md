@@ -960,14 +960,14 @@ CREATE CONSTRAINT ON (n:Person) ASSERT n.id IS UNIQUE;
 本引擎的等价写法是 `CREATE UNIQUE INDEX ... FOR (n:Person) ON (n.id)`；
 官方脚本需要改写成后者（或由 loader 依据 schema 的 `pk` 直接建，已实现）。
 
-### 12.3 索引回填的提交结果未校验（服务端）
+### 12.3 索引回填的提交与上线校验
 
-`CREATE INDEX` 的回填把整段扫描放在**一个事务**里，且 `commitTran` 的返回值被忽略：
-提交失败时仍会把索引置为 `PUBLIC` 并回 "Index created"。此时索引条目为空却状态 ONLINE，
-规划器选中它 ⇒ **静默漏结果**（空索引比没有索引更危险：没有索引会走全表扫、结果正确）。
+`CREATE INDEX` 的回填把整段扫描放在**一个事务**里。旧实现忽略提交返回值：提交失败仍把索引置为
+`PUBLIC` 并回 "Index created"，留下“空索引 + ONLINE” ⇒ 规划器选中它后**静默漏结果**。
 
-已修：**校验 `commitTran` 返回值**——提交失败时把索引置 `ERROR`、回报明确错误，
-绝不再置 `PUBLIC`（否则就是"空索引 + ONLINE 100%" ⇒ 静默漏结果）。
+已修：回填走会话的 `commit()` 并**检查结果**——失败时置 `ERROR` 并回报明确错误，绝不再置 `PUBLIC`。
+2026-10-20 的复测在 `Message.(id)` 上确认回填可正常完成（见
+[ldbc-snb-sf0.1-comparison.md §9.1](../../benchmark/ldbc-snb-sf0.1-comparison.md)）。
 
 仍待补：① 回填**分块提交**（单事务数十万条写入是缓存/更新链表的规模风险）；
 ② 置 `PUBLIC` 前校验条目数（目标集合非空而条目为 0 ⇒ 拒绝上线）。

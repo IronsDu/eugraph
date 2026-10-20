@@ -283,6 +283,13 @@ Bolt v5.1 使用分块传输编码进行消息帧定界：
 选中的图不存在时回退到默认图，因此库级语句（如 `DROP DATABASE x`）不会因会话指向一个已消失的图而失败。
 语句与输出列形状见 [query/syntax/cypher-syntax.md](../query/syntax/cypher-syntax.md) 第八节。
 
+**Neo4j Browser 兼容（2026-10-20 修复）**：Browser 会把 home database 设为 `system` / `neo4j`，
+并用**显式事务**执行 `SHOW CURRENT USER` / `SHOW DATABASES` / `dbms.components()` 等元数据查询。
+`GraphService::resolveGraph` 现在统一把这两个名字映射到 default（覆盖 `executeCypher`、`beginSession`、
+DDL、批量导入所有入口）；此前别名只写在 `executeCypher`，显式事务路径会报
+`Graph not found or being dropped: system`，Browser 停在 `reconnecting`。
+实测 Browser（`http://127.0.0.1:7474`）以 `bolt://localhost:7688`、用户名 `neo4j`、密码 `eugraph` 连接成功。
+
 ### 9. 结果流分页（PULL 的 has_more 语义）
 
 RUN 只负责把查询编译成算子流水线并返回 `fields`；真正的结果按 PULL 逐页拉取，服务端必须严格遵守分页契约：
