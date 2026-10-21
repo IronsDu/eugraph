@@ -335,6 +335,7 @@ complex-5 返回 20 行，~0.5–0.9 s（neo4j ~0.1 s）；不再有 CPU 不收�
 | 查询 | 差距 | 方向 |
 |---|---|---|
 | complex-3 | 21× | `Tag(name)` 起点选择、`HAS_CREATOR` 方向的前向/反向表选择 |
+| complex-5 | 5.3×（0.48 s vs 0.09 s） | post→HAS_CREATOR 的低 degree 边访问（89k source × 1 条边） |
 | complex-12 | 4.6× | `TagClass(name) → Tag → Post` 多跳展开与中间结果规模 |
 | complex-10 | 8.8× | VLE 之后的 `IS_LOCATED_IN` / `HAS_CREATOR` 展开顺序 |
 
@@ -715,11 +716,11 @@ Expand(All) (friend)<-[:HAS_CREATOR]-(message)      52,475 rows
 
 ---
 
-## 11. 八条 complex 查询复测（2026-10-21）
+## 11. complex 查询复测（2026-10-21）
 
 > 在 §10 的三项改动（batch 去重、共享 VertexValue、跳过无属性边空查）之外，本轮又把
 > `LoadVertexProp` / `LoadVertexLabels` 从逐行点读改为按 chunk 批量预取。对 §9 中差距较大的
-> 8 条 complex 查询重跑同机交错 A/B。
+> 8 条 complex 查询重跑同机交错 A/B，并补测本轮新支持的 complex-5（§11.4）。
 
 ### 11.1 方法
 
@@ -765,6 +766,21 @@ python3 scripts/bench_ldbc_ab.py \
   优化单条查询的算子。
 
 
+### 11.4 新支持：complex-5
+
+complex-5 在 §11 的 8 条之外，之前因 CPU 不收敛被列为不可用；本轮修复后补测（同样
+`--rounds 10 --warmup 2 --neo4j-fix-types`，personId=933、minDate=1287230400000）：
+
+| 查询 | 行数 eg/neo | eg min / p50 (ms) | neo min / p50 (ms) | eg/neo |
+|---|---:|---:|---:|---:|
+| complex-5 | 20/20 | **475.56 / 488.42** | **90.07 / 92.70** | **5.28×** |
+
+计划已与 neo4j 同形（forum 驱动 `CONTAINER_OF → HAS_CREATOR`），结果逐行一致。剩余差距主要是
+`post→HAS_CREATOR` 的 89,477 个 source 每个只有一条边：每次 source 都要做一次全局
+`edge_index` 的前缀 B+ 树定位（约 3.8 µs/edge），而 neo4j 的邻接起点内联在 node record、
+边是定长 relationship record。高 degree 的 `forum→post`（~10 条/源）每边只需 ~1.1 µs，
+说明定位成本会随 degree 摊薄；低 degree + 大量 source 才是 complex-5 的主要差距。
+
 ---
 
 ## 12. LDBC 全查询可运行性（2026-10-21）
@@ -784,7 +800,7 @@ python3 scripts/bench_ldbc_ab.py \
 |---|---|
 | 全部 short-1..7 | ✅ 正常结束 |
 | complex-2/3/4/6/7/8/9/10/11/12 | ✅ 正常结束 |
-| **complex-5** | ✅ 修复后正常结束（20 行，~0.5–0.9 s） |
+| **complex-5** | ✅ 修复后正常结束（20 行；min 475.56 ms，见 §11.4） |
 | complex-1/13/14 | ❌ 语法不支持（`shortestPath` / `allShortestPaths` / `reduce`），立即返回 SyntaxError，不挂起 |
 | update-1..8 | ✅ 全部正常结束（update-1 的 `s[0]` 绑定、update-6/7 的多标签 `id` 已修） |
 | 4G cgroup 下 | 无 OOM；无 CPU 失控（complex-5 修复后） |
@@ -796,3 +812,23 @@ python3 scripts/bench_ldbc_ab.py \
 2. **多标签 CREATE 的共享属性**：`CREATE (p:Post:Message {id: ...})` 中 `id` 同时被两个 label 声明，
    旧实现报 `Ambiguous property`；现在写入所有声明该属性的 label，并在 `LoadVertexPropCoalesce`
    对**相同值**去重，保证 `p.id` 仍是标量而不是重复 list（不同值仍按多标签属性语义返回 list）。
+
+
+### 12.4 update 语句单次执行耗时
+
+在一次性数据副本、4G cgroup、4 compute 线程下顺序执行（冷 server，仅证明可完成，不是
+性能基准；update 会改数据，所以每条都从副本开始，不碰基准库）：
+
+| 语句 | 结果 | 耗时 (ms) |
+|---|---|---:|
+| update-1 | ✅ | 258.6 |
+| update-2 | ✅ | 39.2 |
+| update-3 | ✅ | 28.7 |
+| update-4 | ✅ | 36.4 |
+| update-5 | ✅ | 14.5 |
+| update-6 | ✅ | 43.6 |
+| update-7 | ✅ | 573.8 |
+| update-8 | ✅ | 10.3 |
+
+update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义而失败，修复后均可正常结束；
+多标签共享属性写入所有声明它的 label，读取端对相同值去重（§12.3）。
