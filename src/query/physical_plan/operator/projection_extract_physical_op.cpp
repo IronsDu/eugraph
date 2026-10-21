@@ -513,16 +513,42 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
                     if (row < vertex_coalesce_cache[i].size()) {
                         const auto& values = vertex_coalesce_cache[i][row];
+                        // A multi-label CREATE writes a shared property to every
+                        // label that declares it. UNWIND/coalesce must still
+                        // produce one Cypher property value, not a duplicate
+                        // list; collapse identical per-label values (genuinely
+                        // conflicting values stay a list, matching multi-label
+                        // property semantics).
                         if (values.empty()) {
                             output.columns[i].setNull(row);
                         } else if (values.size() == 1) {
+                            // Fast path: the common single-label case must not pay
+                            // for a per-row dedup vector (complex-3 reads 52k
+                            // creationDate values through this path).
                             output.columns[i].setValue(row, propertyValueToValue(values[0]));
                         } else {
-                            ListValue lv;
-                            lv.elements.reserve(values.size());
-                            for (const auto& pv : values)
-                                lv.elements.push_back(ValueStorage{propertyValueToValue(pv)});
-                            output.columns[i].setValue(row, Value(mk<ListValue>(std::move(lv))));
+                            std::vector<PropertyValue> unique_values;
+                            unique_values.reserve(values.size());
+                            for (const auto& pv : values) {
+                                bool duplicate = false;
+                                for (const auto& existing : unique_values) {
+                                    if (existing == pv) {
+                                        duplicate = true;
+                                        break;
+                                    }
+                                }
+                                if (!duplicate)
+                                    unique_values.push_back(pv);
+                            }
+                            if (unique_values.size() == 1) {
+                                output.columns[i].setValue(row, propertyValueToValue(unique_values[0]));
+                            } else {
+                                ListValue lv;
+                                lv.elements.reserve(unique_values.size());
+                                for (const auto& pv : unique_values)
+                                    lv.elements.push_back(ValueStorage{propertyValueToValue(pv)});
+                                output.columns[i].setValue(row, Value(mk<ListValue>(std::move(lv))));
+                            }
                         }
                     } else {
                         output.columns[i].setNull(row);

@@ -182,6 +182,24 @@ filter-vals c0=VertexValue(0) c4=VertexRef(3)
 
 根因：**SlotId 虽然全局唯一，但解析入口仍以 name 为 key，丢失了来源作用域。**
 
+### 2.2b 已修复：OPTIONAL MATCH 的“尾绑定、头未绑定”方向（complex-5）
+
+`WITH forum, collect(friend) AS friends ... OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum)`
+里 `friend` 是新变量、`forum` 已绑定。旧实现按书写顺序从 `friend` 起扫，生成
+`AllNodeScan(friend) + CrossProduct`，`friend IN friends` 只是其后的 Filter，LDBC complex-5 因此 CPU 不收敛。
+
+`bindOptionalMatch` 现在在判断“起点是否已绑定”之前先做一次**固定长度、非命名 path 链的尾→头归一化**：
+
+```
+(a)<-[:R]-(b)<-[:S]-(c)   // c 已绑定, a 未绑定
+  ⇒ (c)-[:S]->(b)-[:R]->(a)
+```
+
+归一化后 `c` 成为起点，走原有的 `CorrelatedSource → Expand` 路径；不再需要为这个形状新增算子。
+约束：只处理无 `*` range、无命名 path 的链（路径元素顺序可观察的不能反转）；无向边方向保持不变。
+实现见 `Binder::bindOptionalMatch` 的 `normalized_match` 构造。回归测试：
+`QueryExecutorTest.OptionalMatchConstrainedByBoundTail`。
+
 ### 2.3 varlen 没有绑定边过滤抽象
 
 - 固定 Expand 有 `dst_bound / edge_bound / dst_col_idx / edge_col_idx` 布尔成员；

@@ -296,7 +296,6 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 | 查询 | 原因 |
 |---|---|
 | complex-1 / complex-13 / complex-14 | **语法不支持**：依赖 `shortestPath` / `allShortestPaths` + `reduce`（eugraph 报 `UnexpectedSyntax`） |
-| complex-5 | **eugraph 不可用**：实测 3 个 compute 线程连续满载 9 分钟不返回，客户端 120 s 超时也不生效（阻断算子只在批边界检查取消）；neo4j 92 ms 完成 |
 | complex-6 / complex-9 | 早前轮次 eugraph 可执行（0.49 s / 3.96 s）；本轮为控制耗时未跑，neo4j 侧为 31 / 37 ms |
 
 ## 4. 测量陷阱（复现前务必先读）
@@ -319,18 +318,24 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 | complex-13 | 同上（现用 `knows*1..3 + min(length(path))` 近似） | 同上 |
 | complex-14 | `allShortestPaths` + `reduce` 不支持 | 实现 all-shortest-paths + reduce |
 
-### 5.2 complex-5：CPU 不收敛（当前最大问题）
+### 5.2 complex-5：已修复（2026-10-21）
 
-`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum) WHERE friend IN friends`
-不返回。早前记录的判断是"需查 join order / `IN` 谓词下推，与内存无关"；本轮在 Release 下实测
-**3 个 compute 线程连续 9 分钟满载**，且只有客户端断开后算子才停止。两条下一步：
-① 该形状的 join order 与 `IN` 下推；② 查清取消检查为何在阻断算子内部不生效。
+历史现象：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum) WHERE friend IN friends`
+在 Release 下 3 个 compute 线程连续满载 9 分钟不返回。根因是 **`friend` 是新变量、`forum` 已绑定**，
+binder 仍按 pattern 书写顺序从 `friend` 起扫，生成 `AllNodeScan(friend)` + CrossProduct；`IN` 只是
+CrossProduct 之后的 Filter。
+
+修复：`bindOptionalMatch` 在决定相关性之前，若固定长度、非命名 path 链的**尾部已绑定而头部未绑定**，
+反转链方向（`(a)<-[:R]-(b)<-[:S]-(c)` → `(c)-[:S]->(b)-[:R]->(a)`），使已绑定的 `forum` 驱动
+`CONTAINER_OF → HAS_CREATOR` 展开。修复后计划与 neo4j 一致（`forum` 起点、无 AllNodeScan），
+complex-5 返回 20 行，~0.5–0.9 s（neo4j ~0.1 s）；不再有 CPU 不收敛。
 
 ### 5.3 仍然较慢的语句
 
 | 查询 | 差距 | 方向 |
 |---|---|---|
 | complex-3 | 21× | `Tag(name)` 起点选择、`HAS_CREATOR` 方向的前向/反向表选择 |
+| complex-5 | 5.3×（0.48 s vs 0.09 s） | post→HAS_CREATOR 的低 degree 边访问（89k source × 1 条边） |
 | complex-12 | 4.6× | `TagClass(name) → Tag → Post` 多跳展开与中间结果规模 |
 | complex-10 | 8.8× | VLE 之后的 `IS_LOCATED_IN` / `HAS_CREATOR` 展开顺序 |
 
@@ -711,11 +716,11 @@ Expand(All) (friend)<-[:HAS_CREATOR]-(message)      52,475 rows
 
 ---
 
-## 11. 八条 complex 查询复测（2026-10-21）
+## 11. complex 查询复测（2026-10-21）
 
 > 在 §10 的三项改动（batch 去重、共享 VertexValue、跳过无属性边空查）之外，本轮又把
 > `LoadVertexProp` / `LoadVertexLabels` 从逐行点读改为按 chunk 批量预取。对 §9 中差距较大的
-> 8 条 complex 查询重跑同机交错 A/B。
+> 8 条 complex 查询重跑同机交错 A/B，并补测本轮新支持的 complex-5（§11.4）。
 
 ### 11.1 方法
 
@@ -759,3 +764,71 @@ python3 scripts/bench_ldbc_ab.py \
   样本，叠加 tag 层次 VLE 的 65k 路径与 14 候选 `tag.name` coalesce。下一步应优先做
   **可复用的邻接扫描**（一次 cursor 覆盖整个 VLE 遍历）或按源连续邻接存储，而不是继续
   优化单条查询的算子。
+
+
+### 11.4 新支持：complex-5
+
+complex-5 在 §11 的 8 条之外，之前因 CPU 不收敛被列为不可用；本轮修复后补测（同样
+`--rounds 10 --warmup 2 --neo4j-fix-types`，personId=933、minDate=1287230400000）：
+
+| 查询 | 行数 eg/neo | eg min / p50 (ms) | neo min / p50 (ms) | eg/neo |
+|---|---:|---:|---:|---:|
+| complex-5 | 20/20 | **475.56 / 488.42** | **90.07 / 92.70** | **5.28×** |
+
+计划已与 neo4j 同形（forum 驱动 `CONTAINER_OF → HAS_CREATOR`），结果逐行一致。剩余差距主要是
+`post→HAS_CREATOR` 的 89,477 个 source 每个只有一条边：每次 source 都要做一次全局
+`edge_index` 的前缀 B+ 树定位（约 3.8 µs/edge），而 neo4j 的邻接起点内联在 node record、
+边是定长 relationship record。高 degree 的 `forum→post`（~10 条/源）每边只需 ~1.1 µs，
+说明定位成本会随 degree 摊薄；低 degree + 大量 source 才是 complex-5 的主要差距。
+
+---
+
+## 12. LDBC 全查询可运行性（2026-10-21）
+
+> 目标：确认 `ldbc_snb_interactive_v1_impls/cypher/queries` 下每条语句都不会拖垮机器；
+> 悬挂/超时/内存超限只影响被测 server，不影响宿主机。
+
+### 12.1 安全执行方式
+
+- server 放进 user cgroup：`MemoryMax=4G`、`MemorySwapMax=0`、`CPUQuota=400%`；
+- 每条查询独立起 server，客户端 `timeout 45s`；超时/崩溃后只清理该 scope；
+- 读查询用数据副本；update 查询用一次性副本，跑完即删。
+
+### 12.2 结果
+
+| 类别 | 状态 |
+|---|---|
+| 全部 short-1..7 | ✅ 正常结束 |
+| complex-2/3/4/6/7/8/9/10/11/12 | ✅ 正常结束 |
+| **complex-5** | ✅ 修复后正常结束（20 行；min 475.56 ms，见 §11.4） |
+| complex-1/13/14 | ❌ 语法不支持（`shortestPath` / `allShortestPaths` / `reduce`），立即返回 SyntaxError，不挂起 |
+| update-1..8 | ✅ 全部正常结束（update-1 的 `s[0]` 绑定、update-6/7 的多标签 `id` 已修） |
+| 4G cgroup 下 | 无 OOM；无 CPU 失控（complex-5 修复后） |
+
+### 12.3 同步修复的两个绑定缺陷
+
+1. **`cloneInlineExpr` 缺 `SubscriptExpr`/`SliceExpr`**：`UNWIND $studyAt AS s MATCH (... {id: s[0]})`
+   曾报 `UndefinedVariable: Variable ''`；补全 clone 分支后正常。
+2. **多标签 CREATE 的共享属性**：`CREATE (p:Post:Message {id: ...})` 中 `id` 同时被两个 label 声明，
+   旧实现报 `Ambiguous property`；现在写入所有声明该属性的 label，并在 `LoadVertexPropCoalesce`
+   对**相同值**去重，保证 `p.id` 仍是标量而不是重复 list（不同值仍按多标签属性语义返回 list）。
+
+
+### 12.4 update 语句单次执行耗时
+
+在一次性数据副本、4G cgroup、4 compute 线程下顺序执行（冷 server，仅证明可完成，不是
+性能基准；update 会改数据，所以每条都从副本开始，不碰基准库）：
+
+| 语句 | 结果 | 耗时 (ms) |
+|---|---|---:|
+| update-1 | ✅ | 258.6 |
+| update-2 | ✅ | 39.2 |
+| update-3 | ✅ | 28.7 |
+| update-4 | ✅ | 36.4 |
+| update-5 | ✅ | 14.5 |
+| update-6 | ✅ | 43.6 |
+| update-7 | ✅ | 573.8 |
+| update-8 | ✅ | 10.3 |
+
+update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义而失败，修复后均可正常结束；
+多标签共享属性写入所有声明它的 label，读取端对相同值去重（§12.3）。

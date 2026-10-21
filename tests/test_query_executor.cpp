@@ -918,6 +918,71 @@ TEST_F(QueryExecutorTest, CreateNodeAutoCreatesLabel) {
     }
 }
 
+TEST_F(QueryExecutorTest, MatchPropertyMapSubscriptExpression) {
+    // LDBC update-1 shape: a MATCH property map value that is a list subscript
+    // (`{id: s[0]}`) must be cloned/bound as an expression, not degraded to an
+    // empty Variable. The old cloneInlineExpr fallback made this report
+    // `UndefinedVariable: Variable ''`.
+    auto setup = execSync(*executor_, "CREATE (o:Organisation {id: 7}) RETURN 1");
+    ASSERT_TRUE(setup.error.empty()) << "setup: " << setup.error;
+    auto result = execSync(*executor_, "UNWIND [[7]] AS s MATCH (o:Organisation {id: s[0]}) RETURN o.id AS id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 7);
+}
+
+TEST_F(QueryExecutorTest, CreateNodeMultiLabelSharedProperty) {
+    // LDBC update-6/7: `CREATE (p:Post:Message {id: ...})` shares `id` between
+    // two labels. It is one node property, not an ambiguous reference; both
+    // label tables must receive the value.
+    auto result = execSync(*executor_, "CREATE (p:Post:Message {id: 42}) RETURN p.id AS id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 42);
+}
+
+TEST_F(QueryExecutorTest, OptionalMatchConstrainedByBoundTail) {
+    // LDBC complex-5 shape: `friend` is fresh, while `forum` is already bound
+    // by the previous WITH. The pattern tail must drive the traversal; the
+    // `friend IN friends` predicate supplies the list membership. This is also
+    // the regression test for the old AllNodeScan(friend) + CrossProduct plan.
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name: 'a'}) RETURN 1").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (f:Person {name: 'b'}) RETURN 1").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (p:Person {name: 'a'}), (f:Person {name: 'b'}) "
+                                     "CREATE (p)-[:KNOWS]->(f) RETURN 1")
+                    .error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (forum:Forum {name: 'F'}) RETURN 1").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (forum:Forum {name: 'F'}), (f:Person {name: 'b'}) "
+                                     "CREATE (forum)-[:HAS_MEMBER]->(f) RETURN 1")
+                    .error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (forum:Forum {name: 'F'}) "
+                                     "CREATE (forum)-[:CONTAINER_OF]->(post:Post) RETURN 1")
+                    .error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (forum:Forum {name: 'F'}), (f:Person {name: 'b'}) "
+                                     "MATCH (forum)-[:CONTAINER_OF]->(post:Post) "
+                                     "CREATE (post)-[:HAS_CREATOR]->(f) RETURN 1")
+                    .error.empty());
+
+    auto result = execSync(*executor_, "MATCH (p:Person {name: 'a'})-[:KNOWS]-(friend) "
+                                       "WITH DISTINCT friend "
+                                       "MATCH (friend)<-[:HAS_MEMBER]-(forum) "
+                                       "WITH forum, collect(friend) AS friends "
+                                       "OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum) "
+                                       "WHERE friend IN friends "
+                                       "RETURN forum.name AS forumName, count(post) AS postCount");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "F");
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][1]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1);
+}
+
 TEST_F(QueryExecutorTest, SetEdgePropertyNullRemoves) {
     // Set2 [3]: MATCH ()-[r]->() SET r.property1 = null RETURN r
     execSync(*executor_, "CREATE ()-[:REL {property1: 12, property2: 24}]->()");
@@ -2401,11 +2466,31 @@ TEST_F(QueryExecutorMultiLabelTest, NoPropertyLabel) {
     EXPECT_EQ(vv.id, 1);
 }
 
-TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelAmbiguousProperty) {
-    // name exists on both Person and Employee — ambiguous, binder must reject
-    auto result = execSync(*executor_, "CREATE (n:Person:Employee {name: 'Bob'})");
-    EXPECT_FALSE(result.error.empty());
-    EXPECT_NE(result.error.find("Ambiguous"), std::string::npos) << result.error;
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelSharedProperty) {
+    // `name` exists on both Person and Employee. A CREATE node has one property
+    // value, not an ambiguous reference: write it to both label tables and make
+    // it readable through either typed accessor in a following MATCH.
+    auto created = execSync(*executor_, "CREATE (n:Person:Employee {name: 'Bob'})");
+    ASSERT_TRUE(created.error.empty()) << created.error;
+
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n::Person.name AS p, n::Employee.name AS e");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]))
+        << "first value variant index=" << result.rows[0][0].index();
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][1]))
+        << "second value variant index=" << result.rows[0][1].index();
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Bob");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "Bob");
+
+    auto untyped = execSync(*executor_, "MATCH (n:Person) RETURN n.name AS name");
+    ASSERT_TRUE(untyped.error.empty()) << untyped.error;
+    ASSERT_EQ(untyped.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(untyped.rows[0][0]))
+        << "untyped shared property variant index=" << untyped.rows[0][0].index();
+    EXPECT_EQ(std::get<std::string>(untyped.rows[0][0]), "Bob");
 }
 
 TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyConvenienceFallback) {
