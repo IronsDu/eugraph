@@ -77,6 +77,32 @@ cypher::Expression cloneInlineExpr(const cypher::Expression& expr) {
                 for (const auto& [k, v] : ptr->entries)
                     c->entries.emplace_back(k, cloneInlineExpr(v));
                 return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                auto c = std::make_unique<cypher::SubscriptExpr>();
+                c->list = cloneInlineExpr(ptr->list);
+                c->index = cloneInlineExpr(ptr->index);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                auto c = std::make_unique<cypher::SliceExpr>();
+                c->list = cloneInlineExpr(ptr->list);
+                if (ptr->from)
+                    c->from = cloneInlineExpr(*ptr->from);
+                if (ptr->to)
+                    c->to = cloneInlineExpr(*ptr->to);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                auto c = std::make_unique<cypher::ParenExpr>();
+                c->inner = cloneInlineExpr(ptr->inner);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                auto c = std::make_unique<cypher::CaseExpr>();
+                if (ptr->subject)
+                    c->subject = cloneInlineExpr(*ptr->subject);
+                for (const auto& [w, t] : ptr->when_thens)
+                    c->when_thens.emplace_back(cloneInlineExpr(w), cloneInlineExpr(t));
+                if (ptr->else_expr)
+                    c->else_expr = cloneInlineExpr(*ptr->else_expr);
+                return c;
             }
             return std::make_unique<cypher::Variable>("");
         },

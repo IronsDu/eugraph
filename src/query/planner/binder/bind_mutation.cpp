@@ -47,8 +47,19 @@ bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<Labe
         }
 
         if (match_count > 1) {
-            if (error_out && error_out->empty())
-                *error_out = "Ambiguous property '" + prop_name + "' found in multiple labels. Use ::Label to specify.";
+            // A property name shared by multiple labels of the same CREATE node
+            // (e.g. `CREATE (p:Post:Message {id: ...})`) is not ambiguous: the
+            // node has one property value and each label's property table needs
+            // it. Bind once per label so each BoundExpression is independent.
+            for (auto& [lid, props_vec] : label_properties) {
+                auto* pd = catalog.lookupProperty(lid, prop_name);
+                if (!pd)
+                    continue;
+                auto bound_val = binder.bindExpression(prop_expr);
+                if (!bound_val)
+                    continue;
+                props_vec.emplace_back(pd->id, std::move(*bound_val));
+            }
             continue;
         }
 

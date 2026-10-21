@@ -95,6 +95,19 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
                 for (const auto& [k, v] : ptr->entries)
                     c->entries.emplace_back(k, cloneExpression(v));
                 return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                auto c = std::make_unique<cypher::SubscriptExpr>();
+                c->list = cloneExpression(ptr->list);
+                c->index = cloneExpression(ptr->index);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                auto c = std::make_unique<cypher::SliceExpr>();
+                c->list = cloneExpression(ptr->list);
+                if (ptr->from)
+                    c->from = cloneExpression(*ptr->from);
+                if (ptr->to)
+                    c->to = cloneExpression(*ptr->to);
+                return c;
             } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
                 auto c = std::make_unique<cypher::CaseExpr>();
                 if (ptr->subject)
@@ -306,6 +319,71 @@ bool validateMatchPatternVariables(const MatchPatternGraph& graph, Binder& binde
 }
 
 } // namespace
+
+// ==================== Pattern Orientation Helpers ====================
+
+namespace {
+
+std::optional<cypher::PropertiesMap> clonePropertiesMap(const std::optional<cypher::PropertiesMap>& in) {
+    if (!in.has_value())
+        return std::nullopt;
+    cypher::PropertiesMap out;
+    out.entries.reserve(in->entries.size());
+    for (const auto& [key, value] : in->entries)
+        out.entries.emplace_back(key, cloneExpression(value));
+    return out;
+}
+
+cypher::NodePattern cloneNodePattern(const cypher::NodePattern& in) {
+    cypher::NodePattern out;
+    out.variable = in.variable;
+    out.labels = in.labels;
+    out.properties = clonePropertiesMap(in.properties);
+    return out;
+}
+
+cypher::RelationshipPattern cloneRelationshipPattern(const cypher::RelationshipPattern& in) {
+    cypher::RelationshipPattern out;
+    out.variable = in.variable;
+    out.rel_types = in.rel_types;
+    out.properties = clonePropertiesMap(in.properties);
+    out.direction = in.direction;
+    if (in.range.has_value())
+        out.range = std::make_pair(cloneExpression(in.range->first), cloneExpression(in.range->second));
+    return out;
+}
+
+/// Reverse a fixed-length pattern chain so a bound tail can drive the traversal.
+/// Example: `(a)<-[:R]-(b)<-[:S]-(c)` with `c` already bound becomes
+/// `(c)-[:S]->(b)-[:R]->(a)`. Variable-length and named-path chains are left
+/// alone (path element order / hop semantics are observable).
+cypher::PatternPart reverseFixedPattern(const cypher::PatternPart& in) {
+    cypher::PatternPart out;
+    out.variable = in.variable;
+    const auto& elem = in.element;
+    out.element.node = cloneNodePattern(elem.chain.back().second);
+    for (size_t i = elem.chain.size(); i-- > 0;) {
+        auto rel = cloneRelationshipPattern(elem.chain[i].first);
+        if (rel.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT)
+            rel.direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+        else if (rel.direction == cypher::RelationshipDirection::RIGHT_TO_LEFT)
+            rel.direction = cypher::RelationshipDirection::LEFT_TO_RIGHT;
+        const auto& node = (i == 0) ? elem.node : elem.chain[i - 1].second;
+        out.element.chain.emplace_back(std::move(rel), cloneNodePattern(node));
+    }
+    return out;
+}
+
+} // namespace
+
+cypher::PatternPart clonePatternPart(const cypher::PatternPart& in) {
+    cypher::PatternPart out;
+    out.variable = in.variable;
+    out.element.node = cloneNodePattern(in.element.node);
+    for (const auto& [rel, node] : in.element.chain)
+        out.element.chain.emplace_back(cloneRelationshipPattern(rel), cloneNodePattern(node));
+    return out;
+}
 
 // ==================== MATCH Binding ====================
 
@@ -1932,7 +2010,48 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         return std::nullopt;
     }
 
-    MatchPatternGraph graph = MatchPatternGraphBuilder{}.build(match);
+    // If the pattern's tail is already bound but its head is fresh, reverse the
+    // fixed-length chain before the optional-match correlation decision. This
+    // turns `WITH forum ... OPTIONAL MATCH (friend)<-...-(forum)` into a
+    // forum-driven traversal instead of AllNodeScan(friend) + CrossProduct.
+    cypher::MatchClause normalized_match;
+    const cypher::MatchClause* effective_match = &match;
+    for (const auto& pp : match.patterns) {
+        if (pp.variable || pp.element.chain.empty())
+            continue;
+        bool fixed_length = true;
+        for (const auto& [rel, node] : pp.element.chain) {
+            (void)node;
+            if (rel.range.has_value()) {
+                fixed_length = false;
+                break;
+            }
+        }
+        if (!fixed_length || !pp.element.node.variable.has_value() ||
+            !pp.element.chain.back().second.variable.has_value())
+            continue;
+        const auto& head = *pp.element.node.variable;
+        const auto& tail = *pp.element.chain.back().second.variable;
+        if (ctx_.lookup(tail) != nullptr && ctx_.lookup(head) == nullptr) {
+            normalized_match.optional = match.optional;
+            if (match.where_pred)
+                normalized_match.where_pred = cloneExpression(*match.where_pred);
+            normalized_match.patterns.reserve(match.patterns.size());
+            for (const auto& part : match.patterns) {
+                const bool reverse = !part.variable && !part.element.chain.empty() &&
+                                     part.element.node.variable.has_value() &&
+                                     part.element.chain.back().second.variable.has_value() &&
+                                     ctx_.lookup(*part.element.chain.back().second.variable) != nullptr &&
+                                     ctx_.lookup(*part.element.node.variable) == nullptr;
+                normalized_match.patterns.push_back(reverse ? reverseFixedPattern(part) : clonePatternPart(part));
+            }
+            effective_match = &normalized_match;
+            break;
+        }
+    }
+    const auto& m = *effective_match;
+
+    MatchPatternGraph graph = MatchPatternGraphBuilder{}.build(m);
 
     // Collect every variable from the outer scope that appears in this
     // OPTIONAL MATCH pattern. Correlating all of them avoids re-scanning a
@@ -1968,8 +2087,8 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         for (const auto& name : vars)
             where_names.insert(name);
     };
-    if (match.where_pred)
-        collect_where_vars(*match.where_pred);
+    if (m.where_pred)
+        collect_where_vars(*m.where_pred);
 
     std::vector<BoundPatternVar> where_outer_vars;
     for (const auto& name : where_names) {
@@ -2028,7 +2147,7 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         }
 
         BoundLogicalOperator parent_op = std::move(source);
-        auto sub_plan = bindMatch(match, std::move(parent_op), /*skip_where=*/false);
+        auto sub_plan = bindMatch(m, std::move(parent_op), /*skip_where=*/false);
         if (!sub_plan)
             return std::nullopt;
 
@@ -2088,7 +2207,7 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         uint32_t source_cols = source_scope.next_column_index;
 
         ctx_.beginSubScope();
-        auto pattern_plan = bindMatch(match, std::nullopt, /*skip_where=*/true);
+        auto pattern_plan = bindMatch(m, std::nullopt, /*skip_where=*/true);
         if (!pattern_plan)
             return std::nullopt;
         BindContext::Snapshot pattern_scope = ctx_.save();
@@ -2109,8 +2228,8 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
             return std::nullopt;
         BoundLogicalOperator right_plan = std::move(*joined);
 
-        if (match.where_pred) {
-            auto where_op = bindWhere(*match.where_pred, std::move(right_plan));
+        if (m.where_pred) {
+            auto where_op = bindWhere(*m.where_pred, std::move(right_plan));
             if (!where_op)
                 return std::nullopt;
             right_plan = std::move(*where_op);
@@ -2139,7 +2258,7 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
 
     // Fallback: previous behavior for patterns whose first node is not
     // correlated, or when no variable is bound yet.
-    const auto& first_node = match.patterns[0].element.node;
+    const auto& first_node = m.patterns[0].element.node;
     bool correlated = false;
     std::string corr_var_name;
     const ColumnInfo* outer_col = nullptr;
@@ -2172,7 +2291,7 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         source.types.push_back(sub_info.type);
         source.column_indices.push_back(sub_idx);
         BoundLogicalOperator parent_op = std::move(source);
-        auto sub_plan = bindMatch(match, std::move(parent_op), /*skip_where=*/false);
+        auto sub_plan = bindMatch(m, std::move(parent_op), /*skip_where=*/false);
         if (!sub_plan)
             return std::nullopt;
         std::vector<std::pair<std::string, ColumnInfo>> new_vars;
@@ -2196,7 +2315,7 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
 
     auto saved_ctx = ctx_.save();
     ctx_.beginSubScope();
-    auto sub_plan = bindMatch(match, std::nullopt, /*skip_where=*/false);
+    auto sub_plan = bindMatch(m, std::nullopt, /*skip_where=*/false);
     if (!sub_plan)
         return std::nullopt;
     std::vector<std::pair<std::string, ColumnInfo>> new_vars;

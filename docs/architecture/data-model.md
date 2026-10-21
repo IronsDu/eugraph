@@ -40,6 +40,10 @@
 - 字段改名只需修改元数据 `PropertyDef.name`，无需修改 KV 数据（KV 中存 prop_id 而非属性名）
 - 删除列后 prop_id 保留空洞，新增列分配新 ID，避免旧数据被误读
 - 读取时只返回 `PropertyDef` 中定义的 prop_id，孤儿数据不可见
+- **多标签顶点的共享属性**：同一条 CREATE 里多个 label 都声明同名属性时，属性值会写入每个声明它的
+  label 表（`CREATE (p:Post:Message {id: ...})` 两边都有 `id`）。读取 `n.prop` 时
+  `LoadVertexPropCoalesce` 对**相同值去重**，所以仍返回标量；不同值才按多标签语义返回 list。
+  `n::Label.prop` 仍读该 label 自己的值。
 
 ---
 
