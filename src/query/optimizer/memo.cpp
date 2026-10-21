@@ -152,7 +152,10 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
     std::vector<GroupId> child_groups;
     int n_children = getChildCount(op);
     if (n_children == 1) {
-        binder::BoundLogicalOperator child = std::visit(
+        // 子节点在**堆**上持有：Create4 "Many CREATE clauses" 会产生 100+ 层的
+        // 单子链；若每层递归都在栈上放完整 BoundLogicalOperator 变体，ASan 放大
+        // 栈帧后会 SEGV（栈溢出）。堆持有把每帧缩到指针大小，语义不变。
+        auto child = std::make_unique<binder::BoundLogicalOperator>(std::visit(
             [](auto& val) -> binder::BoundLogicalOperator {
                 using T = std::decay_t<decltype(val)>;
                 if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
@@ -179,60 +182,60 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                     return c;
                 }
             },
-            op);
-        child_groups.push_back(copyIn(child));
+            op));
+        child_groups.push_back(copyIn(*child));
     } else if (n_children == 2) {
         if (std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>(op)) {
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(op);
-            auto left = std::move(join->left);
+            auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(join->left));
             join->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(left));
-            auto right = std::move(join->right);
+            child_groups.push_back(copyIn(*left));
+            auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(join->right));
             join->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(right));
+            child_groups.push_back(copyIn(*right));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(op)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(op);
-            auto left = std::move(sj->left);
+            auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(sj->left));
             sj->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(left));
-            auto right = std::move(sj->right);
+            child_groups.push_back(copyIn(*left));
+            auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(sj->right));
             sj->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(right));
+            child_groups.push_back(copyIn(*right));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(op)) {
             auto& lj = std::get<std::unique_ptr<binder::BoundLeftJoinOp>>(op);
-            auto left = std::move(lj->left);
+            auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(lj->left));
             lj->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(left));
-            auto right = std::move(lj->right);
+            child_groups.push_back(copyIn(*left));
+            auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(lj->right));
             lj->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(right));
+            child_groups.push_back(copyIn(*right));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op)) {
             auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op);
-            auto left = std::move(pc->left);
+            auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(pc->left));
             pc->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(left));
-            auto right = std::move(pc->right);
+            child_groups.push_back(copyIn(*left));
+            auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(pc->right));
             pc->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(right));
+            child_groups.push_back(copyIn(*right));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(op)) {
             // Two inputs: the row source, and the body sub-plan (which is opaque
             // to the rewriter but must still be carried through the memo, so it is
             // canonicalised as a child group like any binary operator's input).
             auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(op);
-            auto child = std::move(fe->child);
+            auto child = std::make_unique<binder::BoundLogicalOperator>(std::move(fe->child));
             fe->child = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(child));
-            auto body = std::move(fe->body);
+            child_groups.push_back(copyIn(*child));
+            auto body = std::make_unique<binder::BoundLogicalOperator>(std::move(fe->body));
             fe->body = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(body));
+            child_groups.push_back(copyIn(*body));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundUnionOp>>(op)) {
             auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(op);
-            auto left = std::move(uo->left);
+            auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(uo->left));
             uo->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(left));
-            auto right = std::move(uo->right);
+            child_groups.push_back(copyIn(*left));
+            auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(uo->right));
             uo->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(right));
+            child_groups.push_back(copyIn(*right));
         }
     }
 
