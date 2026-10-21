@@ -6839,6 +6839,50 @@ TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabelVerifyRemoved) {
     EXPECT_FALSE(has_employee) << "Employee label should have been removed";
 }
 
+// --- REMOVE last label: properties must survive in __anon__ and stay visible ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveLastLabelKeepsPropertiesAccessible) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // No RETURN here: the Remove op cannot rely on a projected property map.
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n.name, keys(n), labels(n)");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(r3.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+
+    const auto& keys = *std::get<ListValuePtr>(r3.rows[0][1]);
+    ASSERT_EQ(keys.elements.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(keys.elements[0].value), "name");
+    const auto& labels = *std::get<ListValuePtr>(r3.rows[0][2]);
+    EXPECT_TRUE(labels.elements.empty()) << "internal __anon__ must not leak into labels(n)";
+}
+
+// --- REMOVE one of several labels: migrated anon properties must stay visible ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveOneOfMultipleLabelsKeepsPropertiesAccessible) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'}) SET n:Employee");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Employee) RETURN n.name, keys(n), labels(n)");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(r3.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+
+    const auto& keys = *std::get<ListValuePtr>(r3.rows[0][1]);
+    ASSERT_EQ(keys.elements.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(keys.elements[0].value), "name");
+    const auto& labels = *std::get<ListValuePtr>(r3.rows[0][2]);
+    ASSERT_EQ(labels.elements.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(labels.elements[0].value), "Employee");
+}
+
 // --- CREATE writes unknown property to __anon__, then MATCH + RETURN reads it back ---
 TEST_F(QueryExecutorMultiLabelTest, CreateUnknownPropThenMatchReturn) {
     // "name" is in Person schema → writes to Person
