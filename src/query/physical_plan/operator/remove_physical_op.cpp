@@ -74,24 +74,40 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                         // 否则 REMOVE n:L1:L3 这种"部分移除"也会丢失属性（多 label
                         // CREATE 时属性只挂在第一个 label 下，参见 bind_mutation 的
                         // pending_props re-resolution）。
+                        bool migrated_anon = false;
                         if (anon_label_id_ != INVALID_LABEL_ID && anon_label_id_ != lit->second) {
                             auto src_def_it = label_defs_.find(lit->second);
-                            auto src_props_it = updated.properties.find(lit->second);
-                            if (src_def_it != label_defs_.end() && src_props_it != updated.properties.end()) {
-                                const auto& src_def = src_def_it->second;
-                                Properties& anon_props = updated.properties[anon_label_id_];
-                                for (const auto& pd : src_def.properties) {
-                                    if (pd.id >= src_props_it->second.size())
-                                        continue;
-                                    const auto& pv = src_props_it->second[pd.id];
-                                    if (!pv.has_value())
-                                        continue;
-                                    uint16_t anon_pid =
-                                        co_await meta_.getOrCreateAnonPropId(pd.name, PropertyType::ANY);
-                                    co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, *pv);
-                                    if (anon_props.size() <= anon_pid)
-                                        anon_props.resize(anon_pid + 1);
-                                    anon_props[anon_pid] = pv;
+                            if (src_def_it != label_defs_.end()) {
+                                // 属性不一定已随 VertexValue 预取（ProjectionExtract 只
+                                // 物化查询需要的列）。REMOVE label 会删除该 label 的
+                                // vprop 表，所以缺失时必须按 label 回读，否则属性丢失。
+                                const Properties* src_props = nullptr;
+                                std::optional<Properties> fetched_props;
+                                auto src_props_it = updated.properties.find(lit->second);
+                                if (src_props_it != updated.properties.end() && !src_props_it->second.empty()) {
+                                    src_props = &src_props_it->second;
+                                } else {
+                                    fetched_props = co_await store_.getVertexProperties(vid, lit->second);
+                                    if (fetched_props.has_value())
+                                        src_props = &*fetched_props;
+                                }
+                                if (src_props != nullptr) {
+                                    const auto& src_def = src_def_it->second;
+                                    Properties& anon_props = updated.properties[anon_label_id_];
+                                    for (const auto& pd : src_def.properties) {
+                                        if (pd.id >= src_props->size())
+                                            continue;
+                                        const auto& pv = (*src_props)[pd.id];
+                                        if (!pv.has_value())
+                                            continue;
+                                        uint16_t anon_pid =
+                                            co_await meta_.getOrCreateAnonPropId(pd.name, PropertyType::ANY);
+                                        co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, *pv);
+                                        if (anon_props.size() <= anon_pid)
+                                            anon_props.resize(anon_pid + 1);
+                                        anon_props[anon_pid] = pv;
+                                        migrated_anon = true;
+                                    }
                                 }
                             }
                         }
@@ -100,8 +116,26 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                             co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
                         co_await deleteVertexIndexEntries(store_, old_index_entries);
                         co_await insertVertexIndexEntries(store_, new_index_entries);
-                        if (updated.labels.has_value()) {
-                            updated.labels->erase(lit->second);
+                        // 最后一个用户 label 被移除后，顶点必须挂上内部 __anon__
+                        // label：属性已迁到 __anon__ 表，ProjectionExtract 只对
+                        // “带 anon label”的顶点预取 anon 属性。缺少这一步时属性
+                        // 仍在存储里，但 keys(n)/n.prop 会看不到（REMOVE TCK 回归）。
+                        {
+                            LabelIdSet remaining =
+                                updated.labels.has_value() ? *updated.labels : co_await store_.getVertexLabels(vid);
+                            remaining.erase(lit->second);
+                            // 两种情况都要挂内部 __anon__ label：
+                            //  1) 已无用户 label（无标签顶点的属性容器）；
+                            //  2) 本次把属性迁到了 __anon__，但还有其它 label —— 否则
+                            //     ProjectionExtract 不会预取 anon 属性，keys(n) 丢属性。
+                            const bool need_anon_label =
+                                (remaining.empty() || migrated_anon) && anon_label_id_ != INVALID_LABEL_ID &&
+                                anon_label_id_ != lit->second && !remaining.count(anon_label_id_);
+                            if (need_anon_label) {
+                                co_await store_.addVertexLabel(vid, anon_label_id_);
+                                remaining.insert(anon_label_id_);
+                            }
+                            updated.labels = std::move(remaining);
                             modified = true;
                         }
                     } else if (item.kind == BoundRemoveItem::Kind::PROPERTY) {

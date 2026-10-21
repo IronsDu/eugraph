@@ -217,6 +217,64 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             }
         }
 
+        // Batch-prefetch single-property / label reads as well: LoadVertexProp
+        // used to issue one co_await per row, so an Expand of 52k messages with
+        // friend.firstName/lastName meant 100k+ async point reads. Collect the
+        // unique ids per spec, issue one batch per spec, then fan the results
+        // back out to rows.
+        std::vector<std::vector<std::optional<PropertyValue>>> vertex_prop_cache(n_specs);
+        std::vector<std::vector<std::optional<LabelIdSet>>> vertex_labels_cache(n_specs);
+        for (size_t i = 0; i < n_specs; ++i) {
+            const auto& spec = specs_[i];
+            if (spec.kind != ColumnSpec::Kind::LoadVertexProp && spec.kind != ColumnSpec::Kind::LoadVertexLabels)
+                continue;
+
+            std::vector<VertexId> ids;
+            std::vector<size_t> value_for_row(row_count, SIZE_MAX);
+            std::unordered_map<VertexId, size_t> index_of;
+            index_of.reserve(row_count);
+            for (size_t row = 0; row < row_count; ++row) {
+                // resolveVertexId caches by column only; a fresh pair per row is
+                // required here because this loop runs before the per-row cache.
+                size_t vid_cache_col = SIZE_MAX;
+                VertexId vid_cache = INVALID_VERTEX_ID;
+                VertexId vid = resolveVertexId(*chunk, spec.source_col, row, vid_cache_col, vid_cache);
+                if (vid == INVALID_VERTEX_ID)
+                    continue;
+                auto [it, inserted] = index_of.try_emplace(vid, ids.size());
+                if (inserted)
+                    ids.push_back(vid);
+                value_for_row[row] = it->second;
+            }
+            if (ids.empty())
+                continue;
+
+            if (spec.kind == ColumnSpec::Kind::LoadVertexProp) {
+                auto values =
+                    co_await store_.batchGetVertexProperties(ids, spec.label_id, std::vector<uint16_t>{spec.prop_id});
+                vertex_prop_cache[i].resize(row_count);
+                for (size_t row = 0; row < row_count; ++row) {
+                    const size_t idx = value_for_row[row];
+                    if (idx == SIZE_MAX || idx >= values.size() || !values[idx].has_value())
+                        continue;
+                    const auto& props = *values[idx];
+                    if (props.size() > spec.prop_id && props[spec.prop_id].has_value())
+                        vertex_prop_cache[i][row] = props[spec.prop_id];
+                }
+            } else {
+                auto labels = co_await store_.getVertexLabelsBatch(ids);
+                vertex_labels_cache[i].resize(row_count);
+                for (size_t row = 0; row < row_count; ++row) {
+                    const size_t idx = value_for_row[row];
+                    if (idx == SIZE_MAX || idx >= labels.size())
+                        continue;
+                    LabelIdSet ids_set = labels[idx];
+                    ids_set.erase(INVALID_LABEL_ID);
+                    vertex_labels_cache[i][row] = std::move(ids_set);
+                }
+            }
+        }
+
         // Prefetch coalesced multi-candidate vertex properties. Each row may
         // have values from several present labels; the runtime semantics are
         // scalar if exactly one label has the property, or a list if multiple
@@ -268,7 +326,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
 
         // Prefetch vertex labels + full properties for ConstructVertex specs in
         // batch, instead of one labels fetch and one properties fetch per row.
-        std::vector<std::vector<std::optional<VertexValue>>> vertex_ctor_cache(n_specs);
+        // The cache stores **shared handles**: the same bound vertex repeated across
+        // rows (friend/countryX/countryY after an Expand) is materialized once and
+        // shared, instead of deep-copying its labels+properties map per row.
+        std::vector<std::vector<VertexValuePtr>> vertex_ctor_cache(n_specs);
         for (size_t i = 0; i < n_specs; ++i) {
             const auto& spec = specs_[i];
             if (spec.kind != ColumnSpec::Kind::ConstructVertex)
@@ -277,20 +338,31 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
 
             std::vector<VertexId> ref_vids;
             std::vector<size_t> ref_rows;
-            std::vector<size_t> anon_rows;
+            std::vector<size_t> anon_rows; // value-source rows that still need anon props
             for (size_t row = 0; row < row_count; ++row) {
                 const auto& v = chunk->columns[spec.source_col].getValue(row);
                 if (std::holds_alternative<VertexValuePtr>(v)) {
-                    VertexValue vv = (*std::get<VertexValuePtr>(v));
-                    if (vv.labels.has_value()) {
-                        LabelIdSet labels = *vv.labels;
-                        labels.erase(INVALID_LABEL_ID);
-                        vv.labels = std::move(labels);
+                    VertexValuePtr src = std::get<VertexValuePtr>(v);
+                    const bool strip_invalid =
+                        src && src->labels.has_value() && src->labels->count(INVALID_LABEL_ID) > 0;
+                    const bool need_anon = anon_label_id_ != INVALID_LABEL_ID && src && src->labels.has_value() &&
+                                           src->labels->count(anon_label_id_) > 0 &&
+                                           src->properties.count(anon_label_id_) == 0;
+                    if (src && !strip_invalid && !need_anon) {
+                        // 只读路径：直接共享同一个 VertexValue ✓
+                        vertex_ctor_cache[i][row] = std::move(src);
+                    } else if (src) {
+                        // 需要清理标签/补 anon 属性时才写时复制，避免污染其它行。
+                        auto copy = std::make_shared<VertexValue>(*src);
+                        if (copy->labels.has_value()) {
+                            LabelIdSet labels = *copy->labels;
+                            labels.erase(INVALID_LABEL_ID);
+                            copy->labels = std::move(labels);
+                        }
+                        vertex_ctor_cache[i][row] = std::move(copy);
+                        if (need_anon)
+                            anon_rows.push_back(row);
                     }
-                    vertex_ctor_cache[i][row] = std::move(vv);
-                    if (anon_label_id_ != INVALID_LABEL_ID &&
-                        !vertex_ctor_cache[i][row]->properties.count(anon_label_id_))
-                        anon_rows.push_back(row);
                 } else {
                     VertexId vid = INVALID_VERTEX_ID;
                     if (std::holds_alternative<VertexRef>(v))
@@ -306,48 +378,71 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
 
             if (!ref_vids.empty()) {
                 auto labels_batch = co_await store_.getVertexLabelsBatch(ref_vids);
-                std::unordered_map<LabelId, std::vector<size_t>> rows_by_label;
+                std::unordered_map<VertexId, VertexValuePtr> by_vid;
+                by_vid.reserve(ref_vids.size());
                 for (size_t j = 0; j < ref_vids.size() && j < labels_batch.size(); ++j) {
-                    VertexValue vv;
-                    vv.id = ref_vids[j];
-                    LabelIdSet labels = labels_batch[j];
-                    labels.erase(INVALID_LABEL_ID);
-                    vv.labels = labels;
-                    vertex_ctor_cache[i][ref_rows[j]] = std::move(vv);
-                    for (LabelId lid : labels)
-                        rows_by_label[lid].push_back(j);
+                    const VertexId vid = ref_vids[j];
+                    auto [it, inserted] = by_vid.try_emplace(vid);
+                    if (inserted) {
+                        auto vv = std::make_shared<VertexValue>();
+                        vv->id = vid;
+                        LabelIdSet labels = labels_batch[j];
+                        labels.erase(INVALID_LABEL_ID);
+                        vv->labels = std::move(labels);
+                        it->second = std::move(vv);
+                    }
+                    vertex_ctor_cache[i][ref_rows[j]] = it->second;
                 }
 
-                for (const auto& [lid, local_rows] : rows_by_label) {
-                    std::vector<VertexId> ids;
-                    ids.reserve(local_rows.size());
-                    for (size_t j : local_rows)
-                        ids.push_back(ref_vids[j]);
+                std::unordered_map<LabelId, std::vector<VertexId>> ids_by_label;
+                for (const auto& [vid, vv] : by_vid) {
+                    if (!vv->labels.has_value())
+                        continue;
+                    for (LabelId lid : *vv->labels)
+                        ids_by_label[lid].push_back(vid);
+                }
+                for (const auto& [lid, ids] : ids_by_label) {
                     auto props = co_await store_.batchGetVertexProperties(ids, lid, {});
                     for (size_t j = 0; j < ids.size() && j < props.size(); ++j) {
                         if (props[j].has_value())
-                            vertex_ctor_cache[i][ref_rows[local_rows[j]]]->properties[lid] = std::move(*props[j]);
+                            by_vid[ids[j]]->properties[lid] = std::move(*props[j]);
                     }
                 }
 
                 if (anon_label_id_ != INVALID_LABEL_ID) {
-                    auto anon_props = co_await store_.batchGetVertexProperties(ref_vids, anon_label_id_, {});
-                    for (size_t j = 0; j < ref_vids.size() && j < anon_props.size(); ++j) {
-                        if (anon_props[j].has_value())
-                            vertex_ctor_cache[i][ref_rows[j]]->properties[anon_label_id_] = std::move(*anon_props[j]);
+                    // 只对真的带 anon 标签的 vid 查 anon 属性（避免每行一次空查询）。
+                    std::vector<VertexId> anon_ids;
+                    for (const auto& [vid, vv] : by_vid) {
+                        if (vv->labels.has_value() && vv->labels->count(anon_label_id_) &&
+                            !vv->properties.count(anon_label_id_))
+                            anon_ids.push_back(vid);
+                    }
+                    if (!anon_ids.empty()) {
+                        auto anon_props = co_await store_.batchGetVertexProperties(anon_ids, anon_label_id_, {});
+                        for (size_t j = 0; j < anon_ids.size() && j < anon_props.size(); ++j) {
+                            if (anon_props[j].has_value())
+                                by_vid[anon_ids[j]]->properties[anon_label_id_] = std::move(*anon_props[j]);
+                        }
                     }
                 }
             }
 
             if (!anon_rows.empty()) {
-                std::vector<VertexId> ids;
-                ids.reserve(anon_rows.size());
-                for (size_t row : anon_rows)
-                    ids.push_back(vertex_ctor_cache[i][row]->id);
-                auto anon_props = co_await store_.batchGetVertexProperties(ids, anon_label_id_, {});
-                for (size_t j = 0; j < ids.size() && j < anon_props.size(); ++j) {
-                    if (anon_props[j].has_value())
-                        vertex_ctor_cache[i][anon_rows[j]]->properties[anon_label_id_] = std::move(*anon_props[j]);
+                std::unordered_map<VertexId, VertexValuePtr> anon_ptrs;
+                std::vector<VertexId> anon_ids;
+                for (size_t row : anon_rows) {
+                    const VertexValuePtr& vv = vertex_ctor_cache[i][row];
+                    if (!vv)
+                        continue;
+                    if (anon_ptrs.try_emplace(vv->id, vv).second)
+                        anon_ids.push_back(vv->id);
+                }
+                if (!anon_ids.empty()) {
+                    auto anon_props = co_await store_.batchGetVertexProperties(anon_ids, anon_label_id_, {});
+                    for (size_t j = 0; j < anon_ids.size() && j < anon_props.size(); ++j) {
+                        if (anon_props[j].has_value())
+                            anon_ptrs[anon_ids[j]]->properties[anon_label_id_] = std::move(*anon_props[j]);
+                    }
                 }
             }
         }
@@ -409,16 +504,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexProp: {
-                    VertexId vid = resolveVertexId(*chunk, spec.source_col, row, rc.vid_col, rc.vid);
-                    if (vid != INVALID_VERTEX_ID) {
-                        auto pv = co_await store_.getVertexProperty(vid, spec.label_id, spec.prop_id);
-                        if (pv.has_value())
-                            output.columns[i].setValue(row, propertyValueToValue(*pv));
-                        else
-                            output.columns[i].setNull(row);
-                    } else {
+                    if (row < vertex_prop_cache[i].size() && vertex_prop_cache[i][row].has_value())
+                        output.columns[i].setValue(row, propertyValueToValue(*vertex_prop_cache[i][row]));
+                    else
                         output.columns[i].setNull(row);
-                    }
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
@@ -457,17 +546,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexLabels: {
-                    VertexId vid = resolveVertexId(*chunk, spec.source_col, row, rc.vid_col, rc.vid);
-                    if (vid == INVALID_VERTEX_ID)
+                    if (row >= vertex_labels_cache[i].size() || !vertex_labels_cache[i][row].has_value())
                         break;
-                    auto lit = rc.labels.find(spec.source_col);
-                    if (lit == rc.labels.end()) {
-                        auto labels = co_await store_.getVertexLabels(vid);
-                        labels.erase(INVALID_LABEL_ID);
-                        lit = rc.labels.emplace(spec.source_col, std::move(labels)).first;
-                    }
                     ListValue lv;
-                    for (auto lid : lit->second) {
+                    for (auto lid : *vertex_labels_cache[i][row]) {
                         auto nit = vertex_label_names_.find(lid);
                         if (nit != vertex_label_names_.end())
                             lv.elements.push_back(ValueStorage{Value(nit->second)});
@@ -485,14 +567,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::ConstructVertex: {
-                    if (row < vertex_ctor_cache[i].size() && vertex_ctor_cache[i][row].has_value()) {
-                        // The cache entry is keyed by (spec, row) and consumed exactly
-                        // once, so hand the VertexValue over instead of deep-copying it
-                        // into a Value first -- the payload owns an
-                        // unordered_map<LabelId, Properties>.
-                        // Publish the constructed vertex once, then let both the typed
-                        // and the Value path share that same handle.
-                        auto vv = mk<VertexValue>(std::move(*vertex_ctor_cache[i][row]));
+                    if (row < vertex_ctor_cache[i].size() && vertex_ctor_cache[i][row]) {
+                        // 同一 (spec, vid) 在批内共享同一个 VertexValue ✓；这里只发布
+                        // handle，不再按行 deep-copy（payload 是 labels+properties map）。
+                        VertexValuePtr vv = vertex_ctor_cache[i][row];
                         if (!output.columns[i].setVertexValue(row, vv))
                             output.columns[i].setValue(row, Value(std::move(vv)));
                     } else {
@@ -520,9 +598,15 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         if (ev.id == INVALID_EDGE_ID || ev.label_id == INVALID_EDGE_LABEL_ID)
                             break;
                         if (!ev.properties.has_value()) {
-                            auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id);
-                            if (props.has_value())
-                                ev.properties = std::move(*props);
+                            // 无属性边（如 HAS_CREATOR / IS_LOCATED_IN）不需要查 eprop 表：
+                            // 大结果集上每行一次空查会放大成数万次 WT search。
+                            auto pc = edge_prop_counts_.find(ev.label_id);
+                            const bool may_have_props = pc == edge_prop_counts_.end() || pc->second > 0;
+                            if (may_have_props) {
+                                auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id);
+                                if (props.has_value())
+                                    ev.properties = std::move(*props);
+                            }
                         }
                         rc.eid_col = spec.source_col;
                         rc.eid = ev.id;

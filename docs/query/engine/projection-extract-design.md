@@ -181,14 +181,21 @@ Phase 4: 表达式改写
 输入：子算子的拓扑输出（含 `VertexRef` / `EdgeKey` / `VertexValue` 等）。输出：按 `ColumnSpec[]` 定义的列。执行流程：
 
 1. 从子算子拉取 chunk
-2. 遍历每个 ColumnSpec：
-   - `Passthrough`：整体复制上游列
-   - `LoadVertexProp` / `LoadEdgeProp`：逐行 `co_await store.getVertexProperty/getEdgeProperty`
-   - `LoadVertexLabels`：逐行 `co_await store.getVertexLabels` → `List<String>`
+2. 遍历每个 ColumnSpec；**所有按行读取都按 chunk 批量预取**（unique vid + 行映射 + 一次
+   batch 调用）：
+   - `Passthrough`：整体复制上游列（共享 `VertexValuePtr`，不深拷贝）
+   - `LoadVertexProp` / `LoadEdgeProp`：收集 chunk 内唯一 id，一次
+     `batchGetVertexPropertiesProjected` / `getEdgePropertyBatch`，再按行回填
+   - `LoadVertexLabels`：一次 `getVertexLabelsBatch`，再按行回填
    - `LoadEdgeType`：内存查字典 `edge_label_id → name`
-   - `ConstructVertex`：逐行加载 labels + 全部属性 → `VertexValue`
-   - `ConstructEdge`：内存组装 `EdgeValue`
+   - `LoadVertexPropCoalesce`：一次批量读 labels，再按候选 `(label, prop)` 批量读属性
+   - `ConstructVertex`：批量预取 labels + 全部属性；**同一 vid 在批内共享一个
+     `VertexValuePtr`**；只读路径共享，需要清 `INVALID_LABEL_ID` / 补 anon 属性时写时复制；
+     anon 属性只对 label 集合真的含 `__anon__` 的顶点查询
+   - `ConstructEdge`：内存组装 `EdgeValue`；planner 传入 `EdgeLabelId → 声明属性数`，
+     **无属性边不查 eprop 表**（`properties` 保持 `nullopt`）
 3. `co_yield` 输出 chunk
+
 
 ### 3.2 dispatchProjectionExtract
 
@@ -213,6 +220,24 @@ plan_result = dispatchProjectionExtract(plan_result, var, ctx);
 - `SetPhysicalOp`：编译所有 items 的 `value_expr`
 
 `ExpressionCompiler` 通过 `TupleSlotLayout::getColumnIndex(slot_id)` 将表达式树中的所有 `BoundColumnRef.slot_id` 固化为 `column_index`，运行时直接按列号读 `chunk.columns[idx]`。
+
+### 3.4 性能不变量（回归红线）
+
+以下几条是 complex-3 优化中验证过的底线，修改 PE 时不要退回去：
+
+1. **不许逐行深拷贝大对象**：`VertexValue`（含 `unordered_map<LabelId, Properties>`）只读时
+   共享 `shared_ptr`；同一 vid 在批内只物化一次。需要修改时先复制（COW），并在文档/测试中
+   说明哪些路径会修改。
+2. **batch API 必须容忍重复 vid**：一个已绑定顶点被 Expand 复制到整批行是常态；存储层先按
+   唯一 vid 查询、再按输入顺序展开，调用方不应自己假设“批内无重复”。
+3. **先按 schema 裁剪再查**：
+   - 无 `__anon__` 标签的顶点不查 anon 属性；
+   - 无声明属性的边类型不查 eprop；
+   - 候选 label 不存在时不发属性查询。
+4. **无属性边 / 无标签属性返回 `nullopt` 而不是空查询**：行为与“查了但没找到”一致，
+   只是省掉 I/O；不要为了省查而改变 `properties` 的表示。
+5. **性能改动必须同机交错 A/B 验证**，并记录 min/p50；详见
+   [查询性能排查与优化笔记](../../benchmark/query-performance-optimization-notes.md)。
 
 ## 四、示例
 
@@ -317,3 +342,4 @@ ProjectPhysicalOp(items=[BoundColumnRef(SLOT_N_NAME)])
 | `src/query/planner/slot_id.hpp` | `SlotId`、`SlotAllocator`（用户/内部双区间） |
 | `docs/query/engine/slot-id-design.md` | SlotId 系统设计 |
 | `docs/query/engine/physical-operator-audit.md` | 物理算子职责审计 |
+| `docs/benchmark/query-performance-optimization-notes.md` | 性能排查方法、complex-3 复盘与后续优化方向 |

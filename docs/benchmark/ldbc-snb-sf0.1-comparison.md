@@ -614,3 +614,148 @@ N 个 client = N 条长连接（每 client 一个 driver）；每 client 先 war
 
 **复现命令**：见 §7.3（A/B）、本轮 §9.1（loader）与 §9.4（`scripts/bench_bolt_qps.py`）；
 A/B 可用 `--json` 保存原始结果（本轮结果未入库）。
+
+---
+
+## 10. complex-3 专项优化（2026-10-21）
+
+> 目标：complex-3 是上一轮差距最大的查询（~17–21×）。本轮用同机交错 A/B + GDB 采样定位，
+> 修掉了三处**逐行重复物化/空查询**，不改查询语义、不改存储格式。
+> 方法论、检查清单与后续存储布局级优化见
+> [查询性能排查与优化笔记](query-performance-optimization-notes.md)。
+
+### 10.1 根因（按贡献排序）
+
+1. **`ProjectionExtract` 为每个输出行深拷贝 `VertexValue`**：执行
+   `WITH DISTINCT friend, countryX, countryY` 后，friend/countryX/countryY 都是完整 VERTEX；
+   随后的 `Expand(friend→message)` 把 52,475 条 message 展开，`ProjectionExtract` 对每一行
+   重新构造这 3 个顶点，深拷贝 `unordered_map<LabelId, Properties>`。
+   GDB 采样里 `VertexValue` 的构造/析构是最显眼的一类栈。
+2. **批处理 API 对重复 vid 逐个处理**：同一批 1024 行里的 friend/countryX/countryY 往往是
+   **同一个 vid 重复 1024 次**；`getVertexLabelsBatch` / `getVertexPropertiesBatch` /
+   `...Projected` 仍对每个元素做一次 WT `search_near`。
+3. **无条件 anon 属性查询**：`ProjectionExtract` 对每个 ConstructVertex 行都查一次
+   `__anon__` 属性，即使该顶点根本没有 anon 标签。
+4. **为无属性边逐行查 eprop 表**：`ConstructEdge` 对每行都 `getEdgeProperties`，而
+   `HAS_CREATOR` / `IS_LOCATED_IN` 根本没有声明属性；52k 条 message 产生 52k 次空 WT 查询。
+
+### 10.2 改动
+
+| 文件 | 改动 |
+|---|---|
+| `src/storage/data/sync_graph_data_store.cpp` | 三个 batch API 先按唯一 vid 扫描、再按原顺序展开；重复 vid 只做一次 WT 查询 |
+| `src/query/physical_plan/operator/projection_extract_physical_op.cpp` | ConstructVertex 缓存改为 `VertexValuePtr`：同一 vid 在批内**共享**一个实例；ref 源按唯一 vid 物化一次；只在需要清 `INVALID_LABEL_ID` / 补 anon 时写时复制 |
+| 同上 | anon 属性只对 labels 真的包含 `__anon__` 的顶点查询 |
+| 同上 + `physical_planner.cpp` | `ConstructEdge` 按 schema 的边属性数跳过空 eprop 查询（无属性边不再逐行查表） |
+
+### 10.3 同机交错 A/B（同一数据、同一客户端；baseline = 优化前 main）
+
+工作负载：`interactive-complex-3.cypher`（personId=933），每轮 3 warmup + 10 次计时，三轮交替；
+另有中间量 `MATCH (friend)<-[:HAS_CREATOR]-(message) RETURN count(message)`（52,475 行）用于隔离
+message 展开。
+
+| 指标 | baseline min / p50 | 优化后 min / p50 | 提升 |
+|---|---:|---:|---:|
+| complex-3 | 489.8 / 497.0 ms | **136.0 / 141.9 ms** | **3.60× / 3.50×** |
+| message 展开子查询 | 199.4 / 206.0 ms | **31.1 / 32.7 ms** | **6.4× / 6.3×** |
+
+complex-3 行数两端都是 0（与 §9 一致）。neo4j 同查询约 **27–44 ms**（取决于机器负载），
+即优化后 eugraph 仍慢约 **3–5×**，已从 ~17–21× 收窄到同一数量级。
+
+### 10.4 与 neo4j 计划对照（关键：它**也**读了 52k 次 creationDate）
+
+neo4j `PROFILE`（5.26）的算子链：
+
+```
+Expand(All) (friend)<-[:HAS_CREATOR]-(message)      52,475 rows
+  Filter (cache[message.creationDate] < end AND >= start)   DB Hits 52,475 → 787 rows
+    Expand(All) (message)-[:IS_LOCATED_IN]->(country)       787 rows / DB Hits 5,319
+      Filter country IN [countryX, countryY]                18 rows
+        Projection CASE ... → EagerAggregation → ... → CacheProperties → ProduceResults
+```
+
+要点：
+
+* **neo4j 同样对 52,475 条 message 读了 creationDate**（Filter 的 DB Hits 就是 52,475），
+  **没有**用 creationDate 索引，也**没有**把 date 谓词下推到 HAS_CREATOR 之前；
+  join 顺序与 eugraph 相同（都是 friend → message → date → country）。
+* 差别在**每次属性读取的代价**与**何时物化整顶点**：
+
+| 维度 | neo4j | eugraph（优化后） | 差距来源 |
+|---|---|---|---|
+| creationDate 读取 | 节点记录内属性指针，52,475 次 DB hits ≈ **+15.6 ms**（messages 11.5→27.1） | WT `vprop` KV：每 message 先读 labels、再按候选 prop 读值，52,475 次 ≈ **+86 ms**（messages 41→127） | 属性/标签**存储布局**：逐属性 KV + 独立 label_reverse 表 vs 节点内联 |
+| 52k HAS_CREATOR 展开 | 邻接链表，11.5 ms | WT edge index，31–41 ms | 每源一次 B-tree `search_near` vs 指针链表 |
+| 整顶点物化 | 只保留引用；`CacheProperties` 仅对最终 20 行 | 优化前每行深拷贝 friend/country；现在批内共享，但仍按行经过 ProjectionExtract | 本轮已消除深拷贝，剩余为逐行 slot/句柄成本 |
+| 无属性边 | EdgeValue 直接是引用/空属性 | 优化前逐行查 eprop（本轮修复） | 本轮已消除 |
+
+* 因此本轮先修的是**低级重复**（深拷贝、重复 vid、空 eprop 查询）；进一步缩小差距需要动
+  **存储布局/读取原语**（见下节），而不是继续调算子。
+
+### 10.5 剩余瓶颈与下一步
+
+* **~80–90 ms：creationDate 的 labels + property 两次 WT 查询**。当前 `LoadVertexPropCoalesce`
+  先 `getVertexLabelsBatch(52k)` 判断 message 是 Post 还是 Comment，再按候选 `(label,prop)`
+  读 52k 次属性。neo4j 把 labels 内联在节点记录、属性内联/指针化，天然只需一次读。
+  可选方向（按侵入性）：
+  1. **把 labels 与常用属性放在同一条 vertex KV**（`vertex_record{labels, prop_map}`），
+     读一次即可同时得到 label 与 creationDate；这是存储格式变更，需要独立设计与兼容性评审。
+  2. 若查询已能静态确定 label（强类型/单标签），只读一个 `(label,prop)`，跳过 label 查询；
+     对 `Message` 这种派生多标签不适用。
+  3. 为高选择性谓词建二级索引（如 `Message.creationDate`），由 CBO 选择“索引范围扫描 + join”；
+     但 LDBC 官方 neo4j 也未走索引，不能作为通用替代。
+* **~30–40 ms：52k HAS_CREATOR 邻接展开**。WT edge index 每源一次 `search_near`；
+  `scanEdgesBatch` 复用一把 cursor 只能省 open/close（本轮实测 <5%，未保留）。
+  要再降需要**按源连续的邻接存储**（per-vertex adjacency row/table）或覆盖索引，同属存储布局变更。
+* 本轮未改变结果语义；`build-release` 全量 ctest **1294/1294** 通过（含 tck）。
+
+
+---
+
+## 11. 八条 complex 查询复测（2026-10-21）
+
+> 在 §10 的三项改动（batch 去重、共享 VertexValue、跳过无属性边空查）之外，本轮又把
+> `LoadVertexProp` / `LoadVertexLabels` 从逐行点读改为按 chunk 批量预取。对 §9 中差距较大的
+> 8 条 complex 查询重跑同机交错 A/B。
+
+### 11.1 方法
+
+```bash
+python3 scripts/bench_ldbc_ab.py \
+  --queries-dir /path/to/ldbc_snb_interactive_v1_impls/cypher/queries \
+  --only 'complex-2,complex-3,complex-4,complex-7,complex-8,complex-10,complex-11,complex-12' \
+  --rounds 10 --warmup 2 --neo4j-fix-types
+```
+
+- 同机交错，每查询 2 warmup + 10 轮，取 min/p50；
+- eugraph 跑原版文本；neo4j 侧按 §1.1 的 `--neo4j-fix-types` 处理 `LIKES.creationDate` /
+  `WORK_AT.workFrom` 的 STRING 差异；
+- 行数两边逐条核对，全部一致（complex-3 / complex-4 为 0 行）。
+
+### 11.2 结果
+
+| 查询 | 行数 eg/neo | eg min / p50 (ms) | neo min / p50 (ms) | eg/neo | 旧 eg min | 变化 |
+|---|---:|---:|---:|---:|---:|---:|
+| complex-2 | 20/20 | 13.73 / 15.41 | 4.67 / 4.85 | 2.94× | 18.54 | **-25.9%** |
+| complex-3 | 0/0 | **131.50 / 136.69** | 26.63 / 27.10 | 4.94× | 474.91 | **-72.3%** |
+| complex-4 | 0/0 | 7.59 / 8.28 | 3.95 / 4.58 | 1.92× | 12.81 | **-40.7%** |
+| complex-7 | 7/7 | 4.82 / 5.53 | 4.27 / 4.72 | 1.13× | 6.77 | **-28.8%** |
+| complex-8 | 20/20 | **3.53 / 3.78** | 3.74 / 4.02 | **0.94×（快）** | 5.55 | **-36.4%** |
+| complex-10 | 10/10 | 30.44 / 31.62 | 9.26 / 9.87 | 3.29× | 62.76 | **-51.5%** |
+| complex-11 | 4/4 | 7.02 / 7.79 | 4.16 / 4.73 | 1.69× | 8.72 | **-19.5%** |
+| complex-12 | 3/3 | **337.00 / 348.49** | 97.98 / 104.01 | 3.44× | 422.23 | **-20.2%** |
+
+`eg/neo = eg_min / neo_min`（>1 表示 eugraph 更慢，<1 表示更快）；“旧 eg min”取 §9.5 的表，
+仅作同口径历史参考（neo4j 本轮读数也受机器状态影响，跨会话绝对值不要直接比）。
+
+### 11.3 结论
+
+- **8 条全部比上一轮 eugraph 绝对值下降 19–72%**：complex-3 从 475→131 ms，complex-10
+  从 63→30 ms，complex-12 从 422→337 ms；
+- 同参数复跑确认（10 轮）：complex-3 132.9 ms、complex-12 344.1 ms，其余在 ±10% 内；
+- **complex-8 与 neo4j 基本持平**（两次 0.94× / 0.98×），complex-7 为 0.75–0.89×（慢 1.1–1.3×）；
+- 仍落后的主要是 **complex-3（4.9×）**、**complex-12（3.4×）**、**complex-10（3.3×）**、
+  **complex-2（2.9×）**；
+- complex-12 的 GDB 采样显示 `createEdgeScanCursor` / `EdgeScanCursorImpl` 约一半 active
+  样本，叠加 tag 层次 VLE 的 65k 路径与 14 候选 `tag.name` coalesce。下一步应优先做
+  **可复用的邻接扫描**（一次 cursor 覆盖整个 VLE 遍历）或按源连续邻接存储，而不是继续
+  优化单条查询的算子。

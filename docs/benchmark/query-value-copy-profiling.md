@@ -1,5 +1,9 @@
 # 变长展开（VLE）性能剖析：瓶颈定位
 
+> 相关：complex-3 的后续复盘见
+> [查询性能排查与优化笔记](query-performance-optimization-notes.md)，
+> 其中补充了 GDB 原生 `bt` 采样、batch 去重、空查询裁剪与存储布局差距。
+
 > 目的：在着手优化 `VarLenExpand` 前，先**用测量确定瓶颈在哪**。
 > 结论与最初基于计划形状的推断相反 —— **VLE 不是瓶颈**。
 

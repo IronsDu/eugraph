@@ -98,6 +98,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 |------|------|
 | [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同机交错 A/B 耗时对比、并发 QPS（`scripts/bench_bolt_qps.py`）、neo4j 侧需补齐的数据差异、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`） |
 | [查询值拷贝性能剖析](benchmark/query-value-copy-profiling.md) | 定位 complex-10 的真实瓶颈（值拷贝而非 VLE/推导本身）、消除深拷贝的四处改动与交替顺序 A/B 判据 |
+| [查询性能排查与优化笔记](benchmark/query-performance-optimization-notes.md) | complex-3 复盘：GDB 协程采样方法、逐行重复物化/空查询的检查清单、neo4j 计划对照、存储布局级后续优化思路 |
 | [列表推导内模式推导：发现与待修缺陷](query/deferred-pattern-comprehension-findings.md) | complex-10 的根因证据、被证伪的方向、探针规范与验收口径 |
 | [模式推导缺陷排查经验](query/comprehension-defect-debugging-notes.md) | 十一轮排查的复盘：为何反复走错、哪三个动作最终定位到根因、可复用的检查清单 |
 | [已知缺陷待办](query/known-defects-todo.md) | 排查中顺带确认、与 complex-10 无关的既有缺陷（反向模式、类型硬编码、列集合冲突、loader 越界、测量陷阱） |

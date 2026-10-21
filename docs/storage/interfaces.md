@@ -69,6 +69,9 @@ public:
 - 索引扫描走可恢复的 `IIndexScanCursor`（equality/range × 单值/复合）：async 层每批只拉 1024 条，
   内存 O(batch)，不再先物化全集；range 的 `start` 是**排他**下界（与既有语义一致）。
   `lookupVertexByPrimaryKey` 利用“同一 sortable value 下 key 按 entity_id 升序”直接取首条。
+- **批量读取允许重复 id**：`getVertexLabelsBatch` / `getVertexPropertiesBatch` /
+  `getVertexPropertiesBatchProjected` 内部先按唯一 vid 查询，再按输入顺序展开；返回值长度/顺序
+  与输入一致。调用方可以把同一 bound vertex 重复 1024 次，不应因此产生 1024 次 WT 查询。
 - **失败必须粘到会话**：表原语返回 WT 错误码，会话路径一律 `session.fail_from_wt(...)`；即使 op 的
   `bool/optional` 返回值被忽略，`commit()` 也会拒绝提交并回滚（`StickyError` / `TxnErrorClass`）。
   只有 `WT_NOTFOUND`（点查/删除）是正常结果，不粘错误。

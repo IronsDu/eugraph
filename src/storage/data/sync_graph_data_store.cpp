@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <spdlog/spdlog.h>
+#include <unordered_map>
 
 #include "storage/kv/index_key_codec.hpp"
 
@@ -205,7 +206,23 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     std::vector<std::optional<Properties>> out(vids.size());
     if (proj.empty())
         return out;
+    if (vids.empty())
+        return out;
     // One cursor for the whole batch (see the header comment for the measured rationale).
+    // 同一个 vid 在批内重复很常见（见 getVertexLabelsBatch）：只按唯一 vid 扫。
+    std::vector<size_t> unique_of(vids.size());
+    std::vector<VertexId> unique;
+    unique.reserve(vids.size());
+    std::unordered_map<VertexId, size_t> seen;
+    seen.reserve(vids.size() * 2);
+    for (size_t i = 0; i < vids.size(); ++i) {
+        auto [it, inserted] = seen.try_emplace(vids[i], unique.size());
+        if (inserted)
+            unique.push_back(vids[i]);
+        unique_of[i] = it->second;
+    }
+    const bool all_unique = unique.size() == vids.size();
+    std::vector<std::optional<Properties>> unique_out(all_unique ? 0 : unique.size());
     const std::string table = vpropTable(label_id);
     CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
@@ -215,12 +232,13 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     }
     auto* c = cursor.get();
     const size_t width = static_cast<size_t>(*std::max_element(proj.begin(), proj.end())) + 1;
-    for (size_t i = 0; i < vids.size(); ++i) {
+    for (size_t i = 0; i < unique.size(); ++i) {
+        std::optional<Properties>& slot = all_unique ? out[i] : unique_out[i];
         Properties props;
         props.resize(width);
         bool found = false;
         for (uint16_t pid : proj) {
-            auto key = KeyCodec::encodeVPropKey(vids[i], pid);
+            auto key = KeyCodec::encodeVPropKey(unique[i], pid);
             setItem(c, key);
             const int ret = c->search(c);
             if (ret == WT_NOTFOUND)
@@ -233,7 +251,11 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
             found = true;
         }
         if (found)
-            out[i] = std::move(props);
+            slot = std::move(props);
+    }
+    if (!all_unique) {
+        for (size_t i = 0; i < vids.size(); ++i)
+            out[i] = unique_out[unique_of[i]];
     }
     return out;
 }
@@ -305,6 +327,24 @@ LabelIdSet SyncGraphDataStore::getVertexLabels(GraphSession& gs, VertexId vid) {
 
 std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& gs, const std::vector<VertexId>& vids) {
     std::vector<LabelIdSet> out(vids.size());
+    if (vids.empty())
+        return out;
+    // 批内同一个 vid 很常见（一个已绑定顶点被 Expand 复制到整批行，如 complex-3 的
+    // friend/countryX/countryY）。按唯一 vid 扫一次，再映射回原顺序：WT 的每个
+    // search_near 都不便宜，1024 个重复 id 做 1024 次扫描是纯浪费。
+    std::vector<size_t> unique_of(vids.size());
+    std::vector<VertexId> unique;
+    unique.reserve(vids.size());
+    std::unordered_map<VertexId, size_t> seen;
+    seen.reserve(vids.size() * 2);
+    for (size_t i = 0; i < vids.size(); ++i) {
+        auto [it, inserted] = seen.try_emplace(vids[i], unique.size());
+        if (inserted)
+            unique.push_back(vids[i]);
+        unique_of[i] = it->second;
+    }
+    const bool all_unique = unique.size() == vids.size();
+    std::vector<LabelIdSet> unique_out(all_unique ? 0 : unique.size());
     CursorHandle cursor = gs.acquire_scan_cursor(TABLE_LABEL_REVERSE);
     if (!cursor) {
         const int error = cursor.error();
@@ -313,8 +353,9 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
     }
     auto* c = cursor.get();
     std::string prefix;
-    for (size_t i = 0; i < vids.size(); ++i) {
-        prefix = KeyCodec::encodeLabelReversePrefix(vids[i]);
+    for (size_t i = 0; i < unique.size(); ++i) {
+        LabelIdSet& labels = all_unique ? out[i] : unique_out[i];
+        prefix = KeyCodec::encodeLabelReversePrefix(unique[i]);
         setItem(c, prefix);
         int exact = 0;
         int ret = c->search_near(c, &exact);
@@ -331,7 +372,7 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
             if (!key.starts_with(prefix))
                 break; // 正常结束：下一个 vid 的 key（ret == 0，不是错误）✓
             auto [_, label_id] = KeyCodec::decodeLabelReverseKey(key);
-            out[i].insert(label_id);
+            labels.insert(label_id);
             ret = c->next(c);
         }
         if (ret != 0 && ret != WT_NOTFOUND) {
@@ -339,12 +380,32 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
             return out;
         }
     }
+    if (!all_unique) {
+        for (size_t i = 0; i < vids.size(); ++i)
+            out[i] = unique_out[unique_of[i]];
+    }
     return out;
 }
 
 std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBatch(GraphSession& gs, LabelId label_id,
                                                                                     const std::vector<VertexId>& vids) {
     std::vector<std::optional<Properties>> out(vids.size());
+    if (vids.empty())
+        return out;
+    // 同一个 vid 在批内重复很常见（见 getVertexLabelsBatch）：只按唯一 vid 扫。
+    std::vector<size_t> unique_of(vids.size());
+    std::vector<VertexId> unique;
+    unique.reserve(vids.size());
+    std::unordered_map<VertexId, size_t> seen;
+    seen.reserve(vids.size() * 2);
+    for (size_t i = 0; i < vids.size(); ++i) {
+        auto [it, inserted] = seen.try_emplace(vids[i], unique.size());
+        if (inserted)
+            unique.push_back(vids[i]);
+        unique_of[i] = it->second;
+    }
+    const bool all_unique = unique.size() == vids.size();
+    std::vector<std::optional<Properties>> unique_out(all_unique ? 0 : unique.size());
     const std::string table = vpropTable(label_id);
     CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
@@ -354,8 +415,9 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     }
     auto* c = cursor.get();
     std::string prefix;
-    for (size_t i = 0; i < vids.size(); ++i) {
-        prefix = KeyCodec::encodeVPropPrefix(vids[i]);
+    for (size_t i = 0; i < unique.size(); ++i) {
+        std::optional<Properties>& slot = all_unique ? out[i] : unique_out[i];
+        prefix = KeyCodec::encodeVPropPrefix(unique[i]);
         setItem(c, prefix);
         int exact = 0;
         int ret = c->search_near(c, &exact);
@@ -385,7 +447,11 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
             return out;
         }
         if (found)
-            out[i] = std::move(props);
+            slot = std::move(props);
+    }
+    if (!all_unique) {
+        for (size_t i = 0; i < vids.size(); ++i)
+            out[i] = unique_out[unique_of[i]];
     }
     return out;
 }
