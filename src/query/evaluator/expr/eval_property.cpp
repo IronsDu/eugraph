@@ -146,11 +146,6 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                         break;
                 }
             }
-            // Id-only path vertices (shortest-path BFS) carry no properties.
-            // `n.id` on them is the structural vertex id, matching the
-            // topology-form VertexRef path above.
-            if (found.empty() && ref.property_name == "id" && vertex.properties.empty())
-                found.push_back(Value(static_cast<int64_t>(vertex.id)));
             if (found.size() == 1) {
                 r = std::move(found[0]);
             } else if (found.size() > 1) {
@@ -432,8 +427,6 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     }
                 }
             }
-            if (std::holds_alternative<std::monostate>(r) && ref.property == "id" && vertex.properties.empty())
-                r = Value(static_cast<int64_t>(vertex.id));
         } else if (std::holds_alternative<EdgeValuePtr>(ov)) {
             const auto& edge = (*std::get<EdgeValuePtr>(ov));
             if (edge.deleted)
