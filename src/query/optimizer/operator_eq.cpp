@@ -479,6 +479,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->variable != bv->variable)
                     return false;
+                if (av->variable_slot_id != bv->variable_slot_id)
+                    return false;
                 return av->variable_column_index == bv->variable_column_index;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 if (!av || !bv)

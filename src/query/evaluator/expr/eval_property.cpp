@@ -79,9 +79,22 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             const auto& held = std::get<VertexValuePtr>(ov);
             if (!held)
                 continue;
-            const auto& vertex = *held;
+            auto& vertex = *held;
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
+            // Bare path vertices (shortest-path BFS) only carry the internal
+            // id; load the concrete labels/properties before resolving n.id.
+            if (vertex.properties.empty() && eval_ctx_.store) {
+                auto labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
+                if (!labels.empty()) {
+                    vertex.labels = labels;
+                    for (auto lid : labels) {
+                        auto props = folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
+                        if (props)
+                            vertex.properties[lid] = std::move(*props);
+                    }
+                }
+            }
             std::vector<Value> found;
             for (const auto& candidate : ref.candidates) {
                 auto lit = vertex.properties.find(candidate.label_id);
@@ -133,6 +146,11 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                         break;
                 }
             }
+            // Id-only path vertices (shortest-path BFS) carry no properties.
+            // `n.id` on them is the structural vertex id, matching the
+            // topology-form VertexRef path above.
+            if (found.empty() && ref.property_name == "id" && vertex.properties.empty())
+                found.push_back(Value(static_cast<int64_t>(vertex.id)));
             if (found.size() == 1) {
                 r = std::move(found[0]);
             } else if (found.size() > 1) {
@@ -414,6 +432,8 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     }
                 }
             }
+            if (std::holds_alternative<std::monostate>(r) && ref.property == "id" && vertex.properties.empty())
+                r = Value(static_cast<int64_t>(vertex.id));
         } else if (std::holds_alternative<EdgeValuePtr>(ov)) {
             const auto& edge = (*std::get<EdgeValuePtr>(ov));
             if (edge.deleted)

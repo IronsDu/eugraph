@@ -217,7 +217,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 | LdbcQuery8 | complex-8 | 6.5 | 2.7 | 🟡 慢 2.4× |
 | LdbcQuery6 | complex-6 | 550–605 | 61–87 | 🔴 慢 8.9×（官方表头实例上直接实测；§2 交错 A/B 未含该条） |
 | LdbcQuery5 | complex-5 | 不返回 | 92.3 | 🔴 **挂死**（>400 s，§2.3.2 第 3 条） |
-| LdbcQuery1 / 13 / 14 | complex-1 / 13 / 14 | — | — | ✅ 语法/求值已支持；complex-14 见 §13.3，未参与本轮同机 A/B |
+| LdbcQuery1 / 13 / 14 | complex-1 / 13 / 14 | — | — | ✅ 已支持；complex-14 86.0 s（§13.3），未参与本轮同机 A/B |
 
 **复杂查询一栏的口径说明**：`LdbcQuery*` 行取 §2 同机交错 A/B 的 min（参数为本数据集真实
 存在的取值）；`LdbcShortQuery*` 行取 §2.3.3 的修正实测。两处都是"同机、同数据、同参数"，
@@ -295,7 +295,6 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 查询 | 原因 |
 |---|---|
-| complex-14 | **仍未跑通**：`reduce` body 内相关 PC 已支持，但 complex-14 的 PC 位于 **reduce.list_expr**、外层还有 list comprehension；实际绑定报 `BoundPatternComprehension reached evaluator`（见 §13.3） |
 | complex-6 / complex-9 | 早前轮次 eugraph 可执行（0.49 s / 3.96 s）；本轮为控制耗时未跑，neo4j 侧为 31 / 37 ms |
 
 ## 4. 测量陷阱（复现前务必先读）
@@ -314,7 +313,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 语句 | 缺口 | 方案 |
 |------|------|------|
-| complex-14 | ❌ 仍未跑通：reduce body 内相关 PC 已支持，但 complex-14 的 PC 在 reduce.list_expr 且外层是 list comprehension；当前 lowering 未覆盖该组合 | 扩展 list-comprehension lowering，使 PC-as-list-expr 按外层元素预计算并替换 list_expr |
+| complex-14 | ✅ 已跑通（2026-10-22）：PC-as-list-expr、reduce body PC、Unwind slot 身份均已支持；性能仍差（86.0 s vs neo4j 2.9 s） | 后续把 PC 端点等式下推为索引 seek，消除 `AllNodeScan(a)` |
 
 ### 5.2 complex-5：已修复（2026-10-21）
 
@@ -800,7 +799,7 @@ complex-5 在 §11 的 8 条之外，之前因 CPU 不收敛被列为不可用�
 | complex-1/13 | ✅ 正常结束（shortestPath，见 §13） |
 | complex-2/3/4/6/7/8/9/10/11/12 | ✅ 正常结束 |
 | **complex-5** | ✅ 修复后正常结束（20 行；min 475.56 ms，见 §11.4） |
-| complex-14 | ❌ 仍未跑通（PC 在 reduce.list_expr + 外层 list comprehension，见 §13.3） |
+| complex-14 | ✅ 正常结束（4 行；min 86.0 s，见 §13.3） |
 | update-1..8 | ✅ 全部正常结束（update-1 的 `s[0]` 绑定、update-6/7 的多标签 `id` 已修） |
 | 4G cgroup 下 | 无 OOM；无 CPU 失控（complex-5 修复后） |
 
@@ -856,6 +855,7 @@ update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义�
 |---|---|---:|---:|
 | complex-1 | personId=933, firstName=Jose | 20 | **20.5 / 21.1 ms** |
 | complex-13 | person1Id=933, person2Id=1129 | 1（length=3） | **4.4 / 4.6 ms** |
+| complex-14 | person1Id=933, person2Id=1129 | 4 | **86.0 s** |
 | allShortestPaths（简化） | 933 → 1129 | 4 条 length=3 | 正常结束 |
 | reduce 基础 | `reduce(w=0, x IN [1,2,3] \| w+x)` | 6 | 正常结束 |
 
@@ -864,14 +864,12 @@ update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义�
 > complex-1 的 `friendEmails` / `friendLanguages` 为 null 是本地 loader 的属性名差异，
 > 与 shortestPath 无关。
 
-### 13.3 complex-14：仍未跑通（2026-10-22 复测）
+### 13.3 complex-14：已跑通（2026-10-22）
 
-用户更新在 reduce **body** 内相关 pattern comprehension 上已经有效（对应的单元测试通过），但
-实际 complex-14 的形状更深一层：
+complex-14 的形状是最深的一层：PC 不在 reduce body，而是 **reduce.list_expr**，外面还有
+`[r IN rels_in_path | ...]` list comprehension：
 
 ```cypher
-MATCH path = allShortestPaths((person1)-[:KNOWS*0..]-(person2))
-...
 WITH [r IN rels_in_path |
         reduce(w=0.0, v IN [
           (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
@@ -880,22 +878,43 @@ WITH [r IN rels_in_path |
      ] AS weight1
 ```
 
-这里的 PC 是 **reduce.list_expr**，且外层还有一层 `[r IN rels_in_path | ...]` list comprehension；
-当前 lowering 只覆盖“PC 在 reduce body 中、通过 UNWIND reduce.list_expr 逐元素求值”的形状。
-实际 Release 实测仍报：
+为了跑通它，修了三类问题：
 
-```
-ExecutionFailed: BoundPatternComprehension reached evaluator — must be rewritten to BoundColumnRef
+1. **AST/表达式遍历**：`cloneAstExpression`、`collectPatternComprehensionsAST`、
+   `expressionReferencesVariable`、`patchPatternComprehensionPlaceholders`、
+   `forEachSubExpr` 都递归进入 `ReduceExpr`，否则 PC 不会被发现/patch，直接落到 evaluator。
+2. **Unwind 变量的 slot 身份**：lowered list comprehension 恢复 binder scope 后再做物理布局，
+   按名字查 slot 会重新分配，导致 `Correlation` 的 `left_slot` 落到 `rels_in_path` 列表列
+   （`startNode(r)` 收到 ListValue）。现在 `BoundUnwindOp` 携带 `variable_slot_id`，物理布局
+   直接 append 该 slot；同时把它纳入 Unwind 的 operator equality/hash，避免 memo 把两个
+   仅 slot 不同的 Unwind 去重。
+3. **PC 提升顺序**：reduce body 内的 PC 已经由 `lowerReducePatternComprehensions` 降低，
+   不能被 clause 级 hoist 再次绑定；`isReducePcLowered` 过滤掉已降低的 PC。
+
+结果与 neo4j 完全一致（4 行）：
+
+```text
+[933, 10995116278291, 2199023256437, 1129]   70.5
+[933, 2199023256077, 26388279067534, 1129]   23.0
+[933, 24189255811254, 26388279067534, 1129]  17.0
+[933, 2199023256077, 32985348834375, 1129]   17.0
 ```
 
-所以 complex-14 **还不能运行**；`allShortestPaths` 与 `reduce` 基础、以及 reduce body 内的 PC 均可用，
-但仍需扩展 list-comprehension 的 lowering：在外层 `r` 的作用域内先把 PC 求成列表列，再把 inner
-reduce 的 list_expr 替换为该列。
+耗时 **86.0 s**（neo4j 2.9 s，约 30×）。慢的根因不在 shortestPath/reduce，而在 PC 子计划：
+
+```text
+AllNodeScan(a) -> Expand(HAS_CREATOR) -> Expand(REPLY_OF) -> Expand(HAS_CREATOR) -> Filter
+```
+
+`a.id = startNode(r).id` 只在末端 Filter 生效，没有下推成 `a` 的索引 seek；每个 `r` 都要从
+全部 Person 扫起。下一步优化点是把 PC 端点等式（OR 的两个方向）下推为索引 seek / 两个
+PC 分支，预计可降到秒级；当前先保证语义正确、可执行。
 
 ### 13.4 验证
 
 - 本轮按当前分支重编 Release 并实测 complex-1/13/14（见 §13.2/§13.3）；
-- complex-14 仍失败，因此没有把它加入耗时表。
+- 新增 `PatternComprehensionAsReduceListSource`（PC-as-list-expr + nested list comprehension）；
+- 全量 ctest **1304/1304**（含 TCK，731s）。
 ### 13.4 验证
 
 - 新增测试：`ReduceExpression`、`ShortestPathBoundEndpoints`、`AllShortestPathsBoundEndpoints`；

@@ -165,6 +165,14 @@ static cypher::Expression cloneAstExpression(const cypher::Expression& expr) {
                     out->where_pred = cloneAstExpression(*ptr->where_pred);
                 out->is_bare_predicate = ptr->is_bare_predicate;
                 return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                auto out = std::make_unique<cypher::ReduceExpr>();
+                out->accumulator = ptr->accumulator;
+                out->init = cloneAstExpression(ptr->init);
+                out->variable = ptr->variable;
+                out->list_expr = cloneAstExpression(ptr->list_expr);
+                out->expr = cloneAstExpression(ptr->expr);
+                return out;
             }
             return std::make_unique<cypher::Literal>();
         },
@@ -280,6 +288,10 @@ static bool expressionReferencesVariableImpl(const cypher::Expression& expr, con
                 if (ptr->where_pred && expressionReferencesVariableImpl(*ptr->where_pred, name))
                     return true;
                 return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                return expressionReferencesVariableImpl(ptr->init, name) ||
+                       expressionReferencesVariableImpl(ptr->list_expr, name) ||
+                       expressionReferencesVariableImpl(ptr->expr, name);
             } else {
                 return false;
             }
@@ -501,6 +513,10 @@ static bool patternPredicatesVariable(const cypher::Expression& expr, const std:
                         walk(*ptr->where_pred);
                     if (ptr->projection)
                         walk(*ptr->projection);
+                } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                    walk(ptr->init);
+                    walk(ptr->list_expr);
+                    walk(ptr->expr);
                 } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
                     // A pattern bound here (e.g. `x` in `[(x)-->(:Y) | 1]`) is a
                     // reference to the enclosing comprehension's loop variable.
@@ -575,6 +591,8 @@ static void collectPatternComprehensionsAST(const cypher::Expression& expr,
         [&](const auto& ptr) {
             using Elem = typename std::decay_t<decltype(ptr)>::element_type;
             if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                if (binder && binder->isReducePcLowered(ptr.get()))
+                    return;
                 out.push_back(ptr.get());
                 // The projection / where_pred could in turn contain nested
                 // pattern comprehensions; recurse to be safe.
@@ -636,6 +654,10 @@ static void collectPatternComprehensionsAST(const cypher::Expression& expr,
                     collectPatternComprehensionsAST(*ptr->where_pred, out, binder);
                 if (ptr->projection)
                     collectPatternComprehensionsAST(*ptr->projection, out, binder);
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                collectPatternComprehensionsAST(ptr->init, out, binder);
+                collectPatternComprehensionsAST(ptr->list_expr, out, binder);
+                collectPatternComprehensionsAST(ptr->expr, out, binder);
             }
         },
         expr);
@@ -795,6 +817,10 @@ static void patchPatternComprehensionPlaceholders(
                 if (ptr->where_pred)
                     patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map, binder);
                 patchPatternComprehensionPlaceholders(ptr->projection, patch_map, binder);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
+                patchPatternComprehensionPlaceholders(ptr->init, patch_map, binder);
+                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map, binder);
+                patchPatternComprehensionPlaceholders(ptr->expr, patch_map, binder);
             }
         },
         expr);
@@ -812,7 +838,8 @@ bool hoistPatternComprehensions(
     Binder& binder, BoundLogicalOperator& child, const std::vector<Item>& items,
     const std::vector<cypher::OrderBy::SortItem>* order_by_items,
     std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>&
-        patch_map) {
+        patch_map,
+    const std::vector<std::string>& preset_corr_vars = {}) {
     std::vector<const cypher::PatternComprehension*> pc_asts;
     for (const auto& item : items)
         collectPatternComprehensionsAST(item.expr, pc_asts, &binder);
@@ -839,7 +866,8 @@ bool hoistPatternComprehensions(
         binder::SlotId out_slot = binder::INVALID_SLOT_ID;
         std::string out_name;
         binder::BoundType out_elem_type;
-        auto apply_op = binder.bindPatternComprehension(*pc, std::move(child), corr, out_slot, out_name, out_elem_type);
+        auto apply_op = binder.bindPatternComprehension(*pc, std::move(child), corr, out_slot, out_name, out_elem_type,
+                                                        preset_corr_vars);
         if (!apply_op) {
             return false;
         }
@@ -1323,6 +1351,7 @@ bool Binder::lowerPatternComprehensionOverList(const cypher::ReduceExpr& reduce,
     unwind->list_expr = std::move(*bound_list);
     unwind->variable = reduce.variable;
     unwind->variable_column_index = var_col;
+    unwind->variable_slot_id = ctx_.symbols[reduce.variable].slot_id;
     unwind->child = BoundLogicalOperator(std::move(source));
     BoundLogicalOperator current = std::move(unwind);
 
@@ -1437,6 +1466,12 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
             collectAllVariables(*pc->projection, outer_vars);
     }
     outer_vars.erase(lc.variable);
+    for (auto it = outer_vars.begin(); it != outer_vars.end();) {
+        if (saved.symbols.count(*it) == 0)
+            it = outer_vars.erase(it);
+        else
+            ++it;
+    }
 
     // Build the right sub-plan in an independent scope. The correlated source
     // keeps the outer slots and semantic types so expressions like nodes(p)
@@ -1486,6 +1521,7 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
     unwind->list_expr = std::move(*bound_list);
     unwind->variable = lc.variable;
     unwind->variable_column_index = var_col;
+    unwind->variable_slot_id = ctx_.symbols[lc.variable].slot_id;
     unwind->child = BoundLogicalOperator(std::move(source));
     BoundLogicalOperator current = std::move(unwind);
 
@@ -1511,7 +1547,10 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
     }
 
     std::unordered_map<const cypher::PatternComprehension*, std::tuple<SlotId, std::string, BoundType>> pc_patch_map;
-    if (!hoistPatternComprehensions(*this, current, pc_items, nullptr, pc_patch_map)) {
+    std::vector<std::string> pc_preset(outer_vars.begin(), outer_vars.end());
+    if (!lc.variable.empty() && std::find(pc_preset.begin(), pc_preset.end(), lc.variable) == pc_preset.end())
+        pc_preset.push_back(lc.variable);
+    if (!hoistPatternComprehensions(*this, current, pc_items, nullptr, pc_patch_map, pc_preset)) {
         ctx_.restore(saved);
         return false;
     }

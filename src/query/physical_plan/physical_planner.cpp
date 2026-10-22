@@ -3031,7 +3031,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::move(v.list_expr), unwind_col_index, binder::BoundType::Any(), std::move(child_schema),
                         std::vector<binder::BoundType>(output_types), std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
-                    TupleSlotLayout unwind_layout = makeSlotLayout(output_schema, ctx);
+                    TupleSlotLayout unwind_layout = cr.slot_layout;
+                    if (v.variable_slot_id != binder::INVALID_SLOT_ID)
+                        unwind_layout.append(v.variable_slot_id);
+                    else
+                        unwind_layout.append(ctx.slot_allocator.next());
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(unwind_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundForeachOp>) {

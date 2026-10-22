@@ -950,6 +950,30 @@ TEST_F(QueryExecutorTest, ReduceBodyCorrelatedPatternComprehension) {
     EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 0.5);
 }
 
+TEST_F(QueryExecutorTest, PatternComprehensionAsReduceListSource) {
+    auto setup = execSync(*executor_, "CREATE (a:Person {name: 'pca'}), (b:Person {name: 'pcb'}), "
+                                      "(a)<-[:HAS_CREATOR]-(:Comment {name: 'pcc'})-[:REPLY_OF]->"
+                                      "(:Post {name: 'pcp'})-[:HAS_CREATOR]->(b), "
+                                      "(a)-[:KNOWS]->(b)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (p:Person {name: 'pca'})-[r:KNOWS]->(q:Person {name: 'pcb'}) "
+                                       "WITH [r] AS rs "
+                                       "RETURN [x IN rs | reduce(w = 0.0, v IN ["
+                                       "  (u:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)"
+                                       "    -[:HAS_CREATOR]->(v:Person) "
+                                       "  WHERE (u.name = startNode(x).name AND v.name = endNode(x).name) OR "
+                                       "        (u.name = endNode(x).name AND v.name = startNode(x).name) "
+                                       "  | 1.0] | w + v)] AS w");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]));
+    const auto& list = *std::get<ListValuePtr>(result.rows[0][0]);
+    ASSERT_EQ(list.elements.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<double>(list.elements[0].value));
+    EXPECT_DOUBLE_EQ(std::get<double>(list.elements[0].value), 1.0);
+}
+
 TEST_F(QueryExecutorTest, ShortestPathBoundEndpoints) {
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'sp1'})-[:KNOWS]->(b:Person {name: 'sp2'}) "
                                      "-[:KNOWS]->(c:Person {name: 'sp3'}) RETURN 1")

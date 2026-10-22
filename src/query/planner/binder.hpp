@@ -100,6 +100,9 @@ private:
     std::unordered_map<const cypher::ExistsExpr*, const cypher::PatternComprehension*> projection_exists_patterns_;
 
 public:
+    bool isReducePcLowered(const cypher::PatternComprehension* pc) const {
+        return reduce_pc_lists_.count(pc) != 0;
+    }
     const BindContext& ctx() const {
         return ctx_;
     }

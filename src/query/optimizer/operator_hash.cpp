@@ -469,6 +469,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     return;
                 seed = combine(seed, hashBoundExpression(val->list_expr));
                 seed = hashBytes(seed, val->variable);
+                seed = combine(seed, val->variable_slot_id);
                 seed = combine(seed, val->variable_column_index);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 if (!val)

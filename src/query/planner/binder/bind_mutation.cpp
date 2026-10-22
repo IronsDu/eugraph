@@ -634,6 +634,7 @@ std::optional<BoundLogicalOperator> Binder::bindUnwind(const cypher::UnwindClaus
     unwind_op->list_expr = std::move(*bound_list);
     unwind_op->variable = unwind.variable;
     unwind_op->variable_column_index = var_col;
+    unwind_op->variable_slot_id = ctx_.symbols[unwind.variable].slot_id;
     unwind_op->child = std::move(*child);
     return unwind_op;
 }

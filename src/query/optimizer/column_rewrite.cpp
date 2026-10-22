@@ -218,6 +218,12 @@ template <typename ExprRef, typename Visit> void forEachSubExpr(ExprRef&& expr, 
                     if (val->to)
                         visit(*val->to);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
+                if (val) {
+                    visit(val->init);
+                    visit(val->list_expr);
+                    visit(val->expr);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||

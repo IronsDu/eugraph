@@ -1014,6 +1014,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->list_expr = cloneBoundExpression(val->list_expr);
                 c->variable = val->variable;
                 c->variable_column_index = val->variable_column_index;
+                c->variable_slot_id = val->variable_slot_id;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 auto c = std::make_unique<binder::BoundForeachOp>();
