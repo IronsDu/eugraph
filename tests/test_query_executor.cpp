@@ -926,6 +926,30 @@ TEST_F(QueryExecutorTest, ReduceExpression) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 6);
 }
 
+TEST_F(QueryExecutorTest, ReduceBodyCorrelatedPatternComprehension) {
+    // LDBC complex-14 shape: the pattern comprehension in the reduce body
+    // depends on the current list element `r` (via startNode/endNode). It must
+    // be evaluated per element, not treated as a clause-level list column.
+    auto setup = execSync(*executor_, "CREATE (a:Person {name: 'a'}), (b:Person {name: 'b'}), "
+                                      "(a)<-[:HAS_CREATOR]-(:Comment {name: 'c'})-[:REPLY_OF]->"
+                                      "(:Post {name: 'p'})-[:HAS_CREATOR]->(b), "
+                                      "(a)-[:KNOWS]->(b)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result =
+        execSync(*executor_, "MATCH p = (a:Person {name: 'a'})-[:KNOWS*1..1]->(b:Person {name: 'b'}) "
+                             "RETURN reduce(w = 0.0, r IN relationships(p) | "
+                             "  w + size([(x:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)"
+                             "             -[:HAS_CREATOR]->(y:Person) "
+                             "             WHERE (x.name = startNode(r).name AND y.name = endNode(r).name) OR "
+                             "                   (x.name = endNode(r).name AND y.name = startNode(r).name) "
+                             "             | 1.0]) / 2.0) AS w");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][0]));
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 0.5);
+}
+
 TEST_F(QueryExecutorTest, ShortestPathBoundEndpoints) {
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'sp1'})-[:KNOWS]->(b:Person {name: 'sp2'}) "
                                      "-[:KNOWS]->(c:Person {name: 'sp3'}) RETURN 1")

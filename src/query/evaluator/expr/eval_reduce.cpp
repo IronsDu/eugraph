@@ -11,8 +11,10 @@ void ExpressionEvaluator::evalReduce(const binder::BoundReduceExpr& reduce, cons
                                      size_t count) {
     auto init_eval = evaluateInternal(reduce.init, input);
     auto list_eval = evaluateInternal(reduce.list_expr, input);
-    const size_t total_cols = std::max({input.columns.size(), static_cast<size_t>(reduce.accumulator_column_index) + 1,
-                                        static_cast<size_t>(reduce.loop_column_index) + 1});
+    const uint32_t acc_pos = static_cast<uint32_t>(input.columns.size());
+    const uint32_t loop_pos = acc_pos + 1;
+    const uint32_t index_pos = acc_pos + 2;
+    const size_t total_cols = static_cast<size_t>(index_pos) + 1;
 
     for (size_t i = 0; i < count; ++i) {
         Value acc = (init_eval.column && !init_eval.column->isNull(i)) ? init_eval.column->getValue(i) : Value{};
@@ -29,6 +31,7 @@ void ExpressionEvaluator::evalReduce(const binder::BoundReduceExpr& reduce, cons
             result.setNull(i);
             continue;
         }
+        size_t elem_index = 0;
         for (const auto& elem : (*std::get<ListValuePtr>(list_val)).elements) {
             DataChunk temp;
             temp.columns.resize(total_cols);
@@ -38,10 +41,16 @@ void ExpressionEvaluator::evalReduce(const binder::BoundReduceExpr& reduce, cons
                 temp.columns[c] = Column::constant(input.columns[c].getValue(i));
             for (size_t c = input.columns.size(); c < total_cols; ++c)
                 temp.columns[c] = Column::constant(Value{});
-            temp.columns[reduce.accumulator_column_index] = Column::constant(acc);
-            temp.columns[reduce.loop_column_index] = Column::constant(elem.value);
+            temp.columns[acc_pos] = Column::constant(acc);
+            temp.columns[loop_pos] = Column::constant(elem.value);
+            temp.columns[index_pos] = Column::constant(Value{static_cast<int64_t>(elem_index)});
+            ++elem_index;
 
+            auto previous_overrides = temp_column_overrides_;
+            temp_column_overrides_ = {
+                {reduce.accumulator_slot, acc_pos}, {reduce.loop_slot, loop_pos}, {reduce.index_slot, index_pos}};
             auto body = evaluateInternal(reduce.expr, temp);
+            temp_column_overrides_ = std::move(previous_overrides);
             if (!body.column || body.column->isNull(0)) {
                 acc = Value{};
                 break;

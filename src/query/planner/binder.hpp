@@ -9,6 +9,7 @@
 #include "query/planner/bound_expression/bound_pattern_comprehension.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -202,7 +203,8 @@ public:
     /// The sub-plan uses an independent column space; correlated variables are registered
     /// as columns 0, 1, ... in a BoundCorrelatedSourceOp leaf.
     std::optional<BoundLogicalOperator> bindExistsSubPlan(const cypher::ExistsExpr& exists,
-                                                          std::vector<std::pair<uint32_t, uint32_t>>& correlation);
+                                                          std::vector<std::pair<uint32_t, uint32_t>>& correlation,
+                                                          const std::vector<std::string>& preset_corr_vars = {});
     /// Collect EXISTS expressions from the top-level AND chain of a WHERE predicate.
     /// Each entry is (ExistsExpr pointer, is_anti). is_anti=true means the EXISTS
     /// was wrapped in a NOT, i.e. NOT EXISTS { ... }.
@@ -232,7 +234,8 @@ public:
     std::optional<BoundLogicalOperator>
     bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLogicalOperator child,
                              std::vector<BoundPatternComprehensionApplyOp::Correlation>& correlation, SlotId& out_slot,
-                             std::string& out_name, BoundType& out_element_type);
+                             std::string& out_name, BoundType& out_element_type,
+                             const std::vector<std::string>& preset_corr_vars = {});
     /// Lower a top-level list comprehension whose projection / WHERE contains
     /// pattern comprehensions. The list comprehension is compiled into an
     /// outer PatternComprehensionApplyOp whose right sub-plan UNWINDs the
@@ -242,6 +245,24 @@ public:
     bool lowerListComprehensionWithPatternComprehension(const cypher::ListComprehension& lc,
                                                         BoundLogicalOperator& child, SlotId& out_slot,
                                                         std::string& out_name, BoundType& out_elem_type);
+
+    /// A pattern comprehension in a reduce body depends on the current list
+    /// element, so it cannot be hoisted above the reduce. Precompute one list
+    /// column per element with the same UNWIND + PCApply + collect machinery
+    /// used by list comprehensions; bindExpression then rewrites the PC to
+    /// `list[index]`.
+    struct ReducePcList {
+        SlotId slot = INVALID_SLOT_ID;
+        std::string name;
+        BoundType element_type = BoundType::Any();
+    };
+    bool lowerReducePatternComprehensions(BoundLogicalOperator& child,
+                                          const std::vector<const cypher::Expression*>& exprs);
+    bool lowerPatternComprehensionOverList(const cypher::ReduceExpr& reduce, const cypher::PatternComprehension& pc,
+                                           BoundLogicalOperator& child, SlotId& out_slot, std::string& out_name,
+                                           BoundType& out_element_type);
+    std::unordered_map<const cypher::PatternComprehension*, ReducePcList> reduce_pc_lists_;
+    uint32_t active_reduce_index_slot_ = 0;
 
     // ── Variable registration ──
 

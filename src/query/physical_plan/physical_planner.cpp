@@ -3353,9 +3353,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         out_layout.append(out.slot_id);
                     }
 
+                    std::vector<binder::SlotId> output_slots;
+                    output_slots.reserve(v.outputs.size());
+                    for (const auto& out : v.outputs)
+                        output_slots.push_back(out.slot_id);
                     auto result = std::make_unique<PatternComprehensionApplyPhysicalOp>(
                         std::move(lr.op), std::move(rr.op), correlated, std::move(left_corr_cols),
                         std::move(list_elem_types));
+                    result->setOutputSlots(std::move(output_slots));
                     // Existence-derived comprehensions (`NOT (a)-[:R]-(b)`,
                     // `EXISTS { ... }`, `WHERE (a)-->(b)`) are consumed only as
                     // `size(list) > 0`, so the operator may stop at the first

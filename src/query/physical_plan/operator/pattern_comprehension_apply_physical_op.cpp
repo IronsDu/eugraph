@@ -4,8 +4,11 @@ namespace eugraph {
 namespace compute {
 
 void PatternComprehensionApplyPhysicalOp::deriveOutputLayout(const TupleSlotLayout& /*parent_layout*/) {
-    if (slot_layout_.size() == 0)
+    if (slot_layout_.size() == 0) {
         slot_layout_ = left_->slotLayout();
+        for (auto slot : output_slots_)
+            slot_layout_.append(slot);
+    }
 }
 
 folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::executeChunk() {
@@ -16,7 +19,6 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
             continue;
         auto& in_chunk = *left_chunk_opt;
         size_t n_left = in_chunk.numRows();
-
         // Pre-allocate one ColumnBuffer per PatternComprehension output.
         std::vector<std::shared_ptr<ColumnBuffer>> list_buffers;
         list_buffers.reserve(list_element_types_.size());

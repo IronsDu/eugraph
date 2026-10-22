@@ -22,7 +22,7 @@ bool isDeleteLabelPredicate(const cypher::Expression& expr);
 std::pair<std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>>,
           std::vector<std::pair<std::string, BoundExpression>>>
 bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<LabelId>& label_ids,
-                         const catalog::Catalog& catalog, Binder& binder, std::string* error_out) {
+                         const catalog::Catalog& catalog, Binder& binder, std::string* /*error_out*/) {
     std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>> label_properties;
     std::vector<std::pair<std::string, BoundExpression>> pending_props;
 

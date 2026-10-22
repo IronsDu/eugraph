@@ -217,7 +217,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 | LdbcQuery8 | complex-8 | 6.5 | 2.7 | 🟡 慢 2.4× |
 | LdbcQuery6 | complex-6 | 550–605 | 61–87 | 🔴 慢 8.9×（官方表头实例上直接实测；§2 交错 A/B 未含该条） |
 | LdbcQuery5 | complex-5 | 不返回 | 92.3 | 🔴 **挂死**（>400 s，§2.3.2 第 3 条） |
-| LdbcQuery1 / 13 / 14 | complex-1 / 13 / 14 | — | — | ⚪ 语法不支持（`shortestPath` 系） |
+| LdbcQuery1 / 13 / 14 | complex-1 / 13 / 14 | — | — | ✅ 语法/求值已支持；complex-14 见 §13.3，未参与本轮同机 A/B |
 
 **复杂查询一栏的口径说明**：`LdbcQuery*` 行取 §2 同机交错 A/B 的 min（参数为本数据集真实
 存在的取值）；`LdbcShortQuery*` 行取 §2.3.3 的修正实测。两处都是"同机、同数据、同参数"，
@@ -295,7 +295,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 查询 | 原因 |
 |---|---|
-| complex-14 | **相关 pattern comprehension 尚未求值**：`allShortestPaths` / `reduce` 基础已支持，但 reduce body 内的 `[(a)-... WHERE a.id=startNode(r).id | 1.0]` 需要在每个元素上执行相关子计划，当前只支持 clause 级 pattern comprehension |
+| complex-14 | 已支持 reduce body 内的相关 pattern comprehension（见 §13.3）；尚未纳入本轮同机 A/B |
 | complex-6 / complex-9 | 早前轮次 eugraph 可执行（0.49 s / 3.96 s）；本轮为控制耗时未跑，neo4j 侧为 31 / 37 ms |
 
 ## 4. 测量陷阱（复现前务必先读）
@@ -314,7 +314,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 语句 | 缺口 | 方案 |
 |------|------|------|
-| complex-14 | `allShortestPaths`、`reduce` 已支持；但 reduce body 内的**相关 pattern comprehension**（依赖 list-comprehension 元素 `r` 的 `startNode(r)` / `endNode(r)`）还没有逐元素求值路径 | 需要把 pattern comprehension 降低为表达式级 correlated apply（或在 list-comprehension 层做 UNWIND + Apply） |
+| complex-14 | ✅ 已实现（2026-10-22）：reduce body 内的相关 pattern comprehension 按元素预计算为列表列，body 用 `list[index]` 读取；见 §13.3 | — |
 
 ### 5.2 complex-5：已修复（2026-10-21）
 
@@ -800,7 +800,7 @@ complex-5 在 §11 的 8 条之外，之前因 CPU 不收敛被列为不可用�
 | complex-1/13 | ✅ 正常结束（shortestPath，见 §13） |
 | complex-2/3/4/6/7/8/9/10/11/12 | ✅ 正常结束 |
 | **complex-5** | ✅ 修复后正常结束（20 行；min 475.56 ms，见 §11.4） |
-| complex-14 | ❌ 语法已通过，但 reduce body 内的相关 pattern comprehension 尚未求值 |
+| complex-14 | ✅ 语法/求值已支持（reduce body 内相关 pattern comprehension，见 §13.3；未在本轮 sf0.1 复跑） |
 | update-1..8 | ✅ 全部正常结束（update-1 的 `s[0]` 绑定、update-6/7 的多标签 `id` 已修） |
 | 4G cgroup 下 | 无 OOM；无 CPU 失控（complex-5 修复后） |
 
@@ -864,9 +864,9 @@ update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义�
 > complex-1 的 `friendEmails` / `friendLanguages` 为 null 是本地 loader 的属性名差异，
 > 与 shortestPath 无关。
 
-### 13.3 仍未支持：complex-14
+### 13.3 complex-14：reduce body 内相关 pattern comprehension（2026-10-22 已支持）
 
-`allShortestPaths` 和 `reduce` 本身已可用；complex-14 失败在 reduce body 的：
+complex-14 的 reduce body 含有依赖当前 list 元素 `r` 的 pattern comprehension：
 
 ```cypher
 [(a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
@@ -874,10 +874,22 @@ update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义�
  | 1.0]
 ```
 
-这里 pattern comprehension 依赖 **list-comprehension 的当前元素 `r`**，必须在每个 `r` 上执行一次
-相关子计划；当前引擎只支持 clause 级（RETURN/WITH/WHERE）pattern comprehension 的 hoist，
-表达式级相关子查询还没有 lowering。这是 complex-14 剩下的唯一缺口，不是 allShortestPaths/reduce
-的语法问题。
+clause 级 hoist 无法处理它（`r` 在 reduce 求值时才存在）。实现方式：
+
+1. 在绑定 RETURN/WITH 前扫描 reduce body 中的 pattern comprehension；
+2. 对每个这样的 PC，用 `UNWIND reduce.list_expr AS x` + PCApply + `collect` 构造一个
+   **与 list 元素一一对齐的列表列**（与 list-comprehension 的 lowering 同一套机制）；
+3. reduce body 中该 PC 被重写为 `pc_list[index]`；evaluator 在逐元素求值时提供 0-based
+   `index` 临时列；
+4. reduce 的 accumulator/loop/index 临时列通过 slot 重映射注入，避免与输入列（含 PC 列表列）
+   的列号冲突。
+
+限制：PC 不能引用 accumulator（否则必须先知道 fold 中间值，当前 lowering 不支持）；
+嵌套 reduce body 内的 PC 需要 outer loop 变量时也会被拒绝/留待后续。
+
+验证：新增 `QueryExecutorTest.ReduceBodyCorrelatedPatternComprehension`（多跳
+`Person <- HAS_CREATOR - Comment - REPLY_OF -> Post - HAS_CREATOR -> Person`，期望 0.5），
+debug `query_executor_tests` 全量 583/583 通过。
 
 ### 13.4 验证
 

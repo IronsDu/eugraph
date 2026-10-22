@@ -16,8 +16,14 @@ namespace binder {
 struct BoundReduceExpr {
     std::string accumulator;
     uint32_t accumulator_column_index = 0;
+    uint32_t accumulator_slot = 0;
     std::string variable;
     uint32_t loop_column_index = 0;
+    uint32_t loop_slot = 0;
+    /// Temporary slot holding the 0-based element index. Used when a pattern
+    /// comprehension in the body was precomputed as a per-element list; the
+    /// body indexes that list by this slot.
+    uint32_t index_slot = 0;
     BoundExpression init;
     BoundExpression list_expr;
     BoundExpression expr;

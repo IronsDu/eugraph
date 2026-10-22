@@ -1208,8 +1208,11 @@ binder::BoundExpression cloneBoundExpression(const binder::BoundExpression& expr
                 auto c = std::make_unique<binder::BoundReduceExpr>();
                 c->accumulator = val->accumulator;
                 c->accumulator_column_index = val->accumulator_column_index;
+                c->accumulator_slot = val->accumulator_slot;
                 c->variable = val->variable;
                 c->loop_column_index = val->loop_column_index;
+                c->loop_slot = val->loop_slot;
+                c->index_slot = val->index_slot;
                 c->init = cloneBoundExpression(val->init);
                 c->list_expr = cloneBoundExpression(val->list_expr);
                 c->expr = cloneBoundExpression(val->expr);

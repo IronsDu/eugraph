@@ -704,11 +704,25 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     resolveBinaryFallbackFn(cypher::BinaryOperator::GT, BoundTypeKind::INT64, BoundTypeKind::INT64);
                 return BoundExpression(std::move(gt));
             } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
-                // Placeholder binding: keep the AST pointer so the hoisting
-                // pass (bind_return / bind_with) can construct the
-                // BoundPatternComprehensionApplyOp sub-plan later. Result
-                // type is LIST(Any) until the projection is bound — refined
-                // during hoisting.
+                // A PC inside a reduce body is evaluated once per list element.
+                // bindReturn/bindWith precomputed one list column per element;
+                // the body reads `list[index]` where index is the reduce's
+                // temporary element-index column.
+                auto pc_list = reduce_pc_lists_.find(ptr.get());
+                if (pc_list != reduce_pc_lists_.end()) {
+                    if (active_reduce_index_slot_ == 0) {
+                        error("Internal: pattern comprehension list is only valid inside its reduce body");
+                        return std::nullopt;
+                    }
+                    auto sub = std::make_unique<BoundSubscript>();
+                    sub->list = BoundExpression(
+                        BoundColumnRef(0, BoundType::List(BoundType::clone(pc_list->second.element_type)),
+                                       pc_list->second.name, pc_list->second.slot));
+                    sub->index = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "", active_reduce_index_slot_));
+                    sub->result_type = BoundType::clone(pc_list->second.element_type);
+                    return BoundExpression(std::move(sub));
+                }
+                // Outside a reduce body the clause-level hoisting pass owns it.
                 BoundPatternComprehension bpc;
                 bpc.ast = ptr.get();
                 bpc.result_type = BoundType::List(BoundType::Any());
@@ -773,16 +787,24 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
 
                 const uint32_t acc_col = nextColumnIndex();
                 const uint32_t loop_col = nextColumnIndex();
+                const uint32_t index_slot = nextSlotId();
                 auto saved = ctx_.save();
+                uint32_t acc_slot = 0;
+                uint32_t loop_slot = 0;
                 {
                     ColumnInfo acc_info = makeColumnInfo(ptr->accumulator, BoundType::clone(init_type));
+                    acc_slot = acc_info.slot_id;
                     acc_info.column_index = acc_col;
                     ctx_.symbols[ptr->accumulator] = std::move(acc_info);
                     ColumnInfo elem_info = makeColumnInfo(ptr->variable, std::move(elem_type));
+                    loop_slot = elem_info.slot_id;
                     elem_info.column_index = loop_col;
                     ctx_.symbols[ptr->variable] = std::move(elem_info);
                 }
+                const uint32_t previous_index_slot = active_reduce_index_slot_;
+                active_reduce_index_slot_ = index_slot;
                 auto body = bindExpression(ptr->expr);
+                active_reduce_index_slot_ = previous_index_slot;
                 ctx_.restore(saved);
                 if (!body)
                     return std::nullopt;
@@ -790,8 +812,11 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 auto r = std::make_unique<BoundReduceExpr>();
                 r->accumulator = ptr->accumulator;
                 r->accumulator_column_index = acc_col;
+                r->accumulator_slot = acc_slot;
                 r->variable = ptr->variable;
                 r->loop_column_index = loop_col;
+                r->loop_slot = loop_slot;
+                r->index_slot = index_slot;
                 r->init = std::move(*init);
                 r->list_expr = std::move(*list_expr);
                 r->expr = std::move(*body);

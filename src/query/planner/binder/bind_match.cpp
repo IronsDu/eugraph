@@ -1158,7 +1158,8 @@ std::optional<cypher::Expression> Binder::removeExistsFromWhere(const cypher::Ex
 }
 
 std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::ExistsExpr& exists,
-                                                              std::vector<std::pair<uint32_t, uint32_t>>& correlation) {
+                                                              std::vector<std::pair<uint32_t, uint32_t>>& correlation,
+                                                              const std::vector<std::string>& preset_corr_vars) {
     bool is_full_query = (exists.full_query != nullptr);
     // For full EXISTS subquery, extract the first MATCH clause's patterns
     // into a local vector to reuse the simple EXISTS binding path.
@@ -1350,6 +1351,32 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
 
     // Reset to independent sub-scope
     ctx_.beginSubScope();
+
+    // Explicit outer correlations from the caller (e.g. a reduce loop variable
+    // referenced only from a pattern-comprehension WHERE). The generic EXISTS
+    // path currently only collects these for full subqueries; a pattern
+    // comprehension needs them for the current UNWIND element, so register
+    // them here with their real (non-vertex) types.
+    for (const auto& name : preset_corr_vars) {
+        if (ctx_.lookup(name))
+            continue;
+        auto it = saved_ctx.symbols.find(name);
+        if (it == saved_ctx.symbols.end())
+            continue;
+        ColumnInfo ci = it->second;
+        ci.column_index = nextColumnIndex();
+        ci.slot_id = it->second.slot_id;
+        ctx_.symbols[name] = ci;
+        bool dup = false;
+        for (const auto& [outer, sub] : correlation) {
+            if (outer == ci.slot_id) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup)
+            correlation.emplace_back(ci.slot_id, ci.slot_id);
+    }
 
     // Register the start variable in sub-scope.
     uint32_t sub_idx;
@@ -1961,7 +1988,8 @@ BoundExpression bindSimpleProjectionExpr(Binder& binder, const cypher::Expressio
 std::optional<BoundLogicalOperator>
 Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLogicalOperator child,
                                  std::vector<BoundPatternComprehensionApplyOp::Correlation>& correlation,
-                                 SlotId& out_slot, std::string& out_name, BoundType& out_element_type) {
+                                 SlotId& out_slot, std::string& out_name, BoundType& out_element_type,
+                                 const std::vector<std::string>& preset_corr_vars) {
     // Reuse bindExistsSubPlan by synthesising an ExistsExpr wrapper. Pattern
     // binding, sub-scope management, and correlated-source wiring are
     // identical; we then append Project + Aggregate(collect) to collapse the
@@ -2017,7 +2045,7 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
         synthetic.where_pred = cloneExpression(*pc.where_pred);
 
     std::vector<std::pair<uint32_t, uint32_t>> exists_corr;
-    auto sub_plan = bindExistsSubPlan(synthetic, exists_corr);
+    auto sub_plan = bindExistsSubPlan(synthetic, exists_corr, preset_corr_vars);
     if (!sub_plan)
         return std::nullopt;
     for (const auto& [l, r] : exists_corr) {

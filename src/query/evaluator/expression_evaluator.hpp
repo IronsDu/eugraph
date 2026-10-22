@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -77,6 +78,9 @@ private:
     void evalDynamicPropertyRef(const binder::BoundDynamicPropertyRef& ref, const DataChunk& input, Column& result,
                                 size_t count);
     std::unordered_map<LabelId, std::unordered_map<std::string, uint16_t>> dyn_prop_index_cache_;
+    /// Temporary column remapping for reduce bodies: binder column indices for
+    /// acc/loop/index are keys, runtime positions in the temp chunk are values.
+    std::unordered_map<uint32_t, uint32_t> temp_column_overrides_; // SlotId -> temp position
     void evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result, size_t count);
 
     /// Return a reference to an input column (no real evaluation). Falls back
