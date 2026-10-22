@@ -860,6 +860,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->path_variable = val->path_variable;
                 c->path_column_index = val->path_column_index;
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
+                c->shortest_path = val->shortest_path;
+                c->all_shortest_paths = val->all_shortest_paths;
                 c->edge_variable = val->edge_variable;
                 c->edge_column_index = val->edge_column_index;
                 c->edge_slot_id = val->edge_slot_id;
@@ -1198,6 +1200,19 @@ binder::BoundExpression cloneBoundExpression(const binder::BoundExpression& expr
                 c->loop_column_index = val->loop_column_index;
                 c->list_expr = cloneBoundExpression(val->list_expr);
                 c->where_pred = cloneOptExpr(val->where_pred);
+                c->result_type = val->result_type;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
+                if (!val)
+                    return binder::BoundLiteral{};
+                auto c = std::make_unique<binder::BoundReduceExpr>();
+                c->accumulator = val->accumulator;
+                c->accumulator_column_index = val->accumulator_column_index;
+                c->variable = val->variable;
+                c->loop_column_index = val->loop_column_index;
+                c->init = cloneBoundExpression(val->init);
+                c->list_expr = cloneBoundExpression(val->list_expr);
+                c->expr = cloneBoundExpression(val->expr);
                 c->result_type = val->result_type;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>) {

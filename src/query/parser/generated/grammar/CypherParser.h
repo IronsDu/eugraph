@@ -17,18 +17,19 @@ public:
     LBRACE = 14, RBRACE = 15, LBRACK = 16, RBRACK = 17, SUB = 18, PLUS = 19, 
     DIV = 20, MOD = 21, CARET = 22, MULT = 23, ESC = 24, COLON = 25, COLONCOLON = 26, 
     STICK = 27, DOLLAR = 28, CALL = 29, YIELD = 30, FILTER = 31, EXTRACT = 32, 
-    COUNT = 33, ANY = 34, NONE = 35, SINGLE = 36, ALL = 37, ASC = 38, ASCENDING = 39, 
-    BY = 40, CREATE = 41, DELETE = 42, DESC = 43, DESCENDING = 44, DETACH = 45, 
-    EXISTS = 46, EXPLAIN = 47, LIMIT = 48, MATCH = 49, MERGE = 50, ON = 51, 
-    OPTIONAL = 52, ORDER = 53, REMOVE = 54, RETURN = 55, SET = 56, SKIP_W = 57, 
-    WHERE = 58, WITH = 59, UNION = 60, UNWIND = 61, AND = 62, AS = 63, CONTAINS = 64, 
-    DISTINCT = 65, ENDS = 66, IN = 67, IS = 68, NOT = 69, OR = 70, STARTS = 71, 
-    XOR = 72, FALSE = 73, TRUE = 74, NULL_W = 75, CONSTRAINT = 76, DO = 77, 
-    FOR = 78, REQUIRE = 79, UNIQUE = 80, CASE = 81, WHEN = 82, THEN = 83, 
-    ELSE = 84, END = 85, MANDATORY = 86, SCALAR = 87, OF = 88, ADD = 89, 
-    DROP = 90, FOREACH = 91, ID = 92, ESC_LITERAL = 93, CHAR_LITERAL = 94, 
-    STRING_LITERAL = 95, DIGIT = 96, FLOAT = 97, WS = 98, COMMENT = 99, 
-    LINE_COMMENT = 100, ERRCHAR = 101, Letter = 102
+    COUNT = 33, ANY = 34, NONE = 35, SINGLE = 36, REDUCE = 37, SHORTESTPATH = 38, 
+    ALLSHORTESTPATHS = 39, ALL = 40, ASC = 41, ASCENDING = 42, BY = 43, 
+    CREATE = 44, DELETE = 45, DESC = 46, DESCENDING = 47, DETACH = 48, EXISTS = 49, 
+    EXPLAIN = 50, LIMIT = 51, MATCH = 52, MERGE = 53, ON = 54, OPTIONAL = 55, 
+    ORDER = 56, REMOVE = 57, RETURN = 58, SET = 59, SKIP_W = 60, WHERE = 61, 
+    WITH = 62, UNION = 63, UNWIND = 64, AND = 65, AS = 66, CONTAINS = 67, 
+    DISTINCT = 68, ENDS = 69, IN = 70, IS = 71, NOT = 72, OR = 73, STARTS = 74, 
+    XOR = 75, FALSE = 76, TRUE = 77, NULL_W = 78, CONSTRAINT = 79, DO = 80, 
+    FOR = 81, REQUIRE = 82, UNIQUE = 83, CASE = 84, WHEN = 85, THEN = 86, 
+    ELSE = 87, END = 88, MANDATORY = 89, SCALAR = 90, OF = 91, ADD = 92, 
+    DROP = 93, FOREACH = 94, ID = 95, ESC_LITERAL = 96, CHAR_LITERAL = 97, 
+    STRING_LITERAL = 98, DIGIT = 99, FLOAT = 100, WS = 101, COMMENT = 102, 
+    LINE_COMMENT = 103, ERRCHAR = 104, Letter = 105
   };
 
   enum {
@@ -48,16 +49,18 @@ public:
     RulePowerExpression = 47, RuleUnaryAddSubExpression = 48, RuleAtomicExpression = 49, 
     RuleListExpression = 50, RuleStringExpression = 51, RuleStringExpPrefix = 52, 
     RuleNullExpression = 53, RulePropertyOrLabelExpression = 54, RulePropertyExpression = 55, 
-    RuleLabelCast = 56, RulePatternPart = 57, RulePatternElem = 58, RulePatternElemChain = 59, 
-    RuleProperties = 60, RuleNodePattern = 61, RuleAtom = 62, RuleLhs = 63, 
-    RuleRelationshipPattern = 64, RuleRelationDetail = 65, RuleRelationshipTypes = 66, 
-    RuleUnionSt = 67, RuleSubqueryExist = 68, RuleInvocationName = 69, RuleFunctionInvocation = 70, 
-    RuleParenthesizedExpression = 71, RuleFilterWith = 72, RulePatternComprehension = 73, 
-    RuleRelationshipsChainPattern = 74, RuleListComprehension = 75, RuleFilterExpression = 76, 
-    RuleCountAll = 77, RuleExpressionChain = 78, RuleCaseExpression = 79, 
-    RuleParameter = 80, RuleLiteral = 81, RuleRangeLit = 82, RuleBoolLit = 83, 
-    RuleNumLit = 84, RuleStringLit = 85, RuleCharLit = 86, RuleListLit = 87, 
-    RuleMapLit = 88, RuleMapPair = 89, RuleName = 90, RuleSymbol = 91, RuleReservedWord = 92
+    RuleLabelCast = 56, RulePatternPart = 57, RuleShortestPathPattern = 58, 
+    RuleAllShortestPathsPattern = 59, RulePatternElem = 60, RulePatternElemChain = 61, 
+    RuleProperties = 62, RuleNodePattern = 63, RuleAtom = 64, RuleLhs = 65, 
+    RuleRelationshipPattern = 66, RuleRelationDetail = 67, RuleRelationshipTypes = 68, 
+    RuleUnionSt = 69, RuleSubqueryExist = 70, RuleInvocationName = 71, RuleFunctionInvocation = 72, 
+    RuleParenthesizedExpression = 73, RuleFilterWith = 74, RulePatternComprehension = 75, 
+    RuleRelationshipsChainPattern = 76, RuleListComprehension = 77, RuleReduceExpression = 78, 
+    RuleFilterExpression = 79, RuleCountAll = 80, RuleExpressionChain = 81, 
+    RuleCaseExpression = 82, RuleParameter = 83, RuleLiteral = 84, RuleRangeLit = 85, 
+    RuleBoolLit = 86, RuleNumLit = 87, RuleStringLit = 88, RuleCharLit = 89, 
+    RuleListLit = 90, RuleMapLit = 91, RuleMapPair = 92, RuleName = 93, 
+    RuleSymbol = 94, RuleReservedWord = 95
   };
 
   explicit CypherParser(antlr4::TokenStream *input);
@@ -135,6 +138,8 @@ public:
   class PropertyExpressionContext;
   class LabelCastContext;
   class PatternPartContext;
+  class ShortestPathPatternContext;
+  class AllShortestPathsPatternContext;
   class PatternElemContext;
   class PatternElemChainContext;
   class PropertiesContext;
@@ -153,6 +158,7 @@ public:
   class PatternComprehensionContext;
   class RelationshipsChainPatternContext;
   class ListComprehensionContext;
+  class ReduceExpressionContext;
   class FilterExpressionContext;
   class CountAllContext;
   class ExpressionChainContext;
@@ -1089,6 +1095,8 @@ public:
   public:
     PatternPartContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
+    ShortestPathPatternContext *shortestPathPattern();
+    AllShortestPathsPatternContext *allShortestPathsPattern();
     PatternElemContext *patternElem();
     SymbolContext *symbol();
     antlr4::tree::TerminalNode *ASSIGN();
@@ -1099,6 +1107,38 @@ public:
   };
 
   PatternPartContext* patternPart();
+
+  class  ShortestPathPatternContext : public antlr4::ParserRuleContext {
+  public:
+    ShortestPathPatternContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode *SHORTESTPATH();
+    antlr4::tree::TerminalNode *LPAREN();
+    PatternElemContext *patternElem();
+    antlr4::tree::TerminalNode *RPAREN();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  ShortestPathPatternContext* shortestPathPattern();
+
+  class  AllShortestPathsPatternContext : public antlr4::ParserRuleContext {
+  public:
+    AllShortestPathsPatternContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode *ALLSHORTESTPATHS();
+    antlr4::tree::TerminalNode *LPAREN();
+    PatternElemContext *patternElem();
+    antlr4::tree::TerminalNode *RPAREN();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  AllShortestPathsPatternContext* allShortestPathsPattern();
 
   class  PatternElemContext : public antlr4::ParserRuleContext {
   public:
@@ -1172,6 +1212,7 @@ public:
     CaseExpressionContext *caseExpression();
     CountAllContext *countAll();
     ListComprehensionContext *listComprehension();
+    ReduceExpressionContext *reduceExpression();
     PatternComprehensionContext *patternComprehension();
     FilterWithContext *filterWith();
     RelationshipsChainPatternContext *relationshipsChainPattern();
@@ -1403,6 +1444,29 @@ public:
   };
 
   ListComprehensionContext* listComprehension();
+
+  class  ReduceExpressionContext : public antlr4::ParserRuleContext {
+  public:
+    ReduceExpressionContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode *REDUCE();
+    antlr4::tree::TerminalNode *LPAREN();
+    std::vector<SymbolContext *> symbol();
+    SymbolContext* symbol(size_t i);
+    antlr4::tree::TerminalNode *ASSIGN();
+    std::vector<ExpressionContext *> expression();
+    ExpressionContext* expression(size_t i);
+    antlr4::tree::TerminalNode *COMMA();
+    antlr4::tree::TerminalNode *IN();
+    antlr4::tree::TerminalNode *STICK();
+    antlr4::tree::TerminalNode *RPAREN();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  ReduceExpressionContext* reduceExpression();
 
   class  FilterExpressionContext : public antlr4::ParserRuleContext {
   public:

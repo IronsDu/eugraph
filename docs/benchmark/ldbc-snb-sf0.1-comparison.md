@@ -295,7 +295,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 查询 | 原因 |
 |---|---|
-| complex-1 / complex-13 / complex-14 | **语法不支持**：依赖 `shortestPath` / `allShortestPaths` + `reduce`（eugraph 报 `UnexpectedSyntax`） |
+| complex-14 | **相关 pattern comprehension 尚未求值**：`allShortestPaths` / `reduce` 基础已支持，但 reduce body 内的 `[(a)-... WHERE a.id=startNode(r).id | 1.0]` 需要在每个元素上执行相关子计划，当前只支持 clause 级 pattern comprehension |
 | complex-6 / complex-9 | 早前轮次 eugraph 可执行（0.49 s / 3.96 s）；本轮为控制耗时未跑，neo4j 侧为 31 / 37 ms |
 
 ## 4. 测量陷阱（复现前务必先读）
@@ -314,9 +314,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 语句 | 缺口 | 方案 |
 |------|------|------|
-| complex-1 | `shortestPath` 不支持 | 实现双向 BFS shortest-path 算子 |
-| complex-13 | 同上（现用 `knows*1..3 + min(length(path))` 近似） | 同上 |
-| complex-14 | `allShortestPaths` + `reduce` 不支持 | 实现 all-shortest-paths + reduce |
+| complex-14 | `allShortestPaths`、`reduce` 已支持；但 reduce body 内的**相关 pattern comprehension**（依赖 list-comprehension 元素 `r` 的 `startNode(r)` / `endNode(r)`）还没有逐元素求值路径 | 需要把 pattern comprehension 降低为表达式级 correlated apply（或在 list-comprehension 层做 UNWIND + Apply） |
 
 ### 5.2 complex-5：已修复（2026-10-21）
 
@@ -799,9 +797,10 @@ complex-5 在 §11 的 8 条之外，之前因 CPU 不收敛被列为不可用�
 | 类别 | 状态 |
 |---|---|
 | 全部 short-1..7 | ✅ 正常结束 |
+| complex-1/13 | ✅ 正常结束（shortestPath，见 §13） |
 | complex-2/3/4/6/7/8/9/10/11/12 | ✅ 正常结束 |
 | **complex-5** | ✅ 修复后正常结束（20 行；min 475.56 ms，见 §11.4） |
-| complex-1/13/14 | ❌ 语法不支持（`shortestPath` / `allShortestPaths` / `reduce`），立即返回 SyntaxError，不挂起 |
+| complex-14 | ❌ 语法已通过，但 reduce body 内的相关 pattern comprehension 尚未求值 |
 | update-1..8 | ✅ 全部正常结束（update-1 的 `s[0]` 绑定、update-6/7 的多标签 `id` 已修） |
 | 4G cgroup 下 | 无 OOM；无 CPU 失控（complex-5 修复后） |
 
@@ -832,3 +831,55 @@ complex-5 在 §11 的 8 条之外，之前因 CPU 不收敛被列为不可用�
 
 update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义而失败，修复后均可正常结束；
 多标签共享属性写入所有声明它的 label，读取端对相同值去重（§12.3）。
+
+
+---
+
+## 13. shortestPath / allShortestPaths / reduce 支持（2026-10-22）
+
+### 13.1 实现
+
+- grammar/AST：`shortestPath(...)`、`allShortestPaths(...)` 作为 MATCH pattern part；
+  `reduce(acc = init, x IN list | expr)` 作为表达式。
+- `shortestPath` / `allShortestPaths` 复用 `BoundVarLenExpandOp` + `VarLenExpandPhysicalOp` 的
+  BFS 分支：端点绑定后，每个输入行做一次 BFS（single 取最短路径，all 枚举同层全部父边）。
+  路径以 `PathValue`（id-only 的 VertexValue/EdgeValue）输出，`length` / `nodes` / `relationships` /
+  `startNode` / `endNode` 均可消费；内存上限 100k 条最短路径，超过返回明确错误而不是 OOM。
+- `reduce` 用临时列（accumulator + loop variable）逐元素求值；支持空列表、null 传播。
+- 顺手修复了 Aggregate 输出阶段对嵌套 list group key 的 `groups.at(key)` 二次哈希/比较
+  （改为保存指向 `unordered_map` 元素的稳定指针），complex-1 的 `collect(...) AS unis/companies`
+  因此可正常分组。
+
+### 13.2 实测（sf0.1，正式数据，8 compute）
+
+| 查询 | 参数 | 行数 | min / p50 |
+|---|---|---:|---:|
+| complex-1 | personId=933, firstName=Jose | 20 | **65.1 / 66.5 ms** |
+| complex-13 | person1Id=933, person2Id=1129 | 1（length=3） | **13.4 / 13.8 ms** |
+| allShortestPaths（简化） | 933 → 1129 | 4 条 length=3 | 正常结束 |
+| reduce 基础 | `reduce(w=0, x IN [1,2,3] \| w+x)` | 6 | 正常结束 |
+
+> complex-13 的官方默认 ID（`8796093022390` 等）在本地 sf0.1 数据里不存在，因此上表用
+> 实际存在的 `933 → 1129` 验证；查询本身与引擎结果已和 neo4j 对照（都是 `length=3`）。
+> complex-1 的 `friendEmails` / `friendLanguages` 为 null 是本地 loader 的属性名差异，
+> 与 shortestPath 无关。
+
+### 13.3 仍未支持：complex-14
+
+`allShortestPaths` 和 `reduce` 本身已可用；complex-14 失败在 reduce body 的：
+
+```cypher
+[(a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
+ WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) OR ...
+ | 1.0]
+```
+
+这里 pattern comprehension 依赖 **list-comprehension 的当前元素 `r`**，必须在每个 `r` 上执行一次
+相关子计划；当前引擎只支持 clause 级（RETURN/WITH/WHERE）pattern comprehension 的 hoist，
+表达式级相关子查询还没有 lowering。这是 complex-14 剩下的唯一缺口，不是 allShortestPaths/reduce
+的语法问题。
+
+### 13.4 验证
+
+- 新增测试：`ReduceExpression`、`ShortestPathBoundEndpoints`、`AllShortestPathsBoundEndpoints`；
+- 全量 `build-release` ctest **1302/1302**（含 TCK，728s）。

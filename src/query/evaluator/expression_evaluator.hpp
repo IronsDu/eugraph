@@ -109,6 +109,7 @@ private:
     /// Evaluate a list comprehension: [x IN list | projection].
     void evalListComprehension(const binder::BoundListComprehension& lc, const DataChunk& input, Column& result,
                                size_t count);
+    void evalReduce(const binder::BoundReduceExpr& reduce, const DataChunk& input, Column& result, size_t count);
 };
 
 } // namespace compute

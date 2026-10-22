@@ -20,6 +20,9 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
 
     std::unordered_map<Row, GroupState, RowHash, RowEqual> groups;
     std::vector<Row> group_order;
+    // Pointers into the node-based unordered_map stay valid across rehash;
+    // output does not need to re-hash/re-compare nested list/path keys.
+    std::vector<GroupState*> group_states;
 
     bool has_aggregates = !aggregates_.empty();
 
@@ -79,8 +82,9 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                         gs.agg_states.push_back(nullptr);
                     }
                 }
-                group_order.push_back(key);
                 it = groups.emplace(std::move(key), std::move(gs)).first;
+                group_order.push_back(it->first);
+                group_states.push_back(&it->second);
             }
 
             auto& state = it->second;
@@ -133,8 +137,9 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
     DataChunk output = buildOutputChunk();
     size_t row_idx = 0;
 
-    for (const auto& key : group_order) {
-        auto& state = groups.at(key);
+    for (size_t gi = 0; gi < group_order.size(); ++gi) {
+        const auto& key = group_order[gi];
+        auto& state = *group_states[gi];
 
         for (size_t c = 0; c < key.size(); ++c) {
             output.columns[c].setValue(row_idx, key[c]);

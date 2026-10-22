@@ -918,6 +918,40 @@ TEST_F(QueryExecutorTest, CreateNodeAutoCreatesLabel) {
     }
 }
 
+TEST_F(QueryExecutorTest, ReduceExpression) {
+    auto result = execSync(*executor_, "RETURN reduce(w=0, x IN [1,2,3] | w+x) AS s");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 6);
+}
+
+TEST_F(QueryExecutorTest, ShortestPathBoundEndpoints) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'sp1'})-[:KNOWS]->(b:Person {name: 'sp2'}) "
+                                     "-[:KNOWS]->(c:Person {name: 'sp3'}) RETURN 1")
+                    .error.empty());
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'sp1'}), (c:Person {name: 'sp3'}) "
+                                       "MATCH p = shortestPath((a)-[:KNOWS*1..3]-(c)) "
+                                       "RETURN length(p) AS n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+}
+
+TEST_F(QueryExecutorTest, AllShortestPathsBoundEndpoints) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'ap1'})-[:KNOWS]->(b:Person {name: 'ap2'}) "
+                                     "-[:KNOWS]->(c:Person {name: 'ap3'}) RETURN 1")
+                    .error.empty());
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'ap1'}), (c:Person {name: 'ap3'}) "
+                                       "MATCH p = allShortestPaths((a)-[:KNOWS*0..]-(c)) "
+                                       "RETURN length(p) AS n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+}
+
 TEST_F(QueryExecutorTest, MatchPropertyMapSubscriptExpression) {
     // LDBC update-1 shape: a MATCH property map value that is a list subscript
     // (`{id: s[0]}`) must be cloned/bound as an expression, not degraded to an

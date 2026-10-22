@@ -297,7 +297,15 @@ labelCast
     ;
 
 patternPart
-    : (symbol ASSIGN)? patternElem
+    : (symbol ASSIGN)? (shortestPathPattern | allShortestPathsPattern | patternElem)
+    ;
+
+shortestPathPattern
+    : SHORTESTPATH LPAREN patternElem RPAREN
+    ;
+
+allShortestPathsPattern
+    : ALLSHORTESTPATHS LPAREN patternElem RPAREN
     ;
 
 patternElem
@@ -324,6 +332,7 @@ atom
     | caseExpression
     | countAll
     | listComprehension
+    | reduceExpression
     | patternComprehension
     | filterWith
     | relationshipsChainPattern
@@ -384,6 +393,10 @@ relationshipsChainPattern
 
 listComprehension
     : LBRACK filterExpression (STICK expression)? RBRACK
+    ;
+
+reduceExpression
+    : REDUCE LPAREN symbol ASSIGN expression COMMA symbol IN expression STICK expression RPAREN
     ;
 
 filterExpression

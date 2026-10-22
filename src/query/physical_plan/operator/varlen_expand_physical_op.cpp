@@ -68,6 +68,10 @@ std::string VarLenExpandPhysicalOp::toString() const {
         }
         s += "]";
     }
+    if (shortest_path_)
+        s += ", shortestPath";
+    if (all_shortest_paths_)
+        s += ", allShortestPaths";
     s += ", direction=" + dir + ")";
     return s;
 }
@@ -202,6 +206,165 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         adjacency_cache.emplace(vid, result);
         co_return result;
     };
+
+    // shortestPath / allShortestPaths: BFS instead of the DFS path
+    // enumeration below. The endpoint columns are already bound by the
+    // binder, so each input row is one independent BFS.
+    if (shortest_path_ || all_shortest_paths_) {
+        struct ParentLink {
+            VertexId from = INVALID_VERTEX_ID;
+            VertexId to = INVALID_VERTEX_ID;
+            EdgeId edge_id = INVALID_EDGE_ID;
+            EdgeLabelId edge_label_id = INVALID_EDGE_LABEL_ID;
+            uint64_t seq = 0;
+        };
+        constexpr size_t MAX_PATHS = 100000;
+        while (auto chunk = co_await child_gen.next()) {
+            const size_t input_rows = chunk->numRows();
+            const size_t input_cols = chunk->numColumns();
+            std::vector<std::pair<size_t, PathValue>> pending;
+
+            auto flush = [&]() -> DataChunk {
+                const size_t n = pending.size();
+                DataChunk output;
+                output.columns.reserve(input_cols + 1);
+                for (size_t c = 0; c < input_cols; ++c) {
+                    output.columns.push_back(Column::flat(chunk->columns[c].type, n));
+                    for (size_t r = 0; r < n; ++r)
+                        output.columns[c].setValue(r, chunk->columns[c].getValue(pending[r].first));
+                }
+                output.columns.push_back(Column::flat(binder::BoundTypeKind::PATH, n));
+                for (size_t r = 0; r < n; ++r)
+                    output.columns[input_cols].setValue(r, Value(mk<PathValue>(std::move(pending[r].second))));
+                pending.clear();
+                output.count = n;
+                return output;
+            };
+
+            for (size_t row = 0; row < input_rows; ++row) {
+                VertexId start = vertexIdFromValue(chunk->columns[src_col_idx_].getValue(row));
+                VertexId end = vertexIdFromValue(chunk->columns[dst_col_idx_].getValue(row));
+                if (start == INVALID_VERTEX_ID || end == INVALID_VERTEX_ID)
+                    continue;
+
+                std::unordered_map<VertexId, int> dist;
+                std::unordered_map<VertexId, std::vector<ParentLink>> parents;
+                std::vector<VertexId> frontier{start};
+                dist.emplace(start, 0);
+                bool found = false;
+                int found_depth = -1;
+
+                if (start == end && min_hops_ <= 0) {
+                    found = true;
+                    found_depth = 0;
+                }
+
+                int depth = 0;
+                while (!frontier.empty() && !found) {
+                    ++depth;
+                    if (max_hops_ >= 0 && depth > max_hops_)
+                        break;
+                    std::vector<VertexId> next;
+                    for (VertexId v : frontier) {
+                        if (cancelled())
+                            co_return;
+                        auto edges = co_await scanAll(v);
+                        for (const auto& e : edges) {
+                            VertexId to = e.neighbor_id;
+                            if (to == v)
+                                continue;
+                            auto [it, inserted] = dist.emplace(to, depth);
+                            if (inserted)
+                                next.push_back(to);
+                            if (it->second == depth) {
+                                parents[to].push_back(ParentLink{v, to, e.edge_id, e.edge_label_id, e.seq});
+                            }
+                        }
+                    }
+                    if (dist.count(end) != 0 && depth >= min_hops_) {
+                        found = true;
+                        found_depth = depth;
+                        break;
+                    }
+                    frontier = std::move(next);
+                }
+                if (!found)
+                    continue;
+
+                auto make_path = [&](const std::vector<ParentLink>& links) {
+                    PathValue pv;
+                    VertexValue sv;
+                    sv.id = start;
+                    pv.elements.push_back(ValueStorage{Value(mk<VertexValue>(std::move(sv)))});
+                    VertexId cur = start;
+                    for (const auto& link : links) {
+                        EdgeValue ev;
+                        ev.id = link.edge_id;
+                        ev.label_id = link.edge_label_id;
+                        ev.src_id = link.from;
+                        ev.dst_id = link.to;
+                        ev.seq = link.seq;
+                        pv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(std::move(ev)))});
+                        VertexValue nv;
+                        nv.id = link.to;
+                        pv.elements.push_back(ValueStorage{Value(mk<VertexValue>(std::move(nv)))});
+                        cur = link.to;
+                    }
+                    (void)cur;
+                    return pv;
+                };
+
+                if (found_depth == 0) {
+                    pending.emplace_back(row, make_path({}));
+                } else if (!all_shortest_paths_) {
+                    std::vector<ParentLink> links;
+                    VertexId cur = end;
+                    while (cur != start) {
+                        auto it = parents.find(cur);
+                        if (it == parents.end() || it->second.empty())
+                            break;
+                        links.push_back(it->second.front());
+                        cur = it->second.front().from;
+                    }
+                    std::reverse(links.begin(), links.end());
+                    if (cur == start)
+                        pending.emplace_back(row, make_path(links));
+                } else {
+                    std::vector<ParentLink> links;
+                    size_t produced = 0;
+                    std::function<bool(VertexId)> dfs = [&](VertexId v) -> bool {
+                        if (v == start) {
+                            std::vector<ParentLink> ordered(links.rbegin(), links.rend());
+                            pending.emplace_back(row, make_path(ordered));
+                            if (++produced > MAX_PATHS)
+                                throw std::runtime_error("MemoryLimitExceeded: too many shortest paths");
+                            return true;
+                        }
+                        auto it = parents.find(v);
+                        if (it == parents.end())
+                            return true;
+                        for (const auto& link : it->second) {
+                            links.push_back(link);
+                            if (!dfs(link.from))
+                                return false;
+                            links.pop_back();
+                        }
+                        return true;
+                    };
+                    dfs(end);
+                }
+                if (pending.size() >= DataChunk::DEFAULT_CAPACITY) {
+                    auto output = flush();
+                    co_yield std::move(output);
+                }
+            }
+            if (!pending.empty()) {
+                auto output = flush();
+                co_yield std::move(output);
+            }
+        }
+        co_return;
+    }
 
     while (auto chunk = co_await child_gen.next()) {
         const size_t input_rows = chunk->numRows();

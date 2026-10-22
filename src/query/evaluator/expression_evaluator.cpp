@@ -122,6 +122,10 @@ ExpressionEvaluator::EvalResult ExpressionEvaluator::evaluateInternal(const bind
                 auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
                 evalListComprehension(*val, input, col, count);
                 return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
+                auto& col = acquireTempColumn(val->result_type.kind, count);
+                evalReduce(*val, input, col, count);
+                return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
                 // column_rewrite must have replaced this placeholder with a
                 // BoundColumnRef to the precomputed list column. Reaching here

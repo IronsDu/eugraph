@@ -36,6 +36,10 @@ struct BoundVarLenExpandOp {
     std::string path_variable;
     uint32_t path_column_index = 0;
     bool path_handled_by_varlen = false;
+    /// shortestPath / allShortestPaths: VLE physical operator runs BFS instead
+    /// of enumerating every variable-length path.
+    bool shortest_path = false;
+    bool all_shortest_paths = false;
     // P2: named edge variable ([e:KNOWS*2]) → LIST<EDGE>
     std::string edge_variable;
     uint32_t edge_column_index = 0;

@@ -218,6 +218,7 @@ add_library(eugraph_query_engine STATIC
     src/query/evaluator/expr/eval_subscript.cpp
     src/query/evaluator/expr/eval_slice.cpp
     src/query/evaluator/expr/eval_list_comprehension.cpp
+    src/query/evaluator/expr/eval_reduce.cpp
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/query/physical_plan/operator/projection_extract_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp

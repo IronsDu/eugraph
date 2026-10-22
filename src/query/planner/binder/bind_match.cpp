@@ -410,6 +410,97 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     std::optional<BoundLogicalOperator> current;
     std::vector<std::string> match_edge_vars;
 
+    auto bindConstantHops = [&](const cypher::Expression& expr, int64_t& out) -> bool {
+        auto bound = bindExpression(expr);
+        if (!bound || !std::holds_alternative<BoundLiteral>(*bound))
+            return false;
+        const auto& lit = std::get<BoundLiteral>(*bound);
+        if (auto* i = std::get_if<int64_t>(&lit.value)) {
+            out = *i;
+            return true;
+        }
+        return false;
+    };
+
+    auto bindShortestPathPart = [&](const cypher::PatternPart& pp,
+                                    std::optional<BoundLogicalOperator> child) -> std::optional<BoundLogicalOperator> {
+        if (pp.element.chain.size() != 1) {
+            error("SyntaxError: shortestPath requires exactly one relationship");
+            return std::nullopt;
+        }
+        const auto& start_node = pp.element.node;
+        const auto& [rel, end_node] = pp.element.chain.front();
+        if (!start_node.variable.has_value() || !end_node.variable.has_value()) {
+            error("SyntaxError: shortestPath endpoints must be named");
+            return std::nullopt;
+        }
+        const std::string start_name = *start_node.variable;
+        const std::string end_name = *end_node.variable;
+        const bool start_bound = ctx_.lookup(start_name) != nullptr;
+        const bool end_bound = ctx_.lookup(end_name) != nullptr;
+
+        if (!start_bound && !end_bound) {
+            cypher::MatchClause endpoints;
+            endpoints.optional = false;
+            cypher::PatternPart sp;
+            sp.element.node = cloneNodePattern(start_node);
+            cypher::PatternPart ep;
+            ep.element.node = cloneNodePattern(end_node);
+            endpoints.patterns.push_back(std::move(sp));
+            endpoints.patterns.push_back(std::move(ep));
+            auto endpoint_plan = bindMatch(endpoints, std::nullopt, /*skip_where=*/true, false);
+            if (!endpoint_plan)
+                return std::nullopt;
+            if (child.has_value()) {
+                error("SyntaxError: shortestPath with fresh endpoints cannot follow an existing pattern");
+                return std::nullopt;
+            }
+            child = std::move(*endpoint_plan);
+        } else if (!start_bound || !end_bound) {
+            error("SyntaxError: shortestPath endpoints must both be bound or both fresh");
+            return std::nullopt;
+        }
+        if (!child.has_value()) {
+            error("SyntaxError: shortestPath has no input row");
+            return std::nullopt;
+        }
+
+        const auto* start_info = ctx_.lookup(start_name);
+        const auto* end_info = ctx_.lookup(end_name);
+        if (!start_info || !end_info)
+            return std::nullopt;
+
+        auto vle = std::make_unique<BoundVarLenExpandOp>();
+        vle->src_variable = start_name;
+        vle->src_column_index = start_info->column_index;
+        vle->dst_variable = end_name;
+        vle->dst_column_index = end_info->column_index;
+        vle->dst_slot_id = end_info->slot_id;
+        vle->direction = rel.direction;
+        vle->edge_label_ids = catalog_.resolveEdgeLabelIds(normalizeRelationshipTypes(rel.rel_types));
+        vle->min_hops = 1;
+        vle->max_hops = -1;
+        if (rel.range.has_value()) {
+            if (!bindConstantHops(rel.range->first, vle->min_hops) ||
+                !bindConstantHops(rel.range->second, vle->max_hops))
+                return std::nullopt;
+        }
+        vle->shortest_path = pp.search == cypher::PathSearchMode::SHORTEST;
+        vle->all_shortest_paths = pp.search == cypher::PathSearchMode::ALL_SHORTEST;
+        vle->child = std::move(*child);
+
+        if (pp.variable.has_value()) {
+            const uint32_t path_col = nextColumnIndex();
+            ColumnInfo path_info = makeColumnInfo(*pp.variable, BoundType::Path());
+            path_info.column_index = path_col;
+            ctx_.symbols[*pp.variable] = std::move(path_info);
+            vle->path_variable = *pp.variable;
+            vle->path_column_index = path_col;
+            vle->path_handled_by_varlen = true;
+        }
+        return BoundLogicalOperator(std::move(vle));
+    };
+
     for (size_t pi = 0; pi < match.patterns.size(); ++pi) {
         const auto& pp = match.patterns[pi];
         const auto& element = pp.element;
@@ -417,6 +508,18 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         // For patterns after the first, join with previous via cross product
         std::optional<BoundLogicalOperator> previous = std::move(current);
         current = std::nullopt;
+
+        if (pp.search != cypher::PathSearchMode::NONE) {
+            std::optional<BoundLogicalOperator> child;
+            if (previous.has_value())
+                child = std::move(*previous);
+            else if (pi == 0 && parent.has_value())
+                child = std::move(*parent);
+            current = bindShortestPathPart(pp, std::move(child));
+            if (!current)
+                return std::nullopt;
+            continue;
+        }
 
         // A later pattern part whose start node is already bound in the
         // current plan is a correlated continuation: reuse the existing

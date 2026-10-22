@@ -1,4 +1,5 @@
 #include "query/planner/binder.hpp"
+#include "query/planner/bound_expression/bound_reduce_expr.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -65,6 +66,9 @@ bool containsAggregateCall(const cypher::Expression& expr) {
                     return true;
                 if (ptr->where_pred && containsAggregateCall(*ptr->where_pred))
                     return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                return containsAggregateCall(ptr->init) || containsAggregateCall(ptr->list_expr) ||
+                       containsAggregateCall(ptr->expr);
             } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
                 if (containsAggregateCall(ptr->list_expr))
                     return true;
@@ -753,6 +757,46 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 }
                 bm->result_type = BoundType::Map(BoundType::String(), std::move(merged_value_type));
                 return BoundExpression(std::move(bm));
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                auto init = bindExpression(ptr->init);
+                if (!init)
+                    return std::nullopt;
+                auto list_expr = bindExpression(ptr->list_expr);
+                if (!list_expr)
+                    return std::nullopt;
+
+                const BoundType& init_type = getBoundExprType(*init);
+                const BoundType& list_type = getBoundExprType(*list_expr);
+                BoundType elem_type = (list_type.kind == BoundTypeKind::LIST && list_type.element_type)
+                                          ? BoundType::clone(*list_type.element_type)
+                                          : BoundType::Any();
+
+                const uint32_t acc_col = nextColumnIndex();
+                const uint32_t loop_col = nextColumnIndex();
+                auto saved = ctx_.save();
+                {
+                    ColumnInfo acc_info = makeColumnInfo(ptr->accumulator, BoundType::clone(init_type));
+                    acc_info.column_index = acc_col;
+                    ctx_.symbols[ptr->accumulator] = std::move(acc_info);
+                    ColumnInfo elem_info = makeColumnInfo(ptr->variable, std::move(elem_type));
+                    elem_info.column_index = loop_col;
+                    ctx_.symbols[ptr->variable] = std::move(elem_info);
+                }
+                auto body = bindExpression(ptr->expr);
+                ctx_.restore(saved);
+                if (!body)
+                    return std::nullopt;
+
+                auto r = std::make_unique<BoundReduceExpr>();
+                r->accumulator = ptr->accumulator;
+                r->accumulator_column_index = acc_col;
+                r->variable = ptr->variable;
+                r->loop_column_index = loop_col;
+                r->init = std::move(*init);
+                r->list_expr = std::move(*list_expr);
+                r->expr = std::move(*body);
+                r->result_type = BoundType::clone(init_type);
+                return BoundExpression(std::move(r));
             } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
                 // openCypher forbids aggregate calls inside the row-wise parts of a
                 // list comprehension (WHERE filter and projection). Aggregates are

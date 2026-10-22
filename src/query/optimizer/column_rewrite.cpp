@@ -381,6 +381,8 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v) {
+                    if (!v->path_variable.empty())
+                        ensureSlot(name_to_slot, alloc, v->path_variable);
                     if (!v->edge_variable.empty()) {
                         binder::SlotId sid = ensureSlot(name_to_slot, alloc, v->edge_variable);
                         if (v->edge_slot_id == binder::INVALID_SLOT_ID)
