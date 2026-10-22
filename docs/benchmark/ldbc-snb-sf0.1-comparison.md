@@ -295,7 +295,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 查询 | 原因 |
 |---|---|
-| complex-14 | 已支持 reduce body 内的相关 pattern comprehension（见 §13.3）；尚未纳入本轮同机 A/B |
+| complex-14 | **仍未跑通**：`reduce` body 内相关 PC 已支持，但 complex-14 的 PC 位于 **reduce.list_expr**、外层还有 list comprehension；实际绑定报 `BoundPatternComprehension reached evaluator`（见 §13.3） |
 | complex-6 / complex-9 | 早前轮次 eugraph 可执行（0.49 s / 3.96 s）；本轮为控制耗时未跑，neo4j 侧为 31 / 37 ms |
 
 ## 4. 测量陷阱（复现前务必先读）
@@ -314,7 +314,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 | 语句 | 缺口 | 方案 |
 |------|------|------|
-| complex-14 | ✅ 已实现（2026-10-22）：reduce body 内的相关 pattern comprehension 按元素预计算为列表列，body 用 `list[index]` 读取；见 §13.3 | — |
+| complex-14 | ❌ 仍未跑通：reduce body 内相关 PC 已支持，但 complex-14 的 PC 在 reduce.list_expr 且外层是 list comprehension；当前 lowering 未覆盖该组合 | 扩展 list-comprehension lowering，使 PC-as-list-expr 按外层元素预计算并替换 list_expr |
 
 ### 5.2 complex-5：已修复（2026-10-21）
 
@@ -800,7 +800,7 @@ complex-5 在 §11 的 8 条之外，之前因 CPU 不收敛被列为不可用�
 | complex-1/13 | ✅ 正常结束（shortestPath，见 §13） |
 | complex-2/3/4/6/7/8/9/10/11/12 | ✅ 正常结束 |
 | **complex-5** | ✅ 修复后正常结束（20 行；min 475.56 ms，见 §11.4） |
-| complex-14 | ✅ 语法/求值已支持（reduce body 内相关 pattern comprehension，见 §13.3；未在本轮 sf0.1 复跑） |
+| complex-14 | ❌ 仍未跑通（PC 在 reduce.list_expr + 外层 list comprehension，见 §13.3） |
 | update-1..8 | ✅ 全部正常结束（update-1 的 `s[0]` 绑定、update-6/7 的多标签 `id` 已修） |
 | 4G cgroup 下 | 无 OOM；无 CPU 失控（complex-5 修复后） |
 
@@ -854,8 +854,8 @@ update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义�
 
 | 查询 | 参数 | 行数 | min / p50 |
 |---|---|---:|---:|
-| complex-1 | personId=933, firstName=Jose | 20 | **65.1 / 66.5 ms** |
-| complex-13 | person1Id=933, person2Id=1129 | 1（length=3） | **13.4 / 13.8 ms** |
+| complex-1 | personId=933, firstName=Jose | 20 | **20.5 / 21.1 ms** |
+| complex-13 | person1Id=933, person2Id=1129 | 1（length=3） | **4.4 / 4.6 ms** |
 | allShortestPaths（简化） | 933 → 1129 | 4 条 length=3 | 正常结束 |
 | reduce 基础 | `reduce(w=0, x IN [1,2,3] \| w+x)` | 6 | 正常结束 |
 
@@ -864,33 +864,38 @@ update-1/6/7 原先分别因 `s[0]` 绑定、`Post:Message` 共享 `id` 歧义�
 > complex-1 的 `friendEmails` / `friendLanguages` 为 null 是本地 loader 的属性名差异，
 > 与 shortestPath 无关。
 
-### 13.3 complex-14：reduce body 内相关 pattern comprehension（2026-10-22 已支持）
+### 13.3 complex-14：仍未跑通（2026-10-22 复测）
 
-complex-14 的 reduce body 含有依赖当前 list 元素 `r` 的 pattern comprehension：
+用户更新在 reduce **body** 内相关 pattern comprehension 上已经有效（对应的单元测试通过），但
+实际 complex-14 的形状更深一层：
 
 ```cypher
-[(a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
- WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) OR ...
- | 1.0]
+MATCH path = allShortestPaths((person1)-[:KNOWS*0..]-(person2))
+...
+WITH [r IN rels_in_path |
+        reduce(w=0.0, v IN [
+          (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
+          WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) OR ...
+          | 1.0] | w+v)
+     ] AS weight1
 ```
 
-clause 级 hoist 无法处理它（`r` 在 reduce 求值时才存在）。实现方式：
+这里的 PC 是 **reduce.list_expr**，且外层还有一层 `[r IN rels_in_path | ...]` list comprehension；
+当前 lowering 只覆盖“PC 在 reduce body 中、通过 UNWIND reduce.list_expr 逐元素求值”的形状。
+实际 Release 实测仍报：
 
-1. 在绑定 RETURN/WITH 前扫描 reduce body 中的 pattern comprehension；
-2. 对每个这样的 PC，用 `UNWIND reduce.list_expr AS x` + PCApply + `collect` 构造一个
-   **与 list 元素一一对齐的列表列**（与 list-comprehension 的 lowering 同一套机制）；
-3. reduce body 中该 PC 被重写为 `pc_list[index]`；evaluator 在逐元素求值时提供 0-based
-   `index` 临时列；
-4. reduce 的 accumulator/loop/index 临时列通过 slot 重映射注入，避免与输入列（含 PC 列表列）
-   的列号冲突。
+```
+ExecutionFailed: BoundPatternComprehension reached evaluator — must be rewritten to BoundColumnRef
+```
 
-限制：PC 不能引用 accumulator（否则必须先知道 fold 中间值，当前 lowering 不支持）；
-嵌套 reduce body 内的 PC 需要 outer loop 变量时也会被拒绝/留待后续。
+所以 complex-14 **还不能运行**；`allShortestPaths` 与 `reduce` 基础、以及 reduce body 内的 PC 均可用，
+但仍需扩展 list-comprehension 的 lowering：在外层 `r` 的作用域内先把 PC 求成列表列，再把 inner
+reduce 的 list_expr 替换为该列。
 
-验证：新增 `QueryExecutorTest.ReduceBodyCorrelatedPatternComprehension`（多跳
-`Person <- HAS_CREATOR - Comment - REPLY_OF -> Post - HAS_CREATOR -> Person`，期望 0.5），
-debug `query_executor_tests` 全量 583/583 通过。
+### 13.4 验证
 
+- 本轮按当前分支重编 Release 并实测 complex-1/13/14（见 §13.2/§13.3）；
+- complex-14 仍失败，因此没有把它加入耗时表。
 ### 13.4 验证
 
 - 新增测试：`ReduceExpression`、`ShortestPathBoundEndpoints`、`AllShortestPathsBoundEndpoints`；
