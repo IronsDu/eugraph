@@ -79,9 +79,22 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             const auto& held = std::get<VertexValuePtr>(ov);
             if (!held)
                 continue;
-            const auto& vertex = *held;
+            auto& vertex = *held;
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
+            // Bare path vertices (shortest-path BFS) only carry the internal
+            // id; load the concrete labels/properties before resolving n.id.
+            if (vertex.properties.empty() && eval_ctx_.store) {
+                auto labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
+                if (!labels.empty()) {
+                    vertex.labels = labels;
+                    for (auto lid : labels) {
+                        auto props = folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
+                        if (props)
+                            vertex.properties[lid] = std::move(*props);
+                    }
+                }
+            }
             std::vector<Value> found;
             for (const auto& candidate : ref.candidates) {
                 auto lit = vertex.properties.find(candidate.label_id);

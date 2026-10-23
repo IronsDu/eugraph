@@ -247,6 +247,14 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitShortestPathPattern(CypherParser::ShortestPathPatternContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitAllShortestPathsPattern(CypherParser::AllShortestPathsPatternContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitPatternElem(CypherParser::PatternElemContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -316,6 +324,10 @@ public:
   }
 
   virtual std::any visitListComprehension(CypherParser::ListComprehensionContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitReduceExpression(CypherParser::ReduceExpressionContext *ctx) override {
     return visitChildren(ctx);
   }
 

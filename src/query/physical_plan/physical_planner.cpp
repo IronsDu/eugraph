@@ -21,6 +21,7 @@
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
+#include "query/physical_plan/operator/shortest_path_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/union_physical_op.hpp"
 #include "query/physical_plan/operator/unwind_physical_op.hpp"
@@ -2458,6 +2459,18 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                "' not found in child schema");
                     }
 
+                    if (v.shortest_path || v.all_shortest_paths) {
+                        auto result = std::make_unique<ShortestPathPhysicalOp>(
+                            v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops,
+                            v.max_hops, store, std::move(child_schema), std::move(child_op), v.path_variable,
+                            v.path_slot_id, v.all_shortest_paths, v.dst_label_ids, v.dst_label_missing,
+                            v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value);
+                        auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                              std::move(output_types), TupleSlotLayout{}};
+                        plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+                        return plan_result;
+                    }
+
                     auto result = std::make_unique<VarLenExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops, v.max_hops,
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
@@ -3030,7 +3043,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::move(v.list_expr), unwind_col_index, binder::BoundType::Any(), std::move(child_schema),
                         std::vector<binder::BoundType>(output_types), std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
-                    TupleSlotLayout unwind_layout = makeSlotLayout(output_schema, ctx);
+                    TupleSlotLayout unwind_layout = cr.slot_layout;
+                    if (v.variable_slot_id != binder::INVALID_SLOT_ID)
+                        unwind_layout.append(v.variable_slot_id);
+                    else
+                        unwind_layout.append(ctx.slot_allocator.next());
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(unwind_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundForeachOp>) {
@@ -3352,9 +3369,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         out_layout.append(out.slot_id);
                     }
 
+                    std::vector<binder::SlotId> output_slots;
+                    output_slots.reserve(v.outputs.size());
+                    for (const auto& out : v.outputs)
+                        output_slots.push_back(out.slot_id);
                     auto result = std::make_unique<PatternComprehensionApplyPhysicalOp>(
                         std::move(lr.op), std::move(rr.op), correlated, std::move(left_corr_cols),
                         std::move(list_elem_types));
+                    result->setOutputSlots(std::move(output_slots));
                     // Existence-derived comprehensions (`NOT (a)-[:R]-(b)`,
                     // `EXISTS { ... }`, `WHERE (a)-->(b)`) are consumed only as
                     // `size(list) > 0`, so the operator may stop at the first

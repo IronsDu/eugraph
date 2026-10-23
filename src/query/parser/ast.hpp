@@ -24,6 +24,7 @@ struct ListExpr;
 struct MapExpr;
 struct CaseExpr;
 struct ListComprehension;
+struct ReduceExpr;
 struct PatternComprehension;
 struct SubscriptExpr;
 struct SliceExpr;
@@ -38,14 +39,13 @@ struct ParenExpr;
 // ==================== Expression ====================
 // 递归类型用 unique_ptr 包装
 
-using Expression =
-    std::variant<std::unique_ptr<Literal>, std::unique_ptr<Variable>, std::unique_ptr<Parameter>,
-                 std::unique_ptr<BinaryOp>, std::unique_ptr<UnaryOp>, std::unique_ptr<FunctionCall>,
-                 std::unique_ptr<PropertyAccess>, std::unique_ptr<LabelCastExpr>, std::unique_ptr<ListExpr>,
-                 std::unique_ptr<MapExpr>, std::unique_ptr<CaseExpr>, std::unique_ptr<ListComprehension>,
-                 std::unique_ptr<PatternComprehension>, std::unique_ptr<SubscriptExpr>, std::unique_ptr<SliceExpr>,
-                 std::unique_ptr<ExistsExpr>, std::unique_ptr<AllExpr>, std::unique_ptr<AnyExpr>,
-                 std::unique_ptr<NoneExpr>, std::unique_ptr<SingleExpr>, std::unique_ptr<ParenExpr>>;
+using Expression = std::variant<
+    std::unique_ptr<Literal>, std::unique_ptr<Variable>, std::unique_ptr<Parameter>, std::unique_ptr<BinaryOp>,
+    std::unique_ptr<UnaryOp>, std::unique_ptr<FunctionCall>, std::unique_ptr<PropertyAccess>,
+    std::unique_ptr<LabelCastExpr>, std::unique_ptr<ListExpr>, std::unique_ptr<MapExpr>, std::unique_ptr<CaseExpr>,
+    std::unique_ptr<ListComprehension>, std::unique_ptr<ReduceExpr>, std::unique_ptr<PatternComprehension>,
+    std::unique_ptr<SubscriptExpr>, std::unique_ptr<SliceExpr>, std::unique_ptr<ExistsExpr>, std::unique_ptr<AllExpr>,
+    std::unique_ptr<AnyExpr>, std::unique_ptr<NoneExpr>, std::unique_ptr<SingleExpr>, std::unique_ptr<ParenExpr>>;
 
 // ==================== Literal ====================
 
@@ -172,6 +172,15 @@ struct ListComprehension {
     std::optional<Expression> projection;
 };
 
+/// reduce(acc = init, x IN list | expr)
+struct ReduceExpr {
+    std::string accumulator;
+    Expression init;
+    std::string variable;
+    Expression list_expr;
+    Expression expr;
+};
+
 // ==================== PatternComprehension ====================
 // 前向声明 PatternPart
 
@@ -273,9 +282,16 @@ struct PatternElement {
     std::vector<std::pair<RelationshipPattern, NodePattern>> chain;
 };
 
+enum class PathSearchMode {
+    NONE,
+    SHORTEST,
+    ALL_SHORTEST
+};
+
 struct PatternPart {
     std::optional<std::string> variable; // named path: p = (a)-->(b)
     PatternElement element;
+    PathSearchMode search = PathSearchMode::NONE;
 };
 
 // ==================== Clause ====================

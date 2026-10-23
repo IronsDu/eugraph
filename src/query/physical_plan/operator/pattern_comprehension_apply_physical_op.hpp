@@ -49,6 +49,14 @@ public:
     void setExistenceOnly(bool v) {
         existence_only_ = v;
     }
+
+    /// Slot ids of the appended LIST columns, in output order. deriveOutputLayout
+    /// must append them after the left layout; otherwise downstream
+    /// BoundColumnRefs to a PC output cannot resolve through the slot layout
+    /// and fall back to a stale binder column index.
+    void setOutputSlots(std::vector<binder::SlotId> slots) {
+        output_slots_ = std::move(slots);
+    }
     bool existenceOnly() const {
         return existence_only_;
     }
@@ -59,6 +67,7 @@ private:
     CorrelatedSourcePhysicalOp* correlated_source_;
     std::vector<uint32_t> left_correlation_cols_;
     std::vector<binder::BoundType> list_element_types_;
+    std::vector<binder::SlotId> output_slots_;
     /// See setExistenceOnly(). The emitted list is then an empty placeholder:
     /// only its emptiness is observable, and every upstream consumer reads it
     /// through the synthesised `size(list) > 0` predicate.

@@ -29,6 +29,7 @@ struct BoundAnyExpr;
 struct BoundNoneExpr;
 struct BoundSingleExpr;
 struct BoundListComprehension;
+struct BoundReduceExpr;
 struct BoundPatternComprehension;
 
 using BoundExpression =
@@ -38,7 +39,8 @@ using BoundExpression =
                  std::unique_ptr<BoundFunctionCall>, std::unique_ptr<BoundList>, std::unique_ptr<BoundMap>,
                  std::unique_ptr<BoundCase>, std::unique_ptr<BoundSubscript>, std::unique_ptr<BoundSlice>,
                  std::unique_ptr<BoundAllExpr>, std::unique_ptr<BoundAnyExpr>, std::unique_ptr<BoundNoneExpr>,
-                 std::unique_ptr<BoundSingleExpr>, std::unique_ptr<BoundListComprehension>, BoundPatternComprehension>;
+                 std::unique_ptr<BoundSingleExpr>, std::unique_ptr<BoundListComprehension>,
+                 std::unique_ptr<BoundReduceExpr>, BoundPatternComprehension>;
 
 } // namespace binder
 } // namespace eugraph

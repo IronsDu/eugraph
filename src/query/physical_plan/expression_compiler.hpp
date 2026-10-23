@@ -100,6 +100,17 @@ private:
                     compile(*val->where_pred);
                 compile(val->projection);
             }
+        } else if constexpr (std::is_same_v<Type, std::unique_ptr<binder::BoundReduceExpr>>) {
+            // The body may contain a precomputed per-element pattern
+            // comprehension column (`list[index]`); its list ref is a normal
+            // BoundColumnRef and must be resolved against the outer layout.
+            // acc/loop/index refs are temp columns, so getColumnIndex returns
+            // -1 for their slots and their bind-time indices are preserved.
+            if (val) {
+                compile(val->init);
+                compile(val->list_expr);
+                compile(val->expr);
+            }
         } else if constexpr (std::is_same_v<Type, std::unique_ptr<binder::BoundList>>) {
             if (val) {
                 for (auto& elem : val->elements)

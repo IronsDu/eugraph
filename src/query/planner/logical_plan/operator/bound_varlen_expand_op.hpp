@@ -35,7 +35,13 @@ struct BoundVarLenExpandOp {
     // P1: named path variable (p = (a)-[*1..3]->(b))
     std::string path_variable;
     uint32_t path_column_index = 0;
+    SlotId path_slot_id = INVALID_SLOT_ID;
     bool path_handled_by_varlen = false;
+    /// shortestPath / allShortestPaths planner hint. The physical planner
+    /// emits ShortestPathPhysicalOp for these; VarLenExpandPhysicalOp only
+    /// handles ordinary variable-length enumeration.
+    bool shortest_path = false;
+    bool all_shortest_paths = false;
     // P2: named edge variable ([e:KNOWS*2]) → LIST<EDGE>
     std::string edge_variable;
     uint32_t edge_column_index = 0;

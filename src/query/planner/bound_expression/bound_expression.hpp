@@ -13,6 +13,7 @@
 #include "query/planner/bound_expression/bound_parameter.hpp"
 #include "query/planner/bound_expression/bound_property_ref.hpp"
 #include "query/planner/bound_expression/bound_quantifier_expr.hpp"
+#include "query/planner/bound_expression/bound_reduce_expr.hpp"
 #include "query/planner/bound_expression/bound_slice.hpp"
 #include "query/planner/bound_expression/bound_subscript.hpp"
 #include "query/planner/bound_expression/bound_unary_op.hpp"
@@ -63,6 +64,8 @@ inline const BoundType& getBoundExprType(const BoundExpression& expr) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSingleExpr>>) {
                 return val->result_type;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundListComprehension>>) {
+                return val->result_type;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundReduceExpr>>) {
                 return val->result_type;
             } else if constexpr (std::is_same_v<T, BoundPatternComprehension>) {
                 return val.result_type;

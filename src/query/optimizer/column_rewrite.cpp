@@ -218,6 +218,12 @@ template <typename ExprRef, typename Visit> void forEachSubExpr(ExprRef&& expr, 
                     if (val->to)
                         visit(*val->to);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
+                if (val) {
+                    visit(val->init);
+                    visit(val->list_expr);
+                    visit(val->expr);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
@@ -381,6 +387,8 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v) {
+                    if (!v->path_variable.empty())
+                        ensureSlot(name_to_slot, alloc, v->path_variable);
                     if (!v->edge_variable.empty()) {
                         binder::SlotId sid = ensureSlot(name_to_slot, alloc, v->edge_variable);
                         if (v->edge_slot_id == binder::INVALID_SLOT_ID)

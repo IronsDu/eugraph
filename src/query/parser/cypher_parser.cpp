@@ -762,6 +762,8 @@ private:
             return makeFunctionCall("count", {}, false);
         if (ctx->listComprehension())
             return buildListComprehension(ctx->listComprehension());
+        if (ctx->reduceExpression())
+            return buildReduceExpr(ctx->reduceExpression());
         if (ctx->patternComprehension())
             return buildPatternComprehension(ctx->patternComprehension());
         if (ctx->filterWith())
@@ -895,6 +897,19 @@ private:
         return Expression(std::move(c));
     }
 
+    Expression buildReduceExpr(AP::ReduceExpressionContext* ctx) {
+        auto r = std::make_unique<ReduceExpr>();
+        auto syms = ctx->symbol();
+        if (syms.size() < 2)
+            return Expression(std::make_unique<Literal>());
+        r->accumulator = syms[0]->getText();
+        r->init = buildExpression(ctx->expression(0));
+        r->variable = syms[1]->getText();
+        r->list_expr = buildExpression(ctx->expression(1));
+        r->expr = buildExpression(ctx->expression(2));
+        return Expression(std::move(r));
+    }
+
     Expression buildListComprehension(AP::ListComprehensionContext* ctx) {
         auto lc = std::make_unique<ListComprehension>();
         auto fe = ctx->filterExpression();
@@ -1007,7 +1022,15 @@ private:
         PatternPart pp;
         if (ctx->symbol() && ctx->ASSIGN())
             pp.variable = ctx->symbol()->getText();
-        pp.element = buildPatternElem(ctx->patternElem());
+        if (ctx->shortestPathPattern()) {
+            pp.search = PathSearchMode::SHORTEST;
+            pp.element = buildPatternElem(ctx->shortestPathPattern()->patternElem());
+        } else if (ctx->allShortestPathsPattern()) {
+            pp.search = PathSearchMode::ALL_SHORTEST;
+            pp.element = buildPatternElem(ctx->allShortestPathsPattern()->patternElem());
+        } else {
+            pp.element = buildPatternElem(ctx->patternElem());
+        }
         return pp;
     }
 

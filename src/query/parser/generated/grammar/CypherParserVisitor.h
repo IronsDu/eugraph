@@ -135,6 +135,10 @@ public:
 
     virtual std::any visitPatternPart(CypherParser::PatternPartContext *context) = 0;
 
+    virtual std::any visitShortestPathPattern(CypherParser::ShortestPathPatternContext *context) = 0;
+
+    virtual std::any visitAllShortestPathsPattern(CypherParser::AllShortestPathsPatternContext *context) = 0;
+
     virtual std::any visitPatternElem(CypherParser::PatternElemContext *context) = 0;
 
     virtual std::any visitPatternElemChain(CypherParser::PatternElemChainContext *context) = 0;
@@ -170,6 +174,8 @@ public:
     virtual std::any visitRelationshipsChainPattern(CypherParser::RelationshipsChainPatternContext *context) = 0;
 
     virtual std::any visitListComprehension(CypherParser::ListComprehensionContext *context) = 0;
+
+    virtual std::any visitReduceExpression(CypherParser::ReduceExpressionContext *context) = 0;
 
     virtual std::any visitFilterExpression(CypherParser::FilterExpressionContext *context) = 0;
 

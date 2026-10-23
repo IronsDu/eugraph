@@ -487,6 +487,7 @@ class PhysicalOperator {
 | `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | 输出 `VertexRef` / `EdgeKey` / `VertexRef` |
 | `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输出 `VertexRef` / `EdgeKey` / `VertexRef`（拓扑类型）。语义升级由 wrap 管线完成 |
 | `VarLenExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, Schema | DFS + 边唯一性。输出 `VertexRef`（dst）、`PathValue`（path 列）、`List<EdgeValue>`（edge list 列）。path 列内部已加载 labels |
+| `ShortestPathPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, direction, Schema | 独立于 VarLenExpand。`shortestPath` 双向 BFS；`allShortestPaths` 前向 BFS 枚举等长路径。输出 `PathValue` |
 | `ProjectionExtractPhysicalOp` | `IAsyncGraphDataStore&`, `ColumnSpec[]`, label 名映射 | 融合点/边属性抽取 + Project 语义。7 种 ColumnSpec：Passthrough / LoadVertexProp / LoadEdgeProp / LoadVertexLabels / LoadEdgeType / ConstructVertex / ConstructEdge。替代旧的 VertexPropertyExtract / EdgePropertyExtract / EdgePropertyRead 三个算子 |
 | `PathElementPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx` | 拓扑→语义升级：`PathTopology` → `PathValue`（加载元素属性和标签）。仅保留用于 PathBuild 路径，当前全量加载，待按需优化 |
 | `FilterPhysicalOp` | `BoundExpression` 谓词, Schema | DICTIONARY 共享 child buffer |

@@ -165,6 +165,14 @@ static cypher::Expression cloneAstExpression(const cypher::Expression& expr) {
                     out->where_pred = cloneAstExpression(*ptr->where_pred);
                 out->is_bare_predicate = ptr->is_bare_predicate;
                 return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                auto out = std::make_unique<cypher::ReduceExpr>();
+                out->accumulator = ptr->accumulator;
+                out->init = cloneAstExpression(ptr->init);
+                out->variable = ptr->variable;
+                out->list_expr = cloneAstExpression(ptr->list_expr);
+                out->expr = cloneAstExpression(ptr->expr);
+                return out;
             }
             return std::make_unique<cypher::Literal>();
         },
@@ -280,6 +288,10 @@ static bool expressionReferencesVariableImpl(const cypher::Expression& expr, con
                 if (ptr->where_pred && expressionReferencesVariableImpl(*ptr->where_pred, name))
                     return true;
                 return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                return expressionReferencesVariableImpl(ptr->init, name) ||
+                       expressionReferencesVariableImpl(ptr->list_expr, name) ||
+                       expressionReferencesVariableImpl(ptr->expr, name);
             } else {
                 return false;
             }
@@ -501,6 +513,10 @@ static bool patternPredicatesVariable(const cypher::Expression& expr, const std:
                         walk(*ptr->where_pred);
                     if (ptr->projection)
                         walk(*ptr->projection);
+                } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                    walk(ptr->init);
+                    walk(ptr->list_expr);
+                    walk(ptr->expr);
                 } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
                     // A pattern bound here (e.g. `x` in `[(x)-->(:Y) | 1]`) is a
                     // reference to the enclosing comprehension's loop variable.
@@ -575,6 +591,8 @@ static void collectPatternComprehensionsAST(const cypher::Expression& expr,
         [&](const auto& ptr) {
             using Elem = typename std::decay_t<decltype(ptr)>::element_type;
             if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                if (binder && binder->isReducePcLowered(ptr.get()))
+                    return;
                 out.push_back(ptr.get());
                 // The projection / where_pred could in turn contain nested
                 // pattern comprehensions; recurse to be safe.
@@ -636,6 +654,10 @@ static void collectPatternComprehensionsAST(const cypher::Expression& expr,
                     collectPatternComprehensionsAST(*ptr->where_pred, out, binder);
                 if (ptr->projection)
                     collectPatternComprehensionsAST(*ptr->projection, out, binder);
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                collectPatternComprehensionsAST(ptr->init, out, binder);
+                collectPatternComprehensionsAST(ptr->list_expr, out, binder);
+                collectPatternComprehensionsAST(ptr->expr, out, binder);
             }
         },
         expr);
@@ -795,6 +817,10 @@ static void patchPatternComprehensionPlaceholders(
                 if (ptr->where_pred)
                     patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map, binder);
                 patchPatternComprehensionPlaceholders(ptr->projection, patch_map, binder);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
+                patchPatternComprehensionPlaceholders(ptr->init, patch_map, binder);
+                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map, binder);
+                patchPatternComprehensionPlaceholders(ptr->expr, patch_map, binder);
             }
         },
         expr);
@@ -812,7 +838,8 @@ bool hoistPatternComprehensions(
     Binder& binder, BoundLogicalOperator& child, const std::vector<Item>& items,
     const std::vector<cypher::OrderBy::SortItem>* order_by_items,
     std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>&
-        patch_map) {
+        patch_map,
+    const std::vector<std::string>& preset_corr_vars = {}) {
     std::vector<const cypher::PatternComprehension*> pc_asts;
     for (const auto& item : items)
         collectPatternComprehensionsAST(item.expr, pc_asts, &binder);
@@ -839,7 +866,8 @@ bool hoistPatternComprehensions(
         binder::SlotId out_slot = binder::INVALID_SLOT_ID;
         std::string out_name;
         binder::BoundType out_elem_type;
-        auto apply_op = binder.bindPatternComprehension(*pc, std::move(child), corr, out_slot, out_name, out_elem_type);
+        auto apply_op = binder.bindPatternComprehension(*pc, std::move(child), corr, out_slot, out_name, out_elem_type,
+                                                        preset_corr_vars);
         if (!apply_op) {
             return false;
         }
@@ -1088,6 +1116,310 @@ static void collectAllVariables(const cypher::Expression& expr, std::set<std::st
         expr);
 }
 
+// Collect PatternComprehension nodes in a reduce body, stopping at a nested
+// reduce: the nested reduce owns its own loop variable and gets its own list
+// columns when it is lowered.
+static void collectPcsInReduceBody(const cypher::Expression& expr,
+                                   std::vector<const cypher::PatternComprehension*>& out) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return;
+            if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                out.push_back(ptr.get());
+                if (ptr->projection)
+                    collectPcsInReduceBody(*ptr->projection, out);
+                if (ptr->where_pred)
+                    collectPcsInReduceBody(*ptr->where_pred, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                // A nested reduce is lowered independently; its body may refer
+                // to the outer loop variable, which is not available here.
+                return;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                collectPcsInReduceBody(ptr->left, out);
+                collectPcsInReduceBody(ptr->right, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                collectPcsInReduceBody(ptr->operand, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                collectPcsInReduceBody(ptr->inner, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    collectPcsInReduceBody(arg, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                collectPcsInReduceBody(ptr->object, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                collectPcsInReduceBody(ptr->list, out);
+                collectPcsInReduceBody(ptr->index, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                collectPcsInReduceBody(ptr->list, out);
+                if (ptr->from)
+                    collectPcsInReduceBody(*ptr->from, out);
+                if (ptr->to)
+                    collectPcsInReduceBody(*ptr->to, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject)
+                    collectPcsInReduceBody(*ptr->subject, out);
+                for (const auto& [w, t] : ptr->when_thens) {
+                    collectPcsInReduceBody(w, out);
+                    collectPcsInReduceBody(t, out);
+                }
+                if (ptr->else_expr)
+                    collectPcsInReduceBody(*ptr->else_expr, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    collectPcsInReduceBody(e, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    collectPcsInReduceBody(v, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                collectPcsInReduceBody(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectPcsInReduceBody(*ptr->where_pred, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                collectPcsInReduceBody(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectPcsInReduceBody(*ptr->where_pred, out);
+                if (ptr->projection)
+                    collectPcsInReduceBody(*ptr->projection, out);
+            }
+        },
+        expr);
+}
+
+static void collectReduceExprs(const cypher::Expression& expr, std::vector<const cypher::ReduceExpr*>& out) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return;
+            if constexpr (std::is_same_v<Elem, cypher::ReduceExpr>) {
+                out.push_back(ptr.get());
+                collectReduceExprs(ptr->init, out);
+                collectReduceExprs(ptr->list_expr, out);
+                collectReduceExprs(ptr->expr, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                collectReduceExprs(ptr->left, out);
+                collectReduceExprs(ptr->right, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                collectReduceExprs(ptr->operand, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                collectReduceExprs(ptr->inner, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    collectReduceExprs(arg, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                collectReduceExprs(ptr->object, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                collectReduceExprs(ptr->list, out);
+                collectReduceExprs(ptr->index, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                collectReduceExprs(ptr->list, out);
+                if (ptr->from)
+                    collectReduceExprs(*ptr->from, out);
+                if (ptr->to)
+                    collectReduceExprs(*ptr->to, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject)
+                    collectReduceExprs(*ptr->subject, out);
+                for (const auto& [w, t] : ptr->when_thens) {
+                    collectReduceExprs(w, out);
+                    collectReduceExprs(t, out);
+                }
+                if (ptr->else_expr)
+                    collectReduceExprs(*ptr->else_expr, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    collectReduceExprs(e, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    collectReduceExprs(v, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                collectReduceExprs(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectReduceExprs(*ptr->where_pred, out);
+                if (ptr->projection)
+                    collectReduceExprs(*ptr->projection, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                if (ptr->projection)
+                    collectReduceExprs(*ptr->projection, out);
+                if (ptr->where_pred)
+                    collectReduceExprs(*ptr->where_pred, out);
+            }
+        },
+        expr);
+}
+
+bool Binder::lowerReducePatternComprehensions(BoundLogicalOperator& child,
+                                              const std::vector<const cypher::Expression*>& exprs) {
+    std::vector<const cypher::ReduceExpr*> reduces;
+    for (const auto* expr : exprs) {
+        if (expr)
+            collectReduceExprs(*expr, reduces);
+    }
+    for (const auto* reduce : reduces) {
+        std::vector<const cypher::PatternComprehension*> pcs;
+        collectPcsInReduceBody(reduce->expr, pcs);
+        for (const auto* pc : pcs) {
+            if (reduce_pc_lists_.count(pc))
+                continue;
+            SlotId slot = INVALID_SLOT_ID;
+            std::string name;
+            BoundType elem_type;
+            if (!lowerPatternComprehensionOverList(*reduce, *pc, child, slot, name, elem_type))
+                return false;
+            reduce_pc_lists_[pc] = ReducePcList{slot, std::move(name), std::move(elem_type)};
+        }
+    }
+    return true;
+}
+
+bool Binder::lowerPatternComprehensionOverList(const cypher::ReduceExpr& reduce, const cypher::PatternComprehension& pc,
+                                               BoundLogicalOperator& child, SlotId& out_slot, std::string& out_name,
+                                               BoundType& out_element_type) {
+    auto saved = ctx_.save();
+
+    // Variables from the enclosing row that the list expression or the
+    // pattern comprehension reads. The reduce loop variable is produced by the
+    // UNWIND below, so it must not be part of the outer correlated source.
+    std::set<std::string> outer_vars;
+    collectAllVariables(reduce.list_expr, outer_vars);
+    collectPatternVariables(pc.patterns, outer_vars);
+    if (pc.where_pred)
+        collectAllVariables(*pc.where_pred, outer_vars);
+    if (pc.projection)
+        collectAllVariables(*pc.projection, outer_vars);
+    outer_vars.erase(reduce.variable);
+    if (outer_vars.count(reduce.accumulator)) {
+        ctx_.restore(saved);
+        error("Unsupported: a pattern comprehension in a reduce body cannot reference the accumulator '" +
+              reduce.accumulator + "'");
+        return false;
+    }
+    // Pattern variables introduced by the comprehension itself are not outer
+    // correlations; only names already bound in the enclosing scope are.
+    for (auto it = outer_vars.begin(); it != outer_vars.end();) {
+        if (!saved.symbols.count(*it))
+            it = outer_vars.erase(it);
+        else
+            ++it;
+    }
+
+    ctx_.beginSubScope();
+    BoundCorrelatedSourceOp source;
+    std::vector<BoundPatternComprehensionApplyOp::Correlation> correlation;
+    uint32_t col = 0;
+    for (const auto& name : outer_vars) {
+        auto it = saved.symbols.find(name);
+        if (it == saved.symbols.end()) {
+            ctx_.restore(saved);
+            error("UndefinedVariable: Variable '" + name + "' not defined");
+            return false;
+        }
+        ColumnInfo ci = it->second;
+        ci.column_index = col++;
+        ci.slot_id = it->second.slot_id;
+        ctx_.symbols[name] = ci;
+
+        source.variables.push_back(name);
+        source.types.push_back(BoundType::clone(ci.type));
+        source.column_indices.push_back(ci.column_index);
+        source.slot_ids.push_back(ci.slot_id);
+        BoundPatternComprehensionApplyOp::Correlation corr;
+        corr.left_slot = ci.slot_id;
+        corr.right_slot = ci.slot_id;
+        corr.left_column = it->second.column_index;
+        corr.left_var = name;
+        correlation.push_back(std::move(corr));
+    }
+
+    auto bound_list = bindExpression(reduce.list_expr);
+    if (!bound_list) {
+        ctx_.restore(saved);
+        return false;
+    }
+    const BoundType& list_type = getBoundExprType(*bound_list);
+    BoundType elem_type = (list_type.kind == BoundTypeKind::LIST && list_type.element_type)
+                              ? BoundType::clone(*list_type.element_type)
+                              : BoundType::Any();
+    uint32_t var_col = nextColumnIndex();
+    ctx_.symbols[reduce.variable] = makeColumnInfo(reduce.variable, BoundType::clone(elem_type));
+    (void)var_col;
+
+    auto unwind = std::make_unique<BoundUnwindOp>();
+    unwind->list_expr = std::move(*bound_list);
+    unwind->variable = reduce.variable;
+    unwind->variable_column_index = var_col;
+    unwind->variable_slot_id = ctx_.symbols[reduce.variable].slot_id;
+    unwind->child = BoundLogicalOperator(std::move(source));
+    BoundLogicalOperator current = std::move(unwind);
+
+    std::vector<BoundPatternComprehensionApplyOp::Correlation> pc_corr;
+    SlotId pc_slot = INVALID_SLOT_ID;
+    std::string pc_name;
+    BoundType pc_elem_type;
+    std::vector<std::string> preset_corr(outer_vars.begin(), outer_vars.end());
+    preset_corr.push_back(reduce.variable);
+    auto pc_plan =
+        bindPatternComprehension(pc, std::move(current), pc_corr, pc_slot, pc_name, pc_elem_type, preset_corr);
+    if (!pc_plan) {
+        ctx_.restore(saved);
+        return false;
+    }
+    current = std::move(*pc_plan);
+
+    BoundType pc_list_type = BoundType::List(BoundType::clone(pc_elem_type));
+    const function::FunctionDef* collect_fn = func_registry_.lookup("collect", {pc_list_type});
+    if (!collect_fn)
+        collect_fn = func_registry_.lookup("collect", {BoundType::Any()});
+    if (!collect_fn) {
+        ctx_.restore(saved);
+        error("PatternComprehension: collect() not registered");
+        return false;
+    }
+
+    std::string agg_name = "__rpc_agg_" + std::to_string(nextAnonId());
+    BoundAggregateOp::AggregateItem agg_item;
+    agg_item.func_def = collect_fn;
+    agg_item.function_name = "collect";
+    agg_item.arguments.push_back(BoundExpression(BoundColumnRef(0, pc_list_type, pc_name, pc_slot)));
+    agg_item.alias = agg_name;
+    agg_item.result_type = BoundType::List(BoundType::clone(pc_list_type));
+    agg_item.keeps_nulls = true;
+
+    auto agg = std::make_unique<BoundAggregateOp>();
+    agg->aggregates.push_back(std::move(agg_item));
+    agg->output_names.push_back(agg_name);
+    agg->child = std::move(current);
+    current = std::move(agg);
+
+    ctx_.restore(saved);
+
+    out_name = "__rpc_" + std::to_string(nextAnonId());
+    out_slot = allocateNamedSlot(out_name);
+    out_element_type = BoundType::clone(pc_list_type);
+
+    auto apply = std::make_unique<BoundPatternComprehensionApplyOp>();
+    apply->left = std::move(child);
+    apply->right = std::move(current);
+    apply->correlation = std::move(correlation);
+    BoundPatternComprehensionApplyOp::Output out;
+    out.slot_id = out_slot;
+    out.name = out_name;
+    out.element_type = BoundType::clone(out_element_type);
+    apply->outputs.push_back(std::move(out));
+    child = std::move(apply);
+
+    ColumnInfo out_info;
+    out_info.name = out_name;
+    out_info.type = BoundType::List(BoundType::clone(out_element_type));
+    out_info.column_index = nextColumnIndex();
+    out_info.slot_id = out_slot;
+    ctx_.symbols[out_name] = std::move(out_info);
+    return true;
+}
+
 // GCC 13 在 -O3 下会把 std::variant（cypher::Expression，成员全是 unique_ptr）的 move
 // 内联进 std::vector 的 _M_realloc_insert，然后误判成 "writing 1 byte into a region of
 // size 0"（目标对象其实是 vector 刚分配的缓冲区）。实测与我们的写法无关：显式 move 构造、
@@ -1134,6 +1466,12 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
             collectAllVariables(*pc->projection, outer_vars);
     }
     outer_vars.erase(lc.variable);
+    for (auto it = outer_vars.begin(); it != outer_vars.end();) {
+        if (saved.symbols.count(*it) == 0)
+            it = outer_vars.erase(it);
+        else
+            ++it;
+    }
 
     // Build the right sub-plan in an independent scope. The correlated source
     // keeps the outer slots and semantic types so expressions like nodes(p)
@@ -1183,6 +1521,7 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
     unwind->list_expr = std::move(*bound_list);
     unwind->variable = lc.variable;
     unwind->variable_column_index = var_col;
+    unwind->variable_slot_id = ctx_.symbols[lc.variable].slot_id;
     unwind->child = BoundLogicalOperator(std::move(source));
     BoundLogicalOperator current = std::move(unwind);
 
@@ -1208,7 +1547,10 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
     }
 
     std::unordered_map<const cypher::PatternComprehension*, std::tuple<SlotId, std::string, BoundType>> pc_patch_map;
-    if (!hoistPatternComprehensions(*this, current, pc_items, nullptr, pc_patch_map)) {
+    std::vector<std::string> pc_preset(outer_vars.begin(), outer_vars.end());
+    if (!lc.variable.empty() && std::find(pc_preset.begin(), pc_preset.end(), lc.variable) == pc_preset.end())
+        pc_preset.push_back(lc.variable);
+    if (!hoistPatternComprehensions(*this, current, pc_items, nullptr, pc_patch_map, pc_preset)) {
         ctx_.restore(saved);
         return false;
     }
@@ -1853,6 +2195,22 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         }
     }
 
+    // A PC inside a reduce body depends on the current list element. Lower
+    // each such PC to a per-element list column before the usual clause-level
+    // PC hoisting; bindExpression then reads it as list[index].
+    {
+        std::vector<const cypher::Expression*> reduce_exprs;
+        reduce_exprs.reserve(items.size() + (ret.order_by ? ret.order_by->items.size() : 0));
+        for (const auto& item : items)
+            reduce_exprs.push_back(&item.expr);
+        if (ret.order_by) {
+            for (const auto& si : ret.order_by->items)
+                reduce_exprs.push_back(&si.expr);
+        }
+        if (!lowerReducePatternComprehensions(child, reduce_exprs))
+            return std::nullopt;
+    }
+
     // ── Pattern comprehension hoisting ──
     // Stack one BoundPatternComprehensionApplyOp per PatternComprehension AST
     // node above `child` so each list result is precomputed as a column before
@@ -2415,6 +2773,21 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             has_aggregate = true;
             break;
         }
+    }
+
+    // See bindReturn: PCs in reduce bodies are lowered per element before
+    // clause-level PC hoisting.
+    {
+        std::vector<const cypher::Expression*> reduce_exprs;
+        reduce_exprs.reserve(items.size() + (wc.order_by ? wc.order_by->items.size() : 0));
+        for (const auto& item : items)
+            reduce_exprs.push_back(&item.expr);
+        if (wc.order_by) {
+            for (const auto& si : wc.order_by->items)
+                reduce_exprs.push_back(&si.expr);
+        }
+        if (!lowerReducePatternComprehensions(child, reduce_exprs))
+            return std::nullopt;
     }
 
     // ── Pattern comprehension hoisting ── (see bindReturn for rationale)
