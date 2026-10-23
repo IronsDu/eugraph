@@ -124,6 +124,27 @@ VertexId KeyCodec::decodeVertexExistenceKey(std::string_view key) {
     return decodeU64BE(key, 0);
 }
 
+// ==================== Per-label Vertex Property Storage ====================
+
+std::string KeyCodec::encodeVPropKey(VertexId vertex_id, uint16_t prop_id) {
+    std::string key;
+    key.reserve(8 + 2);
+    encodeU64BE(key, vertex_id);
+    encodeU16BE(key, prop_id);
+    return key;
+}
+
+std::pair<VertexId, uint16_t> KeyCodec::decodeVPropKey(std::string_view key) {
+    return {decodeU64BE(key, 0), decodeU16BE(key, 8)};
+}
+
+std::string KeyCodec::encodeVPropPrefix(VertexId vertex_id) {
+    std::string key;
+    key.reserve(8);
+    encodeU64BE(key, vertex_id);
+    return key;
+}
+
 // ==================== Edge Index ====================
 
 std::string KeyCodec::encodeEdgeIndexKey(const EdgeIndexKey& k) {

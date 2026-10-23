@@ -12,7 +12,8 @@
 
 | WT 表名 | 用途 | Key 格式 |
 |---------|------|----------|
-| `vertex_data` | 顶点标签、属性和有界出边缓存 | `{vertex_id:u64BE}{kind:u8}{...}` |
+| `vertex_data` | 顶点标签和有界出边缓存 | `{vertex_id:u64BE}{kind:u8}{...}` |
+| `vprop_{id}` | 顶点属性（每标签一表） | `{vertex_id:u64BE}{prop_id:u16BE}` |
 | `vertex_existence` | 全图顶点枚举（含无标签顶点） | `{vertex_id:u64BE}` |
 | `label_fwd_{id}` | 标签→顶点正向索引（每标签一表） | `{vertex_id:u64BE}` |
 | `edge_index` | 边邻接索引 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` |
@@ -21,7 +22,7 @@
 | `vidx_{index_id}` | 顶点二级索引 | `{sortable_value}{entity_id:u64BE}` |
 | `eidx_{index_id}` | 边属性索引 | `{sortable_value}{edge_id:u64BE}` |
 
-`label_reverse` 和 `vprop_{id}` 已删除；标签/属性统一进 `vertex_data`。
+`label_reverse` 已删除；标签进 `vertex_data`。属性最终保留在 `vprop_{id}`：纯 X 合并属性会让 LDBC 的单属性点查 B-tree 变大（complex-3 回退约 35%），因此采用 hybrid。
 
 ---
 
@@ -34,28 +35,38 @@
 | kind | 含义 | Key | Value |
 |------|------|-----|-------|
 | `0x00` | 标签 | `{v}{0x00}{label_id:u16BE}` | 空 |
-| `0x01` | 属性 | `{v}{0x01}{label_id:u16BE}{prop_id:u16BE}` | `ValueCodec` |
+| `0x01` | 属性（旧纯 X 数据兼容/保留编码） | `{v}{0x01}{label_id:u16BE}{prop_id:u16BE}` | `ValueCodec` |
 | `0x02` | 出边缓存 | `{v}{0x02}` | 邻接 blob，见下 |
 
 查询前缀：
 
 ```text
-{v}                       -> 该顶点所有标签/属性/邻接
+{v}                       -> 该顶点所有标签/邻接
 {v}{0x00}                 -> 所有标签
 {v}{0x00}{label}          -> 某标签是否存在
-{v}{0x01}                 -> 所有标签下的所有属性
-{v}{0x01}{label}          -> 某标签下所有属性
-{v}{0x01}{label}{prop}    -> 某属性精确点查
 {v}{0x02}                 -> 出边缓存
 ```
 
-同一顶点的记录在 WT 中连续；标签/属性/邻接共享一个 B-tree，读取多标签/多属性时不需要跨 `vprop_*` 表开多个 cursor。
+同一顶点的标签/邻接记录在 `vertex_data` 中连续；属性在 `vprop_{id}` 中按标签分区。这样既保留标签/邻接的局部性，又避免属性点查落入一棵包含所有标签记录的大 B-tree。
+
+### 顶点属性（vprop_{id}）
+
+每个标签一张表。`prop_id` 在每个 Label 内独立编号、永不复用。
+
+```
+前缀 {vertex_id:u64BE}                  -> 该顶点在该标签下的所有属性
+前缀 {vertex_id:u64BE}{prop_id:u16BE}   -> 指定属性
+```
+
+保留 per-label 表是性能决策：纯 `vertex_data` 属性合并后，Message/Person 等热标签的单属性点查
+需要落到约 69MB 的全局 B-tree，而旧的 `vprop_Message`/`vprop_Person` 分别约 28/29MB，页局部性
+明显更好；sf0.1 complex-3 实测纯 X 回退约 35%。
 
 ### 标签/属性 DDL
 
-- `createLabel` 只创建 `label_fwd_{id}`；`vertex_data` 是全局表。
-- `dropLabel` 是低频操作：扫 `label_fwd_{id}` 枚举顶点，删除对应的标签 key 和属性前缀，再 drop 正向表。复杂度 O(该标签的顶点数)，不是 O(1) 删表。
-- 删除顶点：扫 `{v}` 前缀一次删除标签、属性、邻接 blob，再删 `label_fwd` 和 `vertex_existence`。
+- `createLabel` 创建 `label_fwd_{id}` 和 `vprop_{id}`；`vertex_data` 是全局表。
+- `dropLabel`：删除 `label_fwd_{id}` 枚举出的顶点的 X 标签 key，再 drop 正向表与 `vprop_{id}`；属性表的 drop 是 O(1)。
+- 删除顶点：扫 `{v}` 前缀删除标签/邻接，删除各标签的 `vprop` 属性，再删 `label_fwd` 和 `vertex_existence`。
 
 ---
 
@@ -167,7 +178,8 @@ M|next_ids           -> {next_vertex_id:u64}{next_edge_id:u64}{next_label_id:u16
 
 ## 兼容与迁移
 
-- 这是 KV 格式变更：旧的 `label_reverse` / `vprop_*` 数据不能被新 `vertex_data` 自动读取。
-- 旧数据目录需要重新 load 或提供一次性迁移；不要直接用新二进制打开旧目录。
+- 这是 KV 格式变更：旧的 `label_reverse` 需要迁移到 `vertex_data` 的标签记录；`vprop_*` 可保留不动（hybrid 直接复用）。
+- 旧的“纯 X 属性”数据不再是当前读取格式，需要重新 load/迁移到 `vprop_*`。
+- 新二进制会拒绝仍带 `label_reverse` 的目录；需先用迁移工具把标签写入 `vertex_data` 并删除 `label_reverse`。
 - 未引入 per-record version；格式版本在表/图级别管理。
 - 第一版 cache 默认关闭；开启后旧顶点如果没有 blob，统一回退 `edge_index`，不会被误认为“空且完整”。

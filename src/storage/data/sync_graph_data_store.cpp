@@ -113,7 +113,7 @@ bool SyncGraphDataStore::createLabel(LabelId label_id) {
     if (!isOpen())
         return false;
     WtSession session = conn().make_session();
-    return schema_ddl_.create_tables(session, {labelFwdTable(label_id)});
+    return schema_ddl_.create_tables(session, {labelFwdTable(label_id), vpropTable(label_id)});
 }
 
 bool SyncGraphDataStore::dropLabel(LabelId label_id) {
@@ -124,23 +124,19 @@ bool SyncGraphDataStore::dropLabel(LabelId label_id) {
     if (!wt)
         return false;
 
-    // DDL is rare: walk the label's own forward index and remove its records
-    // from vertex_data. This is O(vertices with this label), not a full scan.
+    // Delete the label entries from vertex_data, then drop the per-label
+    // forward and property tables. Property tables are deliberately kept
+    // per-label: point lookups on vprop_{id} are much more cache-friendly than
+    // one large merged B-tree (see benchmark §6/§7).
     bool ok = true;
     const std::string fwd = labelFwdTable(label_id);
     wt::table_scan(wt, fwd, {}, [&](std::string_view key, std::string_view) {
         const VertexId vid = KeyCodec::decodeLabelForwardKey(key);
         if (!wt::table_del(wt, TABLE_VERTEX_DATA, KeyCodec::encodeVertexLabelKey(vid, label_id)))
             ok = false;
-        const auto prop_prefix = KeyCodec::encodeVertexPropertyPrefix(vid, label_id);
-        wt::table_scan(wt, TABLE_VERTEX_DATA, prop_prefix, [&](std::string_view pkey, std::string_view) {
-            if (!wt::table_del(wt, TABLE_VERTEX_DATA, pkey))
-                ok = false;
-            return true;
-        });
         return true;
     });
-    if (!schema_ddl_.drop_tables(session, {fwd}, SchemaDdl::DropMode::CheckpointFirst))
+    if (!schema_ddl_.drop_tables(session, {fwd, vpropTable(label_id)}, SchemaDdl::DropMode::CheckpointFirst))
         ok = false;
     return ok;
 }
@@ -235,9 +231,9 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
 
         for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
             if (props[prop_id].has_value()) {
-                auto key = KeyCodec::encodeVertexPropertyKey(vid, label_id, prop_id);
+                auto key = KeyCodec::encodeVPropKey(vid, prop_id);
                 auto val = ValueCodec::encode(props[prop_id].value());
-                if (!wt::table_put(gs, TABLE_VERTEX_DATA, key, val))
+                if (!wt::table_put(gs, vpropTable(label_id), key, val))
                     return false;
             }
         }
@@ -253,6 +249,11 @@ bool SyncGraphDataStore::deleteVertex(GraphSession& gs, VertexId vid) {
     auto labels = getVertexLabels(gs, vid);
     for (LabelId label_id : labels) {
         wt::table_del(gs, labelFwdTable(label_id), KeyCodec::encodeLabelForwardKey(vid));
+        auto prefix = KeyCodec::encodeVPropPrefix(vid);
+        wt::table_scan(gs, vpropTable(label_id), prefix, [&](std::string_view key, std::string_view) {
+            wt::table_del(gs, vpropTable(label_id), key);
+            return true;
+        });
     }
 
     auto prefix = KeyCodec::encodeVertexDataPrefix(vid);
@@ -283,15 +284,12 @@ VertexData SyncGraphDataStore::loadVertexData(GraphSession& gs, VertexId vid, ui
 
     if (hasNeed(needs, VertexDataNeed::PROPERTIES)) {
         data.properties.emplace();
-        wt::table_scan(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexPropertyPrefix(vid),
-                       [&](std::string_view key, std::string_view value) {
-                           auto decoded = KeyCodec::decodeVertexPropertyKey(key);
-                           Properties& props = (*data.properties)[decoded.label_id];
-                           if (decoded.prop_id >= props.size())
-                               props.resize(static_cast<size_t>(decoded.prop_id) + 1);
-                           props[decoded.prop_id] = ValueCodec::decode(value);
-                           return true;
-                       });
+        auto labels = data.labels.has_value() ? *data.labels : getVertexLabels(gs, vid);
+        for (LabelId lid : labels) {
+            auto props = getVertexProperties(gs, vid, lid);
+            if (props)
+                (*data.properties)[lid] = std::move(*props);
+        }
     }
 
     if (hasNeed(needs, VertexDataNeed::OUT_EDGES)) {
@@ -357,14 +355,14 @@ std::optional<Properties> SyncGraphDataStore::getVertexProperties(GraphSession& 
     if (!session)
         return std::nullopt;
 
-    auto prefix = KeyCodec::encodeVertexPropertyPrefix(vid, label_id);
+    auto prefix = KeyCodec::encodeVPropPrefix(vid);
     Properties props;
     bool found_any = false;
-    wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view value) {
-        auto decoded = KeyCodec::decodeVertexPropertyKey(key);
-        if (decoded.prop_id >= props.size())
-            props.resize(static_cast<size_t>(decoded.prop_id) + 1);
-        props[decoded.prop_id] = ValueCodec::decode(value);
+    wt::table_scan(gs, vpropTable(label_id), prefix, [&](std::string_view key, std::string_view value) {
+        auto [_, prop_id] = KeyCodec::decodeVPropKey(key);
+        if (prop_id >= props.size())
+            props.resize(prop_id + 1);
+        props[prop_id] = ValueCodec::decode(value);
         found_any = true;
         return true;
     });
@@ -392,12 +390,11 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     }
     const bool all_unique = unique.size() == vids.size();
     std::vector<std::optional<Properties>> unique_out(all_unique ? 0 : unique.size());
-
-    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+    const std::string table = vpropTable(label_id);
+    CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
         const int error = cursor.error();
-        gs.fail_from_wt(error,
-                        "getVertexPropertiesBatchProjected: cannot open cursor on " + std::string(TABLE_VERTEX_DATA));
+        gs.fail_from_wt(error, "getVertexPropertiesBatchProjected: cannot open cursor on " + table);
         return out;
     }
     auto* c = cursor.get();
@@ -408,7 +405,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         props.resize(width);
         bool found = false;
         for (uint16_t pid : proj) {
-            auto key = KeyCodec::encodeVertexPropertyKey(unique[i], label_id, pid);
+            auto key = KeyCodec::encodeVPropKey(unique[i], pid);
             setItem(c, key);
             const int ret = c->search(c);
             if (ret == WT_NOTFOUND)
@@ -435,7 +432,7 @@ std::optional<PropertyValue> SyncGraphDataStore::getVertexProperty(GraphSession&
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return std::nullopt;
-    auto val = wt::table_get(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexPropertyKey(vid, label_id, prop_id));
+    auto val = wt::table_get(gs, vpropTable(label_id), KeyCodec::encodeVPropKey(vid, prop_id));
     if (!val)
         return std::nullopt;
     return ValueCodec::decode(*val);
@@ -446,8 +443,7 @@ bool SyncGraphDataStore::putVertexProperty(GraphSession& gs, VertexId vid, Label
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return false;
-    return wt::table_put(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexPropertyKey(vid, label_id, prop_id),
-                         ValueCodec::encode(value));
+    return wt::table_put(gs, vpropTable(label_id), KeyCodec::encodeVPropKey(vid, prop_id), ValueCodec::encode(value));
 }
 
 bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, LabelId label_id,
@@ -457,8 +453,8 @@ bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, Lab
         return false;
     for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
         if (props[prop_id].has_value()) {
-            auto key = KeyCodec::encodeVertexPropertyKey(vid, label_id, prop_id);
-            if (!wt::table_put(gs, TABLE_VERTEX_DATA, key, ValueCodec::encode(props[prop_id].value())))
+            auto key = KeyCodec::encodeVPropKey(vid, prop_id);
+            if (!wt::table_put(gs, vpropTable(label_id), key, ValueCodec::encode(props[prop_id].value())))
                 return false;
         }
     }
@@ -469,7 +465,7 @@ bool SyncGraphDataStore::deleteVertexProperty(GraphSession& gs, VertexId vid, La
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return false;
-    return wt::table_del(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexPropertyKey(vid, label_id, prop_id));
+    return wt::table_del(gs, vpropTable(label_id), KeyCodec::encodeVPropKey(vid, prop_id));
 }
 
 // ==================== Vertex Labels ====================
@@ -565,17 +561,17 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     }
     const bool all_unique = unique.size() == vids.size();
     std::vector<std::optional<Properties>> unique_out(all_unique ? 0 : unique.size());
-
-    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+    const std::string table = vpropTable(label_id);
+    CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
         const int error = cursor.error();
-        gs.fail_from_wt(error, "getVertexPropertiesBatch: cannot open cursor on " + std::string(TABLE_VERTEX_DATA));
+        gs.fail_from_wt(error, "getVertexPropertiesBatch: cannot open cursor on " + table);
         return out;
     }
     auto* c = cursor.get();
     for (size_t i = 0; i < unique.size(); ++i) {
         std::optional<Properties>& slot = all_unique ? out[i] : unique_out[i];
-        const auto prefix = KeyCodec::encodeVertexPropertyPrefix(unique[i], label_id);
+        const auto prefix = KeyCodec::encodeVPropPrefix(unique[i]);
         setItem(c, prefix);
         int exact = 0;
         int ret = c->search_near(c, &exact);
@@ -593,10 +589,10 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
             std::string key = getKeyFromCursor(c);
             if (!key.starts_with(prefix))
                 break;
-            auto decoded = KeyCodec::decodeVertexPropertyKey(key);
-            if (decoded.prop_id >= props.size())
-                props.resize(static_cast<size_t>(decoded.prop_id) + 1);
-            props[decoded.prop_id] = ValueCodec::decode(getValueFromCursor(c));
+            auto [_, prop_id] = KeyCodec::decodeVPropKey(key);
+            if (prop_id >= props.size())
+                props.resize(prop_id + 1);
+            props[prop_id] = ValueCodec::decode(getValueFromCursor(c));
             found = true;
             ret = c->next(c);
         }
@@ -629,9 +625,9 @@ bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, Label
         return false;
     wt::table_del(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexLabelKey(vid, label_id));
     wt::table_del(gs, labelFwdTable(label_id), KeyCodec::encodeLabelForwardKey(vid));
-    auto prefix = KeyCodec::encodeVertexPropertyPrefix(vid, label_id);
-    wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view) {
-        wt::table_del(gs, TABLE_VERTEX_DATA, key);
+    auto prefix = KeyCodec::encodeVPropPrefix(vid);
+    wt::table_scan(gs, vpropTable(label_id), prefix, [&](std::string_view key, std::string_view) {
+        wt::table_del(gs, vpropTable(label_id), key);
         return true;
     });
     return true;

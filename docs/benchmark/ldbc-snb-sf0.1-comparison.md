@@ -268,3 +268,39 @@ complex 子集（优化后，vs 旧 main）：
 - 标签过滤优化只对**大 neighbor 集合 + 大标签**有效；小集合保留点查，避免 complex-2/8/10 回退。
 - complex-3 仍慢约 35%，慢点已转到 message 属性读取（`message.creationDate` 等），说明
   `vertex_data` 的属性点查布局仍有问题；下一轮应针对属性读取做按标签批量/紧凑布局，而不是继续优化标签过滤。
+
+---
+
+## 8. Hybrid 方案：X 标签/邻接 + per-label vprop（2026-10-24）
+
+纯 `vertex_data` 把属性也合进大表后，complex-3 的属性点查回退约 35%。因此最终采用 hybrid：
+
+- `vertex_data`：标签 + 可选 OUT 邻接缓存；
+- `vprop_{id}`：保留每标签属性表，恢复属性点查的 B-tree 局部性；
+- `label_fwd`、`edge_index`、`vertex_existence` 不变。
+
+同机旧 main vs hybrid（旧数据 + X 标签）：
+
+| 查询 | 旧 main | hybrid | hybrid/旧 |
+|---|---:|---:|---:|
+| complex-2 | 15.65 | 15.01 | 0.96 |
+| complex-3 | 136.75 | 139.11 | 1.02 |
+| complex-4 | 8.43 | 8.26 | 0.98 |
+| complex-7 | 5.02 | 4.87 | 0.97 |
+| complex-8 | 4.06 | 3.48 | 0.86 |
+| complex-10 | 35.87 | 36.28 | 1.01 |
+| complex-11 | 7.35 | 7.31 | 0.99 |
+| complex-12 | 354.86 | 374.73 | 1.06 |
+
+核心步骤：
+
+| 步骤 | 旧 main | hybrid |
+|---|---:|---:|
+| `friend<-HAS_CREATOR-message` | 60.63 | **34.2** |
+
+结论：
+
+1. 属性必须保留 per-label 分区；合并进 X 会让单属性点查的 B-tree 变大，complex-3 回退。
+2. 标签合并进 X 后，大 neighbor 集合的标签过滤应走 `label_fwd` 顺序扫描，而不是逐点 `getVertexLabelsBatch`；这是本次 1.8× 提升的来源。
+3. 邻接 cache 仍无收益，默认 N=0；hybrid 保留接口但不启用。
+4. 最终方案是**数据驱动的 hybrid**：标签/邻接合并，属性按标签分区。

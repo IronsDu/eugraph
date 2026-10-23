@@ -49,6 +49,12 @@ public:
     static std::string encodeVertexExistenceKey(VertexId vertex_id);
     static VertexId decodeVertexExistenceKey(std::string_view key);
 
+    // ==================== Per-label Vertex Property Storage (table:vprop_{id}) ====================
+    // Key: {vertex_id:uint64 BE}{prop_id:uint16 BE}
+    static std::string encodeVPropKey(VertexId vertex_id, uint16_t prop_id);
+    static std::pair<VertexId, uint16_t> decodeVPropKey(std::string_view key);
+    static std::string encodeVPropPrefix(VertexId vertex_id);
+
     // ==================== Edge Index (table:edge_index) ====================
     // Key: {vertex_id:uint64 BE}{direction:uint8}{edge_label_id:uint16 BE}{neighbor_id:uint64 BE}{seq:uint64 BE}
     struct EdgeIndexKey {

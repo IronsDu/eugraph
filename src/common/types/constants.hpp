@@ -21,6 +21,9 @@ constexpr const char* TABLE_VERTEX_EXISTENCE = "table:vertex_existence";
 inline std::string labelFwdTable(LabelId id) {
     return "table:label_fwd_" + std::to_string(id);
 }
+inline std::string vpropTable(LabelId id) {
+    return "table:vprop_" + std::to_string(id);
+}
 
 // 按 edge_label_id 分表（dropEdgeLabel 时 drop）
 inline std::string etypeTable(EdgeLabelId id) {
