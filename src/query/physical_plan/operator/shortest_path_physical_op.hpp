@@ -59,14 +59,27 @@ private:
         VertexId id = INVALID_VERTEX_ID;
         EdgeLink link;
     };
+    using NeighborList = std::vector<Neighbor>;
+    /// Per-vertex BFS state. dist + parent in one hash node avoids two
+    /// parallel maps (the parent map used to dominate memory).
+    struct Visit {
+        int dist = 0;
+        EdgeLink parent;
+        bool has_parent = false;
+    };
+    struct AllPathNode {
+        int dist = 0;
+        std::vector<EdgeLink> parents;
+    };
 
-    folly::coro::Task<std::vector<Neighbor>> scan(VertexId vid, Direction scan_dir);
+    folly::coro::Task<std::shared_ptr<const NeighborList>> scan(VertexId vid, Direction scan_dir);
     folly::coro::Task<std::optional<PathValue>> shortestBidirectional(VertexId start, VertexId end);
-    folly::coro::Task<std::vector<PathValue>> allShortestPaths(VertexId start, VertexId end);
+    /// Streams paths instead of materialising a vector of PathValue. The
+    /// caller keeps at most one DataChunk batch of them.
+    folly::coro::AsyncGenerator<PathValue> allShortestPaths(VertexId start, VertexId end);
     folly::coro::Task<bool> hasDstLabels(VertexId vid);
 
     static PathValue buildPath(VertexId start, const std::vector<EdgeLink>& links);
-    static std::string pathKey(const std::vector<EdgeLink>& links);
 
     std::string src_var_;
     std::string dst_var_;
@@ -91,7 +104,11 @@ private:
     PropertyValue dst_filter_value_;
     int src_col_idx_ = -1;
     int dst_col_idx_ = -1;
-    std::unordered_map<uint64_t, std::vector<Neighbor>> edge_cache_;
+    /// Bounded adjacency cache. Beyond the cap new lists are returned but not
+    /// cached, so a query cannot grow this map to several GB just by visiting
+    /// the whole graph.
+    std::unordered_map<uint64_t, std::shared_ptr<const NeighborList>> edge_cache_;
+    size_t cached_neighbors_ = 0;
     std::unordered_map<VertexId, bool> dst_label_cache_;
 };
 

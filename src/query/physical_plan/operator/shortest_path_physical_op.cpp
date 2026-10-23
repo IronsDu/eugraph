@@ -45,6 +45,13 @@ Direction oppositeDirection(Direction dir) {
 }
 
 constexpr size_t MAX_PATHS = 100000;
+// Bound the persisted adjacency cache (~64 MiB at 64 B per Neighbor). The
+// cache is a speed optimization only; lists beyond this budget are still
+// returned to the current BFS, just not stored for later rows.
+constexpr size_t MAX_CACHED_NEIGHBORS = 1'000'000;
+// Keep the output batch bounded by path elements too, not only by row count:
+// 1024 long paths can otherwise be much larger than one chunk should be.
+constexpr size_t MAX_PENDING_PATH_ELEMENTS = 262144;
 
 } // namespace
 
@@ -88,13 +95,13 @@ void ShortestPathPhysicalOp::deriveOutputLayout(const TupleSlotLayout& input_lay
         slot_layout_.append(path_slot_);
 }
 
-folly::coro::Task<std::vector<ShortestPathPhysicalOp::Neighbor>> ShortestPathPhysicalOp::scan(VertexId vid,
-                                                                                              Direction scan_dir) {
+folly::coro::Task<std::shared_ptr<const ShortestPathPhysicalOp::NeighborList>>
+ShortestPathPhysicalOp::scan(VertexId vid, Direction scan_dir) {
     const uint64_t key = (static_cast<uint64_t>(vid) << 2) | static_cast<uint64_t>(scan_dir);
     if (auto it = edge_cache_.find(key); it != edge_cache_.end())
         co_return it->second;
 
-    std::vector<Neighbor> out;
+    auto out = std::make_shared<NeighborList>();
     auto append = [&](Direction dir) -> folly::coro::Task<void> {
         for (const auto& label_filter : scan_filters_) {
             auto gen = cancellable(store_.scanEdges(vid, dir, label_filter));
@@ -113,7 +120,7 @@ folly::coro::Task<std::vector<ShortestPathPhysicalOp::Neighbor>> ShortestPathPhy
                     link.edge_id = e.edge_id;
                     link.edge_label_id = e.edge_label_id;
                     link.seq = e.seq;
-                    out.push_back(Neighbor{e.neighbor_id, link});
+                    out->push_back(Neighbor{e.neighbor_id, link});
                 }
             }
         }
@@ -126,7 +133,10 @@ folly::coro::Task<std::vector<ShortestPathPhysicalOp::Neighbor>> ShortestPathPhy
     } else {
         co_await append(scan_dir);
     }
-    edge_cache_.emplace(key, out);
+    if (cached_neighbors_ + out->size() <= MAX_CACHED_NEIGHBORS) {
+        cached_neighbors_ += out->size();
+        edge_cache_.emplace(key, out);
+    }
     co_return out;
 }
 
@@ -167,29 +177,18 @@ PathValue ShortestPathPhysicalOp::buildPath(VertexId start, const std::vector<Ed
     return path;
 }
 
-std::string ShortestPathPhysicalOp::pathKey(const std::vector<EdgeLink>& links) {
-    std::string key;
-    for (const auto& link : links) {
-        key += std::to_string(link.edge_id);
-        key.push_back(',');
-    }
-    return key;
-}
-
 folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidirectional(VertexId start,
                                                                                           VertexId end) {
     if (start == end && min_hops_ <= 0)
         co_return buildPath(start, {});
 
     constexpr int INF = std::numeric_limits<int>::max();
-    std::unordered_map<VertexId, int> f_dist;
-    std::unordered_map<VertexId, int> b_dist;
-    std::unordered_map<VertexId, EdgeLink> f_parent;
-    std::unordered_map<VertexId, EdgeLink> b_parent;
+    std::unordered_map<VertexId, Visit> f_visit;
+    std::unordered_map<VertexId, Visit> b_visit;
     std::vector<VertexId> f_frontier{start};
     std::vector<VertexId> b_frontier{end};
-    f_dist.emplace(start, 0);
-    b_dist.emplace(end, 0);
+    f_visit.emplace(start, Visit{0, {}, false});
+    b_visit.emplace(end, Visit{0, {}, false});
     int f_depth = 0;
     int b_depth = 0;
     int best = INF;
@@ -213,24 +212,24 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
                 if (cancelled())
                     co_return std::nullopt;
                 auto edges = co_await scan(v, forward_dir_);
-                for (const auto& e : edges) {
+                for (const auto& e : *edges) {
                     if (e.id == v)
                         continue;
-                    auto [it, inserted] = f_dist.emplace(e.id, next_depth);
+                    auto [it, inserted] = f_visit.try_emplace(e.id, Visit{next_depth, {}, false});
                     if (inserted) {
-                        f_parent.emplace(e.id, e.link);
+                        it->second.parent = e.link;
+                        it->second.has_parent = true;
                         next.push_back(e.id);
                     }
-                    auto bit = b_dist.find(e.id);
-                    if (bit == b_dist.end())
+                    auto bit = b_visit.find(e.id);
+                    if (bit == b_visit.end())
                         continue;
-                    const int candidate = next_depth + bit->second;
+                    const int candidate = it->second.dist + bit->second.dist;
                     if (candidate < min_hops_ || (max_hops_ >= 0 && candidate > max_hops_))
                         continue;
                     if (candidate < best) {
                         best = candidate;
                         meet = e.id;
-                        f_parent[e.id] = e.link;
                     }
                 }
             }
@@ -241,7 +240,7 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
                 if (cancelled())
                     co_return std::nullopt;
                 auto edges = co_await scan(v, backward_dir_);
-                for (const auto& e : edges) {
+                for (const auto& e : *edges) {
                     if (e.id == v)
                         continue;
                     EdgeLink back;
@@ -252,21 +251,21 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
                     back.edge_id = e.link.edge_id;
                     back.edge_label_id = e.link.edge_label_id;
                     back.seq = e.link.seq;
-                    auto [it, inserted] = b_dist.emplace(e.id, next_depth);
+                    auto [it, inserted] = b_visit.try_emplace(e.id, Visit{next_depth, {}, false});
                     if (inserted) {
-                        b_parent.emplace(e.id, back);
+                        it->second.parent = back;
+                        it->second.has_parent = true;
                         next.push_back(e.id);
                     }
-                    auto fit = f_dist.find(e.id);
-                    if (fit == f_dist.end())
+                    auto fit = f_visit.find(e.id);
+                    if (fit == f_visit.end())
                         continue;
-                    const int candidate = fit->second + next_depth;
+                    const int candidate = fit->second.dist + it->second.dist;
                     if (candidate < min_hops_ || (max_hops_ >= 0 && candidate > max_hops_))
                         continue;
                     if (candidate < best) {
                         best = candidate;
                         meet = e.id;
-                        b_parent[e.id] = back;
                     }
                 }
             }
@@ -281,22 +280,22 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
     std::vector<EdgeLink> forward_links;
     VertexId cur = meet;
     while (cur != start) {
-        auto it = f_parent.find(cur);
-        if (it == f_parent.end())
+        auto it = f_visit.find(cur);
+        if (it == f_visit.end() || !it->second.has_parent)
             co_return std::nullopt;
-        forward_links.push_back(it->second);
-        cur = it->second.from;
+        forward_links.push_back(it->second.parent);
+        cur = it->second.parent.from;
     }
     std::reverse(forward_links.begin(), forward_links.end());
 
     std::vector<EdgeLink> backward_links;
     cur = meet;
     while (cur != end) {
-        auto it = b_parent.find(cur);
-        if (it == b_parent.end())
+        auto it = b_visit.find(cur);
+        if (it == b_visit.end() || !it->second.has_parent)
             co_return std::nullopt;
-        backward_links.push_back(it->second);
-        cur = it->second.to;
+        backward_links.push_back(it->second.parent);
+        cur = it->second.parent.to;
     }
 
     forward_links.insert(forward_links.end(), backward_links.begin(), backward_links.end());
@@ -305,65 +304,71 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
     co_return buildPath(start, forward_links);
 }
 
-folly::coro::Task<std::vector<PathValue>> ShortestPathPhysicalOp::allShortestPaths(VertexId start, VertexId end) {
+folly::coro::AsyncGenerator<PathValue> ShortestPathPhysicalOp::allShortestPaths(VertexId start, VertexId end) {
     auto one = co_await shortestBidirectional(start, end);
     if (!one.has_value())
-        co_return {};
+        co_return;
     const size_t best = (one->elements.size() - 1) / 2;
-    if (best == 0)
-        co_return {std::move(*one)};
+    if (best == 0) {
+        co_yield std::move(*one);
+        co_return;
+    }
 
-    std::unordered_map<VertexId, int> dist;
-    std::unordered_map<VertexId, std::vector<EdgeLink>> parents;
+    std::unordered_map<VertexId, AllPathNode> visits;
     std::vector<VertexId> frontier{start};
-    dist.emplace(start, 0);
+    visits.emplace(start, AllPathNode{0, {}});
 
     for (size_t depth = 1; depth <= best && !frontier.empty(); ++depth) {
         std::vector<VertexId> next;
         for (VertexId v : frontier) {
             if (cancelled())
-                co_return {};
+                co_return;
             auto edges = co_await scan(v, forward_dir_);
-            for (const auto& e : edges) {
+            for (const auto& e : *edges) {
                 if (e.id == v || e.id == start)
                     continue;
-                auto [it, inserted] = dist.emplace(e.id, static_cast<int>(depth));
+                auto [it, inserted] = visits.try_emplace(e.id, AllPathNode{static_cast<int>(depth), {}});
                 if (inserted) {
-                    parents[e.id].push_back(e.link);
+                    it->second.parents.push_back(e.link);
                     next.push_back(e.id);
-                } else if (it->second == static_cast<int>(depth)) {
-                    parents[e.id].push_back(e.link);
+                } else if (it->second.dist == static_cast<int>(depth)) {
+                    it->second.parents.push_back(e.link);
                 }
             }
         }
         frontier = std::move(next);
     }
 
-    std::vector<PathValue> out;
-    std::unordered_set<std::string> seen;
-    std::vector<EdgeLink> reversed;
-    std::function<void(VertexId)> walk = [&](VertexId v) {
-        if (v == start) {
-            std::vector<EdgeLink> links(reversed.rbegin(), reversed.rend());
-            std::string key = pathKey(links);
-            if (seen.insert(key).second) {
-                if (out.size() >= MAX_PATHS)
-                    throw std::runtime_error("MemoryLimitExceeded: too many shortest paths");
-                out.push_back(buildPath(start, links));
-            }
-            return;
-        }
-        auto it = parents.find(v);
-        if (it == parents.end())
-            return;
-        for (const auto& link : it->second) {
-            reversed.push_back(link);
-            walk(link.from);
-            reversed.pop_back();
-        }
+    struct Frame {
+        VertexId v;
+        size_t next_parent = 0;
     };
-    walk(end);
-    co_return out;
+    std::vector<Frame> stack{{end, 0}};
+    std::vector<EdgeLink> reversed;
+    size_t produced = 0;
+    while (!stack.empty()) {
+        Frame& frame = stack.back();
+        if (frame.v == start) {
+            std::vector<EdgeLink> links(reversed.rbegin(), reversed.rend());
+            if (produced++ >= MAX_PATHS)
+                throw std::runtime_error("MemoryLimitExceeded: too many shortest paths");
+            co_yield buildPath(start, links);
+            stack.pop_back();
+            if (!stack.empty() && !reversed.empty())
+                reversed.pop_back();
+            continue;
+        }
+        auto it = visits.find(frame.v);
+        if (it == visits.end() || frame.next_parent >= it->second.parents.size()) {
+            stack.pop_back();
+            if (!stack.empty() && !reversed.empty())
+                reversed.pop_back();
+            continue;
+        }
+        const EdgeLink link = it->second.parents[frame.next_parent++];
+        reversed.push_back(link);
+        stack.push_back(Frame{link.from, 0});
+    }
 }
 
 folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
@@ -395,6 +400,7 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
         const size_t input_rows = chunk->numRows();
         const size_t input_cols = chunk->numColumns();
         std::vector<std::pair<size_t, PathValue>> pending;
+        size_t pending_path_elements = 0;
 
         auto flush = [&]() -> DataChunk {
             const size_t n = pending.size();
@@ -411,6 +417,7 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
                     output.columns[input_cols].setValue(r, Value(mk<PathValue>(std::move(pending[r].second))));
             }
             pending.clear();
+            pending_path_elements = 0;
             output.count = n;
             output.sel = SelectionVector::identity(n);
             return output;
@@ -431,19 +438,22 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
                 continue;
 
             if (all_shortest_paths_) {
-                auto paths = co_await allShortestPaths(start, end);
-                for (auto& path : paths) {
-                    pending.emplace_back(row, std::move(path));
-                    if (pending.size() >= DataChunk::DEFAULT_CAPACITY) {
+                auto paths = allShortestPaths(start, end);
+                while (auto path = co_await paths.next()) {
+                    pending_path_elements += path->elements.size();
+                    pending.emplace_back(row, std::move(*path));
+                    if (pending.size() >= DataChunk::DEFAULT_CAPACITY ||
+                        pending_path_elements >= MAX_PENDING_PATH_ELEMENTS)
                         co_yield flush();
-                    }
                 }
             } else {
                 auto path = co_await shortestBidirectional(start, end);
-                if (path.has_value())
+                if (path.has_value()) {
+                    pending_path_elements += path->elements.size();
                     pending.emplace_back(row, std::move(*path));
+                }
             }
-            if (pending.size() >= DataChunk::DEFAULT_CAPACITY)
+            if (pending.size() >= DataChunk::DEFAULT_CAPACITY || pending_path_elements >= MAX_PENDING_PATH_ELEMENTS)
                 co_yield flush();
         }
         if (!pending.empty())
