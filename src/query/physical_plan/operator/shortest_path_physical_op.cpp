@@ -327,6 +327,13 @@ folly::coro::AsyncGenerator<PathValue> ShortestPathPhysicalOp::allShortestPaths(
             for (const auto& e : *edges) {
                 if (e.id == v || e.id == start)
                     continue;
+                // The endpoint may be reachable below the lower hop bound.
+                // It must not become a visited terminal in that case; keep
+                // searching until the first valid depth (best) and only then
+                // record parents. Otherwise a direct edge would incorrectly
+                // satisfy a `*2..3` allShortestPaths query.
+                if (e.id == end && depth < best)
+                    continue;
                 auto [it, inserted] = visits.try_emplace(e.id, AllPathNode{static_cast<int>(depth), {}});
                 if (inserted) {
                     it->second.parents.push_back(e.link);
