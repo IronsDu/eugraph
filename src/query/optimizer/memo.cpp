@@ -859,6 +859,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->dst_label_missing = val->dst_label_missing;
                 c->path_variable = val->path_variable;
                 c->path_column_index = val->path_column_index;
+                c->path_slot_id = val->path_slot_id;
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
                 c->shortest_path = val->shortest_path;
                 c->all_shortest_paths = val->all_shortest_paths;

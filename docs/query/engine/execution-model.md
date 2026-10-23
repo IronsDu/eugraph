@@ -163,6 +163,7 @@ AsyncGenerator<DataChunk>
 | PathElementPropertyRead | Column Replacement：PathTopology → PathValue（全量加载元素属性和标签，仅用于 PathBuild 路径） | getVertexLabels / getVertexProperties / getEdgeProperties |
 | Expand | 嵌套循环：对每行输入扫描邻居边，产出 VertexRef / EdgeKey / VertexRef（拓扑） | scanEdges |
 | VarLenExpand | DFS + 显式栈 + 边唯一性回溯，产出 VertexRef（dst），PathValue（path），List\<EdgeValue\>（edge list） | scanEdges × hop_depth |
+| ShortestPath | 独立算子：shortestPath 用双向 BFS（frontier 较小的一侧优先），allShortestPaths 用前向 BFS 枚举等长路径；产出 PathValue | scanEdges（双向 BFS 每层只扫 frontier） |
 | Filter | 纯计算，无 IO | 无 |
 | Project | 纯计算，无 IO | 无。无 RETURN 时空 ProjectOp 输出 0 列 |
 | Sort | **阻断**：全量物化后 `std::sort`。在 Project 之前执行，可引用原始列 | 无 |

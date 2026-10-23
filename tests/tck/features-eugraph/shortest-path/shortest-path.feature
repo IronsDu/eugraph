@@ -54,3 +54,37 @@ Feature: shortestPath and allShortestPaths
     Then the result should be, in any order:
       | len |
     And no side effects
+
+  Scenario: shortestPath respects the direction of a directed chain
+    Given an empty graph
+    And having executed:
+      """
+      CREATE (:Person {name: 'a'})-[:KNOWS]->(:Person {name: 'b'})-[:KNOWS]->(:Person {name: 'c'})
+      """
+    When executing query:
+      """
+      MATCH (a:Person {name: 'a'}), (c:Person {name: 'c'})
+      MATCH p = shortestPath((a)-[:KNOWS*1..3]->(c))
+      RETURN [n IN nodes(p) | n.name] AS names
+      """
+    Then the result should be, in any order:
+      | names           |
+      | ['a', 'b', 'c'] |
+    And no side effects
+
+  Scenario: shortestPath follows a reverse pattern from the other endpoint
+    Given an empty graph
+    And having executed:
+      """
+      CREATE (:Person {name: 'a'})-[:KNOWS]->(:Person {name: 'b'})-[:KNOWS]->(:Person {name: 'c'})
+      """
+    When executing query:
+      """
+      MATCH (a:Person {name: 'a'}), (c:Person {name: 'c'})
+      MATCH p = shortestPath((c)<-[:KNOWS*1..3]-(a))
+      RETURN [n IN nodes(p) | n.name] AS names
+      """
+    Then the result should be, in any order:
+      | names           |
+      | ['c', 'b', 'a'] |
+    And no side effects

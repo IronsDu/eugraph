@@ -21,6 +21,7 @@
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
+#include "query/physical_plan/operator/shortest_path_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/union_physical_op.hpp"
 #include "query/physical_plan/operator/unwind_physical_op.hpp"
@@ -2458,14 +2459,25 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                "' not found in child schema");
                     }
 
+                    if (v.shortest_path || v.all_shortest_paths) {
+                        auto result = std::make_unique<ShortestPathPhysicalOp>(
+                            v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops,
+                            v.max_hops, store, std::move(child_schema), std::move(child_op), v.path_variable,
+                            v.path_slot_id, v.all_shortest_paths, v.dst_label_ids, v.dst_label_missing,
+                            v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value);
+                        auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                              std::move(output_types), TupleSlotLayout{}};
+                        plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+                        return plan_result;
+                    }
+
                     auto result = std::make_unique<VarLenExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops, v.max_hops,
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
                         std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
                         v.edge_variable, v.edge_prop_filters, v.dst_label_ids, dst_bound, dst_existing,
                         v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing, v.dst_label_missing,
-                        v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value,
-                        v.shortest_path, v.all_shortest_paths);
+                        v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value);
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     // Phase D: VarLenExpand outputs VertexRef for dst; ProjectionExtract

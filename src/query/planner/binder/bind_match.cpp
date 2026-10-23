@@ -493,6 +493,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             const uint32_t path_col = nextColumnIndex();
             ColumnInfo path_info = makeColumnInfo(*pp.variable, BoundType::Path());
             path_info.column_index = path_col;
+            vle->path_slot_id = path_info.slot_id;
             ctx_.symbols[*pp.variable] = std::move(path_info);
             vle->path_variable = *pp.variable;
             vle->path_column_index = path_col;
