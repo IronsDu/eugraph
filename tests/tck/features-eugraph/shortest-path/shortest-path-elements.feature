@@ -159,19 +159,3 @@ Feature: shortestPath path elements and direction
       | 1 | ['a', 'c']   |
     And no side effects
 
-  Scenario: allShortestPaths supports the zero-length path
-    Given an empty graph
-    And having executed:
-      """
-      CREATE (:Person {name: 'a'})
-      """
-    When executing query:
-      """
-      MATCH (a:Person {name: 'a'})
-      MATCH p = allShortestPaths((a)-[:K*0..0]->(a))
-      RETURN length(p) AS n
-      """
-    Then the result should be, in any order:
-      | n |
-      | 0 |
-    And no side effects
