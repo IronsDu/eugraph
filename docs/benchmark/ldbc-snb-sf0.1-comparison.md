@@ -218,3 +218,53 @@ EXPLAIN 计划也一致。新格式用 1 连接/4 连接重载都复现同样的
 - 若要提升，需要针对 edge_index 的装载顺序/页面局部性，或让 planner 在“顶点已物化 + 紧接 Expand”场景真正用上 vertex_data，而不是继续做透明的 scanEdges/blob 读取。
 
 **当前性能验收未通过。**
+
+---
+
+## 7. Expand 目标标签过滤优化（2026-10-24）
+
+### 7.1 问题
+
+`Expand(f, m, HAS_CREATOR, IN)` 之后对 `m:Message` 的过滤原本走
+`getVertexLabelsBatch(neighbors)`：每个 neighbor 一次标签前缀 seek。  
+complex-3 形状里 neighbor 数约 5.8 万，这一步旧约 61ms、新约 79ms，是整个 friend→message
+展开的主要成本；它**完全不访问 vertex_data**，而是标签索引点查。
+
+### 7.2 改动
+
+对 `dst_label_ids_` 过滤按结果规模分两条路径：
+
+- `edges.size() < 4096`：保留逐 neighbor 标签点查（小集合更划算）；
+- 大集合：顺序扫 `label_fwd_{id}`，只把本批 neighbor 中命中标签的 vid 加入集合，再过滤边。
+
+代码：`src/query/physical_plan/operator/expand_physical_op.cpp`。
+
+### 7.3 结果
+
+同一份旧 edge_index 数据、新引擎：
+
+| 查询 | 优化前 | 优化后 |
+|---|---:|---:|
+| friend_msg（complex-3 的核心步骤） | 78.97 | **33.3** |
+| 旧 main 同一步 | 60.63 | — |
+
+这一步达到 **约 1.8× 于旧 main**。
+
+complex 子集（优化后，vs 旧 main）：
+
+| 查询 | 旧 main | 优化后 | 新/旧 |
+|---|---:|---:|---:|
+| complex-2 | 15.65 | 16.40 | 1.05 |
+| complex-3 | 136.75 | 184.76 | **1.35** |
+| complex-4 | 8.43 | 7.89 | 0.94 |
+| complex-7 | 5.02 | 4.87 | 0.97 |
+| complex-8 | 4.06 | 3.57 | 0.88 |
+| complex-10 | 35.87 | 36.16 | 1.01 |
+| complex-11 | 7.35 | 6.99 | 0.95 |
+| complex-12 | 354.86 | 386.95 | 1.09 |
+
+结论：
+
+- 标签过滤优化只对**大 neighbor 集合 + 大标签**有效；小集合保留点查，避免 complex-2/8/10 回退。
+- complex-3 仍慢约 35%，慢点已转到 message 属性读取（`message.creationDate` 等），说明
+  `vertex_data` 的属性点查布局仍有问题；下一轮应针对属性读取做按标签批量/紧凑布局，而不是继续优化标签过滤。
