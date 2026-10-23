@@ -6,6 +6,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -45,6 +46,54 @@ enum class Direction : uint8_t {
     OUT = 0x00,
     IN = 0x01,
     BOTH = 0x02
+};
+
+// ==================== Bounded out-edge cache ====================
+// Stored in vertex_data under {vertex_id}{kind=OUT_ADJACENCY}. Variable-length
+// blob: one state byte followed by fixed-width 32B entries; no count field.
+enum class AdjacencyCacheState : uint8_t {
+    COMPLETE = 0x00, // every out-edge of this vertex is cached
+    OVERFLOW = 0x01, // at least one out-edge is not cached; use edge_index
+};
+
+struct CachedOutEdge {
+    EdgeLabelId edge_label_id = INVALID_EDGE_LABEL_ID;
+    VertexId neighbor_id = INVALID_VERTEX_ID;
+    uint64_t seq = 0;
+    EdgeId edge_id = INVALID_EDGE_ID;
+
+    bool operator==(const CachedOutEdge&) const = default;
+};
+
+struct OutEdgeCache {
+    AdjacencyCacheState state = AdjacencyCacheState::COMPLETE;
+    std::vector<CachedOutEdge> edges;
+
+    [[nodiscard]] bool complete() const noexcept {
+        return state == AdjacencyCacheState::COMPLETE;
+    }
+};
+
+// ==================== Vertex data ====================
+// Optional fields distinguish "not requested" from "requested and empty".
+enum class VertexDataNeed : uint32_t {
+    LABELS = 1u << 0,
+    PROPERTIES = 1u << 1,
+    OUT_EDGES = 1u << 2,
+};
+
+inline uint32_t operator|(VertexDataNeed a, VertexDataNeed b) {
+    return static_cast<uint32_t>(a) | static_cast<uint32_t>(b);
+}
+inline bool hasNeed(uint32_t needs, VertexDataNeed n) {
+    return (needs & static_cast<uint32_t>(n)) != 0;
+}
+
+struct VertexData {
+    VertexId id = INVALID_VERTEX_ID;
+    std::optional<LabelIdSet> labels;
+    std::optional<std::unordered_map<LabelId, Properties>> properties;
+    std::optional<OutEdgeCache> out_edges;
 };
 
 // ==================== Vertex ====================

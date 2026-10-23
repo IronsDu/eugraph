@@ -72,6 +72,11 @@ public:
 - **批量读取允许重复 id**：`getVertexLabelsBatch` / `getVertexPropertiesBatch` /
   `getVertexPropertiesBatchProjected` 内部先按唯一 vid 查询，再按输入顺序展开；返回值长度/顺序
   与输入一致。调用方可以把同一 bound vertex 重复 1024 次，不应因此产生 1024 次 WT 查询。
+- **顶点数据合并 + 有界出边缓存**：标签/属性/可选 out-edge blob 统一存 `vertex_data`
+  （编码见 [kv-encoding.md](kv-encoding.md)）。`loadVertexData(vid, needs)` 按需填充
+  `labels/properties/out_edges` 三个 optional；`createEdgeScanCursor`/`scanEdges` 接受可空的
+  `const OutEdgeCache*`，`nullptr` 或 `OVERFLOW` 回退 `edge_index`。cache 默认关闭
+  （`--adj-cache-capacity 0`）；开启后是显式、调用方持有的行/批次局部缓存，不做全局缓存。
 - **失败必须粘到会话**：表原语返回 WT 错误码，会话路径一律 `session.fail_from_wt(...)`；即使 op 的
   `bool/optional` 返回值被忽略，`commit()` 也会拒绝提交并回滚（`StickyError` / `TxnErrorClass`）。
   只有 `WT_NOTFOUND`（点查/删除）是正常结果，不粘错误。

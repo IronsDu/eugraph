@@ -805,3 +805,139 @@ TEST_F(WTGraphStoreTest, TxnVisibility) {
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<std::string>(*val), "no_txn");
 }
+
+// ==================== Bounded out-edge cache ====================
+
+TEST_F(WTGraphStoreTest, OutEdgeCachePopulatesAndServesScan) {
+    store_->setAdjacencyCacheCapacity(4);
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(txn, 900, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    ASSERT_TRUE(store_->insertEdge(txn, 910, 900, 2, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 911, 900, 3, 1, 0, Properties{}));
+    commit(txn);
+
+    auto data = store_->loadVertexData(store_->autoSession(), 900, static_cast<uint32_t>(VertexDataNeed::OUT_EDGES));
+    ASSERT_TRUE(data.out_edges.has_value());
+    EXPECT_EQ(data.out_edges->state, AdjacencyCacheState::COMPLETE);
+    ASSERT_EQ(data.out_edges->edges.size(), 2u);
+
+    std::vector<EdgeId> seen;
+    store_->scanEdges(store_->autoSession(), 900, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                          seen.push_back(e.edge_id);
+                          return true;
+                      });
+    EXPECT_EQ(seen, (std::vector<EdgeId>{910, 911}));
+}
+
+TEST_F(WTGraphStoreTest, OutEdgeCacheOverflowFallsBack) {
+    store_->setAdjacencyCacheCapacity(2);
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(txn, 920, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    ASSERT_TRUE(store_->insertEdge(txn, 921, 920, 2, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 922, 920, 3, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 923, 920, 4, 1, 0, Properties{}));
+    commit(txn);
+
+    auto data = store_->loadVertexData(store_->autoSession(), 920, static_cast<uint32_t>(VertexDataNeed::OUT_EDGES));
+    ASSERT_TRUE(data.out_edges.has_value());
+    EXPECT_EQ(data.out_edges->state, AdjacencyCacheState::OVERFLOW);
+    EXPECT_EQ(data.out_edges->edges.size(), 2u);
+
+    size_t count = 0;
+    store_->scanEdges(store_->autoSession(), 920, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry&) {
+                          ++count;
+                          return true;
+                      });
+    EXPECT_EQ(count, 3u);
+}
+
+TEST_F(WTGraphStoreTest, OutEdgeCacheDeleteCompacts) {
+    store_->setAdjacencyCacheCapacity(4);
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(txn, 930, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    ASSERT_TRUE(store_->insertEdge(txn, 931, 930, 2, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 932, 930, 3, 1, 0, Properties{}));
+    commit(txn);
+
+    auto del = writeTxn();
+    ASSERT_TRUE(store_->deleteEdge(del, 931, 1, 930, 2, 0));
+    commit(del);
+
+    auto data = store_->loadVertexData(store_->autoSession(), 930, static_cast<uint32_t>(VertexDataNeed::OUT_EDGES));
+    ASSERT_TRUE(data.out_edges.has_value());
+    EXPECT_EQ(data.out_edges->state, AdjacencyCacheState::COMPLETE);
+    ASSERT_EQ(data.out_edges->edges.size(), 1u);
+    EXPECT_EQ(data.out_edges->edges[0].edge_id, 932u);
+}
+
+TEST_F(WTGraphStoreTest, OutEdgeCacheDisabledFallsBack) {
+    store_->setAdjacencyCacheCapacity(0);
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(txn, 940, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    ASSERT_TRUE(store_->insertEdge(txn, 941, 940, 2, 1, 0, Properties{}));
+    commit(txn);
+
+    auto data = store_->loadVertexData(store_->autoSession(), 940, static_cast<uint32_t>(VertexDataNeed::OUT_EDGES));
+    EXPECT_FALSE(data.out_edges.has_value());
+
+    size_t count = 0;
+    store_->scanEdges(store_->autoSession(), 940, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry&) {
+                          ++count;
+                          return true;
+                      });
+    EXPECT_EQ(count, 1u);
+}
+
+TEST_F(WTGraphStoreTest, VertexDataOptionalFields) {
+    store_->setAdjacencyCacheCapacity(4);
+    auto txn = writeTxn();
+    auto props = makeProps({{0, std::string("alice")}});
+    ASSERT_TRUE(store_->insertVertex(txn, 950, std::vector<std::pair<LabelId, Properties>>{{1, props}}));
+    commit(txn);
+
+    auto labels_only =
+        store_->loadVertexData(store_->autoSession(), 950, static_cast<uint32_t>(VertexDataNeed::LABELS));
+    EXPECT_TRUE(labels_only.labels.has_value());
+    EXPECT_EQ(labels_only.labels->count(1), 1u);
+    EXPECT_FALSE(labels_only.properties.has_value());
+    EXPECT_FALSE(labels_only.out_edges.has_value());
+
+    auto props_only =
+        store_->loadVertexData(store_->autoSession(), 950, static_cast<uint32_t>(VertexDataNeed::PROPERTIES));
+    EXPECT_FALSE(props_only.labels.has_value());
+    ASSERT_TRUE(props_only.properties.has_value());
+    ASSERT_TRUE(props_only.properties->contains(1));
+    ASSERT_TRUE((*props_only.properties)[1][0].has_value());
+
+    auto all = store_->loadVertexData(store_->autoSession(), 950,
+                                      static_cast<uint32_t>(VertexDataNeed::LABELS) |
+                                          static_cast<uint32_t>(VertexDataNeed::PROPERTIES) |
+                                          static_cast<uint32_t>(VertexDataNeed::OUT_EDGES));
+    EXPECT_TRUE(all.labels.has_value());
+    EXPECT_TRUE(all.properties.has_value());
+    EXPECT_TRUE(all.out_edges.has_value());
+    EXPECT_EQ(all.out_edges->state, AdjacencyCacheState::COMPLETE);
+    EXPECT_TRUE(all.out_edges->edges.empty());
+}
+
+TEST_F(WTGraphStoreTest, ExplicitOutEdgeCacheScanUsesBlob) {
+    store_->setAdjacencyCacheCapacity(4);
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(txn, 960, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    ASSERT_TRUE(store_->insertEdge(txn, 961, 960, 2, 1, 0, Properties{}));
+    commit(txn);
+
+    auto data = store_->loadVertexData(store_->autoSession(), 960, static_cast<uint32_t>(VertexDataNeed::OUT_EDGES));
+    ASSERT_TRUE(data.out_edges.has_value());
+
+    std::vector<EdgeId> seen;
+    store_->scanEdges(store_->autoSession(), 960, &*data.out_edges, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                          seen.push_back(e.edge_id);
+                          return true;
+                      });
+    EXPECT_EQ(seen, (std::vector<EdgeId>{961}));
+}

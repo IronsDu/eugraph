@@ -107,3 +107,63 @@ eugraph 在一次性数据副本上真实提交；neo4j 在现有库上真实提
 - 新增 TCK feature：`tests/tck/features-eugraph/shortest-path/shortest-path.feature`（3/3 通过）。
 - 新增单测：`PatternComprehensionAsReduceListSource`；原有 `ReduceBodyCorrelatedPatternComprehension` 通过。
 - 全量 ctest：**1304/1304**（含 TCK）。
+
+---
+
+## 5. 2026-10-23：vertex_data / 邻接缓存实验
+
+> 本节是存储格式改造后的独立复测，**§2 的旧表来自改造前**。新旧二进制不能直接读同一数据目录；
+> 旧 `label_reverse`/`vprop_*` 目录会被新二进制拒绝，需重新 load 或迁移。
+
+### 5.1 数据与配置
+
+- 新格式数据：`vertex_data` 合并标签/属性；`vertex_existence`、`label_fwd` 保留。
+- 数据用 sf0.1 Basic CSV + 适配 schema 重新装载（Basic 语料没有 Person 的 email/language 列；
+  §2 的完整数据语义以旧库/neo4j 为准，本节只看引擎执行性能）。
+- 8 compute、4 storage IO；3 轮交错，min。
+- 邻接缓存默认关闭（`--adj-cache-capacity 0`）。
+
+### 5.2 邻接缓存 A/B（cache N=8 vs 0）
+
+同一份带 cache 数据的两次查询，仅切换 server 的 `--adj-cache-capacity`：
+
+| 查询 | cache 8 min (ms) | cache 0 min (ms) | cache/0 |
+|---|---:|---:|---:|
+| complex-2 | 18.61 | 19.38 | 1.04 |
+| complex-3 | 202.32 | 205.48 | 1.02 |
+| complex-4 | 9.56 | 10.39 | 1.09 |
+| complex-5 | 554.85 | 547.34 | 0.99 |
+| complex-6 | 163.27 | 165.57 | 1.01 |
+| complex-7 | 6.13 | 5.42 | 0.88 |
+| complex-8 | 4.83 | 4.46 | 0.92 |
+| complex-9 | 737.26 | 720.86 | 0.98 |
+| complex-10 | 43.68 | 42.00 | 0.96 |
+| complex-11 | 9.35 | 8.80 | 0.94 |
+| complex-12 | 426.18 | 430.45 | 1.01 |
+
+**结论：这项 out-only 缓存对 sf0.1 LDBC 复杂查询没有可测收益，部分查询因额外读 blob 略慢。**
+因此默认关闭；保留存储/接口用于后续按需接入（见 §5.4）。
+
+### 5.3 改造后 complex 子集（cache 0，vs neo4j）
+
+| 查询 | eugraph min (ms) | neo4j min (ms) | 状态 |
+|---|---:|---:|---|
+| complex-2 | 17.27 | 5.41 | 🔴 慢 3.2× |
+| complex-3 | 184.09 | 29.69 | 🔴 慢 6.2× |
+| complex-4 | 8.69 | 5.27 | 🟡 慢 1.6× |
+| complex-7 | 5.02 | 4.61 | 🟢 慢 1.1× |
+| complex-8 | 3.65 | 4.32 | 🟢 快 1.2× |
+| complex-10 | 38.65 | 16.92 | 🔴 慢 2.3× |
+| complex-11 | 7.58 | 5.75 | 🟡 慢 1.3× |
+| complex-12 | 372.19 | 103.35 | 🔴 慢 3.6× |
+
+> 这是改造后同一轮的相对值，不对旧轮次做归因；CPU 频率/数据 schema 与 §2 不同。
+
+### 5.4 结论
+
+1. `vertex_data` 合并已完成：少掉 `label_reverse` 和所有 `vprop_*` 表，标签/属性共享 B-tree；
+   但当前 complex 子集没有看到相对旧格式的提速，需要用同机旧二进制做正式 A/B 才能判断。
+2. out-edge cache 在 sf0.1 LDBC 上没有收益，默认关闭；仅在明确需要 OUT 邻接且顶点已物化的
+   专用路径再启用（接口已预留）。
+3. 写路径注意：cache blob 是每顶点单记录，多连接同时更新同一顶点会产生 WT 写冲突；
+   loader 用 4 连接 + cache 开启时实测会 commit 失败，需单连接或关闭 cache。

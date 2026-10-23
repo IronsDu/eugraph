@@ -48,6 +48,18 @@ public:
         return *conn_;
     }
 
+    /// Bounded out-edge cache capacity. 0 disables the cache. Old vertices
+    /// without a blob fall back to edge_index when the cache is enabled later.
+    void setAdjacencyCacheCapacity(uint16_t capacity) noexcept {
+        adjacency_cache_capacity_ = capacity;
+    }
+    [[nodiscard]] uint16_t adjacencyCacheCapacity() const noexcept {
+        return adjacency_cache_capacity_;
+    }
+    [[nodiscard]] bool adjacencyCacheEnabled() const override {
+        return adjacency_cache_capacity_ > 0;
+    }
+
     /// 建表（幂等 ✓）：全局表由 GraphManager 在 bind 之后调用 ✓（session 由调用方创建/拥有）
     bool ensure_tables();
 
@@ -61,6 +73,9 @@ public:
     bool insertVertex(GraphSession& session, VertexId vid,
                       std::span<const std::pair<LabelId, Properties>> label_props) override;
     bool deleteVertex(GraphSession& session, VertexId vid) override;
+    VertexData loadVertexData(GraphSession& session, VertexId vid, uint32_t needs) override;
+    std::vector<std::optional<OutEdgeCache>> loadOutEdgeCachesBatch(GraphSession& session,
+                                                                    const std::vector<VertexId>& vids) override;
 
     // Vertex Properties
     std::optional<Properties> getVertexProperties(GraphSession& session, VertexId vid, LabelId label_id) override;
@@ -115,8 +130,12 @@ public:
     // Edge Traversal
     void scanEdges(GraphSession& session, VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
                    const std::function<bool(const EdgeIndexEntry&)>& callback) override;
+    void scanEdges(GraphSession& session, VertexId vid, const OutEdgeCache* cache, Direction direction,
+                   std::optional<EdgeLabelId> label_filter,
+                   const std::function<bool(const EdgeIndexEntry&)>& callback) override;
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid, Direction direction,
-                                                          std::optional<EdgeLabelId> label_filter) override;
+                                                          std::optional<EdgeLabelId> label_filter,
+                                                          const OutEdgeCache* cache = nullptr) override;
     void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                          std::optional<VertexId> dst_filter,
                          const std::function<bool(const EdgeTypeIndexEntry&)>& callback) override;
@@ -191,6 +210,7 @@ public:
 private:
     WtConnectionStore* conn_ = nullptr;
     SchemaDdl schema_ddl_;
+    uint16_t adjacency_cache_capacity_ = kDefaultAdjacencyCacheCapacity;
 };
 
 // ==================== Scan Cursor Implementations ====================

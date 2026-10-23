@@ -95,6 +95,24 @@ public:
         co_return std::move(result);
     }
 
+    folly::coro::Task<VertexData> loadVertexData(VertexId vid, uint32_t needs) override {
+        auto result =
+            co_await io_.dispatch([this, vid, needs]() { return store_.loadVertexData(session_, vid, needs); });
+        co_return std::move(result);
+    }
+
+    folly::coro::Task<std::vector<std::optional<OutEdgeCache>>>
+    loadOutEdgeCachesBatch(const std::vector<VertexId>& vids) override {
+        auto ids = vids;
+        auto result = co_await io_.dispatch(
+            [this, ids = std::move(ids)]() { return store_.loadOutEdgeCachesBatch(session_, ids); });
+        co_return std::move(result);
+    }
+
+    bool adjacencyCacheEnabled() const override {
+        return store_.adjacencyCacheEnabled();
+    }
+
     folly::coro::Task<std::vector<std::optional<Properties>>>
     batchGetVertexProperties(const std::vector<VertexId>& vids, LabelId label_id,
                              const std::vector<uint16_t>& projection) override {
@@ -250,6 +268,34 @@ public:
             if (batch.empty()) {
                 co_return;
             }
+            co_yield std::move(batch);
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
+    scanEdges(VertexId vid, OutEdgeCache cache, Direction direction, std::optional<EdgeLabelId> label_filter) override {
+        constexpr size_t BATCH = 65536;
+        folly::EventBase* bound_evb = nullptr;
+        auto cursor =
+            co_await io_.dispatch([this, vid, direction, label_filter, cache = std::move(cache), &bound_evb]() {
+                bound_evb = folly::EventBaseManager::get()->getEventBase();
+                return store_.createEdgeScanCursor(session_, vid, direction, label_filter, &cache);
+            });
+        if (!cursor)
+            co_return;
+
+        while (true) {
+            std::vector<ISyncGraphDataStore::EdgeIndexEntry> batch;
+            batch.reserve(BATCH);
+            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
+                                                        batch.push_back(cursor->entry());
+                                                        cursor->next();
+                                                    }
+                                                    co_return;
+                                                }));
+            if (batch.empty())
+                co_return;
             co_yield std::move(batch);
         }
     }

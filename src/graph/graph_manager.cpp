@@ -17,12 +17,13 @@ GraphManager::~GraphManager() {
 }
 
 bool GraphManager::init(const std::string& data_dir, int io_threads, int compute_threads, int checkpoint_interval_sec,
-                        const std::string& data_wt_config) {
+                        const std::string& data_wt_config, uint16_t adjacency_cache_capacity) {
     data_dir_ = data_dir;
     io_threads_ = io_threads;
     compute_threads_ = compute_threads;
     checkpoint_interval_sec_ = checkpoint_interval_sec;
     data_wt_config_ = data_wt_config;
+    adjacency_cache_capacity_ = adjacency_cache_capacity;
 
     auto t0 = std::chrono::steady_clock::now();
 
@@ -278,6 +279,7 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
 
     instance->sync_data = std::make_unique<SyncGraphDataStore>();
     instance->sync_data->bind_connection(instance->data_conn);
+    instance->sync_data->setAdjacencyCacheCapacity(adjacency_cache_capacity_);
     if (!instance->sync_data->ensure_tables()) {
         spdlog::error("Failed to ensure data tables for graph '{}' at {}", name, data_dir);
         return nullptr;

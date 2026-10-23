@@ -55,6 +55,12 @@ public:
     }
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
     virtual folly::coro::Task<std::vector<LabelIdSet>> getVertexLabelsBatch(const std::vector<VertexId>& vids) = 0;
+    /// Optional-field vertex load: only requested labels/properties/out-edges
+    /// are populated. See graph_types.hpp VertexDataNeed.
+    virtual folly::coro::Task<VertexData> loadVertexData(VertexId vid, uint32_t needs) = 0;
+    virtual folly::coro::Task<std::vector<std::optional<OutEdgeCache>>>
+    loadOutEdgeCachesBatch(const std::vector<VertexId>& vids) = 0;
+    virtual bool adjacencyCacheEnabled() const = 0;
 
     // Edge Properties
     virtual folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) = 0;
@@ -109,6 +115,10 @@ public:
     // Edge Scan
     virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) = 0;
+    /// Cache-aware OUT scan. The cache is copied into the coroutine because a
+    /// raw pointer cannot safely cross suspension points.
+    virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
+    scanEdges(VertexId vid, OutEdgeCache cache, Direction direction, std::optional<EdgeLabelId> label_filter) = 0;
     struct BatchedEdge {
         VertexId src_id;
         ISyncGraphDataStore::EdgeIndexEntry entry;
