@@ -304,3 +304,49 @@ complex 子集（优化后，vs 旧 main）：
 2. 标签合并进 X 后，大 neighbor 集合的标签过滤应走 `label_fwd` 顺序扫描，而不是逐点 `getVertexLabelsBatch`；这是本次 1.8× 提升的来源。
 3. 邻接 cache 仍无收益，默认 N=0；hybrid 保留接口但不启用。
 4. 最终方案是**数据驱动的 hybrid**：标签/邻接合并，属性按标签分区。
+
+### 8.1 Hybrid 全量读数（sf0.1，8 compute，cache 0）
+
+| 查询 | 行数 | min (ms) | p50 (ms) |
+|---|---:|---:|---:|
+| short-1 | 1 | 1.13 | 1.16 |
+| short-2 | 10 | 3.50 | 4.20 |
+| short-3 | 3 | 1.11 | 1.22 |
+| short-4 | 1 | 0.99 | 1.07 |
+| short-5 | 1 | 0.98 | 1.02 |
+| short-6 | 1 | 1.14 | 1.21 |
+| short-7 | 0 | 1.39 | 1.60 |
+| complex-1 | 20 | 17.85 | 18.33 |
+| complex-2 | 20 | 15.97 | 21.90 |
+| complex-3 | 0 | 143.78 | 147.89 |
+| complex-4 | 0 | 8.18 | 9.49 |
+| complex-5 | 20 | 520.23 | 528.36 |
+| complex-6 | 3 | 96.92 | 97.19 |
+| complex-7 | 7 | 4.88 | 5.06 |
+| complex-8 | 20 | 3.35 | 3.36 |
+| complex-9 | 20 | 435.34 | 444.61 |
+| complex-10 | 10 | 36.68 | 37.07 |
+| complex-11 | 4 | 6.91 | 7.04 |
+| complex-12 | 3 | 382.48 | 384.77 |
+| complex-13 | 1 | 3.7 | — |
+| complex-14 | 4 | 80536.57 | — |
+
+> complex-13/14 的参数是 `person1Id=933, person2Id=1129`（默认 ID 不在本地数据）；
+> 其余 complex 参数按文件默认 + `personId=933`，short-4..7 用 `messageId=3`。
+> short-7 本次为 0 行，仅说明可运行，不作语义对照。
+
+### 8.2 性能分析
+
+相对旧 main / 旧文档：
+
+- **大标签过滤**：complex-6 从 550–605ms 降到 **97ms**；complex-9 从 3960ms 降到 **435ms**；
+  complex-3 的核心步骤 `friend<-HAS_CREATOR-message` 从 60.6ms 降到 **34.2ms**。
+- **标签过滤改动**使用 `label_fwd` 顺序扫描，对 neighbor 数大、目标标签大的场景收益显著；
+  小集合保留点查，避免 complex-2/8/10 回退。
+- 仍慢：complex-5（520 vs 475ms）、complex-12（382 vs 337ms）、complex-14（80.5s）。
+- 邻接 cache N=8 vs 0 仍无收益，默认关闭；它的成本/复杂度不值得在当前 LDBC 负载上启用。
+- 最终存储利用结论：
+  1. `vertex_data` 的标签部分 + `label_fwd` 是有效热路径；
+  2. 属性必须保留 `vprop_{id}` 的分区局部性，不能全部塞进 X；
+  3. edge_index 仍是复杂查询的主要成本，X 不参与 edge scan；
+  4. cache 只在“顶点已物化 + 紧接 OUT Expand”的特定场景有潜力，当前不启用。
