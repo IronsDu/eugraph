@@ -116,6 +116,7 @@ eugraph 在一次性数据副本上真实提交；neo4j 在现有库上真实提
 `perf/expand-label-filter` 分支相对其 main 父提交的差异：
 
 - 数据：327,588 顶点 / 1,477,965 边 / 1,528 Person / 286,744 Message
+- CSV 为 Basic 数据集；适配 schema 未导入 Person `email`/`language`，本组查询不使用这两列
 - 数据目录复制两份，base/opt 两个二进制、同机、同参数、8 compute、交错取 min
 - 仅改 `Expand` 目标标签过滤：大集合扫 `label_fwd`，小集合保留点查
 

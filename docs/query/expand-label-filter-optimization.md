@@ -61,6 +61,9 @@ schema: /tmp/loader-schema-sf01-basic.json
 loader: --batch-size 5000 --rpc-connections 4 --parallel-files 4
 ```
 
+说明：CSV 为 Basic 数据集，适配 schema 未导入 Person 的 `email`/`language` 列；
+本文所有 A/B 查询都不使用这两列。数值型字段与边/标签计数和 sf0.1 一致。
+
 导入后核对：
 
 - 顶点：327,588
