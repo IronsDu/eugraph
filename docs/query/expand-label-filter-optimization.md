@@ -61,8 +61,9 @@ schema: /tmp/loader-schema-sf01-basic.json
 loader: --batch-size 5000 --rpc-connections 4 --parallel-files 4
 ```
 
-说明：CSV 为 Basic 数据集，适配 schema 未导入 Person 的 `email`/`language` 列；
-本文所有 A/B 查询都不使用这两列。数值型字段与边/标签计数和 sf0.1 一致。
+说明：本节标签过滤 A/B 使用首次 fresh import（未导入 Person `email`/`speaks`），
+因为 friend_msg / complex-6 的读取路径不使用这两个属性；最终与 neo4j 对照使用补齐
+`email`/`speaks` 的导入数据（见 benchmark §4）。
 
 导入后核对：
 
