@@ -500,26 +500,27 @@ static void collectExprSlots(const binder::BoundExpression& expr, std::unordered
 /// Collect slots consumed anywhere in a logical subtree (expressions plus
 /// child operators). Used to decide which slots the LIMIT's Sort/Filter side
 /// still needs before the limit.
-static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordered_set<binder::SlotId>& out) {
+static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordered_set<binder::SlotId>& out,
+                           bool& has_write) {
     std::visit(
         [&](const auto& v) {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (v) {
                     collectExprSlots(v->predicate, out);
-                    collectOpSlots(v->child, out);
+                    collectOpSlots(v->child, out, has_write);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
                     for (const auto& item : v->items)
                         collectExprSlots(item.expr, out);
-                    collectOpSlots(v->child, out);
+                    collectOpSlots(v->child, out, has_write);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
                 if (v) {
                     for (const auto& item : v->items)
                         collectExprSlots(item.expr, out);
-                    collectOpSlots(v->child, out);
+                    collectOpSlots(v->child, out, has_write);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
@@ -528,41 +529,67 @@ static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordere
                     for (const auto& agg : v->aggregates)
                         for (const auto& a : agg.arguments)
                             collectExprSlots(a, out);
-                    collectOpSlots(v->child, out);
+                    collectOpSlots(v->child, out, has_write);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v) {
                     collectExprSlots(v->list_expr, out);
-                    collectOpSlots(v->child, out);
+                    collectOpSlots(v->child, out, has_write);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 if (v)
-                    collectOpSlots(v->child, out);
+                    collectOpSlots(v->child, out, has_write);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
-                    collectOpSlots(v->left, out);
-                    collectOpSlots(v->right, out);
+                    collectOpSlots(v->left, out, has_write);
+                    collectOpSlots(v->right, out, has_write);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v)
-                    collectOpSlots(v->child, out);
+                    collectOpSlots(v->child, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
+                has_write = true;
+                if (v) {
+                    for (const auto& item : v->items)
+                        if (item.value_expr)
+                            collectExprSlots(*item.value_expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>>) {
+                has_write = true;
+                if (v)
+                    collectOpSlots(v->child, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
+                has_write = true;
+                if (v) {
+                    for (const auto& t : v->targets)
+                        if (t.expr)
+                            collectExprSlots(*t.expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
+                has_write = true;
+                if (v)
+                    collectOpSlots(v->child, out, has_write);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 if (v) {
                     collectExprSlots(v->list_expr, out);
-                    collectOpSlots(v->child, out);
-                    collectOpSlots(v->body, out);
+                    collectOpSlots(v->child, out, has_write);
+                    collectOpSlots(v->body, out, has_write);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+                has_write = true;
                 if (v && v->child)
-                    collectOpSlots(*v->child, out);
+                    collectOpSlots(*v->child, out, has_write);
             }
         },
         op);
@@ -628,7 +655,10 @@ static std::unordered_set<binder::SlotId> computeSortFilterDeferredSlots(const P
     std::unordered_set<binder::SlotId> predicate_slots;
     collectExprSlots(filter.predicate, predicate_slots);
     std::unordered_set<binder::SlotId> child_slots;
-    collectOpSlots(filter.child, child_slots);
+    bool child_has_write = false;
+    collectOpSlots(filter.child, child_slots, child_has_write);
+    if (child_has_write)
+        return {};
     std::unordered_set<binder::SlotId> pe_slots;
     collectPEOutputSlots(ctx, pe_slots);
 
@@ -655,7 +685,10 @@ static std::unordered_set<binder::SlotId> computeDeferredSlots(const PlanContext
         collectExprSlots(item.expr, project_slots);
 
     std::unordered_set<binder::SlotId> used_below;
-    collectOpSlots(project.child, used_below);
+    bool has_write = false;
+    collectOpSlots(project.child, used_below, has_write);
+    if (has_write)
+        return {};
 
     std::unordered_set<binder::SlotId> deferred;
     for (binder::SlotId s : project_slots) {
