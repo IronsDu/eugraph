@@ -1158,6 +1158,68 @@ std::optional<cypher::Expression> Binder::removeExistsFromWhere(const cypher::Ex
         expr);
 }
 
+namespace {
+
+bool isVarProp(const cypher::Expression& expr, const std::string& var) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<cypher::PropertyAccess>>) {
+                if (!ptr)
+                    return false;
+                auto* obj = std::get_if<std::unique_ptr<cypher::Variable>>(&ptr->object);
+                return obj && *obj && (*obj)->name == var;
+            }
+            return false;
+        },
+        expr);
+}
+bool isEndpointFn(const cypher::Expression& expr) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<cypher::FunctionCall>>)
+                return ptr && (ptr->name == "startNode" || ptr->name == "endNode");
+            else if constexpr (std::is_same_v<T, std::unique_ptr<cypher::PropertyAccess>>)
+                return ptr && isEndpointFn(ptr->object);
+            else if constexpr (std::is_same_v<T, std::unique_ptr<cypher::ParenExpr>>)
+                return ptr && isEndpointFn(ptr->inner);
+            return false;
+        },
+        expr);
+}
+std::optional<cypher::Expression> anchorPred(const cypher::Expression& expr, const std::string& var) {
+    if (auto* paren = std::get_if<std::unique_ptr<cypher::ParenExpr>>(&expr); paren && *paren)
+        return anchorPred((*paren)->inner, var);
+    auto* bin = std::get_if<std::unique_ptr<cypher::BinaryOp>>(&expr);
+    if (!bin || !*bin)
+        return std::nullopt;
+    auto& b = **bin;
+    if (b.op == cypher::BinaryOperator::EQ) {
+        if ((isVarProp(b.left, var) && isEndpointFn(b.right)) || (isVarProp(b.right, var) && isEndpointFn(b.left)))
+            return cloneExpression(expr);
+        return std::nullopt;
+    }
+    if (b.op == cypher::BinaryOperator::AND || b.op == cypher::BinaryOperator::OR) {
+        auto l = anchorPred(b.left, var), r = anchorPred(b.right, var);
+        if (b.op == cypher::BinaryOperator::OR && (!l || !r))
+            return std::nullopt;
+        if (!l && !r)
+            return std::nullopt;
+        if (!l)
+            return r;
+        if (!r)
+            return l;
+        auto out = std::make_unique<cypher::BinaryOp>();
+        out->op = b.op;
+        out->left = std::move(*l);
+        out->right = std::move(*r);
+        return cypher::Expression(std::move(out));
+    }
+    return std::nullopt;
+}
+} // namespace
+
 std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::ExistsExpr& exists,
                                                               std::vector<std::pair<uint32_t, uint32_t>>& correlation,
                                                               const std::vector<std::string>& preset_corr_vars) {
@@ -1522,6 +1584,31 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         correlation.emplace_back(left_slot, sub_slot);
     }
 
+    // Resolve start-node labels for a non-correlated anchor. The generic
+    // EXISTS/PatternComprehension path used to emit a plain BoundScanOp here;
+    // bindMatch then saw the variable as already bound and only added a
+    // post-scan label filter, leaving an AllNodeScan for e.g. (a:Person).
+    auto makeStartScan = [&]() -> BoundLogicalOperator {
+        std::vector<LabelId> start_labels;
+        for (const auto& label_name : first_node.labels) {
+            LabelId lid = catalog_.labelNameToId(label_name);
+            if (lid != INVALID_LABEL_ID)
+                start_labels.push_back(lid);
+        }
+        if (!start_labels.empty() || !first_node.labels.empty()) {
+            BoundLabelScanOp scan;
+            scan.variable = start_var_name;
+            scan.column_index = sub_idx;
+            scan.label_ids = std::move(start_labels);
+            scan.label_names = first_node.labels;
+            return BoundLogicalOperator(scan);
+        }
+        BoundScanOp scan;
+        scan.variable = start_var_name;
+        scan.column_index = sub_idx;
+        return BoundLogicalOperator(scan);
+    };
+
     // Create the source leaf operator
     BoundLogicalOperator source_op;
     if (is_correlated || !correlation.empty()) {
@@ -1544,13 +1631,11 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         if (!is_correlated) {
             // Nested EXISTS: start var not correlated, but extra vars are.
             // CrossJoin CorrelatedSource(extras) + Scan(start_var).
-            BoundScanOp scan;
-            scan.variable = start_var_name;
-            scan.column_index = sub_idx;
+            auto start_scan = makeStartScan();
             auto join = std::make_unique<BoundBinaryJoinOp>();
             join->join_type = JoinType::Cross;
             join->left = std::move(source);
-            join->right = std::move(scan);
+            join->right = std::move(start_scan);
             source_op = BoundLogicalOperator(std::move(join));
             // start_var's column_index shifted by number of extra correlation cols.
             size_t extra_cols = correlation.size();
@@ -1560,10 +1645,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             source_op = std::move(source);
         }
     } else {
-        BoundScanOp scan;
-        scan.variable = start_var_name;
-        scan.column_index = sub_idx;
-        source_op = std::move(scan);
+        source_op = makeStartScan();
     }
 
     std::optional<BoundLogicalOperator> sub_plan;
@@ -1724,6 +1806,19 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         filter.predicate = makeEqualityExpr(left_ref, right_ref);
         filter.child = std::move(*sub_plan);
         sub_plan = std::make_unique<BoundFilterOp>(std::move(filter));
+    }
+
+    if (!is_correlated && where_pred) {
+        auto ap = anchorPred(*where_pred, start_var_name);
+        if (ap) {
+            auto be = bindExpression(std::move(*ap));
+            if (be) {
+                BoundFilterOp f;
+                f.predicate = std::move(*be);
+                f.child = std::move(*sub_plan);
+                sub_plan = std::make_unique<BoundFilterOp>(std::move(f));
+            }
+        }
     }
 
     // Restore outer binding context
