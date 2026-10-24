@@ -69,6 +69,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
 | Expand 目标标签过滤优化 | [query/expand-label-filter-optimization.md](query/expand-label-filter-optimization.md) | `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | PatternComprehension 锚点标签扫描 | [query/pattern-comprehension-anchor-label-scan.md](query/pattern-comprehension-anchor-label-scan.md) | `src/query/planner/binder/bind_match.cpp` |
+| LDBC c5/c9 计划分析 | [query/ldbc-c5-c9-plan-analysis.md](query/ldbc-c5-c9-plan-analysis.md) | `src/query/physical_plan/` |
 | 添加 DDL 操作 | [storage/ddl.md], [storage/metadata-service-design.md], [storage/session-cursor-pool-design.md] | `src/storage/schema_ddl.*`, `src/storage/meta/`, `src/storage/data/` |
 | 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/graph/graph_manager.hpp` |
 | 修改类型系统 | [architecture/type-definitions.md], [storage/kv-encoding.md] | `src/common/types/` |
