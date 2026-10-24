@@ -1522,6 +1522,31 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         correlation.emplace_back(left_slot, sub_slot);
     }
 
+    // Resolve start-node labels for a non-correlated anchor. The generic
+    // EXISTS/PatternComprehension path used to emit a plain BoundScanOp here;
+    // bindMatch then saw the variable as already bound and only added a
+    // post-scan label filter, leaving an AllNodeScan for e.g. (a:Person).
+    auto makeStartScan = [&]() -> BoundLogicalOperator {
+        std::vector<LabelId> start_labels;
+        for (const auto& label_name : first_node.labels) {
+            LabelId lid = catalog_.labelNameToId(label_name);
+            if (lid != INVALID_LABEL_ID)
+                start_labels.push_back(lid);
+        }
+        if (!start_labels.empty() || !first_node.labels.empty()) {
+            BoundLabelScanOp scan;
+            scan.variable = start_var_name;
+            scan.column_index = sub_idx;
+            scan.label_ids = std::move(start_labels);
+            scan.label_names = first_node.labels;
+            return BoundLogicalOperator(scan);
+        }
+        BoundScanOp scan;
+        scan.variable = start_var_name;
+        scan.column_index = sub_idx;
+        return BoundLogicalOperator(scan);
+    };
+
     // Create the source leaf operator
     BoundLogicalOperator source_op;
     if (is_correlated || !correlation.empty()) {
@@ -1544,13 +1569,11 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         if (!is_correlated) {
             // Nested EXISTS: start var not correlated, but extra vars are.
             // CrossJoin CorrelatedSource(extras) + Scan(start_var).
-            BoundScanOp scan;
-            scan.variable = start_var_name;
-            scan.column_index = sub_idx;
+            auto start_scan = makeStartScan();
             auto join = std::make_unique<BoundBinaryJoinOp>();
             join->join_type = JoinType::Cross;
             join->left = std::move(source);
-            join->right = std::move(scan);
+            join->right = std::move(start_scan);
             source_op = BoundLogicalOperator(std::move(join));
             // start_var's column_index shifted by number of extra correlation cols.
             size_t extra_cols = correlation.size();
@@ -1560,10 +1583,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             source_op = std::move(source);
         }
     } else {
-        BoundScanOp scan;
-        scan.variable = start_var_name;
-        scan.column_index = sub_idx;
-        source_op = std::move(scan);
+        source_op = makeStartScan();
     }
 
     std::optional<BoundLogicalOperator> sub_plan;
