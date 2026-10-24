@@ -107,3 +107,37 @@ eugraph 在一次性数据副本上真实提交；neo4j 在现有库上真实提
 - 新增 TCK feature：`tests/tck/features-eugraph/shortest-path/shortest-path.feature`（3/3 通过）。
 - 新增单测：`PatternComprehensionAsReduceListSource`；原有 `ReduceBodyCorrelatedPatternComprehension` 通过。
 - 全量 ctest：**1304/1304**（含 TCK）。
+
+---
+
+## 9. 干净分支 fresh import A/B：仅 Expand 标签过滤优化（2026-10-24）
+
+为了排除旧数据目录/存储改动的影响，重新从 sf0.1 CSV 导入数据，并只对比
+`perf/expand-label-filter` 分支相对其 main 父提交的差异：
+
+- 数据：327,588 顶点 / 1,477,965 边 / 1,528 Person / 286,744 Message
+- 数据目录复制两份，base/opt 两个二进制、同机、同参数、8 compute、交错取 min
+- 仅改 `Expand` 目标标签过滤：大集合扫 `label_fwd`，小集合保留点查
+
+| 查询 | base (ms) | opt (ms) | opt/base |
+|---|---:|---:|---:|
+| friend_msg（complex-3 核心步骤） | 56.47 | **35.64** | **0.63** |
+| complex-5 | 504.36 | 470.32 | 0.93 |
+| complex-6 | 124.40 | 89.88 | **0.72** |
+| complex-9 | 407.48 | 393.71 | 0.97 |
+| complex-14 | 80651.68 | 75619.08 | 0.94 |
+| complex-3 | 130.90 | 131.63 | 1.01 |
+| complex-4 | 7.84 | 8.10 | 1.03 |
+| complex-2 | 14.69 | 14.50 | 0.99 |
+| complex-8 | 3.43 | 3.44 | 1.00 |
+| complex-12 | 353.43 | 350.52 | 0.99 |
+
+完整 short+complex 表、数据导入命令和边界分析见
+[query/expand-label-filter-optimization.md](../query/expand-label-filter-optimization.md)。
+
+结论：
+
+- 大集合目标标签过滤的核心步骤 **1.58×**；
+- complex-6 **-28%**（计划含 `(post:Post)` 大集合过滤）；
+- 其余查询多数在 ±3%，更新型 short 不参与该路径；
+- 本分支没有存储格式/邻接缓存改动。
