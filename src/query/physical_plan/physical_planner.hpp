@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 
 namespace eugraph {
@@ -85,6 +86,13 @@ struct PlanContext {
     /// `x.prop IN left.list` planning).
     std::optional<ExpandAllowedFilterContext> expand_allowed_filter;
     ExpandPhysicalOp* filtered_expand = nullptr;
+
+    /// Output slots whose materialization is deferred past a LIMIT. Set while
+    /// planning the LIMIT's Project child; dispatchProjectionExtract skips
+    /// these specs, and the LIMIT branch re-materializes them with
+    /// LateMaterializePhysicalOp after the limit. Cleared immediately after
+    /// the child is planned.
+    std::optional<std::unordered_set<binder::SlotId>> deferred_slots;
 
     /// Read-only resolver over (var_slots, alias_map). All read-only query
     /// paths should go through this — direct map access is reserved for the

@@ -131,3 +131,38 @@ Limit
 
 也就是说 c9 需要 **Projection split**，不是单独的 LateMaterialize。  
 这比之前计划中的算子位置更靠前，是 c9 真正的阻塞点。
+
+## 2026-10-24 实施结果与核心原因
+
+### 结果（sf0.1，同一数据/机器，5 轮 min）
+
+| 版本 | complex-9 |
+|---|---:|
+| 原路径（`SKIP 0` 绕过改写） | 415.4 ms |
+| LIMIT 边界 LM + Top-N Sort | 245–249 ms |
+| 再加 Filter 边界 LM | **161.7 ms** |
+
+20 行 × 6 列与原路径逐值一致；`EXPLAIN` 为
+`Project → LateMaterialize(20 行) → Limit → Sort → LateMaterialize(7,706 行) → Filter → PE`。
+
+### 核心原因
+
+1. **物化顺序错位（已修）**：RETURN 的 content/imageFile/姓名在 LIMIT 前为 7,706 行物化；
+   ORDER BY 的 `message.id` 在 Filter 前为 53,192 行物化。两层 LM 分别把它们移到 LIMIT / Filter 之后。
+2. **剩余主要成本是存储访问**：Filter 的 `creationDate` 仍需为 53,192 行做 label 批读 +
+   按命中 label 的 per-label vprop 批读（约 98 ms）；Expand 53k 边约 45 ms；Top-N Sort、LM、
+   20 行输出已接近 0。
+3. **判据**：带 `message.id` 的 ORDER BY 249.4 ms，不带 id 144.6 ms —— 105 ms 是 id 的
+   预过滤物化，不是排序；这否证了“Sort 慢”的初始归因。
+
+### 对存储改动的含义
+
+- 旧 `vertex_data` 纯 X 属性合并的结论（complex-2..12 无稳定收益、complex-3 约 -20%）
+  来自“宽行、多属性”的旧执行路径；现在 c9 每行只读 1 个属性，页局部性影响变小，
+  必须在新计划上重新 A/B，不能直接外推。
+- 剩余 98 ms 是 label + per-label vprop 两次点查；compact `label_reverse`、
+  “label + hot property（creationDate/id）”合并、或 `Message.creationDate` 索引
+  是三个候选方向，均需按本文口径 A/B。
+- c5 未实施：当前计划是 `LeftJoin` 右侧 `CorrelatedSource` 对每个 left row 执行一次，
+  BatchExpand 的 >2048 行路径不会触发；需要右子计划去相关 / join reorder，
+  而不是只加批量 Expand。
