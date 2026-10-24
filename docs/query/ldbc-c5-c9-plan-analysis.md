@@ -67,6 +67,25 @@ Filter(date)
 这需要让 `ProjectionExtract` 只加载当前消费者需要的列，而不是在第一个 Filter/Expand 后
 就把所有输出属性一次性物化。属于 demand-driven projection/extraction 的改动，不是存储格式改动。
 
+### 已实现的 c9 改动：LIMIT 边界延迟 coalesce
+
+在 `BoundLimitOp` 规划时：
+
+1. 扫描 LIMIT 子树的 Filter/Sort 表达式，收集它们实际使用的 coalesce slot；
+2. 其余 coalesce slot（例如只出现在最终 RETURN 的 content/imageFile）标记为 deferred；
+3. 规划 LIMIT 子树时由 `dispatchProjectionExtract` 跳过 deferred slot；
+4. 构造 `LimitPhysicalOp` 后，再对 LIMIT 的输出执行一次 PE，只对保留下来的行加载这些 coalesce 属性。
+
+实测：
+
+| 版本 | complex-9 |
+|---|---:|
+| 原实现 | ~420ms |
+| LIMIT 边界延迟 coalesce | **368ms** |
+
+结果仍正确（20 行，date 过滤 7,706 行）。提升有限，说明 content/imageFile 仍有一部分在 LIMIT 前被其他需求触发；
+但这验证了“延后 coalesce”方向，后续需要独立 LateMaterialize 算子才能完全隔离。
+
 ## complex-5
 
 ### 计划（eugraph）
