@@ -80,10 +80,6 @@ struct PlanContext {
     /// Built-in function catalog, used by dbms.functions() procedure rows.
     const function::FunctionRegistry* func_registry = nullptr;
 
-    /// Coalesce slots deferred across a LIMIT. Set while planning the LIMIT
-    /// child; dispatchProjectionExtract skips them, then the LIMIT branch
-    /// appends them after the limit via a second PE pass.
-    std::optional<std::unordered_set<binder::SlotId>> deferred_coalesce;
     /// When set, the next Expand for dst_var is configured as an
     /// allowed-destination index filter (used by Filter(CrossProduct)
     /// `x.prop IN left.list` planning).

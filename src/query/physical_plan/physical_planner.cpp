@@ -148,89 +148,6 @@ static int resolveMutationColumn(PlanContext& ctx, const TupleSlotLayout& layout
 /// single source of truth.
 ///
 /// Returns the input untouched when no PEPlan exists for any input column.
-static void collectCoalesceSlotsFromExpr(const binder::BoundExpression& expr, PlanContext& ctx,
-                                         std::unordered_set<binder::SlotId>& out) {
-    std::visit(
-        [&](const auto& val) {
-            using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
-                if (val.slot_id != binder::INVALID_SLOT_ID)
-                    out.insert(val.slot_id);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
-                if (!val)
-                    return;
-                collectCoalesceSlotsFromExpr(val->object, ctx, out);
-                binder::SlotId src = binder::INVALID_SLOT_ID;
-                if (auto* cr = std::get_if<binder::BoundColumnRef>(&val->object))
-                    src = cr->slot_id;
-                if (src == binder::INVALID_SLOT_ID)
-                    return;
-                src = optimizer::getCanonicalSlot(ctx.alias_map, src);
-                auto it = ctx.extraction_info.find(src);
-                if (it == ctx.extraction_info.end())
-                    return;
-                auto co = it->second.coalesce_vertices.find(val->property_name);
-                if (co != it->second.coalesce_vertices.end())
-                    out.insert(co->second.slot_id);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                if (val)
-                    collectCoalesceSlotsFromExpr(val->object, ctx, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
-                if (val)
-                    collectCoalesceSlotsFromExpr(val->object, ctx, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
-                if (val) {
-                    collectCoalesceSlotsFromExpr(val->left, ctx, out);
-                    collectCoalesceSlotsFromExpr(val->right, ctx, out);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
-                if (val)
-                    collectCoalesceSlotsFromExpr(val->operand, ctx, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
-                if (val)
-                    for (const auto& a : val->args)
-                        collectCoalesceSlotsFromExpr(a, ctx, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
-                if (val)
-                    for (const auto& e : val->elements)
-                        collectCoalesceSlotsFromExpr(e, ctx, out);
-            }
-        },
-        expr);
-}
-
-static void collectChildCoalesceSlots(const binder::BoundLogicalOperator& op, PlanContext& ctx,
-                                      std::unordered_set<binder::SlotId>& out) {
-    std::visit(
-        [&](const auto& val) {
-            using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                if (!val)
-                    return;
-                collectCoalesceSlotsFromExpr(val->predicate, ctx, out);
-                collectChildCoalesceSlots(val->child, ctx, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                if (!val)
-                    return;
-                for (const auto& item : val->items)
-                    collectCoalesceSlotsFromExpr(item.expr, ctx, out);
-                collectChildCoalesceSlots(val->child, ctx, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (val)
-                    collectChildCoalesceSlots(val->child, ctx, out);
-            }
-        },
-        op);
-}
-
 static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_result, IAsyncGraphDataStore& store,
                                                     PlanContext& ctx) {
     const auto& info = ctx.extraction_info;
@@ -352,8 +269,6 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
 
         // Coalesced multi-candidate vertex property loads.
         for (const auto& [prop, co] : pi.coalesce_vertices) {
-            if (ctx.deferred_coalesce && ctx.deferred_coalesce->contains(co.slot_id))
-                continue;
             if (emitted_slots.count(co.slot_id))
                 continue;
             ColumnSpec s;
@@ -2825,32 +2740,13 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundLimitOp>) {
-                    std::unordered_set<binder::SlotId> used_coalesce;
-                    collectChildCoalesceSlots(v.child, ctx, used_coalesce);
-                    std::unordered_set<binder::SlotId> deferred;
-                    for (const auto& [slot, pi] : ctx.extraction_info) {
-                        (void)slot;
-                        for (const auto& [name, co] : pi.coalesce_vertices) {
-                            (void)name;
-                            if (!used_coalesce.contains(co.slot_id))
-                                deferred.insert(co.slot_id);
-                        }
-                    }
-                    auto saved_deferred = ctx.deferred_coalesce;
-                    if (!deferred.empty())
-                        ctx.deferred_coalesce = std::move(deferred);
-
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
-                    ctx.deferred_coalesce = std::move(saved_deferred);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
                     auto result = std::make_unique<LimitPhysicalOp>(v.constant, std::move(v.expr), std::move(cr.op));
-                    auto plan_result = PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                                          std::move(cr.output_types), std::move(cr.slot_layout)};
-                    // Materialize deferred coalesce columns only after LIMIT.
-                    plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
-                    return plan_result;
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundDistinctOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
