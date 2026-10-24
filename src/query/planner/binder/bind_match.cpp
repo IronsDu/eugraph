@@ -1158,6 +1158,68 @@ std::optional<cypher::Expression> Binder::removeExistsFromWhere(const cypher::Ex
         expr);
 }
 
+namespace {
+
+bool isVarProp(const cypher::Expression& expr, const std::string& var) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<cypher::PropertyAccess>>) {
+                if (!ptr)
+                    return false;
+                auto* obj = std::get_if<std::unique_ptr<cypher::Variable>>(&ptr->object);
+                return obj && *obj && (*obj)->name == var;
+            }
+            return false;
+        },
+        expr);
+}
+bool isEndpointFn(const cypher::Expression& expr) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<cypher::FunctionCall>>)
+                return ptr && (ptr->name == "startNode" || ptr->name == "endNode");
+            else if constexpr (std::is_same_v<T, std::unique_ptr<cypher::PropertyAccess>>)
+                return ptr && isEndpointFn(ptr->object);
+            else if constexpr (std::is_same_v<T, std::unique_ptr<cypher::ParenExpr>>)
+                return ptr && isEndpointFn(ptr->inner);
+            return false;
+        },
+        expr);
+}
+std::optional<cypher::Expression> anchorPred(const cypher::Expression& expr, const std::string& var) {
+    if (auto* paren = std::get_if<std::unique_ptr<cypher::ParenExpr>>(&expr); paren && *paren)
+        return anchorPred((*paren)->inner, var);
+    auto* bin = std::get_if<std::unique_ptr<cypher::BinaryOp>>(&expr);
+    if (!bin || !*bin)
+        return std::nullopt;
+    auto& b = **bin;
+    if (b.op == cypher::BinaryOperator::EQ) {
+        if ((isVarProp(b.left, var) && isEndpointFn(b.right)) || (isVarProp(b.right, var) && isEndpointFn(b.left)))
+            return cloneExpression(expr);
+        return std::nullopt;
+    }
+    if (b.op == cypher::BinaryOperator::AND || b.op == cypher::BinaryOperator::OR) {
+        auto l = anchorPred(b.left, var), r = anchorPred(b.right, var);
+        if (b.op == cypher::BinaryOperator::OR && (!l || !r))
+            return std::nullopt;
+        if (!l && !r)
+            return std::nullopt;
+        if (!l)
+            return r;
+        if (!r)
+            return l;
+        auto out = std::make_unique<cypher::BinaryOp>();
+        out->op = b.op;
+        out->left = std::move(*l);
+        out->right = std::move(*r);
+        return cypher::Expression(std::move(out));
+    }
+    return std::nullopt;
+}
+} // namespace
+
 std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::ExistsExpr& exists,
                                                               std::vector<std::pair<uint32_t, uint32_t>>& correlation,
                                                               const std::vector<std::string>& preset_corr_vars) {
@@ -1744,6 +1806,19 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         filter.predicate = makeEqualityExpr(left_ref, right_ref);
         filter.child = std::move(*sub_plan);
         sub_plan = std::make_unique<BoundFilterOp>(std::move(filter));
+    }
+
+    if (!is_correlated && where_pred) {
+        auto ap = anchorPred(*where_pred, start_var_name);
+        if (ap) {
+            auto be = bindExpression(std::move(*ap));
+            if (be) {
+                BoundFilterOp f;
+                f.predicate = std::move(*be);
+                f.child = std::move(*sub_plan);
+                sub_plan = std::make_unique<BoundFilterOp>(std::move(f));
+            }
+        }
     }
 
     // Restore outer binding context

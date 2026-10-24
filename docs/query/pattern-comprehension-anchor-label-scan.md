@@ -52,18 +52,35 @@ complex-14（person1Id=933, person2Id=1129，sf0.1，同一数据/机器）：
 
 `EXPLAIN` 已从 `AllNodeScan(a)` 变为 `LabelScan(variable=a, labels=Person)`。
 
-## 仍未解决
+## 后续：anchor 谓词强化
 
-LabelScan 把 anchor 从 327k 降到 1,528，但每个 path relationship 仍要展开该 anchor 的全部
-Comment/Post 邻域；56.5s 仍远慢于 Neo4j 20.9ms。
+LabelScan 只把 anchor 从 327k 降到 1,528；每个 path relationship 仍要展开全部
+Comment/Post 邻域，56.5s 仍不可接受。
 
-下一步需要：
+在 `bindExistsSubPlan` 中从 WHERE 提取隐含的 anchor 条件：
 
-1. 把 `a.id = startNode(r).id OR a.id = endNode(r).id` 转成运行时 `Person(id)` index seek；
-2. 或先以 VertexRef 过滤 anchor，再只对存活行做完整顶点物化；
-3. 或做 PC 去相关（一次物化 Comment/Post 端点对，再按端点在路径上 join）。
+```cypher
+(a.id = startNode(r).id AND ...) OR (a.id = endNode(r).id AND ...)
+=> a.id = startNode(r).id OR a.id = endNode(r).id
+```
 
-仅靠 anchor LabelScan 只能到 56.5s，不满足 complex-14 目标。
+把该条件作为额外 Filter 放在 pattern 子计划上。`FilterPushdown` 会把它压到
+`CrossProduct` 边界（LabelScan 之后、第一次 Expand 之前），从而只让路径端点的 Person
+进入后续展开。
+
+注意 AST 中 `startNode(r).id` 是 `PropertyAccess(FunctionCall)`，且 WHERE 外层可能有
+`ParenExpr`；提取器必须同时识别这两层，否则会静默提取失败。
+
+### 最终结果
+
+| 版本 | 时间 | 行数 |
+|---|---:|---:|
+| AllNodeScan | 80.5s | 4 |
+| LabelScan | 56.5s | 4 |
+| LabelScan + anchor 谓词强化 | **1.17s** | 4 |
+
+仍慢于 Neo4j 20.9ms，但已从分钟级降到秒级。后续可继续做运行时 index seek
+或 PC 去相关，逼近 Neo4j。
 
 ## 验证
 
