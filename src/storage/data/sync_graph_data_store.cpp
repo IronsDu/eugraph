@@ -366,6 +366,18 @@ std::optional<Properties> SyncGraphDataStore::getVertexProperties(GraphSession& 
         found_any = true;
         return true;
     });
+    if (!found_any) {
+        // Legacy pure-X data fallback.
+        wt::table_scan(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexPropertyPrefix(vid, label_id),
+                       [&](std::string_view key, std::string_view value) {
+                           auto decoded = KeyCodec::decodeVertexPropertyKey(key);
+                           if (decoded.prop_id >= props.size())
+                               props.resize(static_cast<size_t>(decoded.prop_id) + 1);
+                           props[decoded.prop_id] = ValueCodec::decode(value);
+                           found_any = true;
+                           return true;
+                       });
+    }
     if (!found_any)
         return std::nullopt;
     return props;
@@ -417,6 +429,16 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
             props[pid] = ValueCodec::decode(getValueFromCursor(c));
             found = true;
         }
+        if (!found) {
+            for (uint16_t pid : proj) {
+                auto legacy = wt::table_get(gs, TABLE_VERTEX_DATA,
+                                            KeyCodec::encodeVertexPropertyKey(unique[i], label_id, pid));
+                if (legacy) {
+                    props[pid] = ValueCodec::decode(*legacy);
+                    found = true;
+                }
+            }
+        }
         if (found)
             slot = std::move(props);
     }
@@ -433,9 +455,12 @@ std::optional<PropertyValue> SyncGraphDataStore::getVertexProperty(GraphSession&
     if (!session)
         return std::nullopt;
     auto val = wt::table_get(gs, vpropTable(label_id), KeyCodec::encodeVPropKey(vid, prop_id));
-    if (!val)
+    if (val)
+        return ValueCodec::decode(*val);
+    auto legacy = wt::table_get(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexPropertyKey(vid, label_id, prop_id));
+    if (!legacy)
         return std::nullopt;
-    return ValueCodec::decode(*val);
+    return ValueCodec::decode(*legacy);
 }
 
 bool SyncGraphDataStore::putVertexProperty(GraphSession& gs, VertexId vid, LabelId label_id, uint16_t prop_id,
@@ -599,6 +624,17 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         if (ret != 0 && ret != WT_NOTFOUND) {
             gs.fail_from_wt(ret, "getVertexPropertiesBatch: next failed");
             return out;
+        }
+        if (!found) {
+            wt::table_scan(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexPropertyPrefix(unique[i], label_id),
+                           [&](std::string_view key, std::string_view value) {
+                               auto decoded = KeyCodec::decodeVertexPropertyKey(key);
+                               if (decoded.prop_id >= props.size())
+                                   props.resize(static_cast<size_t>(decoded.prop_id) + 1);
+                               props[decoded.prop_id] = ValueCodec::decode(value);
+                               found = true;
+                               return true;
+                           });
         }
         if (found)
             slot = std::move(props);
