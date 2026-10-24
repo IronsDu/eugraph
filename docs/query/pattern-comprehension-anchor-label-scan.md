@@ -77,7 +77,7 @@ Comment/Post 邻域，56.5s 仍不可接受。
 |---|---:|---:|
 | AllNodeScan | 80.5s | 4 |
 | LabelScan | 56.5s | 4 |
-| LabelScan + anchor 谓词强化 | **1.17s** | 4 |
+| LabelScan + anchor 谓词强化 | **0.81s**（3 轮 min；首测 1.17s） | 4 |
 
 仍慢于 Neo4j 20.9ms，但已从分钟级降到秒级。后续可继续做运行时 index seek
 或 PC 去相关，逼近 Neo4j。
