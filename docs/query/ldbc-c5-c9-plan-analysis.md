@@ -107,3 +107,27 @@ Neo4j 同计划形状约 98ms，但同样先展开 89k posts，再过滤到 262�
 - complex-9：需要 demand-driven 延迟物化；
 - complex-5：需要 vertex-list semi-join / join reorder；
 - 两者都不需要修改存储格式，但都是算子/规划层改动，不能靠阈值或简单谓词下推解决。
+
+
+## 2026-10-24 修正：c9 的 Project 位于 Limit 之下
+
+重新检查 c9 物理计划：
+
+```text
+Limit
+  Project(items=[personId, personFirstName, ..., commentOrPostContent])
+    Sort(date DESC, id ASC)
+      Filter(date)
+        ProjectionExtract(...)
+```
+
+`Project` 不是 Limit 的父节点，而是 Limit 的子节点。因此：
+
+- 在 Limit 之后追加 LateMaterialize 不会改变已经执行的 Project；
+- 之前“Limit 后 PE”导致 Project 列槽错位，本质原因是 Project 已经在 Limit 之下消费了旧 schema；
+- 仅新增算子无法解决，必须先拆分 RETURN Project：
+  - 下方 Project：只保留 Sort/Limit 需要的键和 `message`/`friend` VertexRef；
+  - 上方 Project：在 Limit 之后计算 content/imageFile/姓名。
+
+也就是说 c9 需要 **Projection split**，不是单独的 LateMaterialize。  
+这比之前计划中的算子位置更靠前，是 c9 真正的阻塞点。
