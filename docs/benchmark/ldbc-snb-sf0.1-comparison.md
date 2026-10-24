@@ -32,10 +32,11 @@
 
 ## 2. 可运行性与耗时
 
-> **本分支状态（2026-10-24）**：complex-14 已完成优化（79.8 s → 0.81 s，仍 🔴 约 39×）；
-> complex-5 / complex-9 **尚未优化**，根因与算子方案已确定（见
+> **本分支状态（2026-10-24）**：complex-14 已优化（79.8 s → 0.81 s，仍 🔴 约 39×）；
+> complex-9 已优化（422 ms → **161.7 ms**，仍 🟡 约 5.0×）；
+> complex-5 **尚未优化**，根因与算子方案已确定（见
 > [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md)、
-> [算子实现计划](../query/c5-c9-operator-implementation-plan.md)），待 PR 合并后继续。
+> [算子实现计划](../query/c5-c9-operator-implementation-plan.md)）。
 
 ### 2.1 Short reads
 
@@ -61,7 +62,7 @@
 | complex-6 | 93.56 | 31.56 | 🟡 慢 3.0× |
 | complex-7 | 5.23 | 3.37 | 🟢 慢 1.6× |
 | complex-8 | 4.16 | 3.47 | 🟢 慢 1.2× |
-| complex-9 | 422.39 | 32.58 | 🔴 慢 13.0× |
+| complex-9 | **161.7** | 32.58 | 🟡 慢约 5.0×（已优化，原 422.39；见 §3） |
 | complex-10 | 40.32 | 10.63 | 🟡 慢 3.8× |
 | complex-11 | 7.30 | 3.31 | 🟡 慢 2.2× |
 | complex-12 | 384.15 | 115.80 | 🟡 慢 3.3× |
@@ -69,7 +70,8 @@
 | complex-14 | **810** | 20.90 | 🔴 慢约 39×（已优化，原 79,788；见 §3） |
 
 complex-14 为本分支优化后的复测值（3 轮 min，4 行与 neo4j 一致；neo4j 20.9 ms 沿用上一轮同机同数据基线）；
-其余读取沿用上一轮同口径结果，complex-5/9 本轮未优化，数值同上轮。
+complex-9 为优化后 5 轮 min（20 行与原路径逐值一致；neo4j 32.6 ms 沿用上一轮基线）；其余读取沿用上一轮
+同口径结果，complex-5 本轮未优化，数值同上轮。
 
 ### 2.3 Updates
 
@@ -87,14 +89,15 @@ complex-14 为本分支优化后的复测值（3 轮 min，4 行与 neo4j 一致
 | update-8 | 7.45 | 13.34 | 🟢 快 1.8× |
 
 **当前没有不可运行的 LDBC 读取语句。** complex-14 已跑通并完成优化（79.8 s → 0.81 s，4 行结果与
-neo4j 一致，仍慢约 39×）；complex-7/11 的 neo4j 数值属性已归一化为整数后重测，行数分别为 7/7、4/4。
-complex-5/9 尚未优化，留待 PR 合并后继续（见 §3）。
+neo4j 一致，仍慢约 39×）；complex-9 已优化到 161.7 ms（原 422 ms，20 行结果与原路径逐值一致，
+仍慢约 5×）；complex-7/11 的 neo4j 数值属性已归一化为整数后重测，行数分别为 7/7、4/4。
+complex-5 尚未优化（见 §3）。
 
 ## 3. 剩余性能点、原因与思路
 
 | 优先级 | 查询/范围 | 差距 | 已定位原因 | 下一步思路 |
 |---|---|---|---|---|
-| P0 | 🔴 complex-9 | 422 ms vs 32.6 ms（13.0×） | `coalesce(content, imageFile)` 在 7,706 行上全部物化（约 168 ms）；且 RETURN 的 `Project` 位于 `Limit` 之下，TopN 之后无法再延迟物化 | 拆分 RETURN Project + `LateMaterialize`：Sort/Limit 只带键，Limit 之上再物化 content/姓名；目标 ≤250 ms。方案见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
+| P1 | 🟡 complex-9 | 161.7 ms vs 32.6 ms（约 5.0×） | 两层 LM 已消除错位物化（content 168 ms、预过滤 id 105 ms）；剩余为 Filter 的 `creationDate` 在 53,192 行上做 label + per-label vprop 两次点查（约 98 ms），以及 Expand 53k 边（约 45 ms） | 存储/访问路径：compact label、label+hot property 共置、或 `creationDate` 索引；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
 | P0 | 🔴 complex-5 | 514 ms vs 98.4 ms（5.2×） | `friend IN friends` 在 `CONTAINER_OF` 89k posts 与 `HAS_CREATOR` 89k 边之后才过滤，89k 中间行全部物化后丢弃；per-source Expand 又放大了这个顺序 | `BatchExpand`（>2048 行改一次扫边 + hash join）或 vertex-list semi-join/join reorder；保留 OPTIONAL 零计数；目标 ≤300 ms。方案见 [算子实现计划](../query/c5-c9-operator-implementation-plan.md) |
 | P1 | 🔴 complex-14 | 810 ms vs 20.9 ms（约 39×） | 原 `AllNodeScan(a)` 已改为 `LabelScan(Person)`，端点等式已下推到第一次 Expand 之前；剩余是每个 `r` 仍各评估一次 PC，端点 `id` 未走索引 seek（未做最新逐算子剖析） | 运行时索引 seek（`a.id = startNode(r).id`）或 PC 去相关；属结构性改动，暂列后续 |
 | P1 | 🟡 complex-3 | 4.7× | `Tag(name)` 起点选择、`HAS_CREATOR` 方向的前向/反向表选择仍不理想 | 结合基数估计选起点；按方向选择更合适的边表 |
@@ -103,8 +106,8 @@ complex-5/9 尚未优化，留待 PR 合并后继续（见 §3）。
 | P2 | 🟡 complex-12 | 3.3× | `TagClass → Tag → Post` 多跳展开与中间结果规模 | 优化展开顺序/中间结果裁剪 |
 | P2 | 🟡 complex-6 | 3.0× | 已通过标签前向扫描从 ~9× 降到 3.0×；剩余是 post/tag 展开与属性读取 | 继续 profile 该路径 |
 
-优先级按“差距 + 下一步可执行性”综合：c5/c9 已有可实施的算子方案、且是 PR 合并后的首项，列 P0；
-c14 剩余优化属结构性改动，列 P1。
+优先级按“差距 + 下一步可执行性”综合：c5 是 PR 合并后的首项 P0；
+c9 剩余优化落到存储/访问路径，c14 属结构性改动，均列 P1。
 
 ### 3.1 通用方向
 
@@ -127,10 +130,13 @@ c14 剩余优化属结构性改动，列 P1。
 - neo4j 的 `LIKES.creationDate` / `WORK_AT.workFrom` / Person 日期属性归一化为整数；
   eugraph 原本就是整数。
 - eugraph 创建 `Message.id` 索引，neo4j 的 Person/Message/Post/Comment/Forum id 索引均 ONLINE。
-- 同机交错 A/B；普通查询 4 轮、complex-13/14 2 轮，取 min；complex-14 优化后复测 3 轮取 min。
+- 同机交错 A/B；普通查询 4 轮、complex-13/14 2 轮，取 min；complex-14 优化后复测 3 轮取 min；
+  complex-9 优化后复测 5 轮取 min。
 - complex-14 优化后：0.81 s（首测 1.17 s），4 行，与 neo4j 一致；计划由 `AllNodeScan(a)` 变为
   `LabelScan(Person)` + 端点谓词 Filter（见
   [pattern-comprehension-anchor-label-scan.md](../query/pattern-comprehension-anchor-label-scan.md)）。
-- complex-5/9 未在本分支改动，数值沿用上一轮；算子方案已写入
+- complex-9 优化后：161.7 ms（原路径 415.4 ms），20 行与原路径逐值一致；计划为
+  `Project → LateMaterialize(20 行) → Limit → Sort → LateMaterialize(7,706 行) → Filter → PE`。
+- complex-5 未在本分支改动，数值沿用上一轮；去相关方案已写入
   [c5-c9-operator-implementation-plan.md](../query/c5-c9-operator-implementation-plan.md)。
 - 全量 ctest：**1304/1304**（含 TCK）。

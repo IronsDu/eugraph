@@ -8,6 +8,7 @@
 #include <folly/coro/AsyncGenerator.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,9 +40,20 @@ public:
             compiler.compile(item.expr);
     }
 
+    /// A LIMIT above the Sort lets us keep only the best `limit` rows
+    /// (bounded max-heap) instead of materializing and sorting every row.
+    bool supportsLimitPushdown() const override {
+        return true;
+    }
+    void setLimitHint(size_t limit) override {
+        limit_hint_ = limit_hint_.has_value() ? std::min(*limit_hint_, limit) : limit;
+        PhysicalOperator::setLimitHint(limit);
+    }
+
 private:
     std::vector<SortItem> sort_items_;
     std::unique_ptr<PhysicalOperator> child_;
+    std::optional<size_t> limit_hint_;
 };
 
 } // namespace compute

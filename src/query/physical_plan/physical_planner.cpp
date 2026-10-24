@@ -13,6 +13,7 @@
 #include "query/physical_plan/operator/hash_join_physical_op.hpp"
 #include "query/physical_plan/operator/index_scan_physical_op.hpp"
 #include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
+#include "query/physical_plan/operator/late_materialize_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/list_index_join_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
@@ -149,10 +150,12 @@ static int resolveMutationColumn(PlanContext& ctx, const TupleSlotLayout& layout
 ///
 /// Returns the input untouched when no PEPlan exists for any input column.
 static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_result, IAsyncGraphDataStore& store,
-                                                    PlanContext& ctx) {
+                                                    PlanContext& ctx, bool as_late_materialize = false) {
     const auto& info = ctx.extraction_info;
     if (info.empty())
         return std::move(child_result);
+
+    auto is_deferred = [&ctx](binder::SlotId sid) { return ctx.deferred_slots && ctx.deferred_slots->contains(sid); };
 
     std::vector<ColumnSpec> specs;
     Schema output_schema;
@@ -220,7 +223,8 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
         // a constructed VERTEX/EDGE, Decide aliased object_slot_id to
         // source_slot_id and we skip — the source column itself satisfies
         // the whole-object demand.
-        if (pi.object_slot_id != binder::INVALID_SLOT_ID && pi.object_slot_id != pi.source_slot_id) {
+        if (pi.object_slot_id != binder::INVALID_SLOT_ID && pi.object_slot_id != pi.source_slot_id &&
+            !is_deferred(pi.object_slot_id)) {
             if (!emitted_slots.count(pi.object_slot_id)) {
                 bool col_is_edge = child_result.output_types[col].kind == binder::BoundTypeKind::EDGE ||
                                    child_result.output_types[col].kind == binder::BoundTypeKind::EDGE_KEY;
@@ -241,7 +245,7 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
         for (size_t i = 0; i < pi.prop_order.size(); ++i) {
             auto [lid, pid] = pi.prop_order[i];
             binder::SlotId pslot = pi.prop_slot_ids[i];
-            if (emitted_slots.count(pslot))
+            if (emitted_slots.count(pslot) || is_deferred(pslot))
                 continue;
             ColumnSpec s;
             s.kind = ColumnSpec::Kind::LoadVertexProp;
@@ -269,7 +273,7 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
 
         // Coalesced multi-candidate vertex property loads.
         for (const auto& [prop, co] : pi.coalesce_vertices) {
-            if (emitted_slots.count(co.slot_id))
+            if (emitted_slots.count(co.slot_id) || is_deferred(co.slot_id))
                 continue;
             ColumnSpec s;
             s.kind = ColumnSpec::Kind::LoadVertexPropCoalesce;
@@ -288,7 +292,7 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
         for (size_t i = 0; i < pi.edge_prop_order.size(); ++i) {
             auto [elid, pid] = pi.edge_prop_order[i];
             binder::SlotId pslot = pi.edge_prop_slot_ids[i];
-            if (emitted_slots.count(pslot))
+            if (emitted_slots.count(pslot) || is_deferred(pslot))
                 continue;
             ColumnSpec s;
             s.kind = ColumnSpec::Kind::LoadEdgeProp;
@@ -315,7 +319,8 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
         }
 
         // Vertex labels.
-        if (pi.labels_slot_id != binder::INVALID_SLOT_ID && !emitted_slots.count(pi.labels_slot_id)) {
+        if (pi.labels_slot_id != binder::INVALID_SLOT_ID && !emitted_slots.count(pi.labels_slot_id) &&
+            !is_deferred(pi.labels_slot_id)) {
             ColumnSpec s;
             s.kind = ColumnSpec::Kind::LoadVertexLabels;
             s.output_name = peName(pi.labels_slot_id);
@@ -329,7 +334,8 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
         }
 
         // Edge type.
-        if (pi.type_slot_id != binder::INVALID_SLOT_ID && !emitted_slots.count(pi.type_slot_id)) {
+        if (pi.type_slot_id != binder::INVALID_SLOT_ID && !emitted_slots.count(pi.type_slot_id) &&
+            !is_deferred(pi.type_slot_id)) {
             ColumnSpec s;
             s.kind = ColumnSpec::Kind::LoadEdgeType;
             s.output_name = peName(pi.type_slot_id);
@@ -356,7 +362,7 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
                 auto fi = info.find(fresh_canon);
                 if (fi != info.end() && fi->second.object_slot_id != binder::INVALID_SLOT_ID &&
                     fi->second.object_slot_id != fi->second.source_slot_id &&
-                    !emitted_slots.count(fi->second.object_slot_id)) {
+                    !emitted_slots.count(fi->second.object_slot_id) && !is_deferred(fi->second.object_slot_id)) {
                     ColumnSpec s;
                     s.kind = ColumnSpec::Kind::ConstructVertex;
                     s.output_name = peName(fi->second.object_slot_id);
@@ -379,16 +385,413 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
     edge_prop_counts.reserve(ctx.edge_label_defs.size());
     for (const auto& [eid, def] : ctx.edge_label_defs)
         edge_prop_counts.emplace(eid, def.properties.size());
-    auto op = std::make_unique<ProjectionExtractPhysicalOp>(
-        std::move(specs), store, std::move(vertex_label_names), std::move(edge_label_names),
-        Schema(child_result.output_schema), std::vector<binder::BoundType>(child_result.output_types),
-        std::move(child_result.op), anon_label_id, std::move(edge_prop_counts));
+    auto op = as_late_materialize
+                  ? std::unique_ptr<PhysicalOperator>(std::make_unique<LateMaterializePhysicalOp>(
+                        std::move(specs), store, std::move(vertex_label_names), std::move(edge_label_names),
+                        Schema(child_result.output_schema), std::vector<binder::BoundType>(child_result.output_types),
+                        std::move(child_result.op), anon_label_id, std::move(edge_prop_counts)))
+                  : std::unique_ptr<PhysicalOperator>(std::make_unique<ProjectionExtractPhysicalOp>(
+                        std::move(specs), store, std::move(vertex_label_names), std::move(edge_label_names),
+                        Schema(child_result.output_schema), std::vector<binder::BoundType>(child_result.output_types),
+                        std::move(child_result.op), anon_label_id, std::move(edge_prop_counts)));
     // NB: build the layout in a local BEFORE moving output_schema into the
     // result. A braced-init-list evaluates left-to-right, so passing
     // makeSlotLayout(output_schema) after std::move(output_schema) would read
     // a moved-from (empty) schema.
     TupleSlotLayout pe_layout = makeSlotLayout(output_schema, ctx);
     return PlanOperatorResult{std::move(op), std::move(output_schema), std::move(output_types), std::move(pe_layout)};
+}
+
+// ==================== LIMIT-boundary late materialization ====================
+
+/// Collect every slot referenced by an expression (recursively).
+static void collectExprSlots(const binder::BoundExpression& expr, std::unordered_set<binder::SlotId>& out) {
+    std::visit(
+        [&](const auto& val) {
+            using T = std::decay_t<decltype(val)>;
+            if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                if (val.slot_id != binder::INVALID_SLOT_ID)
+                    out.insert(val.slot_id);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
+                if (val)
+                    collectExprSlots(val->object, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
+                if (val)
+                    collectExprSlots(val->object, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
+                if (val)
+                    collectExprSlots(val->object, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                if (val) {
+                    collectExprSlots(val->left, out);
+                    collectExprSlots(val->right, out);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
+                if (val)
+                    collectExprSlots(val->operand, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                if (val)
+                    for (const auto& a : val->args)
+                        collectExprSlots(a, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                if (val)
+                    for (const auto& e : val->elements)
+                        collectExprSlots(e, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                if (val)
+                    for (const auto& [k, e] : val->entries) {
+                        (void)k;
+                        collectExprSlots(e, out);
+                    }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                if (val) {
+                    if (val->subject)
+                        collectExprSlots(*val->subject, out);
+                    for (const auto& [w, t] : val->when_thens) {
+                        collectExprSlots(w, out);
+                        collectExprSlots(t, out);
+                    }
+                    if (val->else_expr)
+                        collectExprSlots(*val->else_expr, out);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                if (val) {
+                    collectExprSlots(val->list, out);
+                    collectExprSlots(val->index, out);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                if (val) {
+                    collectExprSlots(val->list, out);
+                    if (val->from)
+                        collectExprSlots(*val->from, out);
+                    if (val->to)
+                        collectExprSlots(*val->to, out);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>) {
+                if (val) {
+                    collectExprSlots(val->list_expr, out);
+                    if (val->where_pred)
+                        collectExprSlots(*val->where_pred, out);
+                    collectExprSlots(val->projection, out);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
+                if (val) {
+                    collectExprSlots(val->init, out);
+                    collectExprSlots(val->list_expr, out);
+                    collectExprSlots(val->expr, out);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
+                if (val) {
+                    collectExprSlots(val->list_expr, out);
+                    if (val->where_pred)
+                        collectExprSlots(*val->where_pred, out);
+                }
+            } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
+                if (val.output_slot != binder::INVALID_SLOT_ID)
+                    out.insert(val.output_slot);
+            }
+        },
+        expr);
+}
+
+/// Collect slots consumed anywhere in a logical subtree (expressions plus
+/// child operators). Used to decide which slots the LIMIT's Sort/Filter side
+/// still needs before the limit.
+static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordered_set<binder::SlotId>& out,
+                           bool& has_write) {
+    std::visit(
+        [&](const auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                if (v) {
+                    collectExprSlots(v->predicate, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                if (v) {
+                    for (const auto& item : v->items)
+                        collectExprSlots(item.expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                if (v) {
+                    for (const auto& item : v->items)
+                        collectExprSlots(item.expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                if (v) {
+                    for (const auto& k : v->group_keys)
+                        collectExprSlots(k, out);
+                    for (const auto& agg : v->aggregates)
+                        for (const auto& a : agg.arguments)
+                            collectExprSlots(a, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                if (v) {
+                    collectExprSlots(v->list_expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                if (v)
+                    collectOpSlots(v->child, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                if (v) {
+                    collectOpSlots(v->left, out, has_write);
+                    collectOpSlots(v->right, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (v)
+                    collectOpSlots(v->child, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
+                has_write = true;
+                if (v) {
+                    for (const auto& item : v->items)
+                        if (item.value_expr)
+                            collectExprSlots(*item.value_expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>>) {
+                has_write = true;
+                if (v)
+                    collectOpSlots(v->child, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
+                has_write = true;
+                if (v) {
+                    for (const auto& t : v->targets)
+                        if (t.expr)
+                            collectExprSlots(*t.expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
+                has_write = true;
+                if (v)
+                    collectOpSlots(v->child, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                if (v) {
+                    collectExprSlots(v->list_expr, out);
+                    collectOpSlots(v->child, out, has_write);
+                    collectOpSlots(v->body, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+                has_write = true;
+                if (v && v->child)
+                    collectOpSlots(*v->child, out, has_write);
+            }
+        },
+        op);
+}
+
+/// True when `slot` is an appended column produced by a PEPlan.
+static bool isPEOutputSlot(const PlanContext& ctx, binder::SlotId slot) {
+    if (slot == binder::INVALID_SLOT_ID)
+        return false;
+    for (const auto& [canon, pi] : ctx.extraction_info) {
+        (void)canon;
+        if (pi.object_slot_id == slot || pi.labels_slot_id == slot || pi.type_slot_id == slot)
+            return true;
+        for (binder::SlotId s : pi.prop_slot_ids)
+            if (s == slot)
+                return true;
+        for (binder::SlotId s : pi.edge_prop_slot_ids)
+            if (s == slot)
+                return true;
+        for (const auto& [name, co] : pi.coalesce_vertices) {
+            (void)name;
+            if (co.slot_id == slot)
+                return true;
+        }
+    }
+    return false;
+}
+
+/// Every slot appended by a PEPlan (props/coalesce/objects/labels/type).
+static void collectPEOutputSlots(const PlanContext& ctx, std::unordered_set<binder::SlotId>& out) {
+    for (const auto& [canon, pi] : ctx.extraction_info) {
+        (void)canon;
+        if (pi.object_slot_id != binder::INVALID_SLOT_ID)
+            out.insert(pi.object_slot_id);
+        if (pi.labels_slot_id != binder::INVALID_SLOT_ID)
+            out.insert(pi.labels_slot_id);
+        if (pi.type_slot_id != binder::INVALID_SLOT_ID)
+            out.insert(pi.type_slot_id);
+        for (binder::SlotId s : pi.prop_slot_ids)
+            out.insert(s);
+        for (binder::SlotId s : pi.edge_prop_slot_ids)
+            out.insert(s);
+        for (const auto& [name, co] : pi.coalesce_vertices) {
+            (void)name;
+            out.insert(co.slot_id);
+        }
+    }
+}
+
+/// Slots used by ORDER BY but not by the Filter directly below it and not by
+/// anything below that Filter. Such slots only need to exist after Filtering,
+/// so loading them for every pre-filter row (e.g. LDBC c9's message.id over
+/// 53k messages) is wasted.
+static std::unordered_set<binder::SlotId> computeSortFilterDeferredSlots(const PlanContext& ctx,
+                                                                         const binder::BoundSortOp& sort,
+                                                                         const binder::BoundFilterOp& filter) {
+    std::unordered_set<binder::SlotId> sort_slots;
+    for (const auto& item : sort.items)
+        collectExprSlots(item.expr, sort_slots);
+    if (sort_slots.empty())
+        return {};
+
+    std::unordered_set<binder::SlotId> predicate_slots;
+    collectExprSlots(filter.predicate, predicate_slots);
+    std::unordered_set<binder::SlotId> child_slots;
+    bool child_has_write = false;
+    collectOpSlots(filter.child, child_slots, child_has_write);
+    if (child_has_write)
+        return {};
+    std::unordered_set<binder::SlotId> pe_slots;
+    collectPEOutputSlots(ctx, pe_slots);
+
+    std::unordered_set<binder::SlotId> deferred;
+    for (binder::SlotId s : sort_slots) {
+        if (s == binder::INVALID_SLOT_ID || predicate_slots.contains(s) || child_slots.contains(s))
+            continue;
+        if (!pe_slots.contains(s))
+            continue;
+        if (ctx.deferred_slots && ctx.deferred_slots->contains(s))
+            continue; // already deferred past LIMIT
+        deferred.insert(s);
+    }
+    return deferred;
+}
+
+/// Slots referenced by the RETURN Project but not by the Sort/Filter side
+/// below it. These are exactly the output-only columns whose materialization
+/// can move above LIMIT.
+static std::unordered_set<binder::SlotId> computeDeferredSlots(const PlanContext& ctx,
+                                                               const binder::BoundProjectOp& project) {
+    std::unordered_set<binder::SlotId> project_slots;
+    for (const auto& item : project.items)
+        collectExprSlots(item.expr, project_slots);
+
+    std::unordered_set<binder::SlotId> used_below;
+    bool has_write = false;
+    collectOpSlots(project.child, used_below, has_write);
+    if (has_write)
+        return {};
+
+    std::unordered_set<binder::SlotId> deferred;
+    for (binder::SlotId s : project_slots) {
+        if (s == binder::INVALID_SLOT_ID || used_below.contains(s))
+            continue;
+        if (isPEOutputSlot(ctx, s))
+            deferred.insert(s);
+    }
+    return deferred;
+}
+
+/// Copy the extraction plans but keep only the deferred output slots, so a
+/// second dispatchProjectionExtract pass emits exactly those columns.
+static optimizer::PEPlans buildDeferredPlans(const optimizer::PEPlans& info,
+                                             const std::unordered_set<binder::SlotId>& deferred) {
+    optimizer::PEPlans subset;
+    for (const auto& [canon, pi] : info) {
+        optimizer::PEPlan cp = pi;
+        cp.prop_order.clear();
+        cp.prop_slot_ids.clear();
+        for (size_t i = 0; i < pi.prop_slot_ids.size(); ++i) {
+            if (!deferred.contains(pi.prop_slot_ids[i]))
+                continue;
+            cp.prop_order.push_back(pi.prop_order[i]);
+            cp.prop_slot_ids.push_back(pi.prop_slot_ids[i]);
+        }
+        cp.edge_prop_order.clear();
+        cp.edge_prop_slot_ids.clear();
+        for (size_t i = 0; i < pi.edge_prop_slot_ids.size(); ++i) {
+            if (!deferred.contains(pi.edge_prop_slot_ids[i]))
+                continue;
+            cp.edge_prop_order.push_back(pi.edge_prop_order[i]);
+            cp.edge_prop_slot_ids.push_back(pi.edge_prop_slot_ids[i]);
+        }
+        for (auto it = cp.coalesce_vertices.begin(); it != cp.coalesce_vertices.end();) {
+            if (deferred.contains(it->second.slot_id))
+                ++it;
+            else
+                it = cp.coalesce_vertices.erase(it);
+        }
+        if (!deferred.contains(cp.object_slot_id))
+            cp.object_slot_id = binder::INVALID_SLOT_ID;
+        if (!deferred.contains(cp.labels_slot_id))
+            cp.labels_slot_id = binder::INVALID_SLOT_ID;
+        if (!deferred.contains(cp.type_slot_id))
+            cp.type_slot_id = binder::INVALID_SLOT_ID;
+        if (cp.prop_slot_ids.empty() && cp.edge_prop_slot_ids.empty() && cp.coalesce_vertices.empty() &&
+            cp.object_slot_id == binder::INVALID_SLOT_ID && cp.labels_slot_id == binder::INVALID_SLOT_ID &&
+            cp.type_slot_id == binder::INVALID_SLOT_ID)
+            continue;
+        subset.emplace(canon, std::move(cp));
+    }
+    return subset;
+}
+
+static PlanOperatorResult materializeDeferredAfterLimit(PlanOperatorResult&& limit_result, PlanContext& ctx,
+                                                        const std::unordered_set<binder::SlotId>& deferred,
+                                                        IAsyncGraphDataStore& store) {
+    auto subset = buildDeferredPlans(ctx.extraction_info, deferred);
+    auto saved_info = std::move(ctx.extraction_info);
+    auto saved_deferred = std::move(ctx.deferred_slots);
+    ctx.extraction_info = std::move(subset);
+    ctx.deferred_slots.reset();
+    auto result = dispatchProjectionExtract(std::move(limit_result), store, ctx, /*as_late_materialize=*/true);
+    ctx.extraction_info = std::move(saved_info);
+    ctx.deferred_slots = std::move(saved_deferred);
+    return result;
+}
+
+/// Shared Project materialization used both by the ordinary BoundProjectOp
+/// branch and by the LIMIT rewrite (Project moved above LIMIT).
+static PlanOperatorResult planProjectOperator(binder::BoundProjectOp& v, PlanOperatorResult&& child_result,
+                                              PlanContext& ctx) {
+    auto child_op = std::move(child_result.op);
+
+    std::vector<ProjectPhysicalOp::ProjectItem> items;
+    Schema output_schema;
+    std::vector<binder::BoundType> output_types;
+    for (auto& item : v.items) {
+        ProjectPhysicalOp::ProjectItem pi;
+        pi.expr = std::move(item.expr);
+        pi.name = std::move(item.alias);
+        items.push_back(std::move(pi));
+        output_schema.push_back(items.back().name);
+        output_types.push_back(std::move(item.result_type));
+    }
+
+    TupleSlotLayout proj_layout;
+    for (size_t i = 0; i < output_schema.size(); ++i) {
+        binder::SlotId sid = v.items[i].output_slot;
+        if (sid == binder::INVALID_SLOT_ID) {
+            auto it = ctx.var_slots.find(output_schema[i]);
+            sid = it != ctx.var_slots.end() ? it->second : ctx.slot_allocator.next();
+            ctx.var_slots[output_schema[i]] = sid;
+        }
+        proj_layout.append(sid);
+    }
+
+    auto result = std::make_unique<ProjectPhysicalOp>(std::move(items), std::move(child_result.output_schema),
+                                                      std::move(child_op));
+    result->setEvalContext(ctx.eval_ctx);
+    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                              std::move(proj_layout)};
 }
 
 // ==================== Path Element Property Read ====================
@@ -1258,13 +1661,16 @@ int findColumn(const Schema& schema, const std::string& name) {
     return -1;
 }
 
-PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::string>&& child_result) {
-    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+PlanOperatorResult extractChildResult(PlanOperatorResult&& cr) {
     if (cr.op) {
         cr.op->setOutputSchema(Schema(cr.output_schema), std::vector<binder::BoundType>(cr.output_types));
         cr.op->setSlotLayout(TupleSlotLayout(cr.slot_layout));
     }
-    return cr;
+    return std::move(cr);
+}
+
+PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::string>&& child_result) {
+    return extractChildResult(std::move(std::get<PlanOperatorResult>(child_result)));
 }
 
 /// Also propagate the slot layout from the result to the physical operator.
@@ -2595,49 +3001,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = extractChildResult(std::move(child_result));
-                    auto child_op = std::move(cr.op);
-
-                    std::vector<ProjectPhysicalOp::ProjectItem> items;
-                    Schema output_schema;
-                    std::vector<binder::BoundType> output_types;
-                    for (auto& item : v.items) {
-                        ProjectPhysicalOp::ProjectItem pi;
-                        pi.expr = std::move(item.expr);
-                        pi.name = std::move(item.alias);
-                        items.push_back(std::move(pi));
-                        output_schema.push_back(items.back().name);
-                        output_types.push_back(std::move(item.result_type));
-                    }
-
-                    // Build the output layout from the pass-computed
-                    // items[i].output_slot. This keeps the physical layout
-                    // consistent with the data each rewritten item emits:
-                    // a forwarded graph variable is promoted to its object
-                    // slot, so the output column must be labelled with that
-                    // slot for downstream covering references to resolve.
-                    // Per-item fallback: items the pass didn't touch
-                    // (output_slot == INVALID_SLOT_ID) fall back to name-based
-                    // assignment, while items with a valid output_slot keep
-                    // it. Mixing the two in one Project is legal — the pass
-                    // may leave a scalar alias untouched while promoting a
-                    // sibling graph variable.
-                    TupleSlotLayout proj_layout;
-                    for (size_t i = 0; i < output_schema.size(); ++i) {
-                        binder::SlotId sid = v.items[i].output_slot;
-                        if (sid == binder::INVALID_SLOT_ID) {
-                            auto it = ctx.var_slots.find(output_schema[i]);
-                            sid = it != ctx.var_slots.end() ? it->second : ctx.slot_allocator.next();
-                            ctx.var_slots[output_schema[i]] = sid;
-                        }
-                        proj_layout.append(sid);
-                    }
-
-                    auto result = std::make_unique<ProjectPhysicalOp>(std::move(items), std::move(cr.output_schema),
-                                                                      std::move(child_op));
-                    result->setEvalContext(ctx.eval_ctx);
-                    auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
-                                                          std::move(output_types), std::move(proj_layout)};
                     // Note: we deliberately do NOT run dispatchProjectionExtract
                     // after Project. Pre-Project PE already appended Construct /
                     // property columns against the topology source; Project's
@@ -2645,7 +3008,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // output column carries the constructed VertexValue / EdgeValue.
                     // Re-running PE here would re-emit Construct for the alias
                     // and produce duplicate output columns.
-                    return plan_result;
+                    return planProjectOperator(v, extractChildResult(std::move(child_result)), ctx);
                 } else if constexpr (std::is_same_v<Elem, binder::BoundAggregateOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -2714,6 +3077,51 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSortOp>) {
+                    // Filter-boundary split: ORDER BY keys that the Filter does
+                    // not need (e.g. message.id in LDBC c9) are loaded after the
+                    // Filter, not for every pre-filter row.
+                    if (auto* fp = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&v.child);
+                        fp && *fp &&
+                        !std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>((*fp)->child)) {
+                        auto& filter = **fp;
+                        auto deferred = computeSortFilterDeferredSlots(ctx, v, filter);
+                        if (!deferred.empty()) {
+                            auto saved_deferred = ctx.deferred_slots;
+                            std::unordered_set<binder::SlotId> merged;
+                            if (saved_deferred)
+                                merged = *saved_deferred;
+                            merged.insert(deferred.begin(), deferred.end());
+                            ctx.deferred_slots = std::move(merged);
+                            auto child_result =
+                                planBoundOperator(filter.child, store, meta, ctx, input_schema, input_types);
+                            ctx.deferred_slots = std::move(saved_deferred);
+                            if (std::holds_alternative<std::string>(child_result))
+                                return std::get<std::string>(child_result);
+                            auto cr = extractChildResult(std::move(child_result));
+                            auto filter_op = std::make_unique<FilterPhysicalOp>(std::move(filter.predicate),
+                                                                                cr.output_schema, std::move(cr.op));
+                            filter_op->setEvalContext(ctx.eval_ctx);
+                            auto filter_result = extractChildResult(
+                                PlanOperatorResult{std::move(filter_op), std::move(cr.output_schema),
+                                                   std::move(cr.output_types), std::move(cr.slot_layout)});
+                            auto lm_result =
+                                materializeDeferredAfterLimit(std::move(filter_result), ctx, deferred, store);
+
+                            std::vector<SortPhysicalOp::SortItem> sort_items;
+                            for (auto& si : v.items) {
+                                SortPhysicalOp::SortItem item;
+                                item.expr = std::move(si.expr);
+                                item.ascending = (si.direction == cypher::OrderBy::Direction::ASC);
+                                sort_items.push_back(std::move(item));
+                            }
+                            auto sort_op =
+                                std::make_unique<SortPhysicalOp>(std::move(sort_items), std::move(lm_result.op));
+                            sort_op->setEvalContext(ctx.eval_ctx);
+                            return extractChildResult(PlanOperatorResult{
+                                std::move(sort_op), std::move(lm_result.output_schema),
+                                std::move(lm_result.output_types), std::move(lm_result.slot_layout)});
+                        }
+                    }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
@@ -2740,6 +3148,35 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundLimitOp>) {
+                    // LIMIT-boundary split:
+                    //   LIMIT(Project(Sort/Filter(...)))
+                    //   -> Project(LateMaterialize(LIMIT(Sort/Filter(...))))
+                    // The Project only reshapes rows (no row-count effect), so
+                    // moving it above LIMIT is semantics-preserving. Columns
+                    // consumed only by the Project (content/imageFile/names, …)
+                    // are deferred and materialized for the surviving rows only.
+                    if (auto* pp = std::get_if<std::unique_ptr<binder::BoundProjectOp>>(&v.child); pp && *pp) {
+                        auto& project = **pp;
+                        auto deferred = computeDeferredSlots(ctx, project);
+                        if (!deferred.empty()) {
+                            auto saved_deferred = std::move(ctx.deferred_slots);
+                            ctx.deferred_slots = deferred;
+                            auto child_result =
+                                planBoundOperator(project.child, store, meta, ctx, input_schema, input_types);
+                            ctx.deferred_slots = std::move(saved_deferred);
+                            if (std::holds_alternative<std::string>(child_result))
+                                return std::get<std::string>(child_result);
+                            auto cr = extractChildResult(std::move(child_result));
+                            auto limit_op =
+                                std::make_unique<LimitPhysicalOp>(v.constant, std::move(v.expr), std::move(cr.op));
+                            auto limit_result = extractChildResult(
+                                PlanOperatorResult{std::move(limit_op), std::move(cr.output_schema),
+                                                   std::move(cr.output_types), std::move(cr.slot_layout)});
+                            auto lm_result =
+                                materializeDeferredAfterLimit(std::move(limit_result), ctx, deferred, store);
+                            return planProjectOperator(project, extractChildResult(std::move(lm_result)), ctx);
+                        }
+                    }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
