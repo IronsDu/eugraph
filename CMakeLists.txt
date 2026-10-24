@@ -111,6 +111,7 @@ add_library(eugraph_lib STATIC
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp
     src/storage/kv/index_key_codec.cpp
+    src/storage/kv/adjacency_codec.cpp
     src/storage/wt_cursor.cpp
     src/storage/wt_session.cpp
     src/storage/wt_table_ops.cpp
@@ -475,6 +476,7 @@ if(EUGRAPH_BUILD_TESTS)
     add_executable(eugraph_tests
         tests/test_key_codec.cpp
         tests/test_value_codec.cpp
+        tests/test_adjacency_codec.cpp
         tests/test_graph_store_wt.cpp
     )
 

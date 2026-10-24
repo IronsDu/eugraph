@@ -6,32 +6,28 @@ using namespace eugraph;
 
 class KeyCodecTest : public ::testing::Test {};
 
-// ==================== Label Reverse Index (table:label_reverse) ====================
+// ==================== Vertex Data: labels (table:vertex_data) ====================
 
-TEST_F(KeyCodecTest, EncodeDecodeLabelReverseKey) {
-    auto key = KeyCodec::encodeLabelReverseKey(1, 100);
-
-    // No prefix byte: 8 + 2 = 10 bytes
-    EXPECT_EQ(key.size(), 10u);
-
-    auto [vertex_id, label_id] = KeyCodec::decodeLabelReverseKey(key);
+TEST_F(KeyCodecTest, EncodeDecodeVertexLabelKey) {
+    auto key = KeyCodec::encodeVertexLabelKey(1, 100);
+    EXPECT_EQ(key.size(), 8u + 1u + 2u);
+    auto [vertex_id, label_id] = KeyCodec::decodeVertexLabelKey(key);
     EXPECT_EQ(vertex_id, 1u);
     EXPECT_EQ(label_id, 100u);
 }
 
-TEST_F(KeyCodecTest, LabelReverseKeyLargeValues) {
-    auto key = KeyCodec::encodeLabelReverseKey(0xFFFFFFFFFFFFFFFF, 0xFFFF);
-    auto [vertex_id, label_id] = KeyCodec::decodeLabelReverseKey(key);
+TEST_F(KeyCodecTest, VertexLabelKeyLargeValues) {
+    auto key = KeyCodec::encodeVertexLabelKey(0xFFFFFFFFFFFFFFFF, 0xFFFF);
+    auto [vertex_id, label_id] = KeyCodec::decodeVertexLabelKey(key);
     EXPECT_EQ(vertex_id, 0xFFFFFFFFFFFFFFFF);
     EXPECT_EQ(label_id, 0xFFFF);
 }
 
-TEST_F(KeyCodecTest, LabelReversePrefix) {
-    auto prefix = KeyCodec::encodeLabelReversePrefix(42);
-    EXPECT_EQ(prefix.size(), 8u);
-
-    auto full_key = KeyCodec::encodeLabelReverseKey(42, 5);
-    EXPECT_EQ(full_key.substr(0, 8), prefix);
+TEST_F(KeyCodecTest, VertexLabelPrefix) {
+    auto prefix = KeyCodec::encodeVertexLabelPrefix(42);
+    EXPECT_EQ(prefix.size(), 8u + 1u);
+    auto full_key = KeyCodec::encodeVertexLabelKey(42, 5);
+    EXPECT_EQ(full_key.substr(0, prefix.size()), prefix);
 }
 
 // ==================== Label Forward Index (table:label_fwd_{id}) ====================
@@ -52,25 +48,32 @@ TEST_F(KeyCodecTest, LabelForwardKeySortOrder) {
     EXPECT_LT(key1, key2);
 }
 
-// ==================== Vertex Property Storage (table:vprop_{id}) ====================
+// ==================== Vertex Data: properties (table:vertex_data) ====================
 
-TEST_F(KeyCodecTest, EncodeDecodeVPropKey) {
-    auto key = KeyCodec::encodeVPropKey(42, 5);
-
-    // No prefix, no label_id: 8 + 2 = 10 bytes
-    EXPECT_EQ(key.size(), 10u);
-
-    auto [vertex_id, prop_id] = KeyCodec::decodeVPropKey(key);
-    EXPECT_EQ(vertex_id, 42u);
-    EXPECT_EQ(prop_id, 5u);
+TEST_F(KeyCodecTest, EncodeDecodeVertexPropertyKey) {
+    auto key = KeyCodec::encodeVertexPropertyKey(42, 7, 5);
+    EXPECT_EQ(key.size(), 8u + 1u + 2u + 2u);
+    auto decoded = KeyCodec::decodeVertexPropertyKey(key);
+    EXPECT_EQ(decoded.vertex_id, 42u);
+    EXPECT_EQ(decoded.label_id, 7u);
+    EXPECT_EQ(decoded.prop_id, 5u);
 }
 
-TEST_F(KeyCodecTest, VPropPrefix) {
-    auto prefix = KeyCodec::encodeVPropPrefix(100);
-    EXPECT_EQ(prefix.size(), 8u);
+TEST_F(KeyCodecTest, VertexPropertyPrefixes) {
+    auto all = KeyCodec::encodeVertexPropertyPrefix(100);
+    EXPECT_EQ(all.size(), 8u + 1u);
+    auto by_label = KeyCodec::encodeVertexPropertyPrefix(100, 3);
+    EXPECT_EQ(by_label.size(), 8u + 1u + 2u);
+    auto full = KeyCodec::encodeVertexPropertyKey(100, 3, 9);
+    EXPECT_EQ(full.substr(0, all.size()), all);
+    EXPECT_EQ(full.substr(0, by_label.size()), by_label);
+}
 
-    auto full_key = KeyCodec::encodeVPropKey(100, 3);
-    EXPECT_EQ(full_key.substr(0, 8), prefix);
+TEST_F(KeyCodecTest, VertexAdjacencyKeyAndPrefix) {
+    auto key = KeyCodec::encodeVertexAdjacencyKey(42);
+    EXPECT_EQ(key.size(), 8u + 1u);
+    auto prefix = KeyCodec::encodeVertexDataPrefix(42);
+    EXPECT_EQ(key.substr(0, prefix.size()), prefix);
 }
 
 // ==================== Edge Index (table:edge_index) ====================

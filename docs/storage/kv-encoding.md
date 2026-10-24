@@ -2,164 +2,184 @@
 
 > [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
-源码：`src/storage/kv/key_codec.hpp`、`src/storage/kv/index_key_codec.hpp`
-
----
+源码：`src/storage/kv/key_codec.hpp`、`src/storage/kv/adjacency_codec.hpp`、`src/storage/kv/index_key_codec.hpp`
 
 ## 架构概述
 
-采用 **WiredTiger 多表隔离** 设计。每个逻辑数据结构有独立的 WT 表，表名即身份标识，key 中无前缀字节。所有多字节整数使用大端序（Big-Endian）编码。
+采用 **WiredTiger 多表隔离** 设计。每个逻辑数据结构有独立的 WT 表，表名即身份标识，key 中无前缀字节。所有多字节 key 使用大端序；`vertex_data` 的邻接 blob value 使用小端序。
 
 ### 表清单
 
 | WT 表名 | 用途 | Key 格式 |
 |---------|------|----------|
-| `label_reverse` | 顶点→标签反向索引 | `{vertex_id:u64BE}{label_id:u16BE}` |
+| `vertex_data` | 顶点标签和有界出边缓存 | `{vertex_id:u64BE}{kind:u8}{...}` |
+| `vprop_{id}` | 顶点属性（每标签一表） | `{vertex_id:u64BE}{prop_id:u16BE}` |
+| `vertex_existence` | 全图顶点枚举（含无标签顶点） | `{vertex_id:u64BE}` |
 | `label_fwd_{id}` | 标签→顶点正向索引（每标签一表） | `{vertex_id:u64BE}` |
-| `vprop_{id}` | 顶点属性存储（每标签一表） | `{vertex_id:u64BE}{prop_id:u16BE}` |
 | `edge_index` | 边邻接索引 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` |
 | `etype_{id}` | 边类型索引（每关系类型一表） | `{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}` |
 | `eprop_{id}` | 边属性存储（每关系类型一表） | `{edge_id:u64BE}{prop_id:u16BE}` |
 | `vidx_{index_id}` | 顶点二级索引 | `{sortable_value}{entity_id:u64BE}` |
-| `vidx_{index_id}` | 顶点复合索引（单/复合同表名规则） | `{sortable_values...}{entity_id:u64BE}` |
-| `eidx_{edge_label_id}_{prop_id...}` | 边属性索引（TODO: 迁移到 eidx_{index_id}） | `{sortable_value}{edge_id:u64BE}` |
-| `eidx_{edge_label_id}_{prop_id...}` | 边复合属性索引（TODO: 迁移到 eidx_{index_id}） | `{sortable_values...}{edge_id:u64BE}` |
+| `eidx_{index_id}` | 边属性索引 | `{sortable_value}{edge_id:u64BE}` |
+
+`label_reverse` 已删除；标签进 `vertex_data`。属性最终保留在 `vprop_{id}`：纯 X 合并属性会让 LDBC 的单属性点查 B-tree 变大（complex-3 回退约 35%），因此采用 hybrid。
 
 ---
 
-## 详细编码
+## 顶点数据（vertex_data）
 
-### 标签反向索引（label_reverse）
-
-记录顶点拥有哪些标签。每顶点-标签组合一条记录。
-
-```
-查询：前缀扫描 {vertex_id:u64BE} → 获取该顶点所有标签
+```text
+{v:u64BE}{kind:u8}{...}
 ```
 
-### 标签正向索引（label_fwd_{id}）
+| kind | 含义 | Key | Value |
+|------|------|-----|-------|
+| `0x00` | 标签 | `{v}{0x00}{label_id:u16BE}` | 空 |
+| `0x01` | 属性（旧纯 X 数据兼容/保留编码） | `{v}{0x01}{label_id:u16BE}{prop_id:u16BE}` | `ValueCodec` |
+| `0x02` | 出边缓存 | `{v}{0x02}` | 邻接 blob，见下 |
 
-每个标签一张表，表名含 label_id。按顶点 ID 排序。
+查询前缀：
 
+```text
+{v}                       -> 该顶点所有标签/邻接
+{v}{0x00}                 -> 所有标签
+{v}{0x00}{label}          -> 某标签是否存在
+{v}{0x02}                 -> 出边缓存
 ```
-查询：全表扫描 → 获取该标签下所有顶点 ID
-```
+
+同一顶点的标签/邻接记录在 `vertex_data` 中连续；属性在 `vprop_{id}` 中按标签分区。这样既保留标签/邻接的局部性，又避免属性点查落入一棵包含所有标签记录的大 B-tree。
 
 ### 顶点属性（vprop_{id}）
 
-每个标签一张表。prop_id 在每个 Label 内独立编号、永不复用。字段改名只需修改元数据中的 PropertyDef，无需修改 KV 数据。
+每个标签一张表。`prop_id` 在每个 Label 内独立编号、永不复用。
 
 ```
-前缀 {vertex_id:u64BE} → 获取某顶点在该标签下的所有属性
-前缀 {vertex_id:u64BE}{prop_id:u16BE} → 获取某顶点在该标签下的指定属性
+前缀 {vertex_id:u64BE}                  -> 该顶点在该标签下的所有属性
+前缀 {vertex_id:u64BE}{prop_id:u16BE}   -> 指定属性
 ```
 
-### 边邻接索引（edge_index）
+保留 per-label 表是性能决策：纯 `vertex_data` 属性合并后，Message/Person 等热标签的单属性点查
+需要落到约 69MB 的全局 B-tree，而旧的 `vprop_Message`/`vprop_Person` 分别约 28/29MB，页局部性
+明显更好；sf0.1 complex-3 实测纯 X 回退约 35%。
 
-全局一张表。每条逻辑边产生**两条**索引记录（出边 + 入边）：一条 `direction=OUT`，一条 `direction=IN`，指向同一个 edge_id。
+### 标签/属性 DDL
+
+- `createLabel` 创建 `label_fwd_{id}` 和 `vprop_{id}`；`vertex_data` 是全局表。
+- `dropLabel`：删除 `label_fwd_{id}` 枚举出的顶点的 X 标签 key，再 drop 正向表与 `vprop_{id}`；属性表的 drop 是 O(1)。
+- 删除顶点：扫 `{v}` 前缀删除标签/邻接，删除各标签的 `vprop` 属性，再删 `label_fwd` 和 `vertex_existence`。
+
+---
+
+## 出边缓存 blob
+
+### 编码
+
+```text
+value = {adj_state:u8}
+        repeated count 次，固定 32 字节 entry（小端）：
+          offset 0:  edge_label:u16
+          offset 2:  reserved0:u16   (必须为 0)
+          offset 4:  reserved1:u32   (必须为 0)
+          offset 8:  neighbor_id:u64
+          offset 16: seq:u64
+          offset 24: edge_id:u64
+```
+
+- **没有 count 字段**：`count = (value.size() - 1) / 32`；
+- blob 变长，不 padding 到 N；
+- `(size - 1) % 32 != 0`、state 非法、reserved 非 0 时视为损坏，调用方回退 `edge_index`；
+- entry 固定 32B，便于删除时 `memmove` 压缩，也便于拷贝到对齐的运行时结构后直接读字段。
+
+### 状态
+
+```text
+COMPLETE = 0
+OVERFLOW = 1
+```
+
+- 创建顶点时若 cache 开启，写一个空 blob（`COMPLETE, count=0`），用于区分“缓存完整且出度为 0”和“没有缓存”；
+- 插入时永远写 `edge_index`；`COMPLETE && count < N` 追加 entry；`COMPLETE && count == N` 时插入第 N+1 条置 `OVERFLOW`，之后不再缓存；
+- 删除时永远删 `edge_index`；blob 中有该 edge 就删除并把后面的 entry 前移；状态保持（`OVERFLOW` 不回退）；
+- entry 按 `(edge_label, neighbor_id, seq, edge_id)` 排序；
+- 第一版只缓存 **OUT**；`IN/BOTH` 仍走 `edge_index`。
+
+### 配置
+
+`--adj-cache-capacity N`（0 关闭，默认 0）。`N=0` 时不创建/维护 blob。当前版本默认关闭；cache 的查询侧接入需要显式传入 `OutEdgeCache*`。
+
+### 读取接口
+
+```cpp
+VertexData loadVertexData(GraphSession&, VertexId, uint32_t needs);
+void scanEdges(GraphSession&, VertexId, const OutEdgeCache* cache,
+               Direction, std::optional<EdgeLabelId>,
+               const std::function<bool(const EdgeIndexEntry&)>& callback);
+```
+
+- `cache == nullptr` 或 `OVERFLOW` → `edge_index`；
+- `OUT && COMPLETE` → 直接过滤 blob；
+- `IN/BOTH` → `edge_index`；
+- 不允许通用 `scanEdges(vid, OUT)` 隐式读 blob：只有调用方明确持有 cache 时才走缓存，避免无收益的额外 B-tree 读取。
+
+> 读放大/写热点：cache blob 是每顶点单条记录，高并发写同一顶点可能产生事务冲突；当前默认关闭，开启前需要评估批量装载/并发更新场景。
+
+---
+
+## 边邻接索引（edge_index）
+
+全局一张表。每条逻辑边产生两条索引记录（OUT + IN），指向同一个 edge_id。
 
 ```
-前缀 {vertex_id}{OUT} → 所有出边
-前缀 {vertex_id}{OUT}{label_id} → 某类型出边
-前缀 {vertex_id}{OUT}{label_id}{neighbor_id} → 两点间某类型所有边
+前缀 {vertex_id}{OUT}                      -> 所有出边
+前缀 {vertex_id}{OUT}{label_id}            -> 某类型出边
+前缀 {vertex_id}{OUT}{label_id}{neighbor}  -> 两点间某类型所有边
 ```
 
 ### 边类型索引（etype_{id}）
 
-每个关系类型一张表。仅存出边方向，每条逻辑边一条记录。用于按关系类型扫描所有边。
+每个关系类型一张表，仅存出边方向，每条逻辑边一条。
 
 ### 边属性（eprop_{id}）
 
-每个关系类型一张表。与 vprop 设计一致，prop_id 在 EdgeLabel 内编号。
+每个关系类型一张表，`prop_id` 在 EdgeLabel 内编号。
 
 ---
 
-## 二级索引（IndexKeyCodec）
+## 二级索引
 
-`IndexKeyCodec` 实现可排序的属性值编码，key 格式为 `{sortable_value}{entity_id:u64BE}`：
+`IndexKeyCodec` 实现可排序属性值编码，key 为 `{sortable_value}{entity_id:u64BE}`：
 
-| 属性类型 | 编码格式 |
-|----------|----------|
+| 属性类型 | 编码 |
+|----------|------|
 | null | `0xFF`（排最前） |
 | bool | `0x00` / `0x01` |
-| int64 | `0x00` + 8 字节 BE，符号翻转（`val ^ 0x8000...`） |
-| double | `0x01` + 8 字节 IEEE 754，符号翻转 |
+| int64 | `0x00` + 8B BE（符号翻转） |
+| double | `0x01` + 8B IEEE754（符号翻转） |
 | string | `0x02` + 原始字节（v1 仅 ASCII 排序） |
 
-等值查询使用 `encodeEqualityPrefix` 做前缀扫描；范围查询用 `search_near` + 边界检查。
-
-### 边索引 Value 编码
-
-边属性索引的 value 存储边的邻接信息，避免二次查询。格式（26 字节）：
-
-```
-{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}{label_id:u16BE}
-```
-
-编解码由 `ValueCodec::encodeEdgeAdjacency` / `decodeEdgeAdjacency` 实现。
-
-索引扫描时使用 `scanIndex*WithValue` 方法，一次性返回 `(edge_id, adjacency_info)`，用于 `EdgeIndexScanPhysicalOp` 直接产出包含 src/dst/edge 的 Row。
-
-### 编码→查询模式举例
-
-**边邻接索引（edge_index）** 支持以下查询：
-
-```
-前缀 {vertex_id}{OUT}                          →  MATCH (a)-[e]->(b) WHERE id(a) = X
-前缀 {vertex_id}{OUT}{label_id}                 →  MATCH (a)-[e:KNOWS]->(b) WHERE id(a) = X
-前缀 {vertex_id}{OUT}{label_id}{neighbor_id}     →  MATCH (a)-[e:KNOWS]->(b) WHERE id(a) = X AND id(b) = Y
-前缀 {vertex_id}                                →  MATCH (a)-[e]-(b) WHERE id(a) = X  （出边+入边）
-```
-
-**边类型索引（etype_{id}）** 支持以下查询：
-
-```
-无 prefix（全表扫描）                             →  MATCH ()-[e:KNOWS]->()
-前缀 {src_id}                                   →  MATCH (a)-[e:KNOWS]->() WHERE id(a) = X
-前缀 {src_id}{dst_id}                           →  MATCH (a)-[e:KNOWS]->(b) WHERE id(a) = X AND id(b) = Y
-```
-
-**顶点属性索引（vidx_{index_id}）** 支持以下查询：
-
-```
-等值扫描 {sortable_value}                        →  MATCH (n:Person) WHERE n.age = 30
-范围扫描 {start} < x < {end}                     →  MATCH (n:Person) WHERE n.age > 20 AND n.age < 40
-复合等值 {v1}{v2}                                →  MATCH (n:Person) WHERE n.age = 30 AND n.name = 'Alice'
-```
-
-**边属性索引（eidx_{edge_label_id}_{prop_id...}）** 支持以下查询：
-
-```
-等值扫描 {sortable_value}                        →  MATCH ()-[e:KNOWS]->() WHERE e.weight = 5
-范围扫描 {start} < x < {end}                     →  MATCH ()-[e:KNOWS]->() WHERE e.since > 2020
-复合等值 {v1}{v2}                                →  MATCH ()-[e:KNOWS]->() WHERE e.weight = 5 AND e.since = 2020
-```
-
-边属性索引的 value 包含邻接信息，因此 `EdgeIndexScanPhysicalOp` 可直接产出 src/dst/edge 列，等价于替换了 Expand + Filter 的组合。
+边属性索引 value 存 `{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}{label_id:u16BE}`，`EdgeIndexScanPhysicalOp` 可直接产出邻接信息。
 
 ---
 
 ## 元数据编码
 
-元数据存储使用独立的 WT 连接（`{db}/meta/`），表内 key 使用 `M|` 前缀字符串：
+元数据使用独立 WT 连接（`{db}/meta/`），`M|` 前缀字符串键：
 
+```text
+M|label:{name}       -> {label_id:u16}{properties_def:binary}{indexes:binary}
+M|edge_label:{name}  -> {edge_label_id:u16}{properties_def:binary}{directed:u8}{indexes:binary}
+M|label_id:{id}      -> {name}{properties_def}{indexes}
+M|edge_label_id:{id} -> {name}{properties_def}{directed}{indexes}
+M|index:{name}       -> {label_id:u16}{prop_id:u16}{is_edge:u8}{state:u8}
+M|next_ids           -> {next_vertex_id:u64}{next_edge_id:u64}{next_label_id:u16}{next_edge_label_id:u16}
 ```
-M|label:{name}       → {label_id:u16}{properties_def:binary}{indexes:binary}
-M|edge_label:{name}  → {edge_label_id:u16}{properties_def:binary}{directed:u8}{indexes:binary}
-M|label_id:{id}      → {name}{properties_def}{indexes}
-M|edge_label_id:{id} → {name}{properties_def}{directed}{indexes}
-M|index:{name}       → {label_id:u16}{prop_id:u16}{is_edge:u8}{state:u8}
-M|next_ids           → {next_vertex_id:u64}{next_edge_id:u64}{next_label_id:u16}{next_edge_label_id:u16}
-```
-
-Values 使用 `MetadataCodec` 进行二进制编解码（`src/storage/meta/meta_codec.cpp`），非 ASCII 管道分隔。
 
 ---
 
-## 关键设计决策
+## 兼容与迁移
 
-1. **多表隔离替代单 KV 前缀**：每个 Label/EdgeLabel 拥有独立的 WT 表，表名即分区依据，避免单表前缀扫描时的跨 label 干扰，并能独立配置 WT 表选项
-2. **prop_id 替代属性名**：KV key 中存 prop_id 而非属性名字符串，字段改名只需修改元数据，无需重写数据
-3. **prop_id 永不复用**：删除列后 prop_id 保留空洞，新增列分配新 ID，避免旧数据被误读
-4. **边双向索引**：edge_index 表同时维护出边和入边索引，每条逻辑边对应两条记录
-5. **边索引邻接冗余**：边属性索引的 value 存储邻接信息（src/dst/seq/label_id），使 `EdgeIndexScanPhysicalOp` 无需二次查询即可产出完整行。代价是每条索引条目多 26 字节
+- 这是 KV 格式变更：旧的 `label_reverse` 需要迁移到 `vertex_data` 的标签记录；`vprop_*` 可保留不动（hybrid 直接复用）。
+- 旧的“纯 X 属性”数据不再是当前读取格式，需要重新 load/迁移到 `vprop_*`。
+- 新二进制会拒绝仍带 `label_reverse` 的目录；需先用迁移工具把标签写入 `vertex_data` 并删除 `label_reverse`。
+- 未引入 per-record version；格式版本在表/图级别管理。
+- 第一版 cache 默认关闭；开启后旧顶点如果没有 blob，统一回退 `edge_index`，不会被误认为“空且完整”。

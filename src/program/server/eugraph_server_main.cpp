@@ -34,6 +34,7 @@ struct ServerConfig {
     int wt_cache_size_mb = 256;
     int wt_evict_threads_max = 4;
     std::string wt_txn_sync = "fsync";
+    int adjacency_cache_capacity = kDefaultAdjacencyCacheCapacity;
 };
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
@@ -59,6 +60,8 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
                                               config.wt_evict_threads_max);
     args::ValueFlag<std::string> wt_txn_sync(parser, "mode", "WiredTiger commit sync: fsync|none", {"wt-txn-sync"},
                                              config.wt_txn_sync);
+    args::ValueFlag<int> adjacency_cache_capacity(parser, "n", "Bounded out-edge cache entries per vertex (0 disables)",
+                                                  {"adj-cache-capacity"}, config.adjacency_cache_capacity);
 
     try {
         parser.ParseCLI(argc, argv);
@@ -85,6 +88,11 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
     config.wt_cache_size_mb = args::get(wt_cache_size_mb);
     config.wt_evict_threads_max = args::get(wt_evict_threads_max);
     config.wt_txn_sync = args::get(wt_txn_sync);
+    config.adjacency_cache_capacity = args::get(adjacency_cache_capacity);
+    if (config.adjacency_cache_capacity < 0 || config.adjacency_cache_capacity > 65535) {
+        std::cerr << "--adj-cache-capacity must be in [0, 65535]\n";
+        std::exit(1);
+    }
     return config;
 }
 
@@ -125,7 +133,8 @@ int main(int argc, char* argv[]) {
 
     auto graph_manager = std::make_shared<GraphManager>();
     if (!graph_manager->init(config.data_dir, config.storage_io_threads, config.compute_threads,
-                             GraphManager::kDefaultCheckpointIntervalSec, data_wt_config)) {
+                             GraphManager::kDefaultCheckpointIntervalSec, data_wt_config,
+                             static_cast<uint16_t>(config.adjacency_cache_capacity))) {
         spdlog::error("Failed to initialize graph manager");
         return 1;
     }

@@ -46,6 +46,16 @@ public:
                               std::span<const std::pair<LabelId, Properties>> label_props) = 0;
     virtual bool deleteVertex(GraphSession& session, VertexId vid) = 0;
 
+    /// Load labels/properties/out-edge cache in one pass according to `needs`.
+    /// Only requested fields are populated; optional fields that are present but
+    /// empty mean "requested, but the vertex has none".
+    virtual VertexData loadVertexData(GraphSession& session, VertexId vid, uint32_t needs) = 0;
+    virtual bool adjacencyCacheEnabled() const = 0;
+    /// Batch variant for OUT_EDGES. Duplicate ids are deduplicated internally;
+    /// output order matches the input order. Missing/malformed blobs are nullopt.
+    virtual std::vector<std::optional<OutEdgeCache>> loadOutEdgeCachesBatch(GraphSession& session,
+                                                                            const std::vector<VertexId>& vids) = 0;
+
     // ==================== Vertex Properties ====================
 
     virtual std::optional<Properties> getVertexProperties(GraphSession& session, VertexId vid, LabelId label_id) = 0;
@@ -168,9 +178,16 @@ public:
     virtual void scanEdges(GraphSession& session, VertexId vid, Direction direction,
                            std::optional<EdgeLabelId> label_filter,
                            const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
+    /// Cache-aware overload. `cache == nullptr` is the normal fallback path;
+    /// only OUT + COMPLETE uses the cache. The pointer must stay valid for the
+    /// duration of the synchronous callback.
+    virtual void scanEdges(GraphSession& session, VertexId vid, const OutEdgeCache* cache, Direction direction,
+                           std::optional<EdgeLabelId> label_filter,
+                           const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
     virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid,
                                                                   Direction direction,
-                                                                  std::optional<EdgeLabelId> label_filter) = 0;
+                                                                  std::optional<EdgeLabelId> label_filter,
+                                                                  const OutEdgeCache* cache = nullptr) = 0;
     virtual void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                  std::optional<VertexId> dst_filter,
                                  const std::function<bool(const EdgeTypeIndexEntry&)>& callback) = 0;

@@ -29,23 +29,69 @@ uint16_t KeyCodec::decodeU16BE(std::string_view data, size_t offset) {
     return (static_cast<uint8_t>(data[offset]) << 8) | static_cast<uint8_t>(data[offset + 1]);
 }
 
-// ==================== Label Reverse Index ====================
+// ==================== Vertex Data ====================
 
-std::string KeyCodec::encodeLabelReverseKey(VertexId vertex_id, LabelId label_id) {
+std::string KeyCodec::encodeVertexLabelKey(VertexId vertex_id, LabelId label_id) {
     std::string key;
-    key.reserve(8 + 2);
+    key.reserve(8 + 1 + 2);
     encodeU64BE(key, vertex_id);
+    encodeU8(key, static_cast<uint8_t>(VertexDataKind::LABEL));
     encodeU16BE(key, label_id);
     return key;
 }
 
-std::pair<VertexId, LabelId> KeyCodec::decodeLabelReverseKey(std::string_view key) {
-    VertexId vertex_id = decodeU64BE(key, 0);
-    LabelId label_id = decodeU16BE(key, 8);
-    return {vertex_id, label_id};
+std::pair<VertexId, LabelId> KeyCodec::decodeVertexLabelKey(std::string_view key) {
+    return {decodeU64BE(key, 0), decodeU16BE(key, 9)};
 }
 
-std::string KeyCodec::encodeLabelReversePrefix(VertexId vertex_id) {
+std::string KeyCodec::encodeVertexLabelPrefix(VertexId vertex_id) {
+    std::string key;
+    key.reserve(8 + 1);
+    encodeU64BE(key, vertex_id);
+    encodeU8(key, static_cast<uint8_t>(VertexDataKind::LABEL));
+    return key;
+}
+
+std::string KeyCodec::encodeVertexPropertyKey(VertexId vertex_id, LabelId label_id, uint16_t prop_id) {
+    std::string key;
+    key.reserve(8 + 1 + 2 + 2);
+    encodeU64BE(key, vertex_id);
+    encodeU8(key, static_cast<uint8_t>(VertexDataKind::PROPERTY));
+    encodeU16BE(key, label_id);
+    encodeU16BE(key, prop_id);
+    return key;
+}
+
+KeyCodec::VertexPropertyKey KeyCodec::decodeVertexPropertyKey(std::string_view key) {
+    return VertexPropertyKey{decodeU64BE(key, 0), decodeU16BE(key, 9), decodeU16BE(key, 11)};
+}
+
+std::string KeyCodec::encodeVertexPropertyPrefix(VertexId vertex_id) {
+    std::string key;
+    key.reserve(8 + 1);
+    encodeU64BE(key, vertex_id);
+    encodeU8(key, static_cast<uint8_t>(VertexDataKind::PROPERTY));
+    return key;
+}
+
+std::string KeyCodec::encodeVertexPropertyPrefix(VertexId vertex_id, LabelId label_id) {
+    std::string key;
+    key.reserve(8 + 1 + 2);
+    encodeU64BE(key, vertex_id);
+    encodeU8(key, static_cast<uint8_t>(VertexDataKind::PROPERTY));
+    encodeU16BE(key, label_id);
+    return key;
+}
+
+std::string KeyCodec::encodeVertexAdjacencyKey(VertexId vertex_id) {
+    std::string key;
+    key.reserve(8 + 1);
+    encodeU64BE(key, vertex_id);
+    encodeU8(key, static_cast<uint8_t>(VertexDataKind::OUT_ADJACENCY));
+    return key;
+}
+
+std::string KeyCodec::encodeVertexDataPrefix(VertexId vertex_id) {
     std::string key;
     key.reserve(8);
     encodeU64BE(key, vertex_id);
@@ -78,7 +124,7 @@ VertexId KeyCodec::decodeVertexExistenceKey(std::string_view key) {
     return decodeU64BE(key, 0);
 }
 
-// ==================== Vertex Property Storage ====================
+// ==================== Per-label Vertex Property Storage ====================
 
 std::string KeyCodec::encodeVPropKey(VertexId vertex_id, uint16_t prop_id) {
     std::string key;
@@ -89,9 +135,7 @@ std::string KeyCodec::encodeVPropKey(VertexId vertex_id, uint16_t prop_id) {
 }
 
 std::pair<VertexId, uint16_t> KeyCodec::decodeVPropKey(std::string_view key) {
-    VertexId vertex_id = decodeU64BE(key, 0);
-    uint16_t prop_id = decodeU16BE(key, 8);
-    return {vertex_id, prop_id};
+    return {decodeU64BE(key, 0), decodeU16BE(key, 8)};
 }
 
 std::string KeyCodec::encodeVPropPrefix(VertexId vertex_id) {

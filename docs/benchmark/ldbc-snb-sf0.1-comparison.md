@@ -107,3 +107,246 @@ eugraph 在一次性数据副本上真实提交；neo4j 在现有库上真实提
 - 新增 TCK feature：`tests/tck/features-eugraph/shortest-path/shortest-path.feature`（3/3 通过）。
 - 新增单测：`PatternComprehensionAsReduceListSource`；原有 `ReduceBodyCorrelatedPatternComprehension` 通过。
 - 全量 ctest：**1304/1304**（含 TCK）。
+
+---
+
+## 5. 2026-10-23：vertex_data / 邻接缓存实验
+
+> 本节是存储格式改造后的独立复测，**§2 的旧表来自改造前**。新旧二进制不能直接读同一数据目录；
+> 旧 `label_reverse`/`vprop_*` 目录会被新二进制拒绝，需重新 load 或迁移。
+
+### 5.1 数据与配置
+
+- 新格式数据：`vertex_data` 合并标签/属性；`vertex_existence`、`label_fwd` 保留。
+- 数据用 sf0.1 Basic CSV + 适配 schema 重新装载（Basic 语料没有 Person 的 email/language 列；
+  §2 的完整数据语义以旧库/neo4j 为准，本节只看引擎执行性能）。
+- 8 compute、4 storage IO；3 轮交错，min。
+- 邻接缓存默认关闭（`--adj-cache-capacity 0`）。
+
+### 5.2 邻接缓存 A/B（cache N=8 vs 0）
+
+同一份带 cache 数据的两次查询，仅切换 server 的 `--adj-cache-capacity`：
+
+| 查询 | cache 8 min (ms) | cache 0 min (ms) | cache/0 |
+|---|---:|---:|---:|
+| complex-2 | 18.61 | 19.38 | 1.04 |
+| complex-3 | 202.32 | 205.48 | 1.02 |
+| complex-4 | 9.56 | 10.39 | 1.09 |
+| complex-5 | 554.85 | 547.34 | 0.99 |
+| complex-6 | 163.27 | 165.57 | 1.01 |
+| complex-7 | 6.13 | 5.42 | 0.88 |
+| complex-8 | 4.83 | 4.46 | 0.92 |
+| complex-9 | 737.26 | 720.86 | 0.98 |
+| complex-10 | 43.68 | 42.00 | 0.96 |
+| complex-11 | 9.35 | 8.80 | 0.94 |
+| complex-12 | 426.18 | 430.45 | 1.01 |
+
+**结论：这项 out-only 缓存对 sf0.1 LDBC 复杂查询没有可测收益，部分查询因额外读 blob 略慢。**
+因此默认关闭；保留存储/接口用于后续按需接入（见 §5.4）。
+
+### 5.3 改造后 complex 子集（cache 0，vs neo4j）
+
+| 查询 | eugraph min (ms) | neo4j min (ms) | 状态 |
+|---|---:|---:|---|
+| complex-2 | 17.27 | 5.41 | 🔴 慢 3.2× |
+| complex-3 | 184.09 | 29.69 | 🔴 慢 6.2× |
+| complex-4 | 8.69 | 5.27 | 🟡 慢 1.6× |
+| complex-7 | 5.02 | 4.61 | 🟢 慢 1.1× |
+| complex-8 | 3.65 | 4.32 | 🟢 快 1.2× |
+| complex-10 | 38.65 | 16.92 | 🔴 慢 2.3× |
+| complex-11 | 7.58 | 5.75 | 🟡 慢 1.3× |
+| complex-12 | 372.19 | 103.35 | 🔴 慢 3.6× |
+
+> 这是改造后同一轮的相对值，不对旧轮次做归因；CPU 频率/数据 schema 与 §2 不同。
+
+### 5.4 结论
+
+1. `vertex_data` 合并已完成：少掉 `label_reverse` 和所有 `vprop_*` 表，标签/属性共享 B-tree；
+   但当前 complex 子集没有看到相对旧格式的提速，需要用同机旧二进制做正式 A/B 才能判断。
+2. out-edge cache 在 sf0.1 LDBC 上没有收益，默认关闭；仅在明确需要 OUT 邻接且顶点已物化的
+   专用路径再启用（接口已预留）。
+3. 写路径注意：cache blob 是每顶点单记录，多连接同时更新同一顶点会产生 WT 写冲突；
+   loader 用 4 连接 + cache 开启时实测会 commit 失败，需单连接或关闭 cache。
+
+---
+
+## 6. 旧/新存储 A/B 归因（2026-10-24）
+
+> 目的不是再和 neo4j 比，而是判断 `vertex_data` 合并到底有没有进入热路径。
+> 旧 main 二进制 + 旧数据目录 vs 新二进制 + 新格式数据，同机交错，min。
+
+### 6.1 complex 子集
+
+| 查询 | 旧 main | 新存储 | 新/旧 |
+|---|---:|---:|---:|
+| complex-2 | 15.65 | 16.64 | 1.06 |
+| complex-3 | 136.75 | 177.04 | **1.29** |
+| complex-4 | 8.43 | 8.21 | 0.97 |
+| complex-7 | 5.02 | 4.98 | 0.99 |
+| complex-8 | 4.06 | 4.01 | 0.99 |
+| complex-10 | 35.87 | 37.23 | 1.04 |
+| complex-11 | 7.35 | 7.86 | 1.07 |
+| complex-12 | 354.86 | 364.48 | 1.03 |
+
+结论：新存储没有提升；complex-3 慢约 29%。
+
+### 6.2 complex-3 归因
+
+把 complex-3 拆开：
+
+| 子查询 | 旧 | 新 | 比值 |
+|---|---:|---:|---:|
+| countries | 1.51 | 1.70 | 1.13 |
+| cities | 3.81 | 3.97 | 1.04 |
+| cities_props | 7.45 | 6.74 | 0.91 |
+| scan_city | 1.00 | 1.03 | 1.03 |
+| vle KNOWS*1..2 | 1.85 | 1.87 | 1.01 |
+| `friend<-HAS_CREATOR-message` | **61.43** | **78.97** | **1.29** |
+
+最慢的一步只走 `edge_index`，**没有访问 `vertex_data`**。两边点数/边数、KNOWS 边数、Message 数完全一致，
+EXPLAIN 计划也一致。新格式用 1 连接/4 连接重载都复现同样的 30% 差异。
+
+结论：
+
+1. 当前 `vertex_data` 合并没有被 LDBC 热路径利用；真正贵的是 edge_index 展开。
+2. 30% 差异更可能来自 edge_index 的物理页面布局/装载顺序/页局部性，而不是标签/属性表结构。
+3. 在没有隔离 edge_index 布局之前，不能用这组 A/B 判断 vertex_data 的收益。
+
+### 6.3 下一步（未完成）
+
+- 做“只迁移 vertex_data、保留旧 edge_index”的隔离实验，确认布局假设；
+- 若要提升，需要针对 edge_index 的装载顺序/页面局部性，或让 planner 在“顶点已物化 + 紧接 Expand”场景真正用上 vertex_data，而不是继续做透明的 scanEdges/blob 读取。
+
+**当前性能验收未通过。**
+
+---
+
+## 7. Expand 目标标签过滤优化（2026-10-24）
+
+### 7.1 问题
+
+`Expand(f, m, HAS_CREATOR, IN)` 之后对 `m:Message` 的过滤原本走
+`getVertexLabelsBatch(neighbors)`：每个 neighbor 一次标签前缀 seek。  
+complex-3 形状里 neighbor 数约 5.8 万，这一步旧约 61ms、新约 79ms，是整个 friend→message
+展开的主要成本；它**完全不访问 vertex_data**，而是标签索引点查。
+
+### 7.2 改动
+
+对 `dst_label_ids_` 过滤按结果规模分两条路径：
+
+- `edges.size() < 4096`：保留逐 neighbor 标签点查（小集合更划算）；
+- 大集合：顺序扫 `label_fwd_{id}`，只把本批 neighbor 中命中标签的 vid 加入集合，再过滤边。
+
+代码：`src/query/physical_plan/operator/expand_physical_op.cpp`。
+
+### 7.3 结果
+
+同一份旧 edge_index 数据、新引擎：
+
+| 查询 | 优化前 | 优化后 |
+|---|---:|---:|
+| friend_msg（complex-3 的核心步骤） | 78.97 | **33.3** |
+| 旧 main 同一步 | 60.63 | — |
+
+这一步达到 **约 1.8× 于旧 main**。
+
+complex 子集（优化后，vs 旧 main）：
+
+| 查询 | 旧 main | 优化后 | 新/旧 |
+|---|---:|---:|---:|
+| complex-2 | 15.65 | 16.40 | 1.05 |
+| complex-3 | 136.75 | 184.76 | **1.35** |
+| complex-4 | 8.43 | 7.89 | 0.94 |
+| complex-7 | 5.02 | 4.87 | 0.97 |
+| complex-8 | 4.06 | 3.57 | 0.88 |
+| complex-10 | 35.87 | 36.16 | 1.01 |
+| complex-11 | 7.35 | 6.99 | 0.95 |
+| complex-12 | 354.86 | 386.95 | 1.09 |
+
+结论：
+
+- 标签过滤优化只对**大 neighbor 集合 + 大标签**有效；小集合保留点查，避免 complex-2/8/10 回退。
+- complex-3 仍慢约 35%，慢点已转到 message 属性读取（`message.creationDate` 等），说明
+  `vertex_data` 的属性点查布局仍有问题；下一轮应针对属性读取做按标签批量/紧凑布局，而不是继续优化标签过滤。
+
+---
+
+## 8. Hybrid 方案：X 标签/邻接 + per-label vprop（2026-10-24）
+
+纯 `vertex_data` 把属性也合进大表后，complex-3 的属性点查回退约 35%。因此最终采用 hybrid：
+
+- `vertex_data`：标签 + 可选 OUT 邻接缓存；
+- `vprop_{id}`：保留每标签属性表，恢复属性点查的 B-tree 局部性；
+- `label_fwd`、`edge_index`、`vertex_existence` 不变。
+
+同机旧 main vs hybrid（旧数据 + X 标签）：
+
+| 查询 | 旧 main | hybrid | hybrid/旧 |
+|---|---:|---:|---:|
+| complex-2 | 15.65 | 15.01 | 0.96 |
+| complex-3 | 136.75 | 139.11 | 1.02 |
+| complex-4 | 8.43 | 8.26 | 0.98 |
+| complex-7 | 5.02 | 4.87 | 0.97 |
+| complex-8 | 4.06 | 3.48 | 0.86 |
+| complex-10 | 35.87 | 36.28 | 1.01 |
+| complex-11 | 7.35 | 7.31 | 0.99 |
+| complex-12 | 354.86 | 374.73 | 1.06 |
+
+核心步骤：
+
+| 步骤 | 旧 main | hybrid |
+|---|---:|---:|
+| `friend<-HAS_CREATOR-message` | 60.63 | **34.2** |
+
+结论：
+
+1. 属性必须保留 per-label 分区；合并进 X 会让单属性点查的 B-tree 变大，complex-3 回退。
+2. 标签合并进 X 后，大 neighbor 集合的标签过滤应走 `label_fwd` 顺序扫描，而不是逐点 `getVertexLabelsBatch`；这是本次 1.8× 提升的来源。
+3. 邻接 cache 仍无收益，默认 N=0；hybrid 保留接口但不启用。
+4. 最终方案是**数据驱动的 hybrid**：标签/邻接合并，属性按标签分区。
+
+### 8.1 Hybrid 全量读数（sf0.1，8 compute，cache 0）
+
+| 查询 | 行数 | min (ms) | p50 (ms) |
+|---|---:|---:|---:|
+| short-1 | 1 | 1.13 | 1.16 |
+| short-2 | 10 | 3.50 | 4.20 |
+| short-3 | 3 | 1.11 | 1.22 |
+| short-4 | 1 | 0.99 | 1.07 |
+| short-5 | 1 | 0.98 | 1.02 |
+| short-6 | 1 | 1.14 | 1.21 |
+| short-7 | 0 | 1.39 | 1.60 |
+| complex-1 | 20 | 17.85 | 18.33 |
+| complex-2 | 20 | 15.97 | 21.90 |
+| complex-3 | 0 | 143.78 | 147.89 |
+| complex-4 | 0 | 8.18 | 9.49 |
+| complex-5 | 20 | 520.23 | 528.36 |
+| complex-6 | 3 | 96.92 | 97.19 |
+| complex-7 | 7 | 4.88 | 5.06 |
+| complex-8 | 20 | 3.35 | 3.36 |
+| complex-9 | 20 | 435.34 | 444.61 |
+| complex-10 | 10 | 36.68 | 37.07 |
+| complex-11 | 4 | 6.91 | 7.04 |
+| complex-12 | 3 | 382.48 | 384.77 |
+| complex-13 | 1 | 3.7 | — |
+| complex-14 | 4 | 80536.57 | — |
+
+> complex-13/14 的参数是 `person1Id=933, person2Id=1129`（默认 ID 不在本地数据）；
+> 其余 complex 参数按文件默认 + `personId=933`，short-4..7 用 `messageId=3`。
+> short-7 本次为 0 行，仅说明可运行，不作语义对照。
+
+### 8.2 性能分析
+
+相对旧 main / 旧文档：
+
+- **大标签过滤**：complex-6 从 550–605ms 降到 **97ms**；complex-9 从 3960ms 降到 **435ms**；
+  complex-3 的核心步骤 `friend<-HAS_CREATOR-message` 从 60.6ms 降到 **34.2ms**。
+- **标签过滤改动**使用 `label_fwd` 顺序扫描，对 neighbor 数大、目标标签大的场景收益显著；
+  小集合保留点查，避免 complex-2/8/10 回退。
+- 仍慢：complex-5（520 vs 475ms）、complex-12（382 vs 337ms）、complex-14（80.5s）。
+- 邻接 cache N=8 vs 0 仍无收益，默认关闭；它的成本/复杂度不值得在当前 LDBC 负载上启用。
+- 最终存储利用结论：
+  1. `vertex_data` 的标签部分 + `label_fwd` 是有效热路径；
+  2. 属性必须保留 `vprop_{id}` 的分区局部性，不能全部塞进 X；
+  3. edge_index 仍是复杂查询的主要成本，X 不参与 edge scan；
+  4. cache 只在“顶点已物化 + 紧接 OUT Expand”的特定场景有潜力，当前不启用。

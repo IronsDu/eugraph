@@ -67,6 +67,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加优化规则 | [query/optimizer/cascades-optimizer.md] | `src/query/optimizer/` |
 | 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md] | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
+| 邻接缓存/vertex_data 后续研究 | [storage/adjacency-cache-and-vertex-data-research.md](storage/adjacency-cache-and-vertex-data-research.md) | `src/storage/data/`, `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | 添加 DDL 操作 | [storage/ddl.md], [storage/metadata-service-design.md], [storage/session-cursor-pool-design.md] | `src/storage/schema_ddl.*`, `src/storage/meta/`, `src/storage/data/` |
 | 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/graph/graph_manager.hpp` |
 | 修改类型系统 | [architecture/type-definitions.md], [storage/kv-encoding.md] | `src/common/types/` |
