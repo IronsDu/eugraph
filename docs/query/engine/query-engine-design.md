@@ -745,3 +745,22 @@ using Schema = vector<string>;   // 列名列表
 - **边属性过滤仅支持字面常量**：`{prop: value}` 中 value 必须为字面量（int/string/bool/double），不支持表达式或变量引用。
 - **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [ProjectionExtract 按需属性物化设计](projection-extract-design.md) PathElementPropertyRead 小节）。终点 dst 的属性由 `ProjectionExtractPhysicalOp` 按需加载。
 - **多 MATCH + VarLenExpand 未实现**：当前不支持多条 MATCH 子句中包含变长邻接的组合（属于多 MATCH + JOIN 的通用待实现项）。
+
+## 延迟物化（LateMaterialize）边界约束
+
+`LateMaterializePhysicalOp` 只能放在 **LIMIT 之后**，并且被延迟的列不得被 LIMIT
+之前的算子（Sort / Filter / Aggregate / Join 条件）读取。
+
+- 合法：`LIMIT(Project(...))` → `Project(LateMaterialize(LIMIT(...)))`；
+  只被 RETURN 使用、不参与 Sort/Filter 的列延后到 20 行。
+- 非法：Filter 与 Sort 之间插入 `LateMaterialize` 来延迟 **Sort key**。
+  该位置没有 LIMIT，sort key 仍是占位值，Sort 会按占位值选出错误的 Top-N。
+- 2026-10-25 已移除 filter-boundary split：LDBC c9 曾因此返回错误的 Top-20
+  （旧 161.7 ms 作废，修复后 187.2 ms）。详见
+  [ldbc-c5-c9-plan-analysis.md](../ldbc-c5-c9-plan-analysis.md)。
+
+新增任何物化边界优化，必须同时满足：
+
+1. 行结果与 neo4j 逐行一致（不能只与原路径比较，原路径可能同错）；
+2. 被延迟列的所有下游消费者都在 LIMIT 之后；
+3. EXPLAIN 中不得出现 `Sort` 下方的 `LateMaterialize(after LIMIT)`。
