@@ -6,9 +6,8 @@
   改动后真正要回答的是"两边结果是否一致"。本脚本复用同一套口径（参数覆盖、id 按引擎转型、
   neo4j 侧类型改写、就绪检查），但把每一行结果取回来做**多重集比对**。
 
-默认跳过文档记录为"无法成功运行"的语句（`docs/benchmark/ldbc-snb-sf0.1-comparison.md` §3）：
-  complex-1 / complex-13 / complex-14  —— shortestPath / allShortestPaths + reduce 语法不支持
-  complex-5                            —— eugraph 不返回（compute 满载、取消不生效）
+默认跳过 complex-1：当前 CsvBasic 导入缺少 Person.email/speaks，且 neo4j 侧 friend 集合
+不同，属于数据差异，不是查询语义差异。complex-5/13/14 现已支持，默认参与对照。
 需要时用 --only 显式指定，或 --skip "" 取消默认跳过。
 
 用法：
@@ -27,7 +26,7 @@ from neo4j import GraphDatabase
 
 QUERIES_ROOT = Path("/home/dodo/code/fuck/ldbc_snb_interactive_v1_impls/cypher/queries")
 # 文档 §3 记录为"无法成功运行"，默认跳过
-DEFAULT_SKIP = "complex-1,complex-5,complex-13,complex-14"
+DEFAULT_SKIP = "complex-1"
 
 sys.path.insert(0, str(Path(__file__).parent))
 from bench_ldbc_ab import ID_PARAMS, check_neo4j_ready, load_param_parser, query_body  # noqa: E402
@@ -81,6 +80,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--only", default=None)
     ap.add_argument("--skip", default=DEFAULT_SKIP)
+    ap.add_argument("--override", default=None,
+                    help="逗号分隔 key=value，应用到所有声明该参数的查询（如 person1Id=933,person2Id=1129）")
     args = ap.parse_args()
 
     parse_params = load_param_parser(Path(__file__).with_name("bench_ldbc_interactive.py"))
@@ -97,7 +98,13 @@ def main() -> int:
     check_neo4j_ready(neo)
 
     # 文档口径的参数覆盖（sf0.1 里真实存在的 id）
-    overrides = {"personId": 933, "messageId": 3}
+    overrides = {"personId": 933, "messageId": 3, "person1Id": 933, "person2Id": 1129}
+    if args.override:
+        for item in args.override.split(","):
+            if "=" not in item:
+                continue
+            k, v = item.split("=", 1)
+            overrides[k.strip()] = int(v) if v.strip().lstrip("-").isdigit() else v.strip()
 
     print(f"{'query':22} {'eg rows':>8} {'neo rows':>9} {'eg ms':>8} {'neo ms':>8}  result")
     print("-" * 74)
