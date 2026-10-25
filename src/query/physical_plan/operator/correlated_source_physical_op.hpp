@@ -28,7 +28,11 @@ public:
 
     /// Set the correlated values for the next execution.
     void setValues(const std::vector<Value>& values) {
-        values_ = values;
+        rows_.clear();
+        rows_.push_back(values);
+    }
+    void setRows(std::vector<std::vector<Value>> rows) {
+        rows_ = std::move(rows);
     }
 
     /// Expose the number of correlated columns.
@@ -39,7 +43,7 @@ public:
 private:
     std::vector<std::string> variables_;
     std::vector<binder::BoundType> types_;
-    std::vector<Value> values_;
+    std::vector<std::vector<Value>> rows_;
 };
 
 } // namespace compute

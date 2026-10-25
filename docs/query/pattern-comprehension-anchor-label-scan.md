@@ -86,3 +86,25 @@ Comment/Post 邻域，56.5s 仍不可接受。
 
 - `query_executor_tests`：584/584
 - 全量 ctest：1304/1304（含 TCK）
+
+## 后续：锚点探测（2026-10-25）
+
+LabelScan + 端点谓词仍会在每个 `r` 上重复扫描 1,528 个 Person（c14 共约 24 次）。
+把 PC 右子计划的 `CrossProduct(CorrelatedSource(r), LabelScan(Person))` 替换为
+`CorrelatedVertexProbe`：
+
+- 第一次执行时把 Person 锚点物化为 `VertexId -> row` 映射；
+- 每个 `r` 只按边的 `startNode` / `endNode` 探测端点，不再展开全部 Person；
+- 原有锚点/语义 Filter 保留在 Probe 之上做校验。
+
+结果（sf0.1，person1Id=933，person2Id=1129）：**835 ms → 295 ms**，4 行 pathWeight 不变。
+剩余成本是 24 次 PC 的实际 Comment/Post 展开，约 290 ms。
+
+## 2026-10-25 后续评估
+
+- 当前 295 ms 中约 280 ms 是两个 PC 对 12 条 `r` 的实际 Comment/Post 展开；
+  `allShortestPaths` 约 9 ms，锚点探测已不是瓶颈。
+- `dst_labels` 已验证存在（Comment/Post/Person），因此“提前按标签裁剪展开”没有额外收益。
+- 纯安全的小改动（合并相邻 Filter、reserve、PC 端点 pair 缓存）预计只有个位数百分比。
+- 有意义的下一步是 **受守卫的 PC 共同前缀融合**（结构完全匹配才共享，否则回退）或
+  **IN/OUT 邻接存储**；前者需全量 TCK 验证，后者另开存储分支。

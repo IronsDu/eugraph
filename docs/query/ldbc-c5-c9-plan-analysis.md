@@ -1,7 +1,7 @@
 # LDBC complex-5 / complex-9 计划分析
 
 > complex-14 的优化见 [pattern-comprehension-anchor-label-scan.md](pattern-comprehension-anchor-label-scan.md)。
-> 本文记录 complex-5/9 的剩余瓶颈和下一步实现方向；当前代码未对这两条查询做提交。
+> 本文记录 complex-5/9 的瓶颈、实施结果与下一步方向；2026-10-25 已提交 c5/c9 的算子优化。
 
 ## complex-9
 
@@ -163,6 +163,18 @@ Limit
 - 剩余 98 ms 是 label + per-label vprop 两次点查；compact `label_reverse`、
   “label + hot property（creationDate/id）”合并、或 `Message.creationDate` 索引
   是三个候选方向，均需按本文口径 A/B。
-- c5 未实施：当前计划是 `LeftJoin` 右侧 `CorrelatedSource` 对每个 left row 执行一次，
-  BatchExpand 的 >2048 行路径不会触发；需要右子计划去相关 / join reorder，
-  而不是只加批量 Expand。
+- c5 已于 2026-10-25 通过批处理 `LeftJoin` 实施（512 行/批）；BatchExpand 仍不适用，
+  因为右子计划在批内才有多行。
+
+## 2026-10-25 c5 实施结果：批处理 correlated LeftJoin
+
+- `LeftJoinPhysicalOp` 对 correlated 右子计划改为**每批 512 个 left row 执行一次**：
+  `CorrelatedSource` 支持多行输入，右子计划产出后按 correlation 列（c5 为 forum/friends）
+  匹配回左行，未匹配行补 NULL，保持 OPTIONAL 语义。
+- 结果：c5 **514 ms → 264.1 ms**，20 行与原路径逐值一致；全量 ctest 1304/1304。
+- **批大小必须 < 1024**：实测批 1,024/2,048 时某 forum 的 `postCount` 10→6（输出中 4 行左值变 NULL），
+  批 512 正确。根因尚未定位到具体算子，暂以 512 规避 1,024 行 chunk 边界；后续应查清边界处丢值。
+- **含 path 输出的右子计划不批处理**：`OPTIONAL MATCH p = ...` 的右子计划在批处理下
+  correlation 列/路径会变成 NULL（TCK Match7 named path 回归），因此右输出类型含
+  `PATH`/`PATH_TOPOLOGY` 时回退逐行执行。
+- 剩余成本是 89k posts/creator 的 per-edge 读取；下一步可做 OUT/IN 邻接存储或进一步去相关。

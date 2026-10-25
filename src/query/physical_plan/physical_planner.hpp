@@ -94,6 +94,11 @@ struct PlanContext {
     /// the child is planned.
     std::optional<std::unordered_set<binder::SlotId>> deferred_slots;
 
+    /// Edge variable named by startNode()/endNode() in the anchor Filter
+    /// currently being planned. Used to find the correlation column in a PC
+    /// anchor CrossProduct (whose edge type may be ANY).
+    std::string anchor_edge_var;
+
     /// Read-only resolver over (var_slots, alias_map). All read-only query
     /// paths should go through this — direct map access is reserved for the
     /// lookup-or-allocate pattern in makeSlotLayout / Project per-item fallback
