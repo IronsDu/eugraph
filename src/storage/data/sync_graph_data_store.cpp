@@ -931,6 +931,70 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
     });
 }
 
+void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<VertexId>& src_ids, Direction direction,
+                                        std::optional<EdgeLabelId> label_filter,
+                                        const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) {
+    WT_SESSION* session = gs.wt_session();
+    if (!session || src_ids.empty())
+        return;
+    if (direction == Direction::BOTH) {
+        scanEdgesBatch(gs, src_ids, Direction::OUT, label_filter, callback);
+        scanEdgesBatch(gs, src_ids, Direction::IN, label_filter, callback);
+        return;
+    }
+    if (kAdjCacheCapacity > 0) {
+        for (VertexId vid : src_ids) {
+            auto cursor = createEdgeScanCursor(gs, vid, direction, label_filter);
+            if (!cursor)
+                continue;
+            while (cursor->valid()) {
+                if (!callback(vid, cursor->entry()))
+                    return;
+                cursor->next();
+            }
+        }
+        return;
+    }
+
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "scanEdgesBatch: cannot open cursor on table:edge_index");
+        return;
+    }
+    auto* c = cursor.get();
+    for (VertexId vid : src_ids) {
+        const std::string prefix = label_filter ? KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter)
+                                                : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND)
+            continue;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "scanEdgesBatch: search_near failed");
+            return;
+        }
+        if (exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            std::string key = getKeyFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            auto decoded = KeyCodec::decodeEdgeIndexKey(key);
+            EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
+                                 ValueCodec::decodeU64(getValueFromCursor(c))};
+            if (!callback(vid, entry))
+                return;
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "scanEdgesBatch: next failed");
+            return;
+        }
+    }
+}
+
 void SyncGraphDataStore::scanEdgesByType(GraphSession& gs, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                          std::optional<VertexId> dst_filter,
                                          const std::function<bool(const EdgeTypeIndexEntry&)>& callback) {

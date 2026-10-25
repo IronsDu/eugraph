@@ -268,31 +268,29 @@ public:
     folly::coro::AsyncGenerator<std::vector<BatchedEdge>>
     scanEdgesBatch(const std::vector<VertexId>& src_ids, Direction direction,
                    std::optional<EdgeLabelId> label_filter) override {
-        constexpr size_t BATCH = 65536;
+        // One sync cursor per chunk: createEdgeScanCursor per source was the
+        // dominant fixed cost on LDBC c5 (98k cursors).
+        constexpr size_t kChunkVids = 4096;
         auto vids = src_ids;
         auto dir = direction;
         auto filter = label_filter;
         size_t offset = 0;
         while (offset < vids.size()) {
+            const size_t n = std::min(kChunkVids, vids.size() - offset);
+            std::vector<VertexId> chunk(vids.begin() + static_cast<std::ptrdiff_t>(offset),
+                                        vids.begin() + static_cast<std::ptrdiff_t>(offset + n));
             std::vector<BatchedEdge> batch;
-            batch.reserve(1024);
-            co_await io_.dispatchVoid([this, &vids, &offset, dir, filter, &batch]() {
-                while (offset < vids.size() && batch.size() < BATCH) {
-                    VertexId vid = vids[offset++];
-                    auto cursor = store_.createEdgeScanCursor(session_, vid, dir, filter);
-                    if (!cursor)
-                        continue;
-                    while (cursor->valid() && batch.size() < BATCH) {
-                        batch.push_back(BatchedEdge{vid, cursor->entry()});
-                        cursor->next();
-                    }
-                }
+            batch.reserve(n * 2);
+            co_await io_.dispatchVoid([this, &chunk, dir, filter, &batch]() {
+                store_.scanEdgesBatch(session_, chunk, dir, filter,
+                                      [&batch](VertexId vid, const ISyncGraphDataStore::EdgeIndexEntry& entry) {
+                                          batch.push_back(BatchedEdge{vid, entry});
+                                          return true;
+                                      });
             });
-            if (batch.empty()) {
-                offset = vids.size();
-                co_return;
-            }
-            co_yield std::move(batch);
+            offset += n;
+            if (!batch.empty())
+                co_yield std::move(batch);
         }
     }
 

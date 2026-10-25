@@ -169,3 +169,21 @@ N 调优），在回退消除前不应合并。
 
 c5 比旧存储慢约 16 ms（6%），来自 `vertex_data` 上大量 forum/post 的小批量
 label/property 访问；可接受为当前存储改造的代价，后续可用 label 子表/缓存进一步优化。
+
+### 共享 cursor 批量扫描（2026-10-25）
+
+`AsyncGraphDataStore::scanEdgesBatch` 原先对每个 source 调一次
+`createEdgeScanCursor`（c5 实测 98k 次、累计 184 ms）。现改为：
+
+- 每 4,096 个 source 复用一个 sync cursor，一次 `search_near` 后顺序扫；
+- 结果分批返回，Expand 语义不变。
+
+最终 sf0.1（5 轮 min，N=0）：
+
+| 查询 | 新存储 | 旧存储 |
+|---|---:|---:|
+| complex-9 | **131.0 ms** | 161.7 ms |
+| complex-5 | **243.9 ms** | 264 ms |
+| complex-14 | **284.9 ms** | 295 ms |
+
+三个查询均不再回退；c5 的提升主要来自共享 cursor。

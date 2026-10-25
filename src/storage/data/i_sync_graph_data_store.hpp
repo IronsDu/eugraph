@@ -174,6 +174,10 @@ public:
     virtual void scanEdges(GraphSession& session, VertexId vid, Direction direction,
                            std::optional<EdgeLabelId> label_filter,
                            const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
+    /// One cursor for a whole batch of sources instead of one per vid.
+    virtual void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
+                                std::optional<EdgeLabelId> label_filter,
+                                const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) = 0;
     virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid,
                                                                   Direction direction,
                                                                   std::optional<EdgeLabelId> label_filter) = 0;

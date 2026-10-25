@@ -118,6 +118,9 @@ public:
     // Edge Traversal
     void scanEdges(GraphSession& session, VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
                    const std::function<bool(const EdgeIndexEntry&)>& callback) override;
+    void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
+                        std::optional<EdgeLabelId> label_filter,
+                        const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) override;
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid, Direction direction,
                                                           std::optional<EdgeLabelId> label_filter) override;
     void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
