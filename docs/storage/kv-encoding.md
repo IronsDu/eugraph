@@ -14,9 +14,8 @@
 
 | WT 表名 | 用途 | Key 格式 |
 |---------|------|----------|
-| `label_reverse` | 顶点→标签反向索引 | `{vertex_id:u64BE}{label_id:u16BE}` |
+| `vertex_data` | 顶点标签 + 属性（单表，按顶点前缀聚簇） | `{vertex_id:u64BE}{kind:u8}{...}` |
 | `label_fwd_{id}` | 标签→顶点正向索引（每标签一表） | `{vertex_id:u64BE}` |
-| `vprop_{id}` | 顶点属性存储（每标签一表） | `{vertex_id:u64BE}{prop_id:u16BE}` |
 | `edge_index` | 边邻接索引 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` |
 | `etype_{id}` | 边类型索引（每关系类型一表） | `{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}` |
 | `eprop_{id}` | 边属性存储（每关系类型一表） | `{edge_id:u64BE}{prop_id:u16BE}` |
@@ -29,13 +28,26 @@
 
 ## 详细编码
 
-### 标签反向索引（label_reverse）
+### 顶点数据（vertex_data）
 
-记录顶点拥有哪些标签。每顶点-标签组合一条记录。
+一张表按顶点前缀聚簇记录标签与属性，kind 区分记录类型：
+
+| kind | 含义 | Key | Value |
+|---|---|---|---|
+| `0x00` | 标签 | `{vid:u64BE}{0x00}{label_id:u16BE}` | 空 |
+| `0x01` | 属性 | `{vid:u64BE}{0x01}{label_id:u16BE}{prop_id:u16BE}` | ValueCodec |
+| `0x02` | OUT 邻接缓存（预留） | `{vid:u64BE}{0x02}` | state + entries |
+| `0x03` | IN 邻接缓存（预留） | `{vid:u64BE}{0x03}` | state + entries |
 
 ```
-查询：前缀扫描 {vertex_id:u64BE} → 获取该顶点所有标签
+前缀 {vid}{0x00} → 该顶点的所有标签
+前缀 {vid}{0x01} → 该顶点的所有标签下属性
+前缀 {vid}{0x01}{label} → 某标签下所有属性
+精确 {vid}{0x01}{label}{prop} → 某属性
+前缀 {vid} → 该顶点所有记录（删除时一次清空）
 ```
+
+`label_fwd_{id}` 仍保留：按标签扫描、`DROP LABEL` 时枚举该标签顶点。
 
 ### 标签正向索引（label_fwd_{id}）
 
@@ -45,14 +57,9 @@
 查询：全表扫描 → 获取该标签下所有顶点 ID
 ```
 
-### 顶点属性（vprop_{id}）
+### 顶点属性（vertex_data kind 0x01）
 
-每个标签一张表。prop_id 在每个 Label 内独立编号、永不复用。字段改名只需修改元数据中的 PropertyDef，无需修改 KV 数据。
-
-```
-前缀 {vertex_id:u64BE} → 获取某顶点在该标签下的所有属性
-前缀 {vertex_id:u64BE}{prop_id:u16BE} → 获取某顶点在该标签下的指定属性
-```
+prop_id 在每个 Label 内独立编号、永不复用。属性按 `{vid}{0x01}{label}{prop}` 存放在 `vertex_data` 中；`DROP LABEL` 通过 `label_fwd` 枚举顶点后删除对应前缀。
 
 ### 边邻接索引（edge_index）
 
