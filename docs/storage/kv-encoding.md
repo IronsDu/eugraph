@@ -70,7 +70,8 @@ prop_id 在每个 Label 内独立编号、永不复用。属性按 `{vid}{0x01}{
   value 为 `edge_id`；读取时一次 cursor 从 state 开始，顺序扫边；
 - `OVERFLOW`：边 key 已清空，读取回退 `edge_index`；
 - 第 N+1 条边在同一个事务内把缓存边写入 `edge_index`、删除缓存 key、state 置 OVERFLOW；
-- `edge_index` 只保存 OVERFLOW 方向的邻接（overflow-only）。
+- `edge_index` 只保存 OVERFLOW 方向的邻接（overflow-only）；
+- 当前默认邻接缓存关闭（N=0）：不写 state/邻接 key，`edge_index` 保存全量边。
 
 ### 边邻接索引（edge_index）
 

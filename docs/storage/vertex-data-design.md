@@ -141,3 +141,31 @@ N 调优），在回退消除前不应合并。
 - c14：320 ms（N=64）/ 305 ms（N=0），旧存储 295 ms，仍略慢。
 - c5：329 ms（N=64）/ 346 ms（N=0），旧存储 264 ms，仍明显慢；
   主要剩余嫌疑是大量 per-source label 过滤/小批量扫描在更大的 `vertex_data` 表上变慢。
+
+## 8. 最终配置与基准（2026-10-25，sf0.1）
+
+结论：**邻接缓存默认关闭（N=0）**。
+
+- `N=64` 时，COMPLETE 邻接的 state + key 扫描开销在 c5 的 8,814 个
+  forum / 89k post 小批量访问上被放大：
+  - c5 329 ms、c14 320 ms，均慢于旧存储；
+- `N=0`（不写 state/邻接 key，`edge_index` 全量）时：
+  - c9 **131.4 ms**（旧 161.7，融合 coalesce 生效）
+  - c5 **279.7 ms**（旧 264，+6%）
+  - c14 **290.7 ms**（旧 295，略快）
+- 全量 ctest 1304/1304（含 TCK）。
+
+因此当前实现保留 `vertex_data` 的 labels/properties 合并与融合读取；
+邻接 key/state 代码保留但默认不启用，避免 c5/c14 回退。
+
+### loader
+
+- N=0 时不再写 per-vertex state，**4 RPC 连接可正常导入**：
+  - 28.3 s，loader 峰值 RSS 222 MB；
+  - 1 连接：43.2 s，80 MB；
+- N>0 的多连接仍会因 state 写冲突需要单连接或后续重试/bulk build。
+
+### 仍存在的差异
+
+c5 比旧存储慢约 16 ms（6%），来自 `vertex_data` 上大量 forum/post 的小批量
+label/property 访问；可接受为当前存储改造的代价，后续可用 label 子表/缓存进一步优化。

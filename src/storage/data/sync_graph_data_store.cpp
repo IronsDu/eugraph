@@ -9,8 +9,13 @@
 #include <unordered_map>
 
 #include "storage/kv/index_key_codec.hpp"
+#include "storage/store_profile.hpp"
 
 namespace eugraph {
+
+namespace {
+constexpr uint32_t kAdjCacheCapacity = 0;
+} // namespace
 
 // ==================== WT Item Helpers (local) ====================
 
@@ -172,10 +177,12 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
     if (!wt::table_put(gs, TABLE_VERTEX_EXISTENCE, ve_key, {}))
         return false;
 
-    for (Direction dir : {Direction::OUT, Direction::IN}) {
-        if (!wt::table_put(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjStateKey(vid, dir),
-                           KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::COMPLETE, 0)))
-            return false;
+    if (kAdjCacheCapacity > 0) {
+        for (Direction dir : {Direction::OUT, Direction::IN}) {
+            if (!wt::table_put(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjStateKey(vid, dir),
+                               KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::COMPLETE, 0)))
+                return false;
+        }
     }
 
     for (const auto& [label_id, props] : label_props) {
@@ -384,6 +391,7 @@ LabelIdSet SyncGraphDataStore::getVertexLabels(GraphSession& gs, VertexId vid) {
 }
 
 std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& gs, const std::vector<VertexId>& vids) {
+    StoreProfileScope prof("getVertexLabelsBatch", vids.size());
     std::vector<LabelIdSet> out(vids.size());
     if (vids.empty())
         return out;
@@ -517,6 +525,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
 std::vector<std::vector<PropertyValue>>
 SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std::vector<VertexId>& vids,
                                                      const std::vector<std::pair<LabelId, uint16_t>>& candidates) {
+    StoreProfileScope prof("getVertexCoalescePropertiesBatch", vids.size());
     std::vector<std::vector<PropertyValue>> out(vids.size());
     if (vids.empty() || candidates.empty())
         return out;
@@ -634,10 +643,6 @@ void SyncGraphDataStore::scanAllVertices(GraphSession& gs, const std::function<b
 
 // ==================== Edge ====================
 
-namespace {
-constexpr uint32_t kAdjCacheCapacity = 64;
-}
-
 std::optional<SyncGraphDataStore::AdjState> SyncGraphDataStore::getAdjacencyState(WT_SESSION* session, VertexId vid,
                                                                                   Direction direction) {
     auto val = wt::table_get(session, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjStateKey(vid, direction));
@@ -679,6 +684,10 @@ bool SyncGraphDataStore::promoteAdjacency(WT_SESSION* session, VertexId vid, Dir
 bool SyncGraphDataStore::insertAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
                                              EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
     const std::string edge_val = ValueCodec::encodeU64(eid);
+    if (kAdjCacheCapacity == 0) {
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
+    }
     auto state = getAdjacencyState(session, vid, direction);
     if (!state || state->state == KeyCodec::AdjacencyCacheState::OVERFLOW) {
         KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
@@ -699,6 +708,11 @@ bool SyncGraphDataStore::insertAdjacencyEdge(WT_SESSION* session, VertexId vid, 
 bool SyncGraphDataStore::deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
                                              EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
     (void)eid;
+    if (kAdjCacheCapacity == 0) {
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        wt::table_del(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx));
+        return true;
+    }
     auto state = getAdjacencyState(session, vid, direction);
     if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
         KeyCodec::VertexDataAdjEdgeKey key{vid, direction, label_id, neighbor_id, seq};
@@ -877,6 +891,7 @@ bool SyncGraphDataStore::deleteEdgeProperty(GraphSession& gs, EdgeLabelId label_
 void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction direction,
                                    std::optional<EdgeLabelId> label_filter,
                                    const std::function<bool(const EdgeIndexEntry&)>& callback) {
+    StoreProfileScope prof("scanEdges");
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return;
@@ -887,7 +902,7 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
         return;
     }
 
-    auto state = getAdjacencyState(gs.wt_session(), vid, direction);
+    auto state = kAdjCacheCapacity > 0 ? getAdjacencyState(gs.wt_session(), vid, direction) : std::nullopt;
     if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
         const std::string prefix = KeyCodec::encodeVertexDataAdjPrefix(vid, direction);
         wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view value) {
@@ -951,7 +966,7 @@ uint64_t SyncGraphDataStore::countVerticesByLabel(GraphSession& gs, LabelId labe
 
 uint64_t SyncGraphDataStore::countDegree(GraphSession& gs, VertexId vid, Direction direction,
                                          std::optional<EdgeLabelId> label_filter) {
-    if (direction != Direction::BOTH && !label_filter) {
+    if (kAdjCacheCapacity > 0 && direction != Direction::BOTH && !label_filter) {
         auto state = getAdjacencyState(gs.wt_session(), vid, direction);
         if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE)
             return state->count;
@@ -1175,6 +1190,7 @@ private:
 std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
 SyncGraphDataStore::createEdgeScanCursor(GraphSession& gs, VertexId vid, Direction direction,
                                          std::optional<EdgeLabelId> label_filter) {
+    StoreProfileScope prof("createEdgeScanCursor");
     if (direction == Direction::BOTH) {
         std::vector<EdgeIndexEntry> entries;
         scanEdges(gs, vid, direction, label_filter, [&](const EdgeIndexEntry& e) {
@@ -1184,7 +1200,7 @@ SyncGraphDataStore::createEdgeScanCursor(GraphSession& gs, VertexId vid, Directi
         return std::make_unique<VectorEdgeScanCursor>(std::move(entries));
     }
 
-    {
+    if (kAdjCacheCapacity > 0) {
         CursorHandle cache_cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
         if (!cache_cursor) {
             const int error = cache_cursor.error();
