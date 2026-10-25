@@ -222,6 +222,8 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/query/physical_plan/operator/projection_extract_physical_op.cpp
     src/query/physical_plan/operator/late_materialize_physical_op.cpp
+    src/query/physical_plan/operator/materialize_physical_op.cpp
+    src/query/physical_plan/operator/correlated_vertex_probe_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
     src/query/physical_plan/operator/all_node_scan_physical_op.cpp
     src/query/physical_plan/operator/apply_physical_op.cpp

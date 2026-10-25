@@ -36,19 +36,18 @@ binder::BoundTypeKind kindFromValue(const Value& v) {
 
 folly::coro::AsyncGenerator<DataChunk> CorrelatedSourcePhysicalOp::executeChunk() {
     DataChunk chunk;
-    const size_t n = std::min(types_.size(), values_.size());
-    for (size_t i = 0; i < n; ++i) {
-        // The binder types the correlated variable as VERTEX (semantic), but
-        // LeftJoin passes whatever form the left column actually holds at
-        // runtime — typically VertexRef from a topology-stage Scan. Infer the
-        // column kind from the value so setValue doesn't silently drop it.
-        auto kind = kindFromValue(values_[i]);
-        auto& col = chunk.addColumn(kind);
-        col.reserve(1);
-        col.setValue(0, values_[i]);
+    if (rows_.empty())
+        co_return;
+    const size_t n_cols = std::min(types_.size(), rows_.front().size());
+    for (size_t i = 0; i < n_cols; ++i)
+        chunk.addColumn(kindFromValue(rows_.front()[i]));
+    chunk.reserve(rows_.size());
+    for (const auto& row : rows_) {
+        for (size_t i = 0; i < n_cols && i < row.size(); ++i)
+            chunk.columns[i].setValue(chunk.count, row[i]);
+        ++chunk.count;
     }
-    chunk.count = 1;
-    chunk.sel = SelectionVector::identity(1);
+    chunk.sel = SelectionVector::identity(chunk.count);
     co_yield std::move(chunk);
 }
 

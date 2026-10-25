@@ -15,17 +15,20 @@
 剩余成本：`creationDate` 对 53,192 行的 label + per-label vprop 点查（约 98 ms）、
 Expand 53k 边（约 45 ms）；详见 [ldbc-c5-c9-plan-analysis.md](ldbc-c5-c9-plan-analysis.md)。
 
-## c5 — 未实施，原 BatchExpand 方案需修正
+## c5 — 已实施（264.1 ms）
 
-当前计划中 `LeftJoin` 的右子计划由 `CorrelatedSource` 对每个 left row 执行一次（8,814 次），
-每次只有 1 个 forum；`BatchExpandPhysicalOp` 的 >2048 行批量路径不会触发。
-需要先做**右子计划去相关 / join reorder**（按 forum 只执行一次并 hash join 回左侧），
-再叠加批量 Expand；保留 OPTIONAL 零计数语义。Target 514ms → <=300ms。
+不做 BatchExpand：把 `LeftJoin` 的 correlated 右子计划改为**每 512 个 left row 执行一次**
+（`CorrelatedSource` 多行 + 按 forum/friends 匹配回左行 + NULL 补全），消除 8,814 次子计划重启。
+c5 514 ms → **264.1 ms**，20 行结果与原路径逐值一致；全量 ctest 1304/1304。
+
+注意：批大小必须 < 1024；1,024/2,048 会触发 1,024 行 chunk 边界上的丢值（待查）。
+右子计划输出含 `PATH` 时（`OPTIONAL MATCH p = ...`）回退逐行执行，避免 named path 回归。
+剩余为 89k posts/creator 的 per-edge 成本，下一步是 OUT/IN 邻接存储或进一步去相关。
 
 ## State
 
-Branch `perf/ldbc-c5-c9`；c9 161.7 ms，c5 未开始。
-Tests: `query_executor_tests` 584/584；全量 ctest 见提交说明。
+Branch `perf/ldbc-c5-c14-main`；c9 161.7 ms、c5 264.1 ms、c14 295 ms。
+Tests: `query_executor_tests` 584/584；全量 ctest 1304/1304（含 TCK）。
 storage 后续方向（label/hot-property 共置、creationDate 索引、IN cache）见
 [adjacency-cache-and-vertex-data-research.md](../storage/adjacency-cache-and-vertex-data-research.md)
 （该文档在 `feat/vertex-data-adjacency` 分支，尚未合并到 main）。
