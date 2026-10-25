@@ -120,6 +120,66 @@ KeyCodec::VertexDataKind KeyCodec::vertexDataKind(std::string_view key) {
     return static_cast<VertexDataKind>(static_cast<uint8_t>(key[8]));
 }
 
+std::string KeyCodec::encodeVertexDataAdjStateKey(VertexId vertex_id, Direction direction) {
+    std::string key;
+    key.reserve(8 + 1);
+    encodeU64BE(key, vertex_id);
+    encodeU8(key, static_cast<uint8_t>(direction == Direction::IN ? VertexDataKind::IN_ADJACENCY
+                                                                  : VertexDataKind::OUT_ADJACENCY));
+    return key;
+}
+
+std::string KeyCodec::encodeVertexDataAdjPrefix(VertexId vertex_id, Direction direction) {
+    return encodeVertexDataAdjStateKey(vertex_id, direction);
+}
+
+std::string KeyCodec::encodeVertexDataAdjEdgeKey(const VertexDataAdjEdgeKey& k) {
+    std::string key;
+    key.reserve(8 + 1 + 2 + 8 + 8);
+    encodeU64BE(key, k.vertex_id);
+    encodeU8(key, static_cast<uint8_t>(k.direction == Direction::IN ? VertexDataKind::IN_ADJACENCY
+                                                                    : VertexDataKind::OUT_ADJACENCY));
+    encodeU16BE(key, k.edge_label_id);
+    encodeU64BE(key, k.neighbor_id);
+    encodeU64BE(key, k.seq);
+    return key;
+}
+
+KeyCodec::VertexDataAdjEdgeKey KeyCodec::decodeVertexDataAdjEdgeKey(std::string_view key) {
+    VertexDataAdjEdgeKey k;
+    k.vertex_id = decodeU64BE(key, 0);
+    k.direction = vertexDataKind(key) == VertexDataKind::IN_ADJACENCY ? Direction::IN : Direction::OUT;
+    k.edge_label_id = decodeU16BE(key, 9);
+    k.neighbor_id = decodeU64BE(key, 11);
+    k.seq = decodeU64BE(key, 19);
+    return k;
+}
+
+bool KeyCodec::isVertexDataAdjStateKey(std::string_view key) {
+    return key.size() == 9;
+}
+
+std::string KeyCodec::encodeAdjacencyState(AdjacencyCacheState state, uint32_t count) {
+    std::string value;
+    value.reserve(5);
+    encodeU8(value, static_cast<uint8_t>(state));
+    value.push_back(static_cast<char>((count >> 24) & 0xFF));
+    value.push_back(static_cast<char>((count >> 16) & 0xFF));
+    value.push_back(static_cast<char>((count >> 8) & 0xFF));
+    value.push_back(static_cast<char>(count & 0xFF));
+    return value;
+}
+
+std::pair<KeyCodec::AdjacencyCacheState, uint32_t> KeyCodec::decodeAdjacencyState(std::string_view value) {
+    if (value.size() < 5)
+        return {AdjacencyCacheState::OVERFLOW, 0};
+    uint32_t count = (static_cast<uint32_t>(static_cast<uint8_t>(value[1])) << 24) |
+                     (static_cast<uint32_t>(static_cast<uint8_t>(value[2])) << 16) |
+                     (static_cast<uint32_t>(static_cast<uint8_t>(value[3])) << 8) |
+                     static_cast<uint32_t>(static_cast<uint8_t>(value[4]));
+    return {static_cast<AdjacencyCacheState>(static_cast<uint8_t>(value[0])), count};
+}
+
 // ==================== Edge Index ====================
 
 std::string KeyCodec::encodeEdgeIndexKey(const EdgeIndexKey& k) {

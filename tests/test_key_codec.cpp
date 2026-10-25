@@ -69,6 +69,38 @@ TEST_F(KeyCodecTest, LabelForwardKeySortOrder) {
     EXPECT_LT(key1, key2);
 }
 
+TEST_F(KeyCodecTest, VertexDataAdjacencyStateAndEdgeKeys) {
+    auto state = KeyCodec::encodeVertexDataAdjStateKey(42, Direction::OUT);
+    EXPECT_EQ(state.size(), 9u);
+    EXPECT_TRUE(KeyCodec::isVertexDataAdjStateKey(state));
+    auto edge_key = KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9});
+    EXPECT_FALSE(KeyCodec::isVertexDataAdjStateKey(edge_key));
+
+    KeyCodec::VertexDataAdjEdgeKey in{42, Direction::IN, 3, 7, 9};
+    auto key = KeyCodec::encodeVertexDataAdjEdgeKey(in);
+    EXPECT_EQ(key.size(), 27u);
+    auto decoded = KeyCodec::decodeVertexDataAdjEdgeKey(key);
+    EXPECT_EQ(decoded.vertex_id, 42u);
+    EXPECT_EQ(decoded.direction, Direction::IN);
+    EXPECT_EQ(decoded.edge_label_id, 3u);
+    EXPECT_EQ(decoded.neighbor_id, 7u);
+    EXPECT_EQ(decoded.seq, 9u);
+    EXPECT_EQ(KeyCodec::vertexDataKind(key), KeyCodec::VertexDataKind::IN_ADJACENCY);
+}
+
+TEST_F(KeyCodecTest, VertexDataAdjacencyStateValue) {
+    auto value = KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::COMPLETE, 64);
+    EXPECT_EQ(value.size(), 5u);
+    auto [state, count] = KeyCodec::decodeAdjacencyState(value);
+    EXPECT_EQ(state, KeyCodec::AdjacencyCacheState::COMPLETE);
+    EXPECT_EQ(count, 64u);
+
+    auto overflow = KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::OVERFLOW, 0);
+    auto [s2, c2] = KeyCodec::decodeAdjacencyState(overflow);
+    EXPECT_EQ(s2, KeyCodec::AdjacencyCacheState::OVERFLOW);
+    EXPECT_EQ(c2, 0u);
+}
+
 // ==================== Edge Index (table:edge_index) ====================
 
 TEST_F(KeyCodecTest, EncodeDecodeEdgeIndexKey) {

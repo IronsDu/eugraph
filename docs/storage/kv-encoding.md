@@ -36,8 +36,8 @@
 |---|---|---|---|
 | `0x00` | 标签 | `{vid:u64BE}{0x00}{label_id:u16BE}` | 空 |
 | `0x01` | 属性 | `{vid:u64BE}{0x01}{label_id:u16BE}{prop_id:u16BE}` | ValueCodec |
-| `0x02` | OUT 邻接缓存（预留） | `{vid:u64BE}{0x02}` | state + entries |
-| `0x03` | IN 邻接缓存（预留） | `{vid:u64BE}{0x03}` | state + entries |
+| `0x02` | OUT 邻接 | `{vid}{0x02}` state；每条边 `{vid}{0x02}{label}{neighbor}{seq}` | state+count；edge_id |
+| `0x03` | IN 邻接 | `{vid}{0x03}` state；每条边 `{vid}{0x03}{label}{neighbor}{seq}` | state+count；edge_id |
 
 ```
 前缀 {vid}{0x00} → 该顶点的所有标签
@@ -60,6 +60,17 @@
 ### 顶点属性（vertex_data kind 0x01）
 
 prop_id 在每个 Label 内独立编号、永不复用。属性按 `{vid}{0x01}{label}{prop}` 存放在 `vertex_data` 中；`DROP LABEL` 通过 `label_fwd` 枚举顶点后删除对应前缀。
+
+### 邻接缓存（vertex_data kind 0x02/0x03）
+
+每个顶点的每个方向有一条 state key（`{vid}{kind}`，9 字节），value 为
+`{state:u8}{count:u32BE}`：
+
+- `COMPLETE`：邻接边全部以 `{vid}{kind}{label}{neighbor}{seq}` 记录在同一前缀下，
+  value 为 `edge_id`；读取时一次 cursor 从 state 开始，顺序扫边；
+- `OVERFLOW`：边 key 已清空，读取回退 `edge_index`；
+- 第 N+1 条边在同一个事务内把缓存边写入 `edge_index`、删除缓存 key、state 置 OVERFLOW；
+- `edge_index` 只保存 OVERFLOW 方向的邻接（overflow-only）。
 
 ### 边邻接索引（edge_index）
 

@@ -189,6 +189,24 @@ public:
                            const std::optional<std::vector<PropertyValue>>& end) override;
 
 private:
+    // ==================== vertex_data adjacency helpers ====================
+    struct AdjState {
+        KeyCodec::AdjacencyCacheState state = KeyCodec::AdjacencyCacheState::OVERFLOW;
+        uint32_t count = 0;
+    };
+
+    std::optional<AdjState> getAdjacencyState(WT_SESSION* session, VertexId vid, Direction direction);
+    bool putAdjacencyState(WT_SESSION* session, VertexId vid, Direction direction, KeyCodec::AdjacencyCacheState state,
+                           uint32_t count);
+    bool insertAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction, EdgeLabelId label_id,
+                             VertexId neighbor_id, uint64_t seq, EdgeId eid);
+    bool deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction, EdgeLabelId label_id,
+                             VertexId neighbor_id, uint64_t seq, EdgeId eid);
+    bool promoteAdjacency(WT_SESSION* session, VertexId vid, Direction direction, uint32_t cached_count);
+    bool collectCachedEdges(WT_SESSION* session, VertexId vid, Direction direction,
+                            std::optional<EdgeLabelId> label_filter,
+                            std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out);
+
     WtConnectionStore* conn_ = nullptr;
     SchemaDdl schema_ddl_;
 };
@@ -236,6 +254,26 @@ private:
     ISyncGraphDataStore::EdgeIndexEntry current_;
     std::string currentKey_;
     std::string currentValue_;
+};
+
+/// Materialized edge cursor for cached (COMPLETE) adjacency; also used for BOTH.
+class VectorEdgeScanCursor : public ISyncGraphDataStore::IEdgeScanCursor {
+public:
+    explicit VectorEdgeScanCursor(std::vector<ISyncGraphDataStore::EdgeIndexEntry> entries)
+        : entries_(std::move(entries)) {}
+    bool valid() const override {
+        return pos_ < entries_.size();
+    }
+    const ISyncGraphDataStore::EdgeIndexEntry& entry() const override {
+        return entries_[pos_];
+    }
+    void next() override {
+        ++pos_;
+    }
+
+private:
+    std::vector<ISyncGraphDataStore::EdgeIndexEntry> entries_;
+    size_t pos_ = 0;
 };
 
 class EdgeTypeScanCursorImpl : public ISyncGraphDataStore::IEdgeTypeScanCursor {
