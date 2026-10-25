@@ -1123,11 +1123,17 @@ SyncGraphDataStore::createEdgeScanCursor(GraphSession& gs, VertexId vid, Directi
         return std::make_unique<VectorEdgeScanCursor>(std::move(entries));
     }
 
-    auto state = getAdjacencyState(gs.wt_session(), vid, direction);
-    if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
-        std::vector<EdgeIndexEntry> entries;
-        collectCachedEdges(gs.wt_session(), vid, direction, label_filter, entries);
-        return std::make_unique<VectorEdgeScanCursor>(std::move(entries));
+    {
+        CursorHandle cache_cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+        if (!cache_cursor) {
+            const int error = cache_cursor.error();
+            gs.fail_from_wt(error, "createEdgeScanCursor: cannot open cursor on " + std::string(TABLE_VERTEX_DATA));
+            return nullptr;
+        }
+        auto cached = std::make_unique<VertexDataEdgeScanCursor>(
+            gs, std::move(cache_cursor), KeyCodec::encodeVertexDataAdjPrefix(vid, direction), label_filter);
+        if (cached->cacheUsable())
+            return cached;
     }
 
     std::string prefix;
@@ -1144,6 +1150,101 @@ SyncGraphDataStore::createEdgeScanCursor(GraphSession& gs, VertexId vid, Directi
         return nullptr;
     }
     return std::make_unique<EdgeScanCursorImpl>(gs, std::move(cursor), prefix);
+}
+
+// ==================== VertexDataEdgeScanCursorImpl ====================
+
+VertexDataEdgeScanCursor::VertexDataEdgeScanCursor(GraphSession& session, CursorHandle cursor, std::string_view prefix,
+                                                   std::optional<EdgeLabelId> label_filter)
+    : session_(session), cursor_(std::move(cursor)), prefix_(prefix), label_filter_(label_filter) {
+    if (!cursor_)
+        return;
+    auto* c = cursor_.get();
+    setItem(c, prefix_);
+    int exact = 0;
+    int ret = c->search_near(c, &exact);
+    if (ret == WT_NOTFOUND)
+        return;
+    if (ret != 0) {
+        session_.fail_from_wt(ret, "VertexDataEdgeScanCursor: search_near failed");
+        return;
+    }
+    if (exact < 0)
+        ret = c->next(c);
+    if (ret != 0)
+        return;
+
+    currentKey_ = getKeyFromCursor(c);
+    if (!currentKey_.starts_with(prefix_)) {
+        cache_usable_ = true; // COMPLETE with zero edges
+        return;
+    }
+    if (!KeyCodec::isVertexDataAdjStateKey(currentKey_)) {
+        cache_usable_ = false;
+        return;
+    }
+    auto [state, count] = KeyCodec::decodeAdjacencyState(getValueViewFromCursor(c));
+    (void)count;
+    cache_usable_ = state == KeyCodec::AdjacencyCacheState::COMPLETE;
+    if (!cache_usable_)
+        return;
+
+    ret = c->next(c);
+    if (ret == WT_NOTFOUND) {
+        valid_ = false;
+        return;
+    }
+    if (ret != 0) {
+        session_.fail_from_wt(ret, "VertexDataEdgeScanCursor: next failed");
+        return;
+    }
+    readCurrent();
+}
+
+void VertexDataEdgeScanCursor::readCurrent() {
+    if (!cursor_)
+        return;
+    auto* c = cursor_.get();
+    while (true) {
+        currentKey_ = getKeyFromCursor(c);
+        if (!currentKey_.starts_with(prefix_)) {
+            valid_ = false;
+            return;
+        }
+        if (KeyCodec::isVertexDataAdjStateKey(currentKey_)) {
+            const int ret = c->next(c);
+            if (ret != 0) {
+                valid_ = false;
+                return;
+            }
+            continue;
+        }
+        auto k = KeyCodec::decodeVertexDataAdjEdgeKey(currentKey_);
+        if (label_filter_ && k.edge_label_id != *label_filter_) {
+            const int ret = c->next(c);
+            if (ret != 0) {
+                valid_ = false;
+                return;
+            }
+            continue;
+        }
+        currentValue_ = getValueFromCursor(c);
+        current_ = {k.neighbor_id, k.edge_label_id, k.seq, ValueCodec::decodeU64(currentValue_)};
+        valid_ = true;
+        return;
+    }
+}
+
+void VertexDataEdgeScanCursor::next() {
+    if (!cursor_ || !valid_)
+        return;
+    auto* c = cursor_.get();
+    const int ret = c->next(c);
+    if (ret != 0) {
+        valid_ = false;
+        return;
+    }
+    readCurrent();
 }
 
 // ==================== EdgeTypeScanCursorImpl ====================

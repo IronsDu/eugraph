@@ -256,6 +256,39 @@ private:
     std::string currentValue_;
 };
 
+/// Streaming cursor over cached (COMPLETE) adjacency records in vertex_data.
+/// Positions after the direction's state key and skips it on advances.
+class VertexDataEdgeScanCursor : public ISyncGraphDataStore::IEdgeScanCursor {
+public:
+    VertexDataEdgeScanCursor(GraphSession& session, CursorHandle cursor, std::string_view prefix,
+                             std::optional<EdgeLabelId> label_filter);
+    ~VertexDataEdgeScanCursor() override = default;
+
+    bool valid() const override {
+        return valid_;
+    }
+    const ISyncGraphDataStore::EdgeIndexEntry& entry() const override {
+        return current_;
+    }
+    void next() override;
+    bool cacheUsable() const {
+        return cache_usable_;
+    }
+
+private:
+    void readCurrent();
+
+    GraphSession& session_;
+    CursorHandle cursor_;
+    std::string prefix_;
+    std::optional<EdgeLabelId> label_filter_;
+    bool valid_ = false;
+    bool cache_usable_ = false;
+    ISyncGraphDataStore::EdgeIndexEntry current_{};
+    std::string currentKey_;
+    std::string currentValue_;
+};
+
 /// Materialized edge cursor for cached (COMPLETE) adjacency; also used for BOTH.
 class VectorEdgeScanCursor : public ISyncGraphDataStore::IEdgeScanCursor {
 public:

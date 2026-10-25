@@ -97,3 +97,37 @@ N 第一阶段取全局常量（后续可按 label/方向配置）。
 - `DROP EDGE LABEL`、`deleteVertex`、loader 重建；
 - COMPLETE 路径与 edge_index 读法同构，**不会更快**，收益是统一存储、低 degree 无
   edge_index 条目和写放大；高 degree 仍走 edge_index。
+
+## 7. 实施记录（2026-10-25，sf0.1）
+
+### 已完成
+
+- labels/properties 合并到 `vertex_data`，删除 `label_reverse`/`vprop`；
+- OUT/IN 邻接 key + `AdjacencyCacheState`，`edge_index` 为 overflow-only；
+- `scanEdges`/`createEdgeScanCursor`/`countDegree` 按 state 分派；
+- 缓存 cursor 改为流式（不再把单个顶点的边 materialize 成 vector），
+  c5 从 443 ms 降到 327 ms（仍高于旧 edge_index 的 264 ms）。
+
+### LDBC 重新导入
+
+- 4 RPC 连接：在 `vertex_data` 的 per-vertex state 上产生 WT 写冲突
+  （`WT_ROLLBACK -31800`），loader 失败；
+- 1 RPC 连接：成功，**43.2 s**，loader 峰值 RSS 80 MB，server 峰值 RSS ~530 MB；
+- 超级节点没有额外内存：COMPLETE 最多 N 条，超过即 OVERFLOW。
+
+### 当前基准（新存储 vs 旧存储）
+
+| 查询 | 新存储 | 旧存储 |
+|---|---:|---:|
+| complex-9 | 244 ms | 161.7 ms |
+| complex-5 | 327 ms | 264 ms |
+| complex-14 | 307 ms | 295 ms |
+
+结论：功能正确，但**当前读路径整体回退**。主要嫌疑：
+
+1. `vertex_data` 单表同时含 label/property/邻接，B-tree 变大，点查 page 局部性下降；
+2. label + property 仍是两次独立前缀扫描，没有融合；
+3. COMPLETE 邻接读比纯 `edge_index` 多一次 state 读/解码。
+
+下一步必须先做读路径优化（融合 labels+props 的 `loadVertexData`、邻接 state/边同 cursor、
+N 调优），在回退消除前不应合并。
