@@ -131,3 +131,13 @@ N 第一阶段取全局常量（后续可按 label/方向配置）。
 
 下一步必须先做读路径优化（融合 labels+props 的 `loadVertexData`、邻接 state/边同 cursor、
 N 调优），在回退消除前不应合并。
+
+### 读路径融合（2026-10-25）
+
+- 新增 `getVertexCoalescePropertiesBatch(vids, candidates)`：一次 `{v}{0x01}` 前缀扫描
+  同时完成 labels 判定 + 候选属性取值，PE 的 coalesce 不再先 `getVertexLabelsBatch`
+  再 `batchGetVertexProperties`。
+- c9：244 ms → **143 ms**（旧存储 161.7 ms），已恢复并略优于旧路径。
+- c14：320 ms（N=64）/ 305 ms（N=0），旧存储 295 ms，仍略慢。
+- c5：329 ms（N=64）/ 346 ms（N=0），旧存储 264 ms，仍明显慢；
+  主要剩余嫌疑是大量 per-source label 过滤/小批量扫描在更大的 `vertex_data` 表上变慢。

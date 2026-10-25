@@ -83,6 +83,9 @@ public:
     std::vector<LabelIdSet> getVertexLabelsBatch(GraphSession& session, const std::vector<VertexId>& vids) override;
     std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphSession& session, LabelId label_id,
                                                                     const std::vector<VertexId>& vids) override;
+    std::vector<std::vector<PropertyValue>>
+    getVertexCoalescePropertiesBatch(GraphSession& session, const std::vector<VertexId>& vids,
+                                     const std::vector<std::pair<LabelId, uint16_t>>& candidates) override;
     bool addVertexLabel(GraphSession& session, VertexId vid, LabelId label_id) override;
     bool removeVertexLabel(GraphSession& session, VertexId vid, LabelId label_id) override;
 

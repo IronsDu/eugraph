@@ -89,6 +89,25 @@ public:
         co_return results;
     }
 
+    /// Batch multi-label coalesce property fetch. Default: per-vertex point
+    /// lookups; the storage implementation overrides with one prefix scan.
+    virtual folly::coro::Task<std::vector<std::vector<PropertyValue>>>
+    batchGetVertexCoalesceProperties(const std::vector<VertexId>& vids,
+                                     const std::vector<std::pair<LabelId, uint16_t>>& candidates) {
+        std::vector<std::vector<PropertyValue>> out;
+        out.reserve(vids.size());
+        for (auto vid : vids) {
+            std::vector<PropertyValue> values;
+            for (const auto& [lid, pid] : candidates) {
+                auto v = co_await getVertexProperty(vid, lid, pid);
+                if (v)
+                    values.push_back(*v);
+            }
+            out.push_back(std::move(values));
+        }
+        co_return out;
+    }
+
     // Vertex Property Write
     virtual folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
                                                       const PropertyValue& value) = 0;

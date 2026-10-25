@@ -303,24 +303,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             if (ref_vids.empty())
                 continue;
 
-            auto labels_batch = co_await store_.getVertexLabelsBatch(ref_vids);
-            for (const auto& [lid, pid] : spec.coalesce_candidates) {
-                std::vector<VertexId> ids;
-                std::vector<size_t> rows;
-                for (size_t j = 0; j < ref_vids.size() && j < labels_batch.size(); ++j) {
-                    if (labels_batch[j].contains(lid)) {
-                        ids.push_back(ref_vids[j]);
-                        rows.push_back(ref_rows[j]);
-                    }
-                }
-                if (ids.empty())
-                    continue;
-                auto values = co_await store_.batchGetVertexProperties(ids, lid, {pid});
-                for (size_t j = 0; j < ids.size() && j < values.size(); ++j) {
-                    if (!values[j].has_value() || values[j]->size() <= pid || !(*values[j])[pid].has_value())
-                        continue;
-                    vertex_coalesce_cache[i][rows[j]].push_back((*values[j])[pid].value());
-                }
+            auto coalesced = co_await store_.batchGetVertexCoalesceProperties(ref_vids, spec.coalesce_candidates);
+            for (size_t j = 0; j < ref_vids.size() && j < coalesced.size(); ++j) {
+                for (auto& value : coalesced[j])
+                    vertex_coalesce_cache[i][ref_rows[j]].push_back(std::move(value));
             }
         }
 

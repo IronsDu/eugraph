@@ -514,6 +514,67 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     return out;
 }
 
+std::vector<std::vector<PropertyValue>>
+SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std::vector<VertexId>& vids,
+                                                     const std::vector<std::pair<LabelId, uint16_t>>& candidates) {
+    std::vector<std::vector<PropertyValue>> out(vids.size());
+    if (vids.empty() || candidates.empty())
+        return out;
+
+    std::unordered_map<uint32_t, size_t> cand_index;
+    cand_index.reserve(candidates.size() * 2);
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        uint32_t key = (static_cast<uint32_t>(candidates[i].first) << 16) | candidates[i].second;
+        cand_index.emplace(key, i);
+    }
+
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "getVertexCoalescePropertiesBatch: cannot open cursor on table:vertex_data");
+        return out;
+    }
+    auto* c = cursor.get();
+    size_t out_index = 0;
+    for (VertexId vid : vids) {
+        std::vector<std::optional<PropertyValue>> found(candidates.size());
+        std::string prefix = KeyCodec::encodeVertexDataPropPrefix(vid);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND) {
+            ++out_index;
+            continue;
+        }
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "getVertexCoalescePropertiesBatch: search_near failed");
+            return out;
+        }
+        if (exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            std::string key = getKeyFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            auto [_, label_id, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
+            uint32_t key_id = (static_cast<uint32_t>(label_id) << 16) | prop_id;
+            auto it = cand_index.find(key_id);
+            if (it != cand_index.end())
+                found[it->second] = ValueCodec::decode(getValueFromCursor(c));
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexCoalescePropertiesBatch: next failed");
+            return out;
+        }
+        for (auto& v : found)
+            if (v)
+                out[out_index].push_back(std::move(*v));
+        ++out_index;
+    }
+    return out;
+}
+
 bool SyncGraphDataStore::addVertexLabel(GraphSession& gs, VertexId vid, LabelId label_id) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
