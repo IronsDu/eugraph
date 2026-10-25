@@ -92,7 +92,9 @@ Sort 比较了占位值，返回的 Top-20 不是最大日期。该优化已移�
 
 ### 2.3 Updates
 
-本轮未重跑 update；下表是上一轮同口径结果，**不参与本轮结论**：
+本轮未获得有效的 update 对比：8 条 `interactive-update-*` 是写语句，参数来自
+LDBC update stream fixture（文件本身没有 `:param` 块），仓库内没有现成 fixture；
+用空参数执行是 no-op，不能作为结果。下表沿用上一轮同口径数据，**不参与本轮结论**：
 
 | 语句 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
