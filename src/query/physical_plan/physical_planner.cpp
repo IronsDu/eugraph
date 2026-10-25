@@ -678,38 +678,6 @@ static void collectPEOutputSlots(const PlanContext& ctx, std::unordered_set<bind
 /// anything below that Filter. Such slots only need to exist after Filtering,
 /// so loading them for every pre-filter row (e.g. LDBC c9's message.id over
 /// 53k messages) is wasted.
-static std::unordered_set<binder::SlotId> computeSortFilterDeferredSlots(const PlanContext& ctx,
-                                                                         const binder::BoundSortOp& sort,
-                                                                         const binder::BoundFilterOp& filter) {
-    std::unordered_set<binder::SlotId> sort_slots;
-    for (const auto& item : sort.items)
-        collectExprSlots(item.expr, sort_slots);
-    if (sort_slots.empty())
-        return {};
-
-    std::unordered_set<binder::SlotId> predicate_slots;
-    collectExprSlots(filter.predicate, predicate_slots);
-    std::unordered_set<binder::SlotId> child_slots;
-    bool child_has_write = false;
-    collectOpSlots(filter.child, child_slots, child_has_write);
-    if (child_has_write)
-        return {};
-    std::unordered_set<binder::SlotId> pe_slots;
-    collectPEOutputSlots(ctx, pe_slots);
-
-    std::unordered_set<binder::SlotId> deferred;
-    for (binder::SlotId s : sort_slots) {
-        if (s == binder::INVALID_SLOT_ID || predicate_slots.contains(s) || child_slots.contains(s))
-            continue;
-        if (!pe_slots.contains(s))
-            continue;
-        if (ctx.deferred_slots && ctx.deferred_slots->contains(s))
-            continue; // already deferred past LIMIT
-        deferred.insert(s);
-    }
-    return deferred;
-}
-
 /// Slots referenced by the RETURN Project but not by the Sort/Filter side
 /// below it. These are exactly the output-only columns whose materialization
 /// can move above LIMIT.
@@ -3119,51 +3087,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSortOp>) {
-                    // Filter-boundary split: ORDER BY keys that the Filter does
-                    // not need (e.g. message.id in LDBC c9) are loaded after the
-                    // Filter, not for every pre-filter row.
-                    if (auto* fp = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&v.child);
-                        fp && *fp &&
-                        !std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>((*fp)->child)) {
-                        auto& filter = **fp;
-                        auto deferred = computeSortFilterDeferredSlots(ctx, v, filter);
-                        if (!deferred.empty()) {
-                            auto saved_deferred = ctx.deferred_slots;
-                            std::unordered_set<binder::SlotId> merged;
-                            if (saved_deferred)
-                                merged = *saved_deferred;
-                            merged.insert(deferred.begin(), deferred.end());
-                            ctx.deferred_slots = std::move(merged);
-                            auto child_result =
-                                planBoundOperator(filter.child, store, meta, ctx, input_schema, input_types);
-                            ctx.deferred_slots = std::move(saved_deferred);
-                            if (std::holds_alternative<std::string>(child_result))
-                                return std::get<std::string>(child_result);
-                            auto cr = extractChildResult(std::move(child_result));
-                            auto filter_op = std::make_unique<FilterPhysicalOp>(std::move(filter.predicate),
-                                                                                cr.output_schema, std::move(cr.op));
-                            filter_op->setEvalContext(ctx.eval_ctx);
-                            auto filter_result = extractChildResult(
-                                PlanOperatorResult{std::move(filter_op), std::move(cr.output_schema),
-                                                   std::move(cr.output_types), std::move(cr.slot_layout)});
-                            auto lm_result =
-                                materializeDeferredAfterLimit(std::move(filter_result), ctx, deferred, store);
-
-                            std::vector<SortPhysicalOp::SortItem> sort_items;
-                            for (auto& si : v.items) {
-                                SortPhysicalOp::SortItem item;
-                                item.expr = std::move(si.expr);
-                                item.ascending = (si.direction == cypher::OrderBy::Direction::ASC);
-                                sort_items.push_back(std::move(item));
-                            }
-                            auto sort_op =
-                                std::make_unique<SortPhysicalOp>(std::move(sort_items), std::move(lm_result.op));
-                            sort_op->setEvalContext(ctx.eval_ctx);
-                            return extractChildResult(PlanOperatorResult{
-                                std::move(sort_op), std::move(lm_result.output_schema),
-                                std::move(lm_result.output_types), std::move(lm_result.slot_layout)});
-                        }
-                    }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);

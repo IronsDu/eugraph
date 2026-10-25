@@ -36,9 +36,9 @@
 
 ## 2. 可运行性与耗时
 
-> **本分支状态（2026-10-25）**：complex-14 已优化（79.8 s → 0.81 s → **0.295 s**，仍 🔴🔴 约 14×）；
-> complex-9 已优化（422 ms → **161.7 ms**，仍 🟠 约 5.0×）；
-> complex-5 已优化（514 ms → **264.1 ms**，仍 🟡 约 2.7×）。方案见
+> **本分支状态（2026-10-25，vertex_data + 同轮 A/B）**：complex-14 **291.4 ms**（🔴🔴 约 16.5×）；
+> complex-9 **187.2 ms**（🔴 约 6.7×，旧 161.7 为错误计划结果）；complex-5 **234.0 ms**（🟡 约 2.8×）。
+> 三者行结果均与 neo4j 一致。方案见
 > [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md)、
 > [算子实现计划](../query/c5-c9-operator-implementation-plan.md)）。
 
@@ -63,19 +63,24 @@
 | complex-7 | 5.23 | 3.37 | 🟡 慢 1.6× |
 | complex-4 | 8.29 | 4.13 | 🟡 慢 2.0× |
 | complex-11 | 7.30 | 3.31 | 🟡 慢 2.2× |
-| complex-5 | **264.1** | 98.39 | 🟡 慢约 2.7×（已优化，原 513.66） |
+| complex-5 | **234.0** | 83.10 | 🟡 慢约 2.8×（vertex_data 分支，同轮 A/B 5 轮 min） |
 | complex-6 | 93.56 | 31.56 | 🟡 慢 3.0× |
 | complex-12 | 384.15 | 115.80 | 🟠 慢 3.3× |
 | complex-2 | 14.56 | 4.16 | 🟠 慢 3.5× |
 | complex-1 | 32.21 | 8.73 | 🟠 慢 3.7×（shortestPath） |
 | complex-10 | 40.32 | 10.63 | 🟠 慢 3.8× |
 | complex-3 | 132.06 | 28.33 | 🟠 慢 4.7× |
-| complex-9 | **161.7** | 32.58 | 🟠 慢约 5.0×（已优化，原 422.39；见 §3） |
-| complex-14 | **295** | 20.90 | 🔴🔴 慢约 14×（已优化，原 79,788；见 §3） |
+| complex-9 | **187.2** | 28.10 | 🔴 慢约 6.7×（正确性修复后；旧 161.7 为错误计划结果） |
+| complex-14 | **291.4** | 17.70 | 🔴🔴 慢约 16.5×（vertex_data 分支，同轮 A/B 5 轮 min） |
 
-complex-14 为本分支优化后的复测值（3 轮 min，4 行与 neo4j 一致；neo4j 20.9 ms 沿用上一轮同机同数据基线）；
-complex-9 为优化后 5 轮 min（20 行与原路径逐值一致；neo4j 32.6 ms 沿用上一轮基线）；
-complex-5 为优化后 4 轮 min（20 行与原路径逐值一致；neo4j 98.4 ms 沿用上一轮基线）；其余读取沿用上一轮结果。
+complex-5/9/14 为 `feat/storage-vertex-data` 分支同轮交错 A/B（各 5 轮 min），
+三者的行结果均与 neo4j 逐行一致。
+
+**complex-9 更正**：旧的 161.7 ms 来自 filter-boundary 延迟物化缺陷——
+Sort 所需、Filter 不需要的 `message.id` 被放在 Sort 下方按 LIMIT 后物化，
+Sort 比较了占位值，返回的 Top-20 不是最大日期。该优化已移除；修复后为 187.2 ms，
+优化前正确基线是 422 ms。见 [vertex-data-design §正确性修复](../storage/vertex-data-design.md)。
+其余读取沿用上一轮结果。
 
 ### 2.3 Updates
 

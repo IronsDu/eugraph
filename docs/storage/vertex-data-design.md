@@ -178,12 +178,23 @@ label/property 访问；可接受为当前存储改造的代价，后续可用 l
 - 每 4,096 个 source 复用一个 sync cursor，一次 `search_near` 后顺序扫；
 - 结果分批返回，Expand 语义不变。
 
-最终 sf0.1（5 轮 min，N=0）：
+### 正确性修复：c9 的 filter-boundary 延迟物化
 
-| 查询 | 新存储 | 旧存储 |
-|---|---:|---:|
-| complex-9 | **131.0 ms** | 161.7 ms |
-| complex-5 | **243.9 ms** | 264 ms |
-| complex-14 | **284.9 ms** | 295 ms |
+对照 neo4j 时发现 c9 的 eugraph 结果错误：`ORDER BY creationDate DESC` 返回的日期
+不是最大的，只有 1289221574224，而实际最大是 1289887072396。
 
-三个查询均不再回退；c5 的提升主要来自共享 cursor。
+根因在 `physical_planner` 的 filter-boundary split：它把 Sort 需要、但 Filter 不需要
+的 key（c9 的 `message.id`）延迟物化，并在 Sort **下方**放了
+`LateMaterialize(after LIMIT)`。此处没有 LIMIT，sort key 仍是占位值，Sort 比较
+错误。该优化已移除；LIMIT-boundary 的延迟物化保留。
+
+修复后 c9 与 neo4j 逐行一致；**旧记录的 c9 161.7 ms 是错误计划的结果，不应作为
+基线**。c9 在优化前的正确基线是 422 ms。
+
+最终 sf0.1（同轮交错 A/B，5 轮 min）：
+
+| 查询 | eugraph | neo4j | 行一致 |
+|---|---:|---:|---|
+| complex-5 | 234.0 ms | 83.1 ms | ✅ |
+| complex-9 | 187.2 ms | 28.1 ms | ✅ |
+| complex-14 | 291.4 ms | 17.7 ms | ✅ |
