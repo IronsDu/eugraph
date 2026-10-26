@@ -236,7 +236,6 @@ private:
     CursorHandle cursor_;
     bool valid_ = false;
     VertexId current_vid_ = 0;
-    std::string currentKey_;
     // label 前向表用 label-forward key，顶点存在表用 vertex-existence key。
     bool existence_keys_ = false;
 };
@@ -258,8 +257,6 @@ private:
     std::string prefix_;
     bool valid_ = false;
     ISyncGraphDataStore::EdgeIndexEntry current_;
-    std::string currentKey_;
-    std::string currentValue_;
 };
 
 /// Streaming cursor over cached (COMPLETE) adjacency records in vertex_data.
@@ -291,8 +288,6 @@ private:
     bool valid_ = false;
     bool cache_usable_ = false;
     ISyncGraphDataStore::EdgeIndexEntry current_{};
-    std::string currentKey_;
-    std::string currentValue_;
 };
 
 /// Materialized edge cursor for cached (COMPLETE) adjacency; also used for BOTH.
@@ -332,8 +327,6 @@ private:
     std::string prefix_;
     bool valid_ = false;
     ISyncGraphDataStore::EdgeTypeIndexEntry current_;
-    std::string currentKey_;
-    std::string currentValue_;
 };
 
 // ==================== Index Scan Cursor ====================

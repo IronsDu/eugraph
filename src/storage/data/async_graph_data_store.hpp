@@ -238,7 +238,7 @@ public:
 
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) override {
-        constexpr size_t BATCH = 65536;
+        constexpr size_t BATCH = 4096;
         // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
         folly::EventBase* bound_evb = nullptr;
         auto cursor = co_await io_.dispatch([this, vid, direction, label_filter, &bound_evb]() {
@@ -250,7 +250,8 @@ public:
 
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeIndexEntry> batch;
-            batch.reserve(BATCH);
+            // Most vertices have very few edges; do not reserve 65k entries per source.
+            batch.reserve(64);
             co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
                                                     for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                                                         batch.push_back(cursor->entry());
@@ -263,6 +264,19 @@ public:
             }
             co_yield std::move(batch);
         }
+    }
+
+    folly::coro::Task<void> scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
+                                      std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out) override {
+        out.clear();
+        co_await io_.dispatchVoid([this, vid, direction, label_filter, &out]() {
+            store_.scanEdges(session_, vid, direction, label_filter,
+                             [&out](const ISyncGraphDataStore::EdgeIndexEntry& entry) {
+                                 out.push_back(entry);
+                                 return true;
+                             });
+        });
+        co_return;
     }
 
     folly::coro::AsyncGenerator<std::vector<BatchedEdge>>
@@ -280,7 +294,8 @@ public:
             std::vector<VertexId> chunk(vids.begin() + static_cast<std::ptrdiff_t>(offset),
                                         vids.begin() + static_cast<std::ptrdiff_t>(offset + n));
             std::vector<BatchedEdge> batch;
-            batch.reserve(n * 2);
+            // Cap the upfront allocation; batches with high-degree sources grow on demand.
+            batch.reserve(std::min<size_t>(n, 256));
             co_await io_.dispatchVoid([this, &chunk, dir, filter, &batch]() {
                 store_.scanEdgesBatch(session_, chunk, dir, filter,
                                       [&batch](VertexId vid, const ISyncGraphDataStore::EdgeIndexEntry& entry) {
