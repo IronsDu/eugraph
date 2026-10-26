@@ -134,6 +134,17 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             note = f"NEO-ERR {type(exc).__name__}"
         if eg_rows is not None and neo_rows is not None and note == "MATCH":
+            # c12 returns collect(DISTINCT tag.name); Cypher does not guarantee
+            # list order, so compare it as a set before flagging a difference.
+            if f.stem == "interactive-complex-12":
+                def normalize_c12(row):
+                    row = list(row)
+                    if len(row) >= 4 and isinstance(row[3], tuple) and len(row[3]) == 2 and row[3][0] == "list":
+                        row[3] = ("list", tuple(sorted(row[3][1], key=str)))
+                    return tuple(row)
+
+                eg_rows = [normalize_c12(r) for r in eg_rows]
+                neo_rows = [normalize_c12(r) for r in neo_rows]
             if sorted(eg_rows) != sorted(neo_rows):
                 note = "DIFF"
             elif eg_rows != neo_rows and "ORDER BY" in body.upper():
