@@ -128,11 +128,17 @@ public:
     // Edge Scan
     virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) = 0;
-    /// Fill caller-owned `out` with all edges of one source. The caller may
-    /// reuse `out` across calls, avoiding a fresh batch vector per source.
-    virtual folly::coro::Task<void> scanEdges(VertexId vid, Direction direction,
-                                              std::optional<EdgeLabelId> label_filter,
-                                              std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out) = 0;
+    struct EdgeScanPage {
+        bool has_more = false;
+        std::string next_key; // encoded key of the last returned edge; resume after it
+    };
+    /// Fill caller-owned `out` with at most `max_edges` edges. `out` is reused
+    /// across pages; `after_key` is empty for the first page. High-degree
+    /// sources never grow the caller's vector beyond `max_edges`.
+    virtual folly::coro::Task<EdgeScanPage> scanEdgesPage(VertexId vid, Direction direction,
+                                                          std::optional<EdgeLabelId> label_filter,
+                                                          std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out,
+                                                          size_t max_edges, std::string_view after_key) = 0;
     struct BatchedEdge {
         VertexId src_id;
         ISyncGraphDataStore::EdgeIndexEntry entry;

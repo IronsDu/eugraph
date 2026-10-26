@@ -235,21 +235,28 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 co_return;
             }
             for (const auto& label_filter : scan_filters) {
-                co_await store_.scanEdges(src_id, scan_dir, label_filter, edge_scratch_);
-                for (const auto& entry : edge_scratch_) {
-                    if (dst_bound_) {
-                        const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
-                        if (vertexIdFromValue(bval) != entry.neighbor_id)
-                            continue;
+                std::string after_key;
+                while (true) {
+                    auto page =
+                        co_await store_.scanEdgesPage(src_id, scan_dir, label_filter, edge_scratch_, 4096, after_key);
+                    for (const auto& entry : edge_scratch_) {
+                        if (dst_bound_) {
+                            const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
+                            if (vertexIdFromValue(bval) != entry.neighbor_id)
+                                continue;
+                        }
+                        if (edge_bound_) {
+                            const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
+                            if (edgeIdFromValue(eval) != entry.edge_id)
+                                continue;
+                        }
+                        bool phy_out = (scan_dir == Direction::OUT);
+                        edges.push_back(
+                            {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
                     }
-                    if (edge_bound_) {
-                        const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
-                        if (edgeIdFromValue(eval) != entry.edge_id)
-                            continue;
-                    }
-                    bool phy_out = (scan_dir == Direction::OUT);
-                    edges.push_back(
-                        {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
+                    if (!page.has_more)
+                        break;
+                    after_key = std::move(page.next_key);
                 }
             }
             co_return;
@@ -370,21 +377,28 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         continue;
                     }
                     for (const auto& label_filter : scan_filters) {
-                        co_await store_.scanEdges(src_id, dir, label_filter, edge_scratch_);
-                        for (const auto& entry : edge_scratch_) {
-                            if (dst_bound_) {
-                                const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
-                                if (vertexIdFromValue(bval) != entry.neighbor_id)
-                                    continue;
+                        std::string after_key;
+                        while (true) {
+                            auto page = co_await store_.scanEdgesPage(src_id, dir, label_filter, edge_scratch_, 4096,
+                                                                      after_key);
+                            for (const auto& entry : edge_scratch_) {
+                                if (dst_bound_) {
+                                    const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
+                                    if (vertexIdFromValue(bval) != entry.neighbor_id)
+                                        continue;
+                                }
+                                if (edge_bound_) {
+                                    const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
+                                    if (edgeIdFromValue(eval) != entry.edge_id)
+                                        continue;
+                                }
+                                bool phy_out = (dir == Direction::OUT);
+                                edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id,
+                                                 entry.seq, phy_out});
                             }
-                            if (edge_bound_) {
-                                const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
-                                if (edgeIdFromValue(eval) != entry.edge_id)
-                                    continue;
-                            }
-                            bool phy_out = (dir == Direction::OUT);
-                            edges.push_back(
-                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
+                            if (!page.has_more)
+                                break;
+                            after_key = std::move(page.next_key);
                         }
                     }
                 }

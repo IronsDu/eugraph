@@ -266,17 +266,18 @@ public:
         }
     }
 
-    folly::coro::Task<void> scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
-                                      std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out) override {
-        out.clear();
-        co_await io_.dispatchVoid([this, vid, direction, label_filter, &out]() {
-            store_.scanEdges(session_, vid, direction, label_filter,
-                             [&out](const ISyncGraphDataStore::EdgeIndexEntry& entry) {
-                                 out.push_back(entry);
-                                 return true;
-                             });
+    folly::coro::Task<EdgeScanPage> scanEdgesPage(VertexId vid, Direction direction,
+                                                  std::optional<EdgeLabelId> label_filter,
+                                                  std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out,
+                                                  size_t max_edges, std::string_view after_key) override {
+        auto after = std::string(after_key);
+        auto next = co_await io_.dispatch([this, vid, direction, label_filter, &out, max_edges, after]() {
+            return store_.scanEdgesPage(session_, vid, direction, label_filter, out, max_edges, after);
         });
-        co_return;
+        EdgeScanPage page;
+        page.has_more = !next.empty();
+        page.next_key = std::move(next);
+        co_return page;
     }
 
     folly::coro::AsyncGenerator<std::vector<BatchedEdge>>

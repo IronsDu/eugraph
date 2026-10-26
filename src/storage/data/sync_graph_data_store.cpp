@@ -915,6 +915,70 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
     });
 }
 
+std::string SyncGraphDataStore::scanEdgesPage(GraphSession& gs, VertexId vid, Direction direction,
+                                              std::optional<EdgeLabelId> label_filter, std::vector<EdgeIndexEntry>& out,
+                                              size_t max_edges, std::string_view after_key) {
+    out.clear();
+    if (max_edges == 0)
+        return {};
+    WT_SESSION* session = gs.wt_session();
+    if (!session || direction == Direction::BOTH)
+        return {};
+
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "scanEdgesPage: cannot open cursor on table:edge_index");
+        return {};
+    }
+    auto* c = cursor.get();
+    const std::string prefix = label_filter ? KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter)
+                                            : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
+    int ret;
+    if (!after_key.empty()) {
+        setItem(c, after_key);
+        int exact = 0;
+        ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND)
+            return {};
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "scanEdgesPage: search_near(after) failed");
+            return {};
+        }
+        if (exact == 0)
+            ret = c->next(c);
+    } else {
+        setItem(c, prefix);
+        int exact = 0;
+        ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND)
+            return {};
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "scanEdgesPage: search_near failed");
+            return {};
+        }
+        if (exact < 0)
+            ret = c->next(c);
+    }
+
+    while (ret == 0) {
+        const auto key = getKeyViewFromCursor(c);
+        if (!key.starts_with(prefix))
+            break;
+        auto decoded = KeyCodec::decodeEdgeIndexKey(key);
+        out.push_back({decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
+                       ValueCodec::decodeU64(getValueViewFromCursor(c))});
+        if (out.size() >= max_edges) {
+            // Return the last returned key; the next call resumes after it.
+            // (Returning the *next* key would make search_near(exact) + next
+            // skip that edge.)
+            return std::string(key);
+        }
+        ret = c->next(c);
+    }
+    return {};
+}
+
 void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<VertexId>& src_ids, Direction direction,
                                         std::optional<EdgeLabelId> label_filter,
                                         const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) {

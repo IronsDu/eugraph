@@ -121,6 +121,9 @@ public:
     void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
                         std::optional<EdgeLabelId> label_filter,
                         const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) override;
+    std::string scanEdgesPage(GraphSession& session, VertexId vid, Direction direction,
+                              std::optional<EdgeLabelId> label_filter, std::vector<EdgeIndexEntry>& out,
+                              size_t max_edges, std::string_view after_key) override;
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid, Direction direction,
                                                           std::optional<EdgeLabelId> label_filter) override;
     void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
