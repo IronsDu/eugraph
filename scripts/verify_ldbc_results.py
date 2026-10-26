@@ -134,17 +134,21 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             note = f"NEO-ERR {type(exc).__name__}"
         if eg_rows is not None and neo_rows is not None and note == "MATCH":
-            # c12 returns collect(DISTINCT tag.name); Cypher does not guarantee
-            # list order, so compare it as a set before flagging a difference.
-            if f.stem == "interactive-complex-12":
-                def normalize_c12(row):
-                    row = list(row)
-                    if len(row) >= 4 and isinstance(row[3], tuple) and len(row[3]) == 2 and row[3][0] == "list":
-                        row[3] = ("list", tuple(sorted(row[3][1], key=str)))
-                    return tuple(row)
+            # collect(DISTINCT ...) / collect(...) 不保证列表顺序；c12 的 tagNames
+            # 与 c1 的 email/speaks/unis/companies 都按集合比较。
+            def sort_list_cell(row, idx):
+                row = list(row)
+                if idx < len(row) and isinstance(row[idx], tuple) and len(row[idx]) == 2 and row[idx][0] == "list":
+                    row[idx] = ("list", tuple(sorted(row[idx][1], key=str)))
+                return tuple(row)
 
-                eg_rows = [normalize_c12(r) for r in eg_rows]
-                neo_rows = [normalize_c12(r) for r in neo_rows]
+            if f.stem == "interactive-complex-12":
+                eg_rows = [sort_list_cell(r, 3) for r in eg_rows]
+                neo_rows = [sort_list_cell(r, 3) for r in neo_rows]
+            elif f.stem == "interactive-complex-1":
+                # apply all four list columns
+                eg_rows = [sort_list_cell(sort_list_cell(sort_list_cell(sort_list_cell(r, 8), 9), 11), 12) for r in eg_rows]
+                neo_rows = [sort_list_cell(sort_list_cell(sort_list_cell(sort_list_cell(r, 8), 9), 11), 12) for r in neo_rows]
             if sorted(eg_rows) != sorted(neo_rows):
                 note = "DIFF"
             elif eg_rows != neo_rows and "ORDER BY" in body.upper():

@@ -70,7 +70,7 @@
 | complex-2 | 9.96 | 3.94 | 🟡 慢 2.5× |
 | complex-6 | 77.32 | 29.08 | 🟡 慢 2.7× |
 | complex-5 | **249.76** | 89.53 | 🟡 慢 2.8× |
-| complex-1 | 18.26 | 5.22 | 🟠 慢 3.5×（行数 20/15；companies 聚合差异，待修） |
+| complex-1 | 18.26 | 5.22 | 🟠 慢 3.5×（15/15；列表顺序归一后一致） |
 | complex-12 | 380.55 | 99.05 | 🟠 慢 3.8×（仅 tag 列表顺序不同） |
 | complex-3 | 109.85 | 27.66 | 🟠 慢 4.0×（0 行） |
 | complex-10 | 44.29 | 9.24 | 🟠 慢 4.8× |
@@ -78,10 +78,10 @@
 | complex-14 | **351.14** | 16.46 | 🔴🔴 慢 21.3× |
 
 > 全量 21 条读查询复跑（3 轮 min，同轮交错；Message.id 索引已建）。
-> **CsvComposite 复验：20/21 条语义一致**（c12 的 `collect(DISTINCT tag.name)` 列表顺序归一后一致）；
-> **c1 仍不一致**：email/speaks 已对齐；同一 friend 产生重复行、`companies` 未合并（20/15 行）。
-> 首段 shortestPath 聚合本身 15/15 行一致，问题在后续
-> `OPTIONAL MATCH ... WITH friend, collect(...)` 的聚合，已定位为独立正确性问题。
+> **CsvComposite 复验：21/21 条语义一致**。c12 的 `collect(DISTINCT tag.name)` 和
+> c1 的 email/speaks/unis/companies 列表顺序由 Cypher 保证；按集合归一后逐行一致。
+> c1 的重复行来自“列表含 null 的 GROUP BY 分组键”缺陷，已由 `valueContentEquals` 修复
+> （首段 shortestPath 15/15，最终 c1 也是 15/15）。
 > c3/c4 当前参数下两边都是 0 行，耗时只代表扫描/过滤成本。
 
 complex-5/9/14 的上表为全量 21 条同轮 A/B（3 轮 min）；计划文档中的 234/187/291 ms
@@ -110,10 +110,10 @@ LDBC update stream fixture（文件本身没有 `:param` 块），仓库内没�
 | update-1 | 53.7 | 23.9 | 🟡 慢 2.2× |
 | update-7 | 440.07 | 96.08 | 🟠 慢 4.6× |
 
-**当前没有不可运行的 LDBC 读取语句。** 全量 21 条中 19 条逐行一致：
-complex-14 351 ms（4 行一致，约 21×）、complex-9 232 ms（旧 161.7 为错误计划结果，约 8.1×）、
-complex-5 250 ms（约 2.8×）。complex-1 因 email/speaks 数据差异、complex-12 因 `collect(DISTINCT)`
-列表顺序不保证而标为差异；complex-3/4 当前参数下两边均为 0 行。
+**当前没有不可运行的 LDBC 读取语句。** 全量 21 条结果均语义一致：
+complex-14 351 ms（4 行）、complex-9 232 ms（旧 161.7 为错误计划结果）、
+complex-5 250 ms；complex-1/c12 仅在 `collect` 列表顺序上不同，按集合归一后 15/15、3/3。
+complex-3/4 当前参数下两边均为 0 行。
 
 ## 3. 剩余性能点、原因与思路
 

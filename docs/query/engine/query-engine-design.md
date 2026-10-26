@@ -764,3 +764,21 @@ using Schema = vector<string>;   // 列名列表
 1. 行结果与 neo4j 逐行一致（不能只与原路径比较，原路径可能同错）；
 2. 被延迟列的所有下游消费者都在 LIMIT 之后；
 3. EXPLAIN 中不得出现 `Sort` 下方的 `LateMaterialize(after LIMIT)`。
+
+## GROUP BY / DISTINCT 的 null 容器等价
+
+`valueEquals` 是**三值逻辑**：`null = null` 返回 unknown，列表里只要含 null 也返回 unknown。
+这符合 WHERE 谓词语义，但**不能直接用于哈希容器的键等价**——GROUP BY / DISTINCT 需要
+一个全等价关系。
+
+因此哈希容器使用独立的 `valueContentEquals`：
+
+- `null` 与 `null` 相等；
+- list / map / path 递归比较，元素级 null 视为相等；
+- 其他类型仍走 `valueEquals`；
+- 必须与 `ValueHash` 保持同一等价类。
+
+LDBC c1 的 `WITH friend, collect(...) AS unis, ... OPTIONAL MATCH ... WITH friend, collect(...) AS companies, unis`
+中，`unis = [null]`。旧代码用三值 `valueEquals` 做分组键比较，`[null] != [null]`，每个
+workAt 行都新建一个 group，最终同一 friend 出现多行、companies 各只有一条。修复后 c1
+15/15 行与 neo4j 一致；TCK 场景 `group by a list containing null` 覆盖该回归。
