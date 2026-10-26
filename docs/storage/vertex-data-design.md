@@ -198,3 +198,18 @@ label/property 访问；可接受为当前存储改造的代价，后续可用 l
 | complex-5 | 234.0 ms | 83.1 ms | ✅ |
 | complex-9 | 187.2 ms | 28.1 ms | ✅ |
 | complex-14 | 291.4 ms | 17.7 ms | ✅ |
+
+## 10. 微优化对照（2026-10-26）
+
+把 f1ecea06..eb7ffbee（caller vector、去 key/value 拷贝、分页、Expand/LeftJoin/PE scratch）
+与 adafc818 基线在同一数据副本上交错 A/B（两个服务端同时运行、5 轮 min）：
+
+| 查询 | adafc818 基线 | eb7ffbee | 变化 |
+|---|---:|---:|---:|
+| complex-5 | 236.1 ms | 242.3 ms | +2.6% |
+| complex-9 | 194.6 ms | 183.8 ms | -5.5% |
+| complex-14 | 285.7 ms | 297.4 ms | +4.1% |
+
+结论：**没有稳定的性能收益**，差异在噪声/轻微回退范围。说明这些分配/拷贝不是
+c5/c9/c14 的瓶颈；c5 仍是 per-edge/计划问题，c14 仍是 PC 展开问题。
+caller-owned page 保留的主要价值是内存上限（4096 条/页），不是提速。
