@@ -106,6 +106,9 @@ std::string ProjectionExtractPhysicalOp::toString() const {
 
 folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk() {
     auto child_gen = cancellable(child_->executeChunk());
+    // Reused across chunks/specs: ConstructVertex's vid->VertexValue maps.
+    std::unordered_map<VertexId, VertexValuePtr> ctor_by_vid;
+    std::unordered_map<VertexId, VertexValuePtr> ctor_anon_ptrs;
 
     while (auto chunk = co_await child_gen.next()) {
         const size_t row_count = chunk->numRows();
@@ -364,7 +367,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
 
             if (!ref_vids.empty()) {
                 auto labels_batch = co_await store_.getVertexLabelsBatch(ref_vids);
-                std::unordered_map<VertexId, VertexValuePtr> by_vid;
+                auto& by_vid = ctor_by_vid;
+                by_vid.clear();
                 by_vid.reserve(ref_vids.size());
                 for (size_t j = 0; j < ref_vids.size() && j < labels_batch.size(); ++j) {
                     const VertexId vid = ref_vids[j];
@@ -414,7 +418,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             }
 
             if (!anon_rows.empty()) {
-                std::unordered_map<VertexId, VertexValuePtr> anon_ptrs;
+                auto& anon_ptrs = ctor_anon_ptrs;
+                anon_ptrs.clear();
                 std::vector<VertexId> anon_ids;
                 for (size_t row : anon_rows) {
                     const VertexValuePtr& vv = vertex_ctor_cache[i][row];
