@@ -198,6 +198,13 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
     // chunk's expansion count, which is the hot allocation otherwise.
     std::vector<EdgeEntryScratch> edges;
     std::unordered_set<EdgeId> allowed_seen;
+    // Reused across chunks/specs: label-filter scratch.
+    std::vector<VertexId> label_neighbors;
+    std::unordered_set<VertexId> label_neighbors_seen;
+    std::unordered_map<VertexId, LabelIdSet> label_map;
+    std::unordered_set<VertexId> neighbor_set;
+    std::unordered_set<VertexId> label_members;
+    std::unordered_set<VertexId> label_matches;
 
     while (auto chunk = co_await child_gen.next()) {
         const size_t input_rows = chunk->numRows();
@@ -410,15 +417,15 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         // A sequential label-forward scan + membership check is much cheaper
         // for high-degree destinations such as LDBC Message.
         if (!edges.empty() && !dst_label_ids_.empty() && edges.size() < 4096) {
-            std::vector<VertexId> neighbors;
-            std::unordered_set<VertexId> seen_labels;
+            label_neighbors.clear();
+            label_neighbors_seen.clear();
+            label_map.clear();
             for (const auto& e : edges)
-                if (seen_labels.insert(e.dst_id).second)
-                    neighbors.push_back(e.dst_id);
-            auto labels_batch = co_await store_.getVertexLabelsBatch(neighbors);
-            std::unordered_map<VertexId, LabelIdSet> label_map;
-            for (size_t i = 0; i < neighbors.size() && i < labels_batch.size(); ++i)
-                label_map[neighbors[i]] = std::move(labels_batch[i]);
+                if (label_neighbors_seen.insert(e.dst_id).second)
+                    label_neighbors.push_back(e.dst_id);
+            auto labels_batch = co_await store_.getVertexLabelsBatch(label_neighbors);
+            for (size_t i = 0; i < label_neighbors.size() && i < labels_batch.size(); ++i)
+                label_map[label_neighbors[i]] = std::move(labels_batch[i]);
             edges.erase(std::remove_if(edges.begin(), edges.end(),
                                        [&](const EdgeEntryScratch& e) {
                                            auto it = label_map.find(e.dst_id);
@@ -431,42 +438,41 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                        }),
                         edges.end());
         } else if (!edges.empty() && !dst_label_ids_.empty()) {
-            std::unordered_set<VertexId> neighbor_set;
+            neighbor_set.clear();
             neighbor_set.reserve(edges.size() * 2);
             for (const auto& e : edges)
                 neighbor_set.insert(e.dst_id);
 
-            std::unordered_set<VertexId> matches;
+            label_matches.clear();
             bool first = true;
             for (LabelId need : dst_label_ids_) {
-                std::unordered_set<VertexId> members;
-                members.reserve(neighbor_set.size());
+                label_members.clear();
+                label_members.reserve(neighbor_set.size());
                 auto label_gen = cancellable(store_.scanVerticesByLabel(need));
                 while (auto batch = co_await label_gen.next()) {
                     for (VertexId vid : *batch) {
                         if (neighbor_set.find(vid) != neighbor_set.end())
-                            members.insert(vid);
+                            label_members.insert(vid);
                     }
                 }
                 if (first) {
-                    matches = std::move(members);
+                    label_matches.swap(label_members);
                     first = false;
                 } else {
-                    for (auto it = matches.begin(); it != matches.end();) {
-                        if (members.find(*it) == members.end())
-                            it = matches.erase(it);
+                    for (auto it = label_matches.begin(); it != label_matches.end();) {
+                        if (!label_members.contains(*it))
+                            it = label_matches.erase(it);
                         else
                             ++it;
                     }
                 }
-                if (matches.empty())
+                if (label_matches.empty())
                     break;
             }
 
-            edges.erase(
-                std::remove_if(edges.begin(), edges.end(),
-                               [&](const EdgeEntryScratch& e) { return matches.find(e.dst_id) == matches.end(); }),
-                edges.end());
+            edges.erase(std::remove_if(edges.begin(), edges.end(),
+                                       [&](const EdgeEntryScratch& e) { return !label_matches.contains(e.dst_id); }),
+                        edges.end());
         }
 
         if (edges.empty())
