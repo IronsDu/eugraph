@@ -176,7 +176,10 @@ label/property 访问；可接受为当前存储改造的代价，后续可用 l
 `createEdgeScanCursor`（c5 实测 98k 次、累计 184 ms）。现改为：
 
 - 每 4,096 个 source 复用一个 sync cursor，一次 `search_near` 后顺序扫；
-- 结果分批返回，Expand 语义不变。
+- 结果分批返回，Expand 语义不变；
+- Expand 单源改为 `scanEdgesPage(..., edge_scratch_, 4096, after_key)`：调用方拥有 vector，
+  单页最多 4096 条，返回 last-key 续扫；超级节点不会一次性物化全部邻接；
+- 热点 cursor 循环使用 `getKeyView`/`getValueView`，不再为每条边拷贝 key/value。
 
 ### 正确性修复：c9 的 filter-boundary 延迟物化
 
