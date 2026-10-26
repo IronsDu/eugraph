@@ -8,8 +8,9 @@
 - 数据：LDBC SNB Interactive **sf0.1**，重新从 Basic CSV 导入；eugraph 327,588 顶点 /
   1,477,965 边，Person 1,528，Message 286,744。
 - **结果复验使用 CsvComposite 数据**（`social_network-sf0.1-CsvComposite-LongDateFormatter`，
-  schema 为 `docs/program/design/ldbc-sf01.schema.json`）：`email` 已作为 `STRING[]` 导入；
-  该 schema 的 Person 属性名是 `language`，而 LDBC c1 查询读 `speaks`，所以 c1 的 speaks 仍为 null。
+  schema 为 `docs/program/design/ldbc-sf01-composite.schema.json`）：`email` 作为 `STRING[]` 导入；
+  Person 的 `language` 列按上游 `cypher/scripts/headers.txt` 映射为 `speaks:STRING[]`
+  （`language` 是 Post 的属性，不是 Person 的）。
   neo4j 另外存在历史测试标签/边，但标准 Person/Message/Post/Comment/Forum/Tag 等计数与 eugraph 一致。
 - neo4j 的 `LIKES.creationDate`、`WORK_AT.workFrom`、Person 日期的字符串属性已归一化为整数；
   eugraph 原本是整数。
@@ -69,7 +70,7 @@
 | complex-2 | 9.96 | 3.94 | 🟡 慢 2.5× |
 | complex-6 | 77.32 | 29.08 | 🟡 慢 2.7× |
 | complex-5 | **249.76** | 89.53 | 🟡 慢 2.8× |
-| complex-1 | 18.26 | 5.22 | 🟠 慢 3.5×（行数 20/15；email/speaks 缺 + 聚合差异，待修） |
+| complex-1 | 18.26 | 5.22 | 🟠 慢 3.5×（行数 20/15；companies 聚合差异，待修） |
 | complex-12 | 380.55 | 99.05 | 🟠 慢 3.8×（仅 tag 列表顺序不同） |
 | complex-3 | 109.85 | 27.66 | 🟠 慢 4.0×（0 行） |
 | complex-10 | 44.29 | 9.24 | 🟠 慢 4.8× |
@@ -78,9 +79,9 @@
 
 > 全量 21 条读查询复跑（3 轮 min，同轮交错；Message.id 索引已建）。
 > **CsvComposite 复验：20/21 条语义一致**（c12 的 `collect(DISTINCT tag.name)` 列表顺序归一后一致）；
-> **c1 仍不一致**：email 已恢复；`speaks` 因 schema 属性名 `language` 未映射而仍为 null；
-> 同一 friend 产生重复行、`companies` 未合并（20/15 行）。首段 shortestPath 聚合本身 15/15 行一致，
-> 问题在后续 `OPTIONAL MATCH ... WITH friend, collect(...)` 的聚合，已定位为独立正确性问题。
+> **c1 仍不一致**：email/speaks 已对齐；同一 friend 产生重复行、`companies` 未合并（20/15 行）。
+> 首段 shortestPath 聚合本身 15/15 行一致，问题在后续
+> `OPTIONAL MATCH ... WITH friend, collect(...)` 的聚合，已定位为独立正确性问题。
 > c3/c4 当前参数下两边都是 0 行，耗时只代表扫描/过滤成本。
 
 complex-5/9/14 的上表为全量 21 条同轮 A/B（3 轮 min）；计划文档中的 234/187/291 ms

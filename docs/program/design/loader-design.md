@@ -262,7 +262,8 @@ service EuGraphService {
 
 **连带简化：端点标签不再需要「推导」**。既然边文件由 schema 列出，`src_label`/`dst_label` 就是**必填字段**（端点对象只接受列引用，不再接受 `label`），上一版的四级推导链（配置 → 表头 `(Group)` → 列名 `Person.id` 前缀 → 文件名约定）**整条删除**，§7.3 只剩「schema 里写什么用什么」。
 
-**JSON 结构**：顶层按**图元素**分组（`labels` = 顶点标签 → 文件列表，`relationships` = 边类型 → 文件列表），标签名/边类型名**就是配置的键**，不再需要任何推导。完整可用的 sf0.1 配置见 [ldbc-sf01.schema.json](ldbc-sf01.schema.json)（8 个标签、23 个边文件）。
+**JSON 结构**：顶层按**图元素**分组（`labels` = 顶点标签 → 文件列表，`relationships` = 边类型 → 文件列表），标签名/边类型名**就是配置的键**，不再需要任何推导。完整可用的 sf0.1 配置见 [ldbc-sf01.schema.json](ldbc-sf01.schema.json)（CsvBasic）与
+[ldbc-sf01-composite.schema.json](ldbc-sf01-composite.schema.json)（CsvComposite，`language` → `speaks`）。
 
 > JSON 无注释语法，所以示例用 `//` 仅作说明；正式文件里用顶层 `"_comment": [...]` 数组承载说明（loader 忽略未知顶层字段与 `_` 前缀字段）。
 
