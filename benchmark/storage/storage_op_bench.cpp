@@ -2,6 +2,7 @@
 
 #include <benchmark/benchmark.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/coro/Task.h>
 #include <wiredtiger.h>
 
@@ -117,36 +118,79 @@ BENCHMARK_F(WtSeekBench, SearchNearPrefix)(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations());
 }
 
-folly::coro::Task<void> dispatchLoop(eugraph::IoScheduler& io, size_t n, std::thread::id caller,
-                                     std::atomic<uint64_t>& cross_thread) {
-    for (size_t i = 0; i < n; ++i)
+folly::coro::Task<void> dispatchLoop(eugraph::IoScheduler& io, size_t n, std::atomic<uint64_t>& cross_thread,
+                                     std::atomic<uint64_t>& return_thread) {
+    const auto caller = std::this_thread::get_id();
+    for (size_t i = 0; i < n; ++i) {
         co_await io.dispatchVoid([&cross_thread, caller] {
             if (std::this_thread::get_id() != caller)
                 cross_thread.fetch_add(1, std::memory_order_relaxed);
         });
+        if (std::this_thread::get_id() != caller)
+            return_thread.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+/// Measure a real compute -> IO -> compute round trip independently of the
+/// production IoScheduler path (which is currently inline until sessions are
+/// IO-thread bound).
+folly::coro::Task<void> dispatchCrossLoop(eugraph::IoScheduler& io, size_t n, std::atomic<uint64_t>& cross_thread,
+                                          std::atomic<uint64_t>& return_thread) {
+    const auto caller = std::this_thread::get_id();
+    auto caller_executor = co_await folly::coro::co_current_executor;
+    for (size_t i = 0; i < n; ++i) {
+        auto io_task = folly::coro::co_invoke([&cross_thread, caller]() -> folly::coro::Task<void> {
+            if (std::this_thread::get_id() != caller)
+                cross_thread.fetch_add(1, std::memory_order_relaxed);
+            co_return;
+        });
+        auto on_io = folly::coro::co_withExecutor(folly::getKeepAliveToken(io.executor()), std::move(io_task));
+        co_await folly::coro::co_viaIfAsync(std::move(caller_executor), std::move(on_io));
+        if (std::this_thread::get_id() != caller)
+            return_thread.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 class DispatchBench : public benchmark::Fixture {
 public:
     void SetUp(const benchmark::State&) override {
         io_ = std::make_unique<eugraph::IoScheduler>(1);
+        cpu_ = std::make_unique<folly::CPUThreadPoolExecutor>(1);
     }
     void TearDown(const benchmark::State&) override {
+        cpu_.reset();
         io_.reset();
     }
 
 protected:
     std::unique_ptr<eugraph::IoScheduler> io_;
+    std::unique_ptr<folly::CPUThreadPoolExecutor> cpu_;
 };
 
-BENCHMARK_F(DispatchBench, EmptyDispatchVoid)(benchmark::State& state) {
+BENCHMARK_F(DispatchBench, InlineDispatchVoid)(benchmark::State& state) {
     constexpr size_t kBatch = 64;
-    const auto caller = std::this_thread::get_id();
     std::atomic<uint64_t> cross_thread{0};
-    for (auto _ : state)
-        folly::coro::blockingWait(dispatchLoop(*io_, kBatch, caller, cross_thread));
+    std::atomic<uint64_t> return_thread{0};
+    for (auto _ : state) {
+        auto task = dispatchLoop(*io_, kBatch, cross_thread, return_thread);
+        folly::coro::blockingWait(folly::coro::co_withExecutor(cpu_.get(), std::move(task)));
+    }
     state.SetItemsProcessed(state.iterations() * kBatch);
     state.counters["cross_thread"] = static_cast<double>(cross_thread.load(std::memory_order_relaxed));
+    state.counters["return_thread"] = static_cast<double>(return_thread.load(std::memory_order_relaxed));
+}
+
+BENCHMARK_F(DispatchBench, CrossThreadDispatchVoid)(benchmark::State& state) {
+    constexpr size_t kBatch = 64;
+    std::atomic<uint64_t> cross_thread{0};
+    std::atomic<uint64_t> return_thread{0};
+    for (auto _ : state) {
+        auto task = dispatchCrossLoop(*io_, kBatch, cross_thread, return_thread);
+        folly::coro::blockingWait(folly::coro::co_withExecutor(cpu_.get(), std::move(task)));
+    }
+    state.SetItemsProcessed(state.iterations() * kBatch);
+    state.counters["cross_thread"] = static_cast<double>(cross_thread.load(std::memory_order_relaxed));
+    state.counters["return_thread"] = static_cast<double>(return_thread.load(std::memory_order_relaxed));
 }
 
 } // namespace

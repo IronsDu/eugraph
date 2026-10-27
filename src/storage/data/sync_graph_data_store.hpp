@@ -86,6 +86,8 @@ public:
     // Vertex Labels
     LabelIdSet getVertexLabels(GraphSession& session, VertexId vid) override;
     std::vector<LabelIdSet> getVertexLabelsBatch(GraphSession& session, const std::vector<VertexId>& vids) override;
+    std::vector<VertexDataBatchEntry> getVertexDataBatch(GraphSession& session,
+                                                         const std::vector<VertexId>& vids) override;
     std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphSession& session, LabelId label_id,
                                                                     const std::vector<VertexId>& vids) override;
     std::vector<std::vector<PropertyValue>>

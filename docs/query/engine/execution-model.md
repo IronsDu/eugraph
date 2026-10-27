@@ -72,10 +72,12 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 > 统计一条语句的 IO 成本：设置 `EUGRAPH_IO_TRACE=1`，语句结束时日志会输出
 > `[io-trace] io_dispatches=<N> wt_search=<N> wt_search_near=<N> by_call=<top5> query=<text>`。
-> `io_dispatches` 是该语句 `AsyncGraphDataStore` 发起的 dispatch 调用次数；**当前实现因 eager
-> Task + `co_viaIfAsync`，lambda 实际在调用线程 inline 执行，并未跨到 IO 池**（benchmark
-> `cross_thread=0`）。`wt_search`/`wt_search_near` 仍是真实执行的 seek 次数；`by_call` 按存储方法拆分。
-> 成本口径与修正方向见 [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
+> `io_dispatches` 是该语句 `AsyncGraphDataStore` 发起的 dispatch 调用次数；`wt_search`/
+> `wt_search_near` 是 WT 精确 seek / 前缀 seek 次数；`by_call` 按存储方法拆分。
+> 当前生产 `IoScheduler` 仍是 inline（eager Task + `co_viaIfAsync`），`cross_thread=0`；
+> 真实跨线程成本由 benchmark 的 `CrossThreadDispatchVoid` 单独测量（约 10 µs/次）。
+> 写入路径的 WT session 尚未做 IO 线程绑定，不能直接改成跨线程。
+> 单次成本与归因方法见 [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
 
 > Bolt 之所以能"整条消息都在 Compute 池上"，是因为它把响应整体物化成 `std::vector<uint8_t>` 后才 `via(socket EventBase)` 写回；Thrift 是流式 RPC，generator 由框架在消费方线程恢复，**不能照搬 Bolt 的做法**（见下方待办 2）。
 

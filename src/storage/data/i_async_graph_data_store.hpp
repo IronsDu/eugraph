@@ -55,6 +55,9 @@ public:
     }
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
     virtual folly::coro::Task<std::vector<LabelIdSet>> getVertexLabelsBatch(const std::vector<VertexId>& vids) = 0;
+    /// Labels + all properties for each vid, one IO dispatch / one prefix scan per vertex.
+    virtual folly::coro::Task<std::vector<ISyncGraphDataStore::VertexDataBatchEntry>>
+    batchGetVertexData(const std::vector<VertexId>& vids) = 0;
 
     // Edge Properties
     virtual folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) = 0;

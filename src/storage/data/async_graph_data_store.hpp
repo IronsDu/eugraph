@@ -133,6 +133,14 @@ public:
         co_return std::move(result);
     }
 
+    folly::coro::Task<std::vector<ISyncGraphDataStore::VertexDataBatchEntry>>
+    batchGetVertexData(const std::vector<VertexId>& vids) override {
+        auto ids = vids;
+        auto result =
+            co_await dispatch([this, ids = std::move(ids)]() { return store_.getVertexDataBatch(session_, ids); });
+        co_return std::move(result);
+    }
+
     folly::coro::Task<std::vector<std::optional<Properties>>>
     batchGetVertexProperties(const std::vector<VertexId>& vids, LabelId label_id,
                              const std::vector<uint16_t>& projection) override {

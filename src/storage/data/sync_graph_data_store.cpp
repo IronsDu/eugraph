@@ -435,6 +435,71 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
     return out;
 }
 
+std::vector<ISyncGraphDataStore::VertexDataBatchEntry>
+SyncGraphDataStore::getVertexDataBatch(GraphSession& gs, const std::vector<VertexId>& vids) {
+    std::vector<VertexDataBatchEntry> out(vids.size());
+    if (vids.empty())
+        return out;
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "getVertexDataBatch: cannot open cursor on table:vertex_data");
+        return out;
+    }
+    auto* c = cursor.get();
+    for (size_t i = 0; i < vids.size(); ++i) {
+        const std::string label_prefix = KeyCodec::encodeVertexDataLabelPrefix(vids[i]);
+        setItem(c, label_prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: label search failed");
+            return out;
+        }
+        if (ret == 0 && exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            const auto key = getKeyViewFromCursor(c);
+            if (!key.starts_with(label_prefix))
+                break;
+            auto [_, label_id] = KeyCodec::decodeVertexDataLabelKey(key);
+            out[i].labels.insert(label_id);
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: label next failed");
+            return out;
+        }
+
+        const std::string prop_prefix = KeyCodec::encodeVertexDataPropPrefix(vids[i]);
+        setItem(c, prop_prefix);
+        exact = 0;
+        ret = (recordWtSearchNear(), c->search_near(c, &exact));
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: prop search failed");
+            return out;
+        }
+        if (ret == 0 && exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            const auto key = getKeyViewFromCursor(c);
+            if (!key.starts_with(prop_prefix))
+                break;
+            auto [_, label_id, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
+            auto& props = out[i].properties[label_id];
+            if (prop_id >= props.size())
+                props.resize(prop_id + 1);
+            props[prop_id] = ValueCodec::decode(getValueViewFromCursor(c));
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: prop next failed");
+            return out;
+        }
+    }
+    return out;
+}
+
 std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBatch(GraphSession& gs, LabelId label_id,
                                                                                     const std::vector<VertexId>& vids) {
     std::vector<std::optional<Properties>> out(vids.size());

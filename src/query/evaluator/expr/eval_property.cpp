@@ -10,6 +10,41 @@
 namespace eugraph {
 namespace compute {
 
+namespace {
+
+using VertexDataCache = std::unordered_map<VertexId, ISyncGraphDataStore::VertexDataBatchEntry>;
+
+/// Prefetch labels+properties for all bare VertexValues in one column in a
+/// single storage call. The per-row property resolver used to issue one
+/// getVertexLabels + one getVertexProperties per label; c14's path filter did
+/// ~90k such calls.
+VertexDataCache prefetchVertexData(const function::EvalContext& ctx, const Column& obj_col, size_t count) {
+    VertexDataCache cache;
+    if (!ctx.store)
+        return cache;
+    std::vector<VertexId> ids;
+    std::unordered_set<VertexId> seen;
+    for (size_t i = 0; i < count; ++i) {
+        Value v = obj_col.getValue(i);
+        if (!std::holds_alternative<VertexValuePtr>(v))
+            continue;
+        const auto& vv = std::get<VertexValuePtr>(v);
+        if (!vv || vv->deleted || !vv->properties.empty())
+            continue;
+        if (seen.insert(vv->id).second)
+            ids.push_back(vv->id);
+    }
+    if (ids.empty())
+        return cache;
+    auto batch = folly::coro::blockingWait(ctx.store->batchGetVertexData(ids));
+    cache.reserve(ids.size());
+    for (size_t i = 0; i < ids.size() && i < batch.size(); ++i)
+        cache.emplace(ids[i], std::move(batch[i]));
+    return cache;
+}
+
+} // namespace
+
 void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result,
                                           size_t count) {
     auto obj = evaluateInternal(ref.object, input);
@@ -72,6 +107,7 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
         return Value{};
     };
 
+    const auto prefetched = prefetchVertexData(eval_ctx_, *obj.column, count);
     for (size_t i = 0; i < count; ++i) {
         Value ov = obj.column->getValue(i);
         Value r;
@@ -85,13 +121,22 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             // Bare path vertices (shortest-path BFS) only carry the internal
             // id; load the concrete labels/properties before resolving n.id.
             if (vertex.properties.empty() && eval_ctx_.store) {
-                auto labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
-                if (!labels.empty()) {
-                    vertex.labels = labels;
-                    for (auto lid : labels) {
-                        auto props = folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
-                        if (props)
-                            vertex.properties[lid] = std::move(*props);
+                auto pit = prefetched.find(vertex.id);
+                if (pit != prefetched.end()) {
+                    if (!vertex.labels.has_value())
+                        vertex.labels = pit->second.labels;
+                    vertex.properties = pit->second.properties;
+                }
+                if (vertex.properties.empty()) {
+                    auto labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
+                    if (!labels.empty()) {
+                        vertex.labels = labels;
+                        for (auto lid : labels) {
+                            auto props =
+                                folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
+                            if (props)
+                                vertex.properties[lid] = std::move(*props);
+                        }
                     }
                 }
             }
@@ -345,6 +390,7 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         return kMissingProp;
     };
 
+    const auto prefetched = prefetchVertexData(eval_ctx_, *obj.column, count);
     for (size_t i = 0; i < count; ++i) {
         Value ov;
         // The fast path reads the column's handle directly, so it has to check both
@@ -369,33 +415,42 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
             // Lazy-load labels and properties for bare VertexValues (e.g. from
             // startNode/endNode which only set the internal id).
             if (vertex.properties.empty() && eval_ctx_.store) {
-                if (!vertex.labels.has_value())
-                    vertex.labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
-                if (vertex.labels.has_value()) {
-                    for (auto lid : *vertex.labels) {
-                        auto props = folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
-                        if (props)
-                            vertex.properties[lid] = std::move(*props);
-                    }
+                auto pit = prefetched.find(vertex.id);
+                if (pit != prefetched.end()) {
+                    if (!vertex.labels.has_value())
+                        vertex.labels = pit->second.labels;
+                    vertex.properties = pit->second.properties;
                 }
-                // 总是补查 __anon__：REMOVE LABEL 把属性迁移到 __anon__ 后，
-                // vertex 可能 (a) 已无任何用户标签，或 (b) 还有其它标签但属性
-                // 副本在 __anon__。两种情况都需要 __anon__ 旁路才能读到属性。
-                if (eval_ctx_.meta && !vertex.properties.count(anon_label_id_cached_)) {
-                    LabelId anon_lid = anon_label_id_cached_;
-                    if (anon_lid == INVALID_LABEL_ID) {
-                        auto anon_def =
-                            folly::coro::blockingWait(eval_ctx_.meta->getLabelDef(std::string(kAnonLabelName)));
-                        if (anon_def) {
-                            anon_lid = anon_def->id;
-                            anon_label_id_cached_ = anon_lid;
+                if (vertex.properties.empty()) {
+                    if (!vertex.labels.has_value())
+                        vertex.labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
+                    if (vertex.labels.has_value()) {
+                        for (auto lid : *vertex.labels) {
+                            auto props =
+                                folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
+                            if (props)
+                                vertex.properties[lid] = std::move(*props);
                         }
                     }
-                    if (anon_lid != INVALID_LABEL_ID) {
-                        auto props =
-                            folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, anon_lid));
-                        if (props)
-                            vertex.properties[anon_lid] = std::move(*props);
+                    // 总是补查 __anon__：REMOVE LABEL 把属性迁移到 __anon__ 后，
+                    // vertex 可能 (a) 已无任何用户标签，或 (b) 还有其它标签但属性
+                    // 副本在 __anon__。两种情况都需要 __anon__ 旁路才能读到属性。
+                    if (eval_ctx_.meta && !vertex.properties.count(anon_label_id_cached_)) {
+                        LabelId anon_lid = anon_label_id_cached_;
+                        if (anon_lid == INVALID_LABEL_ID) {
+                            auto anon_def =
+                                folly::coro::blockingWait(eval_ctx_.meta->getLabelDef(std::string(kAnonLabelName)));
+                            if (anon_def) {
+                                anon_lid = anon_def->id;
+                                anon_label_id_cached_ = anon_lid;
+                            }
+                        }
+                        if (anon_lid != INVALID_LABEL_ID) {
+                            auto props =
+                                folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, anon_lid));
+                            if (props)
+                                vertex.properties[anon_lid] = std::move(*props);
+                        }
                     }
                 }
             }
