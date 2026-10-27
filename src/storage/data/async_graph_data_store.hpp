@@ -13,10 +13,14 @@
 #include <folly/coro/Task.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <optional>
+#include <source_location>
 #include <span>
+#include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -40,6 +44,26 @@ public:
     /// 投递到 Storage IO 池都是一次跨池调度；用于按查询统计线程切换开销。
     [[nodiscard]] uint64_t ioDispatches() const noexcept {
         return io_stats_.dispatches;
+    }
+
+    /// 按存储方法聚合的 dispatch 明细（top 5），用于定位是哪类调用在放大。
+    [[nodiscard]] std::string ioDispatchSummary() const {
+        std::unordered_map<std::string, uint64_t> merged;
+        for (const auto& [line, count] : io_stats_.by_line) {
+            auto name = io_stats_.line_names.find(line);
+            merged[name != io_stats_.line_names.end() ? name->second : std::to_string(line)] += count;
+        }
+        std::vector<std::pair<std::string, uint64_t>> rows(merged.begin(), merged.end());
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+            return a.second != b.second ? a.second > b.second : a.first < b.first;
+        });
+        std::string out;
+        for (size_t i = 0; i < rows.size() && i < 5; ++i) {
+            if (!out.empty())
+                out += ", ";
+            out += rows[i].first + "=" + std::to_string(rows[i].second);
+        }
+        return out;
     }
 
     // ==================== DDL ====================
@@ -682,15 +706,47 @@ private:
 
     struct IoStats {
         uint64_t dispatches = 0;
+        std::unordered_map<uint32_t, uint64_t> by_line;
+        std::unordered_map<uint32_t, std::string> line_names;
     };
 
-    template <typename F> folly::coro::Task<std::invoke_result_t<F>> dispatch(F func) {
+    static bool ioTraceEnabled() {
+        static const bool enabled = std::getenv("EUGRAPH_IO_TRACE") != nullptr;
+        return enabled;
+    }
+
+    static std::string shortFunctionName(const std::source_location& loc) {
+        std::string_view fn = loc.function_name();
+        constexpr std::string_view prefix = "eugraph::AsyncGraphDataStore::";
+        if (auto pos = fn.find(prefix); pos != std::string_view::npos)
+            fn = fn.substr(pos + prefix.size());
+        if (auto pos = fn.find('('); pos != std::string_view::npos)
+            fn = fn.substr(0, pos);
+        if (auto pos = fn.rfind(' '); pos != std::string_view::npos)
+            fn = fn.substr(pos + 1);
+        return std::string(fn);
+    }
+
+    void recordDispatch(const std::source_location& loc) {
         ++io_stats_.dispatches;
+        auto& count = io_stats_.by_line[loc.line()];
+        if (count == 0)
+            io_stats_.line_names[loc.line()] = shortFunctionName(loc);
+        ++count;
+    }
+
+    template <typename F>
+    folly::coro::Task<std::invoke_result_t<F>> dispatch(F func,
+                                                        std::source_location loc = std::source_location::current()) {
+        if (ioTraceEnabled())
+            recordDispatch(loc);
         return io_.dispatch(std::move(func));
     }
 
-    template <typename F> folly::coro::Task<void> dispatchVoid(F func) {
-        ++io_stats_.dispatches;
+    template <typename F>
+    folly::coro::Task<void> dispatchVoid(F func, std::source_location loc = std::source_location::current()) {
+        if (ioTraceEnabled())
+            recordDispatch(loc);
         return io_.dispatchVoid(std::move(func));
     }
 

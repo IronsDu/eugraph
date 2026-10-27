@@ -73,7 +73,8 @@ struct StreamContext {
             return;
         const uint64_t dispatches = query_store->ioDispatches();
         if (dispatches != 0)
-            spdlog::info("[io-trace] io_dispatches={} query={}", dispatches, query_text);
+            spdlog::info("[io-trace] io_dispatches={} {} query={}", dispatches, query_store->ioDispatchSummary(),
+                         query_text);
     }
 
     /// 提交本语句的事务（无会话/显式事务 ⇒ 幂等成功 ✓）；必须检查返回值 ✓
