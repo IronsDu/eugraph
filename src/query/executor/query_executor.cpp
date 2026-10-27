@@ -30,6 +30,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>>
 QueryExecutor::prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params,
                              QueryCancel cancel, SessionRef existing_session) {
     auto ctx = std::make_shared<StreamContext>();
+    ctx->query_text = cypher_query;
 
     // 0. Quick guard: skip DDL if query starts with EXPLAIN (so DDL isn't executed for EXPLAIN queries)
     // The actual EXPLAIN handling is in the grammar/AST below.

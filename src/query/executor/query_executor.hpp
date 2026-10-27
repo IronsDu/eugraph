@@ -21,6 +21,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -32,6 +33,8 @@ namespace compute {
 struct StreamContext {
     Schema columns;
     std::string error;
+    /// Set by prepareStream; used only by the EUGRAPH_IO_TRACE log.
+    std::string query_text;
     /// 图租约：流在 executeCypher 返回后才被消费 ⇒ 必须让图活到流销毁 ✓（声明在 session 之前
     /// ⇒ 比 session 后销毁 ✓）。
     std::optional<GraphUsageGate::Guard> graph_guard;
@@ -61,6 +64,17 @@ struct StreamContext {
     std::unordered_map<std::string, std::vector<LabelId>> label_order;
 
     StreamContext() = default;
+
+    ~StreamContext() {
+        if (!query_store)
+            return;
+        const char* trace = std::getenv("EUGRAPH_IO_TRACE");
+        if (trace == nullptr || *trace == '\0')
+            return;
+        const uint64_t dispatches = query_store->ioDispatches();
+        if (dispatches != 0)
+            spdlog::info("[io-trace] io_dispatches={} query={}", dispatches, query_text);
+    }
 
     /// 提交本语句的事务（无会话/显式事务 ⇒ 幂等成功 ✓）；必须检查返回值 ✓
     bool commit() {
