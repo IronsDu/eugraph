@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <random>
@@ -180,15 +181,20 @@ BENCHMARK_F(DispatchBench, InlineDispatchVoid)(benchmark::State& state) {
     state.counters["return_thread"] = static_cast<double>(return_thread.load(std::memory_order_relaxed));
 }
 
-BENCHMARK_F(DispatchBench, CrossThreadDispatchVoid)(benchmark::State& state) {
+BENCHMARK_F(DispatchBench, CrossThreadCoroutineDispatch)(benchmark::State& state) {
     constexpr size_t kBatch = 64;
     std::atomic<uint64_t> cross_thread{0};
     std::atomic<uint64_t> return_thread{0};
+    const auto start = std::chrono::steady_clock::now();
     for (auto _ : state) {
         auto task = dispatchCrossLoop(*io_, kBatch, cross_thread, return_thread);
         folly::coro::blockingWait(folly::coro::co_withExecutor(cpu_.get(), std::move(task)));
     }
-    state.SetItemsProcessed(state.iterations() * kBatch);
+    const auto elapsed_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+    const auto ops = state.iterations() * kBatch;
+    state.SetItemsProcessed(ops);
+    state.counters["ns_per_dispatch"] = ops == 0 ? 0.0 : static_cast<double>(elapsed_ns) / static_cast<double>(ops);
     state.counters["cross_thread"] = static_cast<double>(cross_thread.load(std::memory_order_relaxed));
     state.counters["return_thread"] = static_cast<double>(return_thread.load(std::memory_order_relaxed));
 }
