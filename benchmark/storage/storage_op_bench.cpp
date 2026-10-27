@@ -1,4 +1,6 @@
 #include "storage/io_scheduler.hpp"
+#include "storage/kv/index_key_codec.hpp"
+#include "storage/kv/key_codec.hpp"
 
 #include <benchmark/benchmark.h>
 #include <folly/coro/BlockingWait.h>
@@ -198,5 +200,145 @@ BENCHMARK_F(DispatchBench, CrossThreadCoroutineDispatch)(benchmark::State& state
     state.counters["cross_thread"] = static_cast<double>(cross_thread.load(std::memory_order_relaxed));
     state.counters["return_thread"] = static_cast<double>(return_thread.load(std::memory_order_relaxed));
 }
+
+
+// ==================== Key decode cost ====================
+
+namespace {
+
+std::string cycleKey(const std::vector<std::string>& keys, size_t& i) {
+    return keys[i++ % keys.size()];
+}
+
+} // namespace
+
+static void KeyDecode_LabelForward(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i)
+        keys.push_back(eugraph::KeyCodec::encodeLabelForwardKey(0x100000000ULL + i));
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeLabelForwardKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_VertexExistence(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i)
+        keys.push_back(eugraph::KeyCodec::encodeVertexExistenceKey(0x200000000ULL + i));
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeVertexExistenceKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_VertexDataLabel(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i)
+        keys.push_back(eugraph::KeyCodec::encodeVertexDataLabelKey(0x300000000ULL + i, static_cast<eugraph::LabelId>(i)));
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeVertexDataLabelKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_VertexDataProp(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i)
+        keys.push_back(eugraph::KeyCodec::encodeVertexDataPropKey(
+            0x400000000ULL + i, static_cast<eugraph::LabelId>(i % 8), static_cast<uint16_t>(i % 16)));
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeVertexDataPropKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_VertexDataAdjEdge(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i) {
+        eugraph::KeyCodec::VertexDataAdjEdgeKey k{0x500000000ULL + i, eugraph::Direction::OUT,
+                                                  static_cast<eugraph::EdgeLabelId>(i % 8),
+                                                  0x600000000ULL + i, i};
+        keys.push_back(eugraph::KeyCodec::encodeVertexDataAdjEdgeKey(k));
+    }
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeVertexDataAdjEdgeKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_EdgeIndex(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i) {
+        eugraph::KeyCodec::EdgeIndexKey k{0x700000000ULL + i, eugraph::Direction::IN,
+                                          static_cast<eugraph::EdgeLabelId>(i % 8), 0x800000000ULL + i, i};
+        keys.push_back(eugraph::KeyCodec::encodeEdgeIndexKey(k));
+    }
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeEdgeIndexKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_EdgeType(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i) {
+        eugraph::KeyCodec::EdgeTypeIndexKey k{0x900000000ULL + i, 0xA00000000ULL + i, i};
+        keys.push_back(eugraph::KeyCodec::encodeEdgeTypeIndexKey(k));
+    }
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeEdgeTypeIndexKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_EProp(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i)
+        keys.push_back(eugraph::KeyCodec::encodeEPropKey(0xB00000000ULL + i, static_cast<uint16_t>(i % 16)));
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::KeyCodec::decodeEPropKey(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+static void KeyDecode_IndexSuffix(benchmark::State& state) {
+    std::vector<std::string> keys;
+    for (uint64_t i = 0; i < 1024; ++i)
+        keys.push_back(eugraph::IndexKeyCodec::encodeIndexKey(static_cast<int64_t>(i * 17), 0xC00000000ULL + i));
+    size_t i = 0;
+    for (auto _ : state) {
+        auto v = eugraph::IndexKeyCodec::decodeEntityId(cycleKey(keys, i));
+        benchmark::DoNotOptimize(v);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+
+BENCHMARK(KeyDecode_LabelForward);
+BENCHMARK(KeyDecode_VertexExistence);
+BENCHMARK(KeyDecode_VertexDataLabel);
+BENCHMARK(KeyDecode_VertexDataProp);
+BENCHMARK(KeyDecode_VertexDataAdjEdge);
+BENCHMARK(KeyDecode_EdgeIndex);
+BENCHMARK(KeyDecode_EdgeType);
+BENCHMARK(KeyDecode_EProp);
+BENCHMARK(KeyDecode_IndexSuffix);
 
 } // namespace

@@ -117,3 +117,33 @@ c14 批量前是 163,703 次 search_near、91,672 次 dispatch、wall ~291 ms；
 - seek 计数是逻辑调用次数，不区分缓存命中/缺页；基准是 warm cache；
 - 跨线程 benchmark 是独立实现，不代表当前生产 inline 路径；
 - 语句 trace 本身有计数/日志开销，wall time 取自同分支独立 A/B 的近似值。
+
+## 6. Google Benchmark 汇总（2026-10-28）
+
+构建/运行：
+
+```bash
+cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DEUGRAPH_ENABLE_BENCHMARK=ON
+cmake --build build-bench --target storage_op_bench -j2
+./build-bench/benchmark/storage/storage_op_bench \
+  --benchmark_min_time=0.3s --benchmark_repetitions=3
+```
+
+| Benchmark | 操作 | 平均耗时 |
+|---|---|---:|
+| `WtSeekBench/SearchExact` | WT 精确 `search` | **567 ns** |
+| `WtSeekBench/SearchNearPrefix` | WT 前缀 `search_near` | **411 ns** |
+| `KeyDecode_LabelForward` | 8B label-forward key | 8.0 ns |
+| `KeyDecode_VertexExistence` | 8B vertex-existence key | 8.0 ns |
+| `KeyDecode_VertexDataLabel` | 11B `{vid}{kind}{label}` | 7.4 ns |
+| `KeyDecode_VertexDataProp` | 13B `{vid}{kind}{label}{prop}` | 6.9 ns |
+| `KeyDecode_VertexDataAdjEdge` | 27B `{vid}{kind}{label}{neighbor}{seq}` | 18.7 ns |
+| `KeyDecode_EdgeIndex` | 27B edge-index key | 18.6 ns |
+| `KeyDecode_EdgeType` | 24B etype key | 18.6 ns |
+| `KeyDecode_EProp` | 10B `{edge}{prop}` | 7.8 ns |
+| `KeyDecode_IndexSuffix` | index key 末尾 entity id | 14.1 ns |
+| `DispatchBench/InlineDispatchVoid` | 当前 inline dispatch | 0.3–0.5 µs |
+| `DispatchBench/CrossThreadCoroutineDispatch` | 真实 compute→IO→compute | **10.1 µs** |
+
+结论：**key decode 本身是 7–19 ns 量级，远低于一次 WT seek（400–600 ns），更远低于一次真实跨线程 dispatch（~10 µs）**。
+后续优化不应再以“key 解码”为主要方向；瓶颈在搜索次数、dispatch 次数、计划/算子。
