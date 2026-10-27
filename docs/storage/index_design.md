@@ -112,7 +112,7 @@ struct IndexPropertyAccessor {
 
 ## 6. 属性 ID
 
-- 存储层 `prop_id` 仍在 Label / EdgeLabel 内独立编号；`vprop_{id}` / `eprop_{id}` 编码不变。
+- 存储层 `prop_id` 仍在 Label / EdgeLabel 内独立编号；顶点属性编码为 `vertex_data` 的 `{vid}{0x01}{label}{prop}`，边属性仍是 `eprop_{id}` 的 `{eid}{prop}`。
 - 顶点索引元数据不存 `prop_id`，只存属性名；强模式额外存 `source_label_id`。
 - 弱 accessor 在 DDL / 计划构建 / 维护时按当前 schema 解析为 `(label_id, prop_id)` 候选集合。
 - 属性 ID 不要求图内唯一。
@@ -158,7 +158,7 @@ std::unordered_map<PropKey, std::vector<IndexId>, PropKeyHash> prop_pair_to_inde
 4. 分配 `index_id`，持久化元数据，state = WRITE_ONLY。
 5. 创建物理表 `vidx_{index_id}`（顶点）或现有边索引表。
 6. 回填：扫描 filter label 下所有实体，按 accessors 顺序取值：
-   - 强：读 `vprop_{source_label_id}` 的 `(entity_id, prop_id)`；
+   - 强：读 `vertex_data` 的 `{entity_id}{0x01}{source_label_id}{prop_id}`；
    - 弱：遍历实体所有标签，按属性名找 `prop_id`：
      - 单标签命中：取该值；
      - 多标签命中且值相同：取该值；

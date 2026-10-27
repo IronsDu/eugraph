@@ -30,5 +30,5 @@ c5 514 ms → 264.1 ms（批处理）→ **234.0 ms**（共享 cursor + vertex_d
 
 Branch `feat/storage-vertex-data`；最终同轮 A/B：c5 234.0 ms、c9 187.2 ms、
 c14 291.4 ms，行均与 neo4j 一致；全量 ctest 1304/1304（含 TCK）。
-存储与计划决策见 [vertex-data-design.md](../storage/vertex-data-design.md) 与
+存储与计划决策见 [kv-encoding.md](../storage/kv-encoding.md) 与
 [ldbc-snb-sf0.1-comparison.md](../benchmark/ldbc-snb-sf0.1-comparison.md)。

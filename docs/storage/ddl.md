@@ -1,12 +1,13 @@
 # DDL（数据定义语言）设计
 
-> [设计规划] 参见 [README.md](../README.md) 返回文档导航
+> [当前实现 + 设计规划] 参见 [README.md](../README.md) 返回文档导航
 
 本文档描述 schema 级别的 DDL 操作设计，包括删除标签类型、删除关系类型、列的增删改等。
 
-**当前实现状态**：`ISyncGraphDataStore` 已实现 `dropLabel`/`dropEdgeLabel` 物理删表，但 handler 层尚未暴露这些操作。列操作（增/删/改）均未实现。
+**当前实现状态**：`ISyncGraphDataStore` 已实现 `dropLabel`/`dropEdgeLabel` 的**物理清理 + 删表**：先通过 `label_fwd`/`etype` 枚举受影响的顶点或边，删除 `vertex_data` / `edge_index` 中对应记录，再 drop per-label 表。handler 层尚未暴露这些操作。列操作（增/删/改）均未实现。
 
 > 编码格式基于当前 WiredTiger 多表架构（`src/storage/kv/key_codec.hpp`），表名常量见 `src/common/types/constants.hpp`。
+> 顶点标签/属性/邻接编码见 [kv-encoding.md](kv-encoding.md)。
 
 ---
 
@@ -22,35 +23,31 @@
 
 删除标签类型涉及以下 WT 表：
 
-| WT 表名 | 用途 | 能否快速删除 |
+| WT 表名 | 用途 | 清理方式 |
 |----------|------|-------------|
 | `table:label_fwd_{id}` | 标签正向索引（Label → Vertices） | ✅ 整表 Drop，O(1) |
-| `table:vprop_{id}` | 属性存储 | ✅ 整表 Drop，O(1) |
-| `table:label_reverse` | 标签反向索引（Vertex → Labels），key: `{vid:u64BE}{label_id:u16BE}` | ❌ label_id 在 key 尾部，分散在不同 vertex_id 下 |
+| `table:vertex_data` | 标签 + 属性（全局表，`{vid}{0x00|0x01}{label}` 记录） | ❌ 不能整表 Drop；按 `label_fwd` 枚举顶点后删除对应前缀 |
+| `table:vertex_existence` | 顶点存在表 | ❌ 不能删；顶点本身保留 |
 
-两个 per-label 表可直接 `WT_SESSION::drop()` 瞬间清除。`label_reverse` 是全局表，无法范围删除。
+旧实现的 `label_reverse`/`vprop_{id}` 已移除；标签与属性共享全局 `vertex_data` 表，因此 `DROP LABEL` 不再是纯 O(1) 删表，需要先枚举该标签下的顶点。
 
-### 1.3 方案：Tombstone + 快速删表
-
-#### 操作流程
+### 1.3 当前流程
 
 ```
-1. 在元数据中标记该 label_id 为 "已删除"（写入 tombstone 到 GraphSchema.deleted_labels）
-2. WT drop table:label_fwd_{id}  — 清除标签正向索引
-3. WT drop table:vprop_{id}     — 清除该标签下所有属性
-4. label_reverse 条目保留不动
-5. 完成
+1. 扫描 table:label_fwd_{id}，收集该标签下的所有 vid
+2. 对每个 vid：
+   - 删除 vertex_data 的 {vid}{0x00}{label_id}（标签记录）
+   - 扫描并删除 vertex_data 的 {vid}{0x01}{label_id} 前缀（属性记录）
+3. WT drop table:label_fwd_{id}
+4. 元数据侧 tombstone 字段在 GraphSchema 中预留；handler 尚未暴露 DROP，当前没有写入/过滤路径
 ```
 
 #### 读取时的处理
 
 - **查某标签下的顶点**（scan label_fwd）→ 表已删除，查不到 ✅
-- **查某顶点的标签**（scan label_reverse）→ 返回结果中过滤掉 tombstone 的 label_id ✅
-- **查某顶点在某标签下的属性**（scan vprop）→ 表已删除，查不到 ✅
-
-#### label_reverse 条目的清理
-
-每顶点仅少数几条 label_reverse 记录，且读取时已被 GraphSchema tombstone 过滤，不影响正确性。可选择后台任务定期清理或不做清理。
+- **查某顶点的标签**（`vertex_data` kind 0x00）→ 标签记录已删除，不会返回该 label ✅
+- **查某顶点在某标签下的属性**（`vertex_data` kind 0x01 前缀）→ 属性记录已删除，查不到 ✅
+- **同顶点的其他标签** → 不受影响，`vertex_existence` 保留 ✅
 
 ### 1.4 元数据变更
 
@@ -69,10 +66,10 @@ Value: {label_id:u16BE}{status:u8}{properties_def}{indexes}
 
 ### 1.5 实现状态
 
-- `ISyncGraphDataStore::dropLabel(LabelId)` — **已实现**（drop `label_fwd_{id}` + `vprop_{id}` 表）
-- `GraphSchema::deleted_labels` tombstone — **已实现**（L| 过滤）
+- `ISyncGraphDataStore::dropLabel(LabelId)` — **已实现**（枚举 `label_fwd_{id}`，删除 `vertex_data` 标签/属性记录，再 drop `label_fwd_{id}`）
+- `GraphSchema::deleted_labels` 字段 — **已预留，未接线**（无 DROP 入口，也无读取过滤）
 - Handler 层暴露 DROP LABEL — **未实现**
-- `label_reverse` 清理 — **未实现**
+- `label_reverse` 清理 — **N/A**（表已移除）
 
 ---
 
@@ -86,35 +83,39 @@ Value: {label_id:u16BE}{status:u8}{properties_def}{indexes}
 
 ### 2.2 数据分析
 
-| WT 表名 | 用途 | 能否快速删除 |
+| WT 表名 | 用途 | 清理方式 |
 |----------|------|-------------|
 | `table:etype_{id}` | 边类型索引（按 src→dst 排序） | ✅ 整表 Drop，O(1) |
 | `table:eprop_{id}` | 边属性存储 | ✅ 整表 Drop，O(1) |
-| `table:edge_index` | 邻接索引，key: `{vid:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` | ❌ label_id 在 key 中间，分散在不同 vertex 下 |
+| `table:edge_index` | 全局邻接索引，key 含 label_id | ❌ label_id 在 key 中间；按 etype 枚举边后逐条删除 |
+| `table:vertex_data` | 可选邻接缓存（N>0 时的 kind 0x02/0x03） | ❌ 按端点 state 删除缓存 key |
 
-### 2.3 方案：Tombstone + 快速删表
+### 2.3 当前流程
 
 ```
-1. 在元数据中标记该 edge_label_id 为 "已删除"（tombstone 到 GraphSchema.deleted_edge_labels）
-2. WT drop table:etype_{id}  — 清除类型索引
-3. WT drop table:eprop_{id}  — 清除所有边的属性
-4. edge_index 条目保留不动
-5. 完成
+1. 扫描 table:etype_{id}，收集该 label 的所有 (src, dst, seq)
+2. 对每条边：
+   - 对 src/OUT 与 dst/IN 两个方向分别读 vertex_data 的 state：
+     - COMPLETE：删除 {vid}{kind}{label}{neighbor}{seq} 缓存 key，count--
+     - OVERFLOW / 无 state：删除 edge_index 的对应 key
+3. WT drop table:etype_{id}
+4. WT drop table:eprop_{id}
+5. 元数据侧 tombstone 字段在 GraphSchema 中预留；handler 尚未暴露 DROP，当前没有写入/过滤路径
 ```
 
 #### 读取时的处理
 
 - **按关系类型扫描边**（scan etype）→ 表已删除，查不到 ✅
-- **从某顶点遍历边**（scan edge_index）→ 返回结果中过滤掉 tombstone 的 edge_label_id ✅
+- **从某顶点遍历边**（scan edge_index / vertex_data 缓存）→ 对应邻接条目已删除，查不到 ✅
 - **查某条边的属性**（scan eprop）→ 表已删除，查不到 ✅
-- **统计度数**（countDegree）→ 扫描 edge_index 时过滤 tombstone ✅
+- **统计度数**（countDegree）→ 只统计剩余邻接条目 ✅
 
 ### 2.4 实现状态
 
-- `ISyncGraphDataStore::dropEdgeLabel(EdgeLabelId)` — **已实现**（drop `etype_{id}` + `eprop_{id}` 表）
-- `GraphSchema::deleted_edge_labels` tombstone — **已实现**
+- `ISyncGraphDataStore::dropEdgeLabel(EdgeLabelId)` — **已实现**（枚举 `etype_{id}`，清理 `edge_index` / `vertex_data` 缓存，再 drop `etype_{id}` + `eprop_{id}`）
+- `GraphSchema::deleted_edge_labels` 字段 — **已预留，未接线**（无 DROP 入口，也无读取过滤）
 - Handler 层暴露 DROP EDGE_LABEL — **未实现**
-- `edge_index` 清理 — **未实现**
+- `edge_index` 清理 — **已实现**
 
 ---
 
@@ -127,8 +128,8 @@ Value: {label_id:u16BE}{status:u8}{properties_def}{indexes}
 当前 KV 编码中，属性存储使用 prop_id 而非属性名：
 
 ```
-Vertex 属性:  table:vprop_{id}   key: {vertex_id:u64BE}{prop_id:u16BE}
-Edge 属性:    table:eprop_{id}   key: {edge_id:u64BE}{prop_id:u16BE}
+Vertex 属性:  table:vertex_data  key: {vertex_id:u64BE}{0x01}{label_id:u16BE}{prop_id:u16BE}
+Edge 属性:    table:eprop_{id}  key: {edge_id:u64BE}{prop_id:u16BE}
 ```
 
 prop_id 在每个 Label/EdgeLabel 内单调递增、**永不复用**。属性名与 prop_id 的映射关系保存在元数据 LabelDef/EdgeLabelDef 中。

@@ -653,31 +653,6 @@ static bool isPEOutputSlot(const PlanContext& ctx, binder::SlotId slot) {
     return false;
 }
 
-/// Every slot appended by a PEPlan (props/coalesce/objects/labels/type).
-static void collectPEOutputSlots(const PlanContext& ctx, std::unordered_set<binder::SlotId>& out) {
-    for (const auto& [canon, pi] : ctx.extraction_info) {
-        (void)canon;
-        if (pi.object_slot_id != binder::INVALID_SLOT_ID)
-            out.insert(pi.object_slot_id);
-        if (pi.labels_slot_id != binder::INVALID_SLOT_ID)
-            out.insert(pi.labels_slot_id);
-        if (pi.type_slot_id != binder::INVALID_SLOT_ID)
-            out.insert(pi.type_slot_id);
-        for (binder::SlotId s : pi.prop_slot_ids)
-            out.insert(s);
-        for (binder::SlotId s : pi.edge_prop_slot_ids)
-            out.insert(s);
-        for (const auto& [name, co] : pi.coalesce_vertices) {
-            (void)name;
-            out.insert(co.slot_id);
-        }
-    }
-}
-
-/// Slots used by ORDER BY but not by the Filter directly below it and not by
-/// anything below that Filter. Such slots only need to exist after Filtering,
-/// so loading them for every pre-filter row (e.g. LDBC c9's message.id over
-/// 53k messages) is wasted.
 /// Slots referenced by the RETURN Project but not by the Sort/Filter side
 /// below it. These are exactly the output-only columns whose materialization
 /// can move above LIMIT.

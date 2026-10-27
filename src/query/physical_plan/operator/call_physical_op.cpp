@@ -387,7 +387,8 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
             for (const auto& ldef : labels) {
                 if (ldef.name == kAnonLabelName)
                     continue;
-                auto scan = data_store_->scanVerticesByLabel(ldef.id);
+                std::vector<VertexId> label_batch;
+                auto scan = data_store_->scanVerticesByLabel(ldef.id, label_batch);
                 while (auto batch = co_await scan.next()) {
                     if (batch && !batch->empty()) {
                         labels_in_use.push_back(ldef);
@@ -415,7 +416,8 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
                 std::set<LabelId> start_labels;
                 std::set<LabelId> end_labels;
 
-                auto edges = data_store_->scanEdgesByType(eldef.id, std::nullopt, std::nullopt);
+                std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> edge_batch;
+                auto edges = data_store_->scanEdgesByType(eldef.id, std::nullopt, std::nullopt, edge_batch);
                 while (auto batch = co_await edges.next()) {
                     if (!batch)
                         continue;

@@ -47,18 +47,19 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, uint32_t index_id
       label_defs_(std::move(label_defs)) {}
 
 folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
-    folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
+    std::vector<VertexId> scan_batch;
+    folly::coro::AsyncGenerator<std::span<const VertexId>> gen;
     if (index_id_ != 0) {
         if (mode_ == ScanMode::EQUALITY) {
-            gen = cancellable(store_.scanVerticesByIndexId(index_id_, eq_values_));
+            gen = cancellable(store_.scanVerticesByIndexId(index_id_, eq_values_, scan_batch));
         } else {
-            gen = cancellable(store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_));
+            gen = cancellable(store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_, scan_batch));
         }
     } else if (mode_ == ScanMode::EQUALITY) {
         if (prop_ids_.size() == 1) {
-            gen = cancellable(store_.scanVerticesByIndex(label_id_, prop_ids_[0], eq_values_[0]));
+            gen = cancellable(store_.scanVerticesByIndex(label_id_, prop_ids_[0], eq_values_[0], scan_batch));
         } else {
-            gen = cancellable(store_.scanVerticesByIndexComposite(label_id_, prop_ids_, eq_values_));
+            gen = cancellable(store_.scanVerticesByIndexComposite(label_id_, prop_ids_, eq_values_, scan_batch));
         }
     } else {
         if (prop_ids_.size() == 1) {
@@ -68,9 +69,10 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
                 start = (*range_start_)[0];
             if (range_end_.has_value())
                 end = (*range_end_)[0];
-            gen = cancellable(store_.scanVerticesByIndexRange(label_id_, prop_ids_[0], start, end));
+            gen = cancellable(store_.scanVerticesByIndexRange(label_id_, prop_ids_[0], start, end, scan_batch));
         } else {
-            gen = cancellable(store_.scanVerticesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_));
+            gen = cancellable(
+                store_.scanVerticesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_, scan_batch));
         }
     }
 

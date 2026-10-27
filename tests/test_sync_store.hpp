@@ -21,7 +21,8 @@ namespace eugraph::test {
 
 class TestSyncGraphDataStore : public SyncGraphDataStore {
 public:
-    TestSyncGraphDataStore() {
+    explicit TestSyncGraphDataStore(uint32_t adjacency_cache_capacity = 0)
+        : SyncGraphDataStore(adjacency_cache_capacity) {
         bind_connection(conn_);
         pool_ = std::make_unique<SessionPool>(16, [this]() { return conn_.make_session(); });
     }

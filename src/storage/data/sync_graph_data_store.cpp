@@ -12,10 +12,6 @@
 
 namespace eugraph {
 
-namespace {
-constexpr uint32_t kAdjCacheCapacity = 0;
-} // namespace
-
 // ==================== WT Item Helpers (local) ====================
 
 namespace {
@@ -162,7 +158,7 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
     if (!wt::table_put(gs, TABLE_VERTEX_EXISTENCE, ve_key, {}))
         return false;
 
-    if (kAdjCacheCapacity > 0) {
+    if (adjacency_cache_capacity_ > 0) {
         for (Direction dir : {Direction::OUT, Direction::IN}) {
             if (!wt::table_put(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjStateKey(vid, dir),
                                KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::COMPLETE, 0)))
@@ -669,7 +665,7 @@ bool SyncGraphDataStore::promoteAdjacency(WT_SESSION* session, VertexId vid, Dir
 bool SyncGraphDataStore::insertAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
                                              EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
     const std::string edge_val = ValueCodec::encodeU64(eid);
-    if (kAdjCacheCapacity == 0) {
+    if (adjacency_cache_capacity_ == 0) {
         KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
         return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
     }
@@ -678,7 +674,7 @@ bool SyncGraphDataStore::insertAdjacencyEdge(WT_SESSION* session, VertexId vid, 
         KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
         return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
     }
-    if (state->count >= kAdjCacheCapacity) {
+    if (state->count >= adjacency_cache_capacity_) {
         if (!promoteAdjacency(session, vid, direction, state->count))
             return false;
         KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
@@ -693,7 +689,7 @@ bool SyncGraphDataStore::insertAdjacencyEdge(WT_SESSION* session, VertexId vid, 
 bool SyncGraphDataStore::deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
                                              EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
     (void)eid;
-    if (kAdjCacheCapacity == 0) {
+    if (adjacency_cache_capacity_ == 0) {
         KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
         wt::table_del(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx));
         return true;
@@ -886,7 +882,7 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
         return;
     }
 
-    auto state = kAdjCacheCapacity > 0 ? getAdjacencyState(gs.wt_session(), vid, direction) : std::nullopt;
+    auto state = adjacency_cache_capacity_ > 0 ? getAdjacencyState(gs.wt_session(), vid, direction) : std::nullopt;
     if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
         const std::string prefix = KeyCodec::encodeVertexDataAdjPrefix(vid, direction);
         wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view value) {
@@ -915,68 +911,22 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
     });
 }
 
-std::string SyncGraphDataStore::scanEdgesPage(GraphSession& gs, VertexId vid, Direction direction,
-                                              std::optional<EdgeLabelId> label_filter, std::vector<EdgeIndexEntry>& out,
-                                              size_t max_edges, std::string_view after_key) {
-    out.clear();
-    if (max_edges == 0)
-        return {};
-    WT_SESSION* session = gs.wt_session();
-    if (!session || direction == Direction::BOTH)
-        return {};
-
+// Edge-index-only cursor factory used by `createEdgeScanCursor`'s overflow
+// fallback.
+std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
+SyncGraphDataStore::createEdgeIndexScanCursor(GraphSession& gs, VertexId vid, Direction direction,
+                                              std::optional<EdgeLabelId> label_filter) {
+    if (!gs.wt_session() || direction == Direction::BOTH)
+        return nullptr;
+    const std::string prefix = label_filter ? KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter)
+                                            : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
     CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
     if (!cursor) {
         const int error = cursor.error();
-        gs.fail_from_wt(error, "scanEdgesPage: cannot open cursor on table:edge_index");
-        return {};
+        gs.fail_from_wt(error, "cannot open cursor on table:edge_index");
+        return nullptr;
     }
-    auto* c = cursor.get();
-    const std::string prefix = label_filter ? KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter)
-                                            : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
-    int ret;
-    if (!after_key.empty()) {
-        setItem(c, after_key);
-        int exact = 0;
-        ret = c->search_near(c, &exact);
-        if (ret == WT_NOTFOUND)
-            return {};
-        if (ret != 0) {
-            gs.fail_from_wt(ret, "scanEdgesPage: search_near(after) failed");
-            return {};
-        }
-        if (exact == 0)
-            ret = c->next(c);
-    } else {
-        setItem(c, prefix);
-        int exact = 0;
-        ret = c->search_near(c, &exact);
-        if (ret == WT_NOTFOUND)
-            return {};
-        if (ret != 0) {
-            gs.fail_from_wt(ret, "scanEdgesPage: search_near failed");
-            return {};
-        }
-        if (exact < 0)
-            ret = c->next(c);
-    }
-
-    while (ret == 0) {
-        const auto key = getKeyViewFromCursor(c);
-        if (!key.starts_with(prefix))
-            break;
-        auto decoded = KeyCodec::decodeEdgeIndexKey(key);
-        out.push_back({decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
-                       ValueCodec::decodeU64(getValueViewFromCursor(c))});
-        if (out.size() >= max_edges) {
-            // Return the last returned key; the next call resumes after it.
-            // (Returning the *next* key would make search_near(exact) + next
-            // skip that edge.)
-            return std::string(key);
-        }
-        ret = c->next(c);
-    }
-    return {};
+    return std::make_unique<EdgeScanCursorImpl>(gs, std::move(cursor), prefix);
 }
 
 void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<VertexId>& src_ids, Direction direction,
@@ -990,7 +940,7 @@ void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<Vert
         scanEdgesBatch(gs, src_ids, Direction::IN, label_filter, callback);
         return;
     }
-    if (kAdjCacheCapacity > 0) {
+    if (adjacency_cache_capacity_ > 0) {
         for (VertexId vid : src_ids) {
             auto cursor = createEdgeScanCursor(gs, vid, direction, label_filter);
             if (!cursor)
@@ -1078,7 +1028,7 @@ uint64_t SyncGraphDataStore::countVerticesByLabel(GraphSession& gs, LabelId labe
 
 uint64_t SyncGraphDataStore::countDegree(GraphSession& gs, VertexId vid, Direction direction,
                                          std::optional<EdgeLabelId> label_filter) {
-    if (kAdjCacheCapacity > 0 && direction != Direction::BOTH && !label_filter) {
+    if (adjacency_cache_capacity_ > 0 && direction != Direction::BOTH && !label_filter) {
         auto state = getAdjacencyState(gs.wt_session(), vid, direction);
         if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE)
             return state->count;
@@ -1310,7 +1260,7 @@ SyncGraphDataStore::createEdgeScanCursor(GraphSession& gs, VertexId vid, Directi
         return std::make_unique<VectorEdgeScanCursor>(std::move(entries));
     }
 
-    if (kAdjCacheCapacity > 0) {
+    if (adjacency_cache_capacity_ > 0) {
         CursorHandle cache_cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
         if (!cache_cursor) {
             const int error = cache_cursor.error();
@@ -1323,20 +1273,7 @@ SyncGraphDataStore::createEdgeScanCursor(GraphSession& gs, VertexId vid, Directi
             return cached;
     }
 
-    std::string prefix;
-    if (label_filter) {
-        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter);
-    } else {
-        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction);
-    }
-
-    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
-    if (!cursor) {
-        const int error = cursor.error();
-        gs.fail_from_wt(error, "createEdgeScanCursor: cannot open cursor on " + std::string(TABLE_EDGE_INDEX));
-        return nullptr;
-    }
-    return std::make_unique<EdgeScanCursorImpl>(gs, std::move(cursor), prefix);
+    return createEdgeIndexScanCursor(gs, vid, direction, label_filter);
 }
 
 // ==================== VertexDataEdgeScanCursorImpl ====================

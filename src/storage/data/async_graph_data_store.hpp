@@ -11,13 +11,12 @@
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
-#include <folly/coro/ViaIfAsync.h>
-#include <folly/io/async/EventBase.h>
-#include <folly/io/async/EventBaseManager.h>
 
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <span>
+#include <utility>
 #include <vector>
 
 namespace eugraph {
@@ -168,116 +167,53 @@ public:
 
     // ==================== Vertex Scan ====================
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByLabel(LabelId label_id) override {
-        constexpr size_t BATCH = 1024;
-        // The scan cursor belongs to the session of the IO thread that creates it. Handing the
-        // cursor to another IO thread would touch that session concurrently with its owner's
-        // work -- the shared-session race that WiredTiger aborts on
-        // (`WT_SESSION.open_cursor: lock_success == 0`). Pin the stream to the EXACT EventBase
-        // that created the cursor and run every batch there: one thread => no concurrent use,
-        // and the cursor keeps its position across batches (O(1) next()).
-        // `co_viaIfAsync(io_pool)` would NOT be enough: the pool balances over its threads.
-        folly::EventBase* bound_evb = nullptr;
-        auto cursor = co_await io_.dispatch([this, label_id, &bound_evb]() {
-            bound_evb = folly::EventBaseManager::get()->getEventBase();
-            return store_.createVertexScanCursor(session_, label_id);
-        });
-        if (!cursor)
-            co_return;
-
-        while (true) {
-            // reserve(BATCH): the loop below fills up to BATCH or until the cursor runs
-            // out, so one allocation replaces the log2 growths push_back would do.
-            std::vector<VertexId> batch;
-            batch.reserve(BATCH);
-            // Run the batch on the cursor's own EventBase (see the comment above). Wrapped in a
-            // task because folly's co_viaIfAsync takes (executor, awaitable).
-            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                                                        batch.push_back(cursor->vertexId());
-                                                        cursor->next();
-                                                    }
-                                                    co_return;
-                                                }));
-            if (batch.empty()) {
-                co_return;
-            }
-            co_yield std::move(batch);
-        }
+    folly::coro::AsyncGenerator<std::span<const VertexId>> scanVerticesByLabel(LabelId label_id,
+                                                                               std::vector<VertexId>& out) override {
+        return scanCursorStream<VertexId>(
+            out, [this, label_id]() { return store_.createVertexScanCursor(session_, label_id); },
+            [](ISyncGraphDataStore::IVertexScanCursor& cursor, std::vector<VertexId>& batch) {
+                constexpr size_t BATCH = 1024;
+                batch.reserve(BATCH);
+                for (size_t i = 0; i < BATCH && cursor.valid(); ++i) {
+                    batch.push_back(cursor.vertexId());
+                    cursor.next();
+                }
+            });
     }
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>> scanAllVertices() override {
+    folly::coro::AsyncGenerator<std::span<const VertexId>> scanAllVertices(std::vector<VertexId>& out) override {
         // 与 scanVerticesByLabel 同样的游标式流：vid 升序、每点一次，内存只有一个批。
-        constexpr size_t BATCH = 1024;
-        // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
-        folly::EventBase* bound_evb = nullptr;
-        auto cursor = co_await io_.dispatch([this, &bound_evb]() {
-            bound_evb = folly::EventBaseManager::get()->getEventBase();
-            return store_.createAllVertexScanCursor(session_);
-        });
-        if (!cursor)
-            co_return;
-
-        while (true) {
-            std::vector<VertexId> batch;
-            batch.reserve(BATCH); // 同上：填充上限已知
-            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                                                        batch.push_back(cursor->vertexId());
-                                                        cursor->next();
-                                                    }
-                                                    co_return;
-                                                }));
-            if (batch.empty())
-                co_return;
-            co_yield std::move(batch);
-        }
+        return scanCursorStream<VertexId>(
+            out, [this]() { return store_.createAllVertexScanCursor(session_); },
+            [](ISyncGraphDataStore::IVertexScanCursor& cursor, std::vector<VertexId>& batch) {
+                constexpr size_t BATCH = 1024;
+                batch.reserve(BATCH);
+                for (size_t i = 0; i < BATCH && cursor.valid(); ++i) {
+                    batch.push_back(cursor.vertexId());
+                    cursor.next();
+                }
+            });
     }
 
     // ==================== Edge Scan ====================
 
-    folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
-    scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) override {
-        constexpr size_t BATCH = 4096;
-        // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
-        folly::EventBase* bound_evb = nullptr;
-        auto cursor = co_await io_.dispatch([this, vid, direction, label_filter, &bound_evb]() {
-            bound_evb = folly::EventBaseManager::get()->getEventBase();
-            return store_.createEdgeScanCursor(session_, vid, direction, label_filter);
-        });
-        if (!cursor)
-            co_return;
-
-        while (true) {
-            std::vector<ISyncGraphDataStore::EdgeIndexEntry> batch;
-            // Most vertices have very few edges; do not reserve 65k entries per source.
-            batch.reserve(64);
-            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                                                        batch.push_back(cursor->entry());
-                                                        cursor->next();
-                                                    }
-                                                    co_return;
-                                                }));
-            if (batch.empty()) {
-                co_return;
-            }
-            co_yield std::move(batch);
-        }
-    }
-
-    folly::coro::Task<EdgeScanPage> scanEdgesPage(VertexId vid, Direction direction,
-                                                  std::optional<EdgeLabelId> label_filter,
-                                                  std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out,
-                                                  size_t max_edges, std::string_view after_key) override {
-        auto after = std::string(after_key);
-        auto next = co_await io_.dispatch([this, vid, direction, label_filter, &out, max_edges, after]() {
-            return store_.scanEdgesPage(session_, vid, direction, label_filter, out, max_edges, after);
-        });
-        EdgeScanPage page;
-        page.has_more = !next.empty();
-        page.next_key = std::move(next);
-        co_return page;
+    folly::coro::AsyncGenerator<std::span<const ISyncGraphDataStore::EdgeIndexEntry>>
+    scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
+              std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out) override {
+        return scanCursorStream<ISyncGraphDataStore::EdgeIndexEntry>(
+            out,
+            [this, vid, direction, label_filter]() {
+                return store_.createEdgeScanCursor(session_, vid, direction, label_filter);
+            },
+            [](ISyncGraphDataStore::IEdgeScanCursor& cursor, std::vector<ISyncGraphDataStore::EdgeIndexEntry>& batch) {
+                constexpr size_t BATCH = 4096;
+                // Most vertices have very few edges; do not reserve 65k entries per source.
+                batch.reserve(64);
+                for (size_t i = 0; i < BATCH && cursor.valid(); ++i) {
+                    batch.push_back(cursor.entry());
+                    cursor.next();
+                }
+            });
     }
 
     folly::coro::AsyncGenerator<std::vector<BatchedEdge>>
@@ -312,34 +248,23 @@ public:
 
     // ==================== Edge Type Scan ====================
 
-    folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
-    scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter,
-                    std::optional<VertexId> dst_filter) override {
-        constexpr size_t BATCH = 1024;
-        // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
-        folly::EventBase* bound_evb = nullptr;
-        auto cursor = co_await io_.dispatch([this, label_id, src_filter, dst_filter, &bound_evb]() {
-            bound_evb = folly::EventBaseManager::get()->getEventBase();
-            return store_.createEdgeTypeScanCursor(session_, label_id, src_filter, dst_filter);
-        });
-        if (!cursor)
-            co_return;
-
-        while (true) {
-            std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> batch;
-            batch.reserve(BATCH);
-            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                                                        batch.push_back(cursor->entry());
-                                                        cursor->next();
-                                                    }
-                                                    co_return;
-                                                }));
-            if (batch.empty()) {
-                co_return;
-            }
-            co_yield std::move(batch);
-        }
+    folly::coro::AsyncGenerator<std::span<const ISyncGraphDataStore::EdgeTypeIndexEntry>>
+    scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter, std::optional<VertexId> dst_filter,
+                    std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>& out) override {
+        return scanCursorStream<ISyncGraphDataStore::EdgeTypeIndexEntry>(
+            out,
+            [this, label_id, src_filter, dst_filter]() {
+                return store_.createEdgeTypeScanCursor(session_, label_id, src_filter, dst_filter);
+            },
+            [](ISyncGraphDataStore::IEdgeTypeScanCursor& cursor,
+               std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>& batch) {
+                constexpr size_t BATCH = 1024;
+                batch.reserve(BATCH);
+                for (size_t i = 0; i < BATCH && cursor.valid(); ++i) {
+                    batch.push_back(cursor.entry());
+                    cursor.next();
+                }
+            });
     }
 
     // ==================== Vertex Property Write ====================
@@ -496,54 +421,55 @@ public:
 
     // ==================== Index Scan ====================
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,
-                                                                           const PropertyValue& value) override {
+    folly::coro::AsyncGenerator<std::span<const VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,
+                                                                               const PropertyValue& value,
+                                                                               std::vector<VertexId>& out) override {
         std::string table = vidxTable(label_id, prop_id);
         auto val = value;
         return scanIndexCursor<VertexId>(
-            [this, table, val]() { return store_.createIndexEqualityCursor(session_, table, val); },
+            out, [this, table, val]() { return store_.createIndexEqualityCursor(session_, table, val); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
-                                 const std::vector<PropertyValue>& values) override {
+                                 const std::vector<PropertyValue>& values, std::vector<VertexId>& out) override {
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto vals = values;
         return scanIndexCursor<VertexId>(
-            [this, table, vals]() { return store_.createIndexEqualityCursor(session_, table, vals); },
+            out, [this, table, vals]() { return store_.createIndexEqualityCursor(session_, table, vals); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
-                             const std::optional<PropertyValue>& end) override {
+                             const std::optional<PropertyValue>& end, std::vector<VertexId>& out) override {
         std::string table = vidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
         return scanIndexCursor<VertexId>(
-            [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>>
-    scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
-                                      const std::optional<std::vector<PropertyValue>>& start,
-                                      const std::optional<std::vector<PropertyValue>>& end) override {
+    folly::coro::AsyncGenerator<std::span<const VertexId>> scanVerticesByIndexRangeComposite(
+        LabelId label_id, const std::vector<uint16_t>& prop_ids, const std::optional<std::vector<PropertyValue>>& start,
+        const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out) override {
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
         return scanIndexCursor<VertexId>(
-            [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>>
-    scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values) override {
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values,
+                          std::vector<VertexId>& out) override {
         std::string table = vidxTableById(index_id);
         auto vals = values;
         return scanIndexCursor<VertexId>(
-            [this, table, vals]() { return store_.createIndexEqualityCursor(session_, table, vals); },
+            out, [this, table, vals]() { return store_.createIndexEqualityCursor(session_, table, vals); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
@@ -562,25 +488,27 @@ public:
         co_return best;
     }
 
-    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
-                               const std::optional<std::vector<PropertyValue>>& end) override {
+                               const std::optional<std::vector<PropertyValue>>& end,
+                               std::vector<VertexId>& out) override {
         std::string table = vidxTableById(index_id);
         auto s = start;
         auto e = end;
         return scanIndexCursor<VertexId>(
-            [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
     // ==================== Edge Index Scan ====================
 
-    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
-    scanEdgesByIndex(EdgeLabelId label_id, uint16_t prop_id, const PropertyValue& value) override {
+    folly::coro::AsyncGenerator<std::span<const EdgeIndexScanEntry>>
+    scanEdgesByIndex(EdgeLabelId label_id, uint16_t prop_id, const PropertyValue& value,
+                     std::vector<EdgeIndexScanEntry>& out) override {
         std::string table = eidxTable(label_id, prop_id);
         auto val = value;
         return scanIndexCursor<EdgeIndexScanEntry>(
-            [this, table, val]() { return store_.createIndexEqualityCursor(session_, table, val); },
+            out, [this, table, val]() { return store_.createIndexEqualityCursor(session_, table, val); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
@@ -589,13 +517,13 @@ public:
             });
     }
 
-    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    folly::coro::AsyncGenerator<std::span<const EdgeIndexScanEntry>>
     scanEdgesByIndexComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
-                              const std::vector<PropertyValue>& values) override {
+                              const std::vector<PropertyValue>& values, std::vector<EdgeIndexScanEntry>& out) override {
         std::string table = eidxCompositeTable(label_id, prop_ids);
         auto vals = values;
         return scanIndexCursor<EdgeIndexScanEntry>(
-            [this, table, vals]() { return store_.createIndexEqualityCursor(session_, table, vals); },
+            out, [this, table, vals]() { return store_.createIndexEqualityCursor(session_, table, vals); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
@@ -604,14 +532,14 @@ public:
             });
     }
 
-    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    folly::coro::AsyncGenerator<std::span<const EdgeIndexScanEntry>>
     scanEdgesByIndexRange(EdgeLabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
-                          const std::optional<PropertyValue>& end) override {
+                          const std::optional<PropertyValue>& end, std::vector<EdgeIndexScanEntry>& out) override {
         std::string table = eidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
         return scanIndexCursor<EdgeIndexScanEntry>(
-            [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
@@ -620,15 +548,16 @@ public:
             });
     }
 
-    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    folly::coro::AsyncGenerator<std::span<const EdgeIndexScanEntry>>
     scanEdgesByIndexRangeComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
                                    const std::optional<std::vector<PropertyValue>>& start,
-                                   const std::optional<std::vector<PropertyValue>>& end) override {
+                                   const std::optional<std::vector<PropertyValue>>& end,
+                                   std::vector<EdgeIndexScanEntry>& out) override {
         std::string table = eidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
         return scanIndexCursor<EdgeIndexScanEntry>(
-            [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
@@ -698,33 +627,53 @@ public:
     }
 
 private:
-    /// 索引扫描的统一流式驱动：cursor 在 IO 线程创建并钉在同一个 EventBase 上，
-    /// 每批只拉 BATCH 条 ⇒ 内存 O(batch) ✓（不再先 materialize 全集 ✗）。
-    template <typename Entry, typename MakeCursor, typename Convert>
-    folly::coro::AsyncGenerator<std::vector<Entry>> scanIndexCursor(MakeCursor make_cursor, Convert convert) {
-        constexpr size_t BATCH = 1024;
-        folly::EventBase* bound_evb = nullptr;
+    /// 游标式扫描的统一驱动：第一次 dispatch 同时**创建 cursor 并填充首批**，
+    /// 后续每批再 dispatch；扫描结果填进调用方传入的 `out`，batch 之间复用
+    /// 同一 vector（不每批构造临时 vector），yield 的 span 只在本次 batch 内有效。
+    template <typename Entry, typename MakeCursor, typename Fetch>
+    folly::coro::AsyncGenerator<std::span<const Entry>> scanCursorStream(std::vector<Entry>& out,
+                                                                         MakeCursor make_cursor, Fetch fetch) {
         auto cursor = co_await io_.dispatch([&]() {
-            bound_evb = folly::EventBaseManager::get()->getEventBase();
-            return make_cursor();
+            auto created = make_cursor();
+            out.clear();
+            if (created)
+                fetch(*created, out);
+            return created;
         });
-        if (!cursor)
+        if (!cursor || out.empty())
+            co_return;
+        co_yield std::span<const Entry>(out);
+        if (!cursor->valid())
             co_return;
 
         while (true) {
-            std::vector<Entry> batch;
-            batch.reserve(BATCH);
-            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                                                        batch.push_back(convert(*cursor));
-                                                        cursor->next();
-                                                    }
-                                                    co_return;
-                                                }));
-            if (batch.empty())
+            const bool has_more = co_await io_.dispatch([&]() {
+                out.clear();
+                fetch(*cursor, out);
+                return !out.empty();
+            });
+            if (!has_more)
                 co_return;
-            co_yield std::move(batch);
+            co_yield std::span<const Entry>(out);
+            if (!cursor->valid())
+                co_return;
         }
+    }
+
+    /// 索引扫描的统一流式驱动：cursor 在 IO 线程创建并填充首批，
+    /// 每批只拉 BATCH 条 ⇒ 内存 O(batch) ✓。
+    template <typename Entry, typename MakeCursor, typename Convert>
+    folly::coro::AsyncGenerator<std::span<const Entry>> scanIndexCursor(std::vector<Entry>& out, MakeCursor make_cursor,
+                                                                        Convert convert) {
+        return scanCursorStream<Entry>(out, std::move(make_cursor),
+                                       [convert = std::move(convert)](auto& cursor, std::vector<Entry>& batch) {
+                                           constexpr size_t BATCH = 1024;
+                                           batch.reserve(BATCH);
+                                           for (size_t i = 0; i < BATCH && cursor.valid(); ++i) {
+                                               batch.push_back(convert(cursor));
+                                               cursor.next();
+                                           }
+                                       });
     }
 
     ISyncGraphDataStore& store_;

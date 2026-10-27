@@ -45,8 +45,9 @@
 │  │  WtConnectionStore data_conn    WtConnectionStore meta_conn           │  │
 │  │  └─ ({db}/data/)                 └─ ({db}/meta/)                       │  │
 │  │  SyncGraphDataStore (bind)       SyncGraphMetaStore (bind)             │  │
-│  │  ├─ 数据表: label_fwd_, vprop_   ├─ 元数据表: table:metadata          │  │
-│  │  ├─ 边表: etype_, eprop_         └─ KV: M|label:*, M|edge_label:*     │  │
+│  │  ├─ 顶点数据: vertex_data        ├─ 元数据表: table:metadata          │  │
+│  │  ├─ 索引表: label_fwd_           └─ KV: M|label:*, M|edge_label:*     │  │
+│  │  ├─ 边表: edge_index, etype_, eprop_                                  │  │
 │  │  └─ op(GraphSession&, …)         └─ 管理类 KV 操作                    │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -84,10 +85,9 @@
 
 关键设计：
 - **IoScheduler**：`dispatch()` 将同步调用调度到 IO 线程池，协程挂起直到完成
-- **session 归属**：`WT_SESSION` 由**每个 IO 执行上下文独占**（非事务访问用本线程 session，
-  热路径无锁）；详见下文「线程模型 → Session / Cursor 的归属与复用」
-- **扫描流钉线程**：分多批读取的 `AsyncGenerator` **不在批次之间任选 IO 线程**，而是每批
-  `co_viaIfAsync` 回到**创建其 cursor 的那个具体 `EventBase`**（`co_viaIfAsync(池)` 不足以保证）
+- **session 归属**：每个语句从 `SessionPool` 借出一个 `GraphSession`（独占 `WT_SESSION`），
+  数据 op 都带这个会话；详见下文「线程模型 → Session / Cursor 的归属与复用」
+- **扫描流顺序 dispatch**：分多批读取的 `AsyncGenerator` 每批都经 `IoScheduler::dispatch`，不绑定具体 `EventBase`；WT session/cursor 无线程亲和，只要同一执行流顺序使用、不并发即可安全迁移线程
 - **GraphSchema**：元数据服务维护的内存 schema，避免计算层直接访问元数据存储
 - 所有 async 方法返回 `folly::coro::Task` 或 `AsyncGenerator`
 
@@ -198,8 +198,8 @@ WiredTiger 没有 thread-local 状态（hazard pointer 数组在 session 内）�
 * cursor 由 `CursorProvider` 按**会话**缓存（`CursorHandle`）；扫描用独立 `acquire_scan_cursor`；
   打开失败经 `error()` 显式可见并粘到会话。
 * 同一租约同一时刻只属于一个执行流：WT session/cursor 允许**顺序**换线程，**禁止并发**使用。
-* 跨多批的扫描流钉在创建其 cursor 的 `EventBase`（每批 `co_viaIfAsync(bound_evb, …)`）；
-  **不能**用 `co_viaIfAsync(io_pool)`——线程池 via 不保证回到原线程。
+* 跨多批的扫描流每批经 `IoScheduler::dispatch` 顺序执行；WT session/cursor 无线程亲和，
+  不要求回到创建 cursor 的 `EventBase`，但同一租约**禁止并发**使用（由执行流的串行消费保证）。
 * 收尾顺序：**先销毁算子树/游标，再 commit/rollback**；事务内任何数据 op 失败都被 `StickyError`
   粘住，`commit()` 拒绝并回滚（失败不可被后续成功提交掩盖）。
 * DDL 由 `SchemaDdl` 接收显式 `WtSession&` 并在内部 `schemaMutex` 串行化；`WT_SESSION::drop` 要求
@@ -249,7 +249,7 @@ Handler::co_createLabel(name, props):
      → 持久化 label def 到 meta store (via IoScheduler)
      → 更新内存 GraphSchema
   2. co_await async_data_.createLabel(label_id)
-     → 创建物理数据表 (label_fwd_{id}, vprop_{id})
+     → 创建物理索引表 label_fwd_{id}（vertex_data 是全局表，启动时已建）
 ```
 
 ## 服务组合模式

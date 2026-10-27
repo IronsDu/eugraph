@@ -31,8 +31,10 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
     resetChunk();
 
     if (candidate_labels_.size() <= 1) {
-        auto gen = candidate_labels_.empty() ? cancellable(store_.scanAllVertices())
-                                             : cancellable(store_.scanVerticesByLabel(candidate_labels_[0]));
+        std::vector<VertexId> scan_batch;
+        auto gen = candidate_labels_.empty()
+                       ? cancellable(store_.scanAllVertices(scan_batch))
+                       : cancellable(store_.scanVerticesByLabel(candidate_labels_[0], scan_batch));
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch) {
                 appendVid(vid);
@@ -44,37 +46,35 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
             }
         }
     } else {
-        struct Stream {
-            folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
-            std::vector<VertexId> batch;
-            size_t pos = 0;
-            bool done = false;
-        };
-        std::vector<Stream> streams;
-        streams.reserve(candidate_labels_.size());
-        for (LabelId lid : candidate_labels_)
-            streams.push_back(Stream{cancellable(store_.scanVerticesByLabel(lid)), {}, 0, false});
+        const size_t k = candidate_labels_.size();
+        std::vector<std::vector<VertexId>> batches(k);
+        std::vector<folly::coro::AsyncGenerator<std::span<const VertexId>>> gens;
+        gens.reserve(k);
+        for (size_t i = 0; i < k; ++i) {
+            batches[i].reserve(1024);
+            gens.push_back(cancellable(store_.scanVerticesByLabel(candidate_labels_[i], batches[i])));
+        }
 
-        const size_t k = streams.size();
         std::vector<bool> has(k, false);
+        std::vector<bool> done(k, false);
+        std::vector<size_t> pos(k, 0);
         std::vector<VertexId> current(k, 0);
         while (true) {
             // 1) 让每一路都握有一个"当前 vid"（本批用完了就续下一批）
             for (size_t i = 0; i < k; ++i) {
-                if (has[i] || streams[i].done)
+                if (has[i] || done[i])
                     continue;
-                while (streams[i].pos >= streams[i].batch.size()) {
-                    auto next = co_await streams[i].gen.next();
+                while (pos[i] >= batches[i].size()) {
+                    auto next = co_await gens[i].next();
                     if (!next) {
-                        streams[i].done = true;
+                        done[i] = true;
                         break;
                     }
-                    streams[i].batch = std::move(*next);
-                    streams[i].pos = 0;
+                    pos[i] = 0;
                 }
-                if (streams[i].done)
+                if (done[i])
                     continue;
-                current[i] = streams[i].batch[streams[i].pos];
+                current[i] = batches[i][pos[i]];
                 has[i] = true;
             }
             // 2) 取最小 vid；所有路都空了就结束
@@ -99,7 +99,7 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
             }
             for (size_t i = 0; i < k; ++i) {
                 if (has[i] && current[i] == smallest) {
-                    ++streams[i].pos;
+                    ++pos[i];
                     has[i] = false;
                 }
             }

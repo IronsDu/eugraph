@@ -26,7 +26,12 @@ namespace eugraph {
 ///  - DDL（create/drop table）是管理类操作 ⇒ 单次 admin session ✓
 class SyncGraphDataStore : public ISyncGraphDataStore {
 public:
-    SyncGraphDataStore() = default;
+    /// `adjacency_cache_capacity` is the per-direction COMPLETE-adjacency limit.
+    /// 0 keeps the current production behaviour: no state/adjacency keys in
+    /// `vertex_data`, every edge lives in `edge_index`. Tests set a small
+    /// non-zero value to exercise the COMPLETE/OVERFLOW paths.
+    explicit SyncGraphDataStore(uint32_t adjacency_cache_capacity = 0) noexcept
+        : adjacency_cache_capacity_(adjacency_cache_capacity) {}
     ~SyncGraphDataStore() override = default;
 
     SyncGraphDataStore(const SyncGraphDataStore&) = delete;
@@ -121,9 +126,6 @@ public:
     void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
                         std::optional<EdgeLabelId> label_filter,
                         const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) override;
-    std::string scanEdgesPage(GraphSession& session, VertexId vid, Direction direction,
-                              std::optional<EdgeLabelId> label_filter, std::vector<EdgeIndexEntry>& out,
-                              size_t max_edges, std::string_view after_key) override;
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid, Direction direction,
                                                           std::optional<EdgeLabelId> label_filter) override;
     void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
@@ -216,8 +218,14 @@ private:
                             std::optional<EdgeLabelId> label_filter,
                             std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out);
 
+    /// Edge-index-only cursor used by `createEdgeScanCursor`'s overflow fallback.
+    std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
+    createEdgeIndexScanCursor(GraphSession& session, VertexId vid, Direction direction,
+                              std::optional<EdgeLabelId> label_filter);
+
     WtConnectionStore* conn_ = nullptr;
     SchemaDdl schema_ddl_;
+    uint32_t adjacency_cache_capacity_ = 0;
 };
 
 // ==================== Scan Cursor Implementations ====================

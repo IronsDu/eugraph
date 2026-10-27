@@ -67,7 +67,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加优化规则 | [query/optimizer/cascades-optimizer.md] | `src/query/optimizer/` |
 | 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md] | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
-| 顶点标签/属性/邻接存储（vertex_data） | [storage/vertex-data-design.md](storage/vertex-data-design.md) | `src/storage/kv/key_codec.*`, `src/storage/data/sync_graph_data_store.*` |
+| 顶点标签/属性/邻接存储（vertex_data） | [storage/kv-encoding.md](storage/kv-encoding.md) | `src/storage/kv/key_codec.*`, `src/storage/data/sync_graph_data_store.*` |
 | Expand 目标标签过滤优化 | [query/expand-label-filter-optimization.md](query/expand-label-filter-optimization.md) | `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | PatternComprehension 锚点标签扫描 | [query/pattern-comprehension-anchor-label-scan.md](query/pattern-comprehension-anchor-label-scan.md) | `src/query/planner/binder/bind_match.cpp` |
 | LDBC c5/c9 计划分析 | [query/ldbc-c5-c9-plan-analysis.md](query/ldbc-c5-c9-plan-analysis.md) | `src/query/physical_plan/` |
@@ -123,7 +123,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 
 | 文档 | 说明 |
 |------|------|
-| [KV 编码](storage/kv-encoding.md) | WT 多表架构、Key/Value 编码格式、二级索引编码 |
+| [KV 编码](storage/kv-encoding.md) | WT 多表架构、vertex_data 标签/属性/邻接编码、Key/Value 编码格式、二级索引编码 |
 | [接口设计](storage/interfaces.md) | sync/async 分离接口 |
 | [元数据服务](storage/metadata-service-design.md) | AsyncGraphMetaStore、GraphSchema、索引元数据、batch ID 分配 |
 | [二级索引](storage/index_design.md) | B-tree 索引、IndexKeyCodec、状态机、IndexScan 优化 |

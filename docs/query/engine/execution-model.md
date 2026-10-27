@@ -161,7 +161,7 @@ AsyncGenerator<DataChunk>
 | IndexScan | 等值或范围扫描，通过 IndexKeyCodec | scanVerticesByIndex / scanVerticesByIndexRange |
 | ProjectionExtract | 融合点/边属性抽取 + Project 语义。7 种 ColumnSpec：Passthrough / LoadVertexProp / LoadEdgeProp / LoadVertexLabels / LoadEdgeType / ConstructVertex / ConstructEdge | getVertexLabels / getVertexProperty / getEdgeProperty 等 |
 | PathElementPropertyRead | Column Replacement：PathTopology → PathValue（全量加载元素属性和标签，仅用于 PathBuild 路径） | getVertexLabels / getVertexProperties / getEdgeProperties |
-| Expand | 嵌套循环：对每行输入扫描邻居边，产出 VertexRef / EdgeKey / VertexRef（拓扑） | scanEdgesPage（caller-owned vector，4096/页） |
+| Expand | 嵌套循环：对每行输入扫描邻居边，产出 VertexRef / EdgeKey / VertexRef（拓扑） | scanEdges（caller-owned vector，4096/批） |
 | VarLenExpand | DFS + 显式栈 + 边唯一性回溯，产出 VertexRef（dst），PathValue（path），List\<EdgeValue\>（edge list） | scanEdges × hop_depth |
 | ShortestPath | 独立算子：shortestPath 用双向 BFS（frontier 较小的一侧优先），allShortestPaths 用前向 BFS 枚举等长路径；产出 PathValue | scanEdges（双向 BFS 每层只扫 frontier） |
 | Filter | 纯计算，无 IO | 无 |

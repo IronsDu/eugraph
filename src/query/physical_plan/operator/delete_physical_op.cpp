@@ -155,13 +155,15 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
                     continue;
                 VertexId vid = entity.vertex_id;
                 if (detach_) {
-                    auto out_gen = cancellable(store_.scanEdges(vid, Direction::OUT, std::nullopt));
+                    std::vector<ISyncGraphDataStore::EdgeIndexEntry> out_batch;
+                    auto out_gen = cancellable(store_.scanEdges(vid, Direction::OUT, std::nullopt, out_batch));
                     while (auto edge_batch = co_await out_gen.next()) {
                         for (const auto& entry : *edge_batch)
                             co_await store_.deleteEdge(entry.edge_id, entry.edge_label_id, vid, entry.neighbor_id,
                                                        entry.seq);
                     }
-                    auto in_gen = cancellable(store_.scanEdges(vid, Direction::IN, std::nullopt));
+                    std::vector<ISyncGraphDataStore::EdgeIndexEntry> in_batch;
+                    auto in_gen = cancellable(store_.scanEdges(vid, Direction::IN, std::nullopt, in_batch));
                     while (auto edge_batch = co_await in_gen.next()) {
                         for (const auto& entry : *edge_batch)
                             co_await store_.deleteEdge(entry.edge_id, entry.edge_label_id, entry.neighbor_id, vid,
@@ -169,7 +171,8 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
                     }
                 } else if (checked_vertices.insert(vid).second) {
                     bool has_connected = false;
-                    auto out_gen = cancellable(store_.scanEdges(vid, Direction::OUT, std::nullopt));
+                    std::vector<ISyncGraphDataStore::EdgeIndexEntry> out_batch;
+                    auto out_gen = cancellable(store_.scanEdges(vid, Direction::OUT, std::nullopt, out_batch));
                     while (auto batch = co_await out_gen.next()) {
                         for (const auto& entry : *batch) {
                             if (deleted_edges.find(entry.edge_id) == deleted_edges.end()) {
@@ -181,7 +184,8 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
                             break;
                     }
                     if (!has_connected) {
-                        auto in_gen = cancellable(store_.scanEdges(vid, Direction::IN, std::nullopt));
+                        std::vector<ISyncGraphDataStore::EdgeIndexEntry> in_batch;
+                        auto in_gen = cancellable(store_.scanEdges(vid, Direction::IN, std::nullopt, in_batch));
                         while (auto batch = co_await in_gen.next()) {
                             for (const auto& entry : *batch) {
                                 if (deleted_edges.find(entry.edge_id) == deleted_edges.end()) {

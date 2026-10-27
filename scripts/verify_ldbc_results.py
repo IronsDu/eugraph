@@ -6,12 +6,12 @@
   改动后真正要回答的是"两边结果是否一致"。本脚本复用同一套口径（参数覆盖、id 按引擎转型、
   neo4j 侧类型改写、就绪检查），但把每一行结果取回来做**多重集比对**。
 
-默认跳过 complex-1：当前 CsvBasic 导入缺少 Person.email/speaks，且 neo4j 侧 friend 集合
-不同，属于数据差异，不是查询语义差异。complex-5/13/14 现已支持，默认参与对照。
-需要时用 --only 显式指定，或 --skip "" 取消默认跳过。
+默认跑全量 21 条读查询（CsvComposite 口径，文档记录 21/21 语义一致；c1/c12 的
+collect 列表按集合归一）。如果使用 CsvBasic、或 neo4j 侧 friend 集合与 eugraph 不同，
+complex-1 可能因数据差异而不一致，可用 --skip complex-1 显式排除。
 
 用法：
-  python3 scripts/verify_ldbc_results.py --queries-dir <dir> [--only complex-7] [--skip ""]
+  python3 scripts/verify_ldbc_results.py --queries-dir <dir> [--only complex-7] [--skip complex-1]
 退出码：0 = 全部一致；1 = 存在差异/错误。
 """
 from __future__ import annotations
@@ -25,8 +25,8 @@ from pathlib import Path
 from neo4j import GraphDatabase
 
 QUERIES_ROOT = Path("/home/dodo/code/fuck/ldbc_snb_interactive_v1_impls/cypher/queries")
-# 文档 §3 记录为"无法成功运行"，默认跳过
-DEFAULT_SKIP = "complex-1"
+# 默认全跑；数据差异场景可显式 --skip complex-1。
+DEFAULT_SKIP = ""
 
 sys.path.insert(0, str(Path(__file__).parent))
 from bench_ldbc_ab import ID_PARAMS, check_neo4j_ready, load_param_parser, query_body  # noqa: E402

@@ -21,7 +21,10 @@
   c5/c9/c14 另有 5 轮专项复测。绝对值受机器频率影响，跨轮次只看数量级。
 - 参数：complex/short 的 `personId=933`、`messageId=3`；complex-13/14
   `person1Id=933, person2Id=1129`（官方默认 ID 不在本地 sf0.1）。complex-1 的 `firstName`
-  保持文件默认 `Jose`。
+  保持文件默认 `Jose`。`bench_ldbc_ab.py` / `verify_ldbc_results.py` 默认使用这组参数，
+  需要换成本地其他 ID 时传 `--override personId=...,person1Id=...,person2Id=...`。
+- 结果复验默认跑全量 21 条；仅在 CsvBasic 或 neo4j 侧 friend 集合存在数据差异时用
+  `--skip complex-1` 排除该条。
 - **点查索引前提**：short-4..7 依赖 `Person/Message/Post/Comment/Forum(id)` 索引。
   本轮 eugraph 补建 `Message.id` 索引，neo4j 的对应索引均确认 `ONLINE`；无索引时 short-4 会退化为
   全表扫描，不能作为结论。
@@ -90,7 +93,7 @@ complex-5/9/14 的上表为全量 21 条同轮 A/B（3 轮 min）；计划文档
 **complex-9 更正**：旧的 161.7 ms 来自 filter-boundary 延迟物化缺陷——
 Sort 所需、Filter 不需要的 `message.id` 被放在 Sort 下方按 LIMIT 后物化，
 Sort 比较了占位值，返回的 Top-20 不是最大日期。该优化已移除；修复后为 187.2 ms，
-优化前正确基线是 422 ms。见 [vertex-data-design §正确性修复](../storage/vertex-data-design.md)。
+优化前正确基线是 422 ms。见 [kv-encoding §实施记录](../storage/kv-encoding.md)。
 其余读取沿用上一轮结果。
 
 ### 2.3 Updates

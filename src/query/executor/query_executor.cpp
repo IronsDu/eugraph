@@ -192,6 +192,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .func_registry = ctx->func_registry.get(),
         .expand_allowed_filter = {},
         .filtered_expand = nullptr,
+        .deferred_slots = std::nullopt,
+        .anchor_edge_var = {},
     };
 
     plan_ctx.eval_ctx.catalog = ctx->catalog.get();
@@ -452,7 +454,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             IAsyncGraphDataStore& ds = bound_store;
 
             {
-                auto gen = ds.scanVerticesByLabel(label_def->id);
+                std::vector<VertexId> scan_batch;
+                auto gen = ds.scanVerticesByLabel(label_def->id, scan_batch);
                 while (auto batch = co_await gen.next()) {
                     for (auto vid : *batch) {
                         std::vector<PropertyValue> values;
@@ -619,7 +622,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             IAsyncGraphDataStore& ds = bound_store;
 
             {
-                auto gen = ds.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
+                std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> scan_batch;
+                auto gen = ds.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt, scan_batch);
                 while (auto batch = co_await gen.next()) {
                     for (const auto& entry : *batch) {
                         auto props_opt = co_await ds.getEdgeProperties(edge_label_def->id, entry.edge_id);

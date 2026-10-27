@@ -63,12 +63,12 @@ MATCH (n) RETURN n::TagB
 ### CREATE 语义：类 NebulaGraph 多标签模型
 
 - 每次 `CREATE (n:Label {...})` 时，系统自动分配唯一顶点 ID
-- 该顶点与创建时指定的标签实体建立关联（写入 `label_reverse` 表）
+- 该顶点与创建时指定的标签实体建立关联（写入 `vertex_data` 的 `{vid}{0x00}{label_id}` 记录）
 - **支持** `CREATE (n:TagA:TagB)` 和 `CREATE (n:TagA:TagB {prop: val})`（多标签节点创建）
   - 属性按标签解析：每个属性查找所有指定标签，单个匹配 → 写入该标签，无匹配 → 写入 `__anon__`
   - **同名属性歧义拒绝**：如果属性名在多个指定标签中都存在（如 `name` 同时在 Person 和 Employee 中），binder 报错要求使用 `::` 消歧
 - 后续通过 `SET n:NewLabel` 给已有顶点增加新标签
-- 每个标签的属性独立存储（`vprop_{label_id}` 表），互不干扰
+- 每个标签的属性独立存储（`vertex_data` 的 `{vid}{0x01}{label_id}{prop_id}` 记录），互不干扰
 - **标签可以不定义属性列**（`CREATE LABEL TagName`），用于纯标记/分类场景
 
 ```cypher
@@ -104,8 +104,8 @@ CREATE (n:Person:Employee {age: 30, salary: 50000, tag: 'x'})  -- 多标签 CREA
 ### 3.3 底层基础设施
 
 - 顶点支持 `LabelIdSet`（多标签集合）
-- 属性按标签独立存储在 `vprop_{id}` 表（每标签一张表）
-- 标签反向索引 `label_reverse` 表维护顶点→标签映射
+- 属性按标签独立存储在 `vertex_data` 的 `{vid}{0x01}{label_id}{prop_id}` 记录
+- 标签集合存放在 `vertex_data` 的 `{vid}{0x00}{label_id}` 记录；`label_fwd_{id}` 维护标签→顶点正向扫描
 - `GraphSchema` 维护标签名→ID 双向映射
 - `__anon__` 隐藏标签的 prop_id 通过轻量级并发分配（`getOrCreateAnonPropId`），不走完整 ALTER DDL 路径
 - SET/REMOVE 支持两种属性访问模式：**强模式**（`n::Label.prop`，编译期校验）和**便捷模式**（`n.prop`，运行时推断归属）
@@ -127,7 +127,7 @@ CREATE (n:Person:Employee {age: 30, salary: 50000, tag: 'x'})  -- 多标签 CREA
 
 ### 4.3 属性存储模型：按标签隔离
 
-`VertexValue.properties` 为 `map<LabelId, Properties>`。每个标签的属性独立存储和访问，兼容现有 `vprop_{id}` 表结构。表达式求值在转型模式下直接定位到对应 LabelId 的 Properties，便捷模式下遍历所有 LabelId。
+`VertexValue.properties` 为 `map<LabelId, Properties>`。每个标签的属性独立存储和访问；物理上落在 `vertex_data` 的 `{vid}{0x01}{label}{prop}` 记录。表达式求值在转型模式下直接定位到对应 LabelId 的 Properties，便捷模式下遍历所有 LabelId。
 
 ### 4.4 CREATE 支持多标签
 

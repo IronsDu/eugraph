@@ -219,6 +219,8 @@ public:
 
 * WT session/cursor **不是线程安全的** ✗，但**无线程亲和** ✓ ⇒ 允许**顺序**换线程使用 ✓，**禁止并发** ✗。
 * 会话**不跨线程并发** ✓：一个租约同一时刻只属于一个执行流 ✓。
+* `AsyncGraphDataStore` 的多批扫描按批直接 `IoScheduler::dispatch`，不绑定具体 `EventBase`；
+  由 `AsyncGenerator` 的串行消费保证同一 session/cursor 不会并发使用 ✓。
 * **无 TLS** ✓（session 由池分发 ✓）。
 * **锁表**：池一次 mutex（每次 acquire/put ✓，**不是**每 KV 调用 ✗）；cursor 缓存在会话内 ✓（无锁 ✓）。
 

@@ -40,12 +40,13 @@ EdgeIndexScanPhysicalOp::EdgeIndexScanPhysicalOp(std::string src_var, std::strin
       store_(store), edge_label_defs_(std::move(edge_label_defs)) {}
 
 folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
-    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>> gen;
+    std::vector<EdgeIndexScanEntry> scan_batch;
+    folly::coro::AsyncGenerator<std::span<const EdgeIndexScanEntry>> gen;
     if (mode_ == ScanMode::EQUALITY) {
         if (prop_ids_.size() == 1) {
-            gen = cancellable(store_.scanEdgesByIndex(label_id_, prop_ids_[0], eq_values_[0]));
+            gen = cancellable(store_.scanEdgesByIndex(label_id_, prop_ids_[0], eq_values_[0], scan_batch));
         } else {
-            gen = cancellable(store_.scanEdgesByIndexComposite(label_id_, prop_ids_, eq_values_));
+            gen = cancellable(store_.scanEdgesByIndexComposite(label_id_, prop_ids_, eq_values_, scan_batch));
         }
     } else {
         if (prop_ids_.size() == 1) {
@@ -55,9 +56,10 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
                 start = (*range_start_)[0];
             if (range_end_.has_value())
                 end = (*range_end_)[0];
-            gen = cancellable(store_.scanEdgesByIndexRange(label_id_, prop_ids_[0], start, end));
+            gen = cancellable(store_.scanEdgesByIndexRange(label_id_, prop_ids_[0], start, end, scan_batch));
         } else {
-            gen = cancellable(store_.scanEdgesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_));
+            gen = cancellable(
+                store_.scanEdgesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_, scan_batch));
         }
     }
 

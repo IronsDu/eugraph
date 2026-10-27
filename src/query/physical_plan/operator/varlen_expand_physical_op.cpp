@@ -91,7 +91,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         if (index_id == 0)
             co_return;
         std::vector<PropertyValue> one{value};
-        auto gen = cancellable(store_.scanVerticesByIndexId(index_id, one));
+        std::vector<VertexId> scan_batch;
+        auto gen = cancellable(store_.scanVerticesByIndexId(index_id, one, scan_batch));
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch)
                 out.insert(vid);
@@ -158,8 +159,9 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
     auto scanDirected = [&](VertexId vid, Direction scan_dir) -> folly::coro::Task<std::vector<DirectedEdgeEntry>> {
         std::vector<DirectedEdgeEntry> out;
         bool phy_out = (scan_dir == Direction::OUT);
+        std::vector<ISyncGraphDataStore::EdgeIndexEntry> scan_batch;
         for (const auto& label_filter : scan_filters) {
-            auto edge_gen = cancellable(store_.scanEdges(vid, scan_dir, label_filter));
+            auto edge_gen = cancellable(store_.scanEdges(vid, scan_dir, label_filter, scan_batch));
             while (auto edge_batch = co_await edge_gen.next()) {
                 for (const auto& e : *edge_batch)
                     out.push_back({e.neighbor_id, e.edge_id, e.edge_label_id, e.seq, phy_out});

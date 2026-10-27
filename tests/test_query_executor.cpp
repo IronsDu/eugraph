@@ -9780,3 +9780,83 @@ TEST_F(QueryExecutorTest, ForeachBodyRejectsReadingClauses) {
     auto result = execSync(*executor_, "FOREACH (x IN [1] | MATCH (n) RETURN n)");
     EXPECT_FALSE(result.error.empty());
 }
+
+// ==================== vertex_data / batching regressions ====================
+
+TEST_F(QueryExecutorTest, GroupByListContainingNull) {
+    // Locks the hash-container contract: null inside a list must be a stable
+    // GROUP BY key, not an unknown that creates a new group per row.
+    auto result = execSync(*executor_, "UNWIND [1, 1] AS x WITH [null] AS l, count(*) AS c RETURN l, c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]));
+    const auto& list = *std::get<ListValuePtr>(result.rows[0][0]);
+    ASSERT_EQ(list.elements.size(), 1u);
+    EXPECT_TRUE(isNull(list.elements[0].value));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 2);
+}
+
+TEST_F(QueryExecutorTest, ExpandUndirectedPaginatesLargeAdjacency) {
+    insertTestVertices();
+
+    // More than one 4096-edge page: the second page must resume after the last
+    // returned key and not lose or duplicate edges.
+    constexpr uint64_t kEdgeCount = 4100;
+    auto txn = sync_data_->beginTransaction();
+    for (uint64_t i = 0; i < kEdgeCount; ++i)
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 20000 + i, 1, 2, KNOWS_LABEL, i, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'name1'})-[:KNOWS]-(b) RETURN count(*) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), static_cast<int64_t>(kEdgeCount));
+}
+
+TEST_F(QueryExecutorMultiLabelTest, CoalesceBatchSkipsMissingLabels) {
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
+    ASSERT_TRUE(employee_def.has_value());
+    const uint16_t person_name = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    const uint16_t employee_name = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "name");
+    ASSERT_NE(person_name, UINT16_MAX);
+    ASSERT_NE(employee_name, UINT16_MAX);
+
+    Properties p1;
+    p1.resize(person_name + 1);
+    p1[person_name] = PropertyValue(std::string("Alice"));
+    Properties p2;
+    p2.resize(employee_name + 1);
+    p2[employee_name] = PropertyValue(std::string("Engineer"));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(p1)}});
+    insertMultiLabelVertex(2, {{EMPLOYEE_LABEL, std::move(p2)}});
+
+    // One Coalesce batch spans rows whose vertices have different label sets;
+    // absent candidates must be skipped rather than producing null entries.
+    auto result = execSync(*executor_, "MATCH (n) RETURN n.name AS name ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "Engineer");
+}
+
+TEST_F(QueryExecutorTest, ScanVerticesSpansMultipleIoBatches) {
+    // More than one 1024-vertex batch: the AsyncGenerator must keep the scan
+    // cursor usable while each batch is dispatched independently to the IO pool.
+    constexpr size_t kVertices = 1100;
+    auto txn = sync_data_->beginTransaction();
+    for (size_t i = 0; i < kVertices; ++i) {
+        ASSERT_TRUE(
+            sync_data_->insertVertex(txn, static_cast<VertexId>(1000 + i),
+                                     std::vector<std::pair<LabelId, Properties>>{{PERSON_LABEL, Properties{}}}));
+    }
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN count(*) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), static_cast<int64_t>(kVertices));
+}

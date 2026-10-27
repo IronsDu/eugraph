@@ -517,7 +517,7 @@ class PhysicalOperator {
 
 **EdgeIndexScan**：由 `Filter(Expand)` 推导产生（单类型时）。边索引 value 包含邻接信息，可直接产出 src/dst/edge 列。
 
-**Expand**：对输入的每一行调用 `scanEdgesPage(src_id, dir, label_filter, edge_scratch_, 4096, after_key)`，每条边产生一行输出。`edge_scratch_` 是算子的成员 vector，跨行/跨页复用；每页最多 4096 条，高 degree 用上一页最后 key 续扫，内存不随 degree 线性增长。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](projection-extract-design.md)）。
+**Expand**：对输入的每一行调用 `scanEdges(src_id, dir, label_filter, edge_scratch_)`，每条边产生一行输出。`edge_scratch_` 是算子的成员 vector，跨行/跨批复用；generator 每批最多 4096 条，内存不随 degree 线性增长。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](projection-extract-design.md)）。
 
 **Filter**：`VectorizedEvaluator` 求值 BoundExpression 谓词，DICTIONARY 选择向量标记有效行。
 
