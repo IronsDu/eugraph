@@ -156,3 +156,31 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
 3. loader 的 DDL 超时改为可配置（或对建索引用更长超时），并在加载结束做
    "索引存在且点查命中"的校验，失败即报错退出；
 4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。
+
+## ASan TCK：CREATE 场景 SEGV（2026-10-28）
+
+**命令**：
+
+```bash
+ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+  ctest --test-dir build/asan -R '^tck_tests$' --output-on-failure
+```
+
+**结果**：TCK 约 44 s 后 server crash，失败在
+`third_party/openCypher/tck/features/clauses/create/Create4.feature` 的
+`[2] Many CREATE clauses`。
+
+**ASan 栈**：
+
+```text
+AddressSanitizer: SEGV in operator delete
+  ColumnBuffer::~ColumnBuffer()          data_chunk.hpp:82
+  DataChunk::~DataChunk()                data_chunk.hpp:764
+  AsyncGenerator<DataChunk>::NextResult::~NextResult()
+  CreateNodePhysicalOp::executeChunk()   create_node_physical_op.cpp:292
+  CreateEdgePhysicalOp::executeChunk()   create_edge_physical_op.cpp:48
+```
+
+Release 构建的全量 TCK 1306/1306 通过；该崩溃只在 ASan 下出现，属于
+CREATE/DataChunk 内存生命周期问题，**不是本次 batch/metrics 改动引入的路径**。
+在修复前 ASan TCK 不能作为绿色门禁。

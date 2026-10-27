@@ -98,12 +98,12 @@ LabelScan + 端点谓词仍会在每个 `r` 上重复扫描 1,528 个 Person（c
 - 原有锚点/语义 Filter 保留在 Probe 之上做校验。
 
 结果（sf0.1，person1Id=933，person2Id=1129）：**835 ms → 295 ms**，4 行 pathWeight 不变；
-`vertex_data` 分支同轮 A/B 复测为 **291.4 ms**（neo4j 17.7 ms，4 行一致）。
+最新全量 A/B 为 **119.5 ms**（neo4j 18.1 ms，4 行一致；批量顶点读取后）。
 剩余成本是 24 次 PC 的实际 Comment/Post 展开，约 290 ms。
 
 ## 2026-10-25 后续评估
 
-- 当前约 291 ms 中约 280 ms 是两个 PC 对 12 条 `r` 的实际 Comment/Post 展开；
+- 批量前约 291 ms 中约 280 ms 是两个 PC 对 12 条 `r` 的实际 Comment/Post 展开；
   `allShortestPaths` 约 9 ms，锚点探测已不是瓶颈。
 - `dst_labels` 已验证存在（Comment/Post/Person），因此“提前按标签裁剪展开”没有额外收益。
 - 纯安全的小改动（合并相邻 Filter、reserve、PC 端点 pair 缓存）预计只有个位数百分比。

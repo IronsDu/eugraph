@@ -43,9 +43,9 @@
 
 ## 2. 可运行性与耗时
 
-> **本分支状态（2026-10-25，全量 21 条复跑）**：complex-14 **351 ms**（🔴🔴 约 21×）；
-> complex-9 **232 ms**（🔴 约 8.1×，旧 161.7 为错误计划结果）；complex-5 **250 ms**（🟡 约 2.8×）。
-> 三者行结果均与 neo4j 一致；c1/c12 的差异见 §2.2 注。方案见
+> **最新全量 21 条复跑（2026-10-27，CsvComposite + 批量读取）**：complex-14 **119.5 ms**
+> （🔴 约 6.6×）、complex-9 **177.1 ms**（🔴 约 6.1×，旧 161.7 为错误计划结果）、
+> complex-5 **246.5 ms**（🟡 约 2.7×）。21/21 行结果与 neo4j 一致。方案见
 > [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md)、
 > [算子实现计划](../query/c5-c9-operator-implementation-plan.md)）。
 
@@ -87,8 +87,8 @@
 > （首段 shortestPath 15/15，最终 c1 也是 15/15）。
 > c3/c4 当前参数下两边都是 0 行，耗时只代表扫描/过滤成本。
 
-complex-5/9/14 的上表为全量 21 条同轮 A/B（3 轮 min）；计划文档中的 234/187/291 ms
-是另外 5 轮专项复测，绝对值受机器频率影响，结论以同轮比值为准。
+complex-5/9/14 上表为最新全量同轮 A/B（3 轮 min，CsvComposite，批量读取后）；
+绝对值受机器频率影响，结论以同轮比值为准。
 
 **complex-9 更正**：旧的 161.7 ms 来自 filter-boundary 延迟物化缺陷——
 Sort 所需、Filter 不需要的 `message.id` 被放在 Sort 下方按 LIMIT 后物化，
@@ -114,8 +114,8 @@ LDBC update stream fixture（文件本身没有 `:param` 块），仓库内没�
 | update-7 | 440.07 | 96.08 | 🟠 慢 4.6× |
 
 **当前没有不可运行的 LDBC 读取语句。** 全量 21 条结果均语义一致：
-complex-14 351 ms（4 行）、complex-9 232 ms（旧 161.7 为错误计划结果）、
-complex-5 250 ms；complex-1/c12 仅在 `collect` 列表顺序上不同，按集合归一后 15/15、3/3。
+complex-14 119.5 ms（4 行）、complex-9 177.1 ms（旧 161.7 为错误计划结果）、
+complex-5 246.5 ms；complex-1/c12 仅在 `collect` 列表顺序上不同，按集合归一后 15/15、3/3。
 complex-3/4 当前参数下两边均为 0 行。
 
 ## 3. 剩余性能点、原因与思路
