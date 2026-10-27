@@ -312,6 +312,70 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
     return false;
 }
 
+/// Total equality for hash-container keys (GROUP BY / DISTINCT).
+///
+/// `valueEquals` is three-valued: null == null is unknown, and a list containing
+/// null yields unknown. Hash containers need a total equivalence relation, so
+/// this variant treats null as equal to null recursively. Without it, a group
+/// key such as c1's `[null]` lands in a different hash bucket every row, and
+/// `WITH friend, collect(...)` fails to aggregate.
+inline bool valueContentEquals(const Value& a, const Value& b) noexcept {
+    const bool an = isNull(a);
+    const bool bn = isNull(b);
+    if (an || bn)
+        return an && bn;
+
+    if (std::holds_alternative<ListValuePtr>(a) && std::holds_alternative<ListValuePtr>(b)) {
+        const auto& la = std::get<ListValuePtr>(a);
+        const auto& lb = std::get<ListValuePtr>(b);
+        if (!la || !lb)
+            return !la && !lb;
+        if (la->elements.size() != lb->elements.size())
+            return false;
+        for (size_t i = 0; i < la->elements.size(); ++i)
+            if (!valueContentEquals(la->elements[i].value, lb->elements[i].value))
+                return false;
+        return true;
+    }
+
+    if (std::holds_alternative<MapValuePtr>(a) && std::holds_alternative<MapValuePtr>(b)) {
+        const auto& ma = std::get<MapValuePtr>(a);
+        const auto& mb = std::get<MapValuePtr>(b);
+        if (!ma || !mb)
+            return !ma && !mb;
+        if (ma->entries.size() != mb->entries.size())
+            return false;
+        for (const auto& [key, lhs] : ma->entries) {
+            bool found = false;
+            for (const auto& [other_key, rhs] : mb->entries) {
+                if (key == other_key && valueContentEquals(lhs.value, rhs.value)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                return false;
+        }
+        return true;
+    }
+
+    if (std::holds_alternative<PathValuePtr>(a) && std::holds_alternative<PathValuePtr>(b)) {
+        const auto& pa = std::get<PathValuePtr>(a);
+        const auto& pb = std::get<PathValuePtr>(b);
+        if (!pa || !pb)
+            return !pa && !pb;
+        if (pa->elements.size() != pb->elements.size())
+            return false;
+        for (size_t i = 0; i < pa->elements.size(); ++i)
+            if (!valueContentEquals(pa->elements[i].value, pb->elements[i].value))
+                return false;
+        return true;
+    }
+
+    auto eq = valueEquals(a, b);
+    return eq && *eq;
+}
+
 // Three-valued ordered comparison: returns -1 (a < b), 0 (equal), 1 (a > b),
 // or nullopt (unknown — null encountered or types are not ordered-comparable).
 // Semantics:
@@ -474,10 +538,7 @@ struct ValueHash {
 /// which is how DISTINCT stopped deduplicating. Use this alongside ValueHash.
 struct ValueContentEqual {
     bool operator()(const Value& a, const Value& b) const noexcept {
-        if (isNull(a) && isNull(b))
-            return true;
-        auto eq = valueEquals(a, b);
-        return eq && *eq;
+        return valueContentEquals(a, b);
     }
 };
 
@@ -501,10 +562,7 @@ struct RowEqual {
             // and DISTINCT would stop deduplicating rows that hold different handles
             // to the same entity. RowHash already hashes payloads, so this also keeps
             // the two halves of the unordered_set contract in agreement.
-            if (isNull(a[i]) && isNull(b[i]))
-                continue;
-            auto eq = valueEquals(a[i], b[i]);
-            if (!eq || !*eq)
+            if (!valueContentEquals(a[i], b[i]))
                 return false;
         }
         return true;

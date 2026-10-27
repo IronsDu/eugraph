@@ -429,7 +429,8 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
     if (labels.empty()) {
         if (anon_label_id_ == INVALID_LABEL_ID)
             co_return std::nullopt;
-        auto gen = cancellable(store_.scanVerticesByLabel(anon_label_id_));
+        std::vector<VertexId> vertex_batch;
+        auto gen = cancellable(store_.scanVerticesByLabel(anon_label_id_, vertex_batch));
         while (auto batch = co_await gen.next()) {
             for (auto vid : *batch) {
                 if (prop_filters.empty() && pending_props.empty())
@@ -490,7 +491,8 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
     for (auto lid : labels) {
         if (lid == INVALID_LABEL_ID)
             continue;
-        auto gen = cancellable(store_.scanVerticesByLabel(lid));
+        std::vector<VertexId> vertex_batch;
+        auto gen = cancellable(store_.scanVerticesByLabel(lid, vertex_batch));
         std::unordered_set<VertexId> label_verts;
         while (auto batch = co_await gen.next()) {
             for (auto vid : *batch) {
@@ -678,7 +680,8 @@ MergePhysicalOp::findMatchingEdge(VertexId src_vid, VertexId dst_vid,
     Direction store_dir = toStoreDir(direction_);
 
     auto scanAndFilter = [&](Direction dir) -> folly::coro::Task<std::optional<std::tuple<EdgeId, EdgeLabelId>>> {
-        auto gen = cancellable(store_.scanEdges(src_vid, dir, edge_label_id_));
+        std::vector<ISyncGraphDataStore::EdgeIndexEntry> edge_batch;
+        auto gen = cancellable(store_.scanEdges(src_vid, dir, edge_label_id_, edge_batch));
         while (auto batch = co_await gen.next()) {
             for (const auto& entry : *batch) {
                 if (entry.neighbor_id != dst_vid)
@@ -745,7 +748,8 @@ MergePhysicalOp::findAllMatchingEdges(VertexId src_vid, VertexId dst_vid,
     Direction store_dir = toStoreDir(direction_);
 
     auto scanAndCollect = [&](Direction dir) -> folly::coro::Task<void> {
-        auto gen = cancellable(store_.scanEdges(src_vid, dir, edge_label_id_));
+        std::vector<ISyncGraphDataStore::EdgeIndexEntry> edge_batch;
+        auto gen = cancellable(store_.scanEdges(src_vid, dir, edge_label_id_, edge_batch));
         while (auto batch = co_await gen.next()) {
             for (const auto& entry : *batch) {
                 if (entry.neighbor_id != dst_vid)
@@ -1252,7 +1256,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 bool bare_merge = !has_relationship_ && start_labels_.empty() && start_prop_filters_.empty() &&
                                   start_pending_props_.empty();
                 if (bare_merge) {
-                    auto all_gen = cancellable(store_.scanAllVertices());
+                    std::vector<VertexId> all_batch;
+                    auto all_gen = cancellable(store_.scanAllVertices(all_batch));
                     while (auto batch = co_await all_gen.next()) {
                         for (auto vid : *batch)
                             bare_matches.push_back(vid);

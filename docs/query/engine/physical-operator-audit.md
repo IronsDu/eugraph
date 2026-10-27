@@ -1254,5 +1254,5 @@ TC-29  MATCH (a)-[:knows]->(b)-[:works_at]->(c),
 |------|------|
 | **I/O 调度器 io_uring + 排序合并** | 工程量大，需改造整个 IO 栈。当前协程+线程池已够用，等 batch API 落地后 profiling 发现瓶颈再动 |
 | **向量化 Hash Join（Radix Partitioning）** | 全新算子，正交于当前拓扑/语义分离重构。CrossProduct/SemiJoin 在列裁剪后输入列极窄 |
-| **顶点属性与边存储在同一 Page** | 当前 `vprop_{id}` 和 `edge_index` 是独立 WT 表，修改 layout 涉及 KV 编码重构和迁移，风险高 |
+| **顶点属性与边存储在同一 Page** | 当前顶点属性在 `vertex_data`、边邻接在 `edge_index`，仍是独立 WT 表；修改 layout 涉及 KV 编码重构和迁移，风险高 |
 | **通用 ExpressionVisitor 提取** | binder 中多处复制 visitor 模板（`hasAggregate`、`expressionReferencesVariable`、`walkAndReplaceAggCalls`、`collectColumnNames`）。正交于拓扑/语义分离 |

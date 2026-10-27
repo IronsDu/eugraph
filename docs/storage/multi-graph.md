@@ -14,14 +14,14 @@ data-dir/
 └── meta/     ← 元数据（WT_CONNECTION，schema 信息）
 ```
 
-WiredTiger 表按 label/edge_label ID 分表（详见 [kv-encoding.md](kv-encoding.md)）：
+WiredTiger 表按 label/edge_label ID 分表；`vertex_data` / `edge_index` / `vertex_existence` 是全局表（详见 [kv-encoding.md](kv-encoding.md)）：
 
 | 表名 | 说明 |
 |------|------|
-| `table:label_reverse` | 顶点→标签反向索引（全局） |
-| `table:edge_index` | 邻接索引（全局） |
+| `table:vertex_data` | 顶点标签 + 属性 + 可选邻接缓存（全局，按顶点前缀聚簇） |
+| `table:vertex_existence` | 顶点存在表（全局） |
+| `table:edge_index` | 邻接索引（全局；邻接缓存启用时只存 OVERFLOW 方向） |
 | `table:label_fwd_{label_id}` | 标签正向索引（per-label） |
-| `table:vprop_{label_id}` | 顶点属性（per-label） |
 | `table:etype_{edge_label_id}` | 边类型索引（per-edge-label） |
 | `table:eprop_{edge_label_id}` | 边属性（per-edge-label） |
 

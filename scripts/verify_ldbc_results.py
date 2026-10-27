@@ -6,13 +6,12 @@
   改动后真正要回答的是"两边结果是否一致"。本脚本复用同一套口径（参数覆盖、id 按引擎转型、
   neo4j 侧类型改写、就绪检查），但把每一行结果取回来做**多重集比对**。
 
-默认跳过文档记录为"无法成功运行"的语句（`docs/benchmark/ldbc-snb-sf0.1-comparison.md` §3）：
-  complex-1 / complex-13 / complex-14  —— shortestPath / allShortestPaths + reduce 语法不支持
-  complex-5                            —— eugraph 不返回（compute 满载、取消不生效）
-需要时用 --only 显式指定，或 --skip "" 取消默认跳过。
+默认跑全量 21 条读查询（CsvComposite 口径，文档记录 21/21 语义一致；c1/c12 的
+collect 列表按集合归一）。如果使用 CsvBasic、或 neo4j 侧 friend 集合与 eugraph 不同，
+complex-1 可能因数据差异而不一致，可用 --skip complex-1 显式排除。
 
 用法：
-  python3 scripts/verify_ldbc_results.py --queries-dir <dir> [--only complex-7] [--skip ""]
+  python3 scripts/verify_ldbc_results.py --queries-dir <dir> [--only complex-7] [--skip complex-1]
 退出码：0 = 全部一致；1 = 存在差异/错误。
 """
 from __future__ import annotations
@@ -26,8 +25,8 @@ from pathlib import Path
 from neo4j import GraphDatabase
 
 QUERIES_ROOT = Path("/home/dodo/code/fuck/ldbc_snb_interactive_v1_impls/cypher/queries")
-# 文档 §3 记录为"无法成功运行"，默认跳过
-DEFAULT_SKIP = "complex-1,complex-5,complex-13,complex-14"
+# 默认全跑；数据差异场景可显式 --skip complex-1。
+DEFAULT_SKIP = ""
 
 sys.path.insert(0, str(Path(__file__).parent))
 from bench_ldbc_ab import ID_PARAMS, check_neo4j_ready, load_param_parser, query_body  # noqa: E402
@@ -81,6 +80,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--only", default=None)
     ap.add_argument("--skip", default=DEFAULT_SKIP)
+    ap.add_argument("--override", default=None,
+                    help="逗号分隔 key=value，应用到所有声明该参数的查询（如 person1Id=933,person2Id=1129）")
     args = ap.parse_args()
 
     parse_params = load_param_parser(Path(__file__).with_name("bench_ldbc_interactive.py"))
@@ -97,7 +98,13 @@ def main() -> int:
     check_neo4j_ready(neo)
 
     # 文档口径的参数覆盖（sf0.1 里真实存在的 id）
-    overrides = {"personId": 933, "messageId": 3}
+    overrides = {"personId": 933, "messageId": 3, "person1Id": 933, "person2Id": 1129}
+    if args.override:
+        for item in args.override.split(","):
+            if "=" not in item:
+                continue
+            k, v = item.split("=", 1)
+            overrides[k.strip()] = int(v) if v.strip().lstrip("-").isdigit() else v.strip()
 
     print(f"{'query':22} {'eg rows':>8} {'neo rows':>9} {'eg ms':>8} {'neo ms':>8}  result")
     print("-" * 74)
@@ -127,6 +134,21 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             note = f"NEO-ERR {type(exc).__name__}"
         if eg_rows is not None and neo_rows is not None and note == "MATCH":
+            # collect(DISTINCT ...) / collect(...) 不保证列表顺序；c12 的 tagNames
+            # 与 c1 的 email/speaks/unis/companies 都按集合比较。
+            def sort_list_cell(row, idx):
+                row = list(row)
+                if idx < len(row) and isinstance(row[idx], tuple) and len(row[idx]) == 2 and row[idx][0] == "list":
+                    row[idx] = ("list", tuple(sorted(row[idx][1], key=str)))
+                return tuple(row)
+
+            if f.stem == "interactive-complex-12":
+                eg_rows = [sort_list_cell(r, 3) for r in eg_rows]
+                neo_rows = [sort_list_cell(r, 3) for r in neo_rows]
+            elif f.stem == "interactive-complex-1":
+                # apply all four list columns
+                eg_rows = [sort_list_cell(sort_list_cell(sort_list_cell(sort_list_cell(r, 8), 9), 11), 12) for r in eg_rows]
+                neo_rows = [sort_list_cell(sort_list_cell(sort_list_cell(sort_list_cell(r, 8), 9), 11), 12) for r in neo_rows]
             if sorted(eg_rows) != sorted(neo_rows):
                 note = "DIFF"
             elif eg_rows != neo_rows and "ORDER BY" in body.upper():

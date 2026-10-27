@@ -103,8 +103,9 @@ ShortestPathPhysicalOp::scan(VertexId vid, Direction scan_dir) {
 
     auto out = std::make_shared<NeighborList>();
     auto append = [&](Direction dir) -> folly::coro::Task<void> {
+        std::vector<ISyncGraphDataStore::EdgeIndexEntry> scan_batch;
         for (const auto& label_filter : scan_filters_) {
-            auto gen = cancellable(store_.scanEdges(vid, dir, label_filter));
+            auto gen = cancellable(store_.scanEdges(vid, dir, label_filter, scan_batch));
             while (auto batch = co_await gen.next()) {
                 for (const auto& e : *batch) {
                     EdgeLink link;
@@ -389,7 +390,8 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
         if (index_id == 0)
             co_return;
         std::vector<PropertyValue> one{value};
-        auto gen = cancellable(store_.scanVerticesByIndexId(index_id, one));
+        std::vector<VertexId> scan_batch;
+        auto gen = cancellable(store_.scanVerticesByIndexId(index_id, one, scan_batch));
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch)
                 out.insert(vid);

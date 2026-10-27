@@ -262,7 +262,8 @@ service EuGraphService {
 
 **连带简化：端点标签不再需要「推导」**。既然边文件由 schema 列出，`src_label`/`dst_label` 就是**必填字段**（端点对象只接受列引用，不再接受 `label`），上一版的四级推导链（配置 → 表头 `(Group)` → 列名 `Person.id` 前缀 → 文件名约定）**整条删除**，§7.3 只剩「schema 里写什么用什么」。
 
-**JSON 结构**：顶层按**图元素**分组（`labels` = 顶点标签 → 文件列表，`relationships` = 边类型 → 文件列表），标签名/边类型名**就是配置的键**，不再需要任何推导。完整可用的 sf0.1 配置见 [ldbc-sf01.schema.json](ldbc-sf01.schema.json)（8 个标签、23 个边文件）。
+**JSON 结构**：顶层按**图元素**分组（`labels` = 顶点标签 → 文件列表，`relationships` = 边类型 → 文件列表），标签名/边类型名**就是配置的键**，不再需要任何推导。完整可用的 sf0.1 配置见 [ldbc-sf01.schema.json](ldbc-sf01.schema.json)（CsvBasic）与
+[ldbc-sf01-composite.schema.json](ldbc-sf01-composite.schema.json)（CsvComposite，`language` → `speaks`）。
 
 > JSON 无注释语法，所以示例用 `//` 仅作说明；正式文件里用顶层 `"_comment": [...]` 数组承载说明（loader 忽略未知顶层字段与 `_` 前缀字段）。
 
@@ -637,7 +638,7 @@ service EuGraphService {
 
 ### 6.2 写入路径：批量导入必须维护索引（机制改造）
 
-**这是本次改动最关键的机制事实**：现状 `batchInsertVertices` **不维护索引**。它走的是 `SyncGraphDataStore::insertVertex`（[sync_graph_data_store.cpp](../../../src/storage/data/sync_graph_data_store.cpp#L280-L312)），只写 `vertex_existence` / `label_reverse` / `label_fwd` / `vprop_*`，索引条目由查询写路径的算子单独维护（[create_node_physical_op.cpp](../../../src/query/physical_plan/operator/create_node_physical_op.cpp#L375)、[set_physical_op.cpp](../../../src/query/physical_plan/operator/set_physical_op.cpp#L296-L297) 等）。
+**这是本次改动最关键的机制事实**：现状 `batchInsertVertices` **不维护索引**。它走的是 `SyncGraphDataStore::insertVertex`（[sync_graph_data_store.cpp](../../../src/storage/data/sync_graph_data_store.cpp#L280-L312)），只写 `vertex_existence` / `vertex_data`（标签 + 属性）/ `label_fwd`，索引条目由查询写路径的算子单独维护（[create_node_physical_op.cpp](../../../src/query/physical_plan/operator/create_node_physical_op.cpp#L375)、[set_physical_op.cpp](../../../src/query/physical_plan/operator/set_physical_op.cpp#L296-L297) 等）。
 
 后果：**主键索引在装载期是空的**，只有 `CREATE INDEX` 的回填才会把它填上；而且任何"装完之后再批量导入"的数据都不会进索引（索引会静默变脏）。既然我们要靠索引解析端点、并希望它与查询共用一套机制，这条必须修：
 
@@ -696,7 +697,7 @@ CREATE UNIQUE INDEX idx_membership_tenantId_userId_unique FOR (n:membership) ON 
 ```
 
 - filter label 就是 **schema 的键**（`labels` 的键），accessor 是主键列，**弱 accessor**（按属性名解析）；
-- 一条索引即覆盖该标签的全部顶点：schema 键是主标签，**行级 `label.header` 产生的额外标签不影响覆盖面** —— 例如 `place` 文件里 `:LABEL=city` 的顶点带 `[place, city]` 两个标签，弱 accessor 会从 `city` 的 vprop 表里按属性名取到 `id`，条目照样进 `(n:place)` 这条索引；
+- 一条索引即覆盖该标签的全部顶点：schema 键是主标签，**行级 `label.header` 产生的额外标签不影响覆盖面** —— 例如 `place` 文件里 `:LABEL=city` 的顶点带 `[place, city]` 两个标签，弱 accessor 会从 `vertex_data` 的 `city` 标签属性记录里按属性名取到 `id`，条目照样进 `(n:place)` 这条索引；
 - 因此 `MATCH (n:city {id: 5})` **仍然能命中** `place` 上的索引（规划器按 `city` 标签找不到索引时会回退为标签扫描 + 过滤，结果正确）；想让 `city` 也直接走索引，可另建一条 `(n:city) ON (n.id)`（可选，非必需）。
 - **列顺序 = 主键元组顺序**，与 `pk_prop_ids` 必须一致（顺序错了等值点查就匹配不上，§5.4）。
 

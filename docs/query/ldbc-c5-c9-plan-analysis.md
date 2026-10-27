@@ -2,6 +2,13 @@
 
 > complex-14 的优化见 [pattern-comprehension-anchor-label-scan.md](pattern-comprehension-anchor-label-scan.md)。
 > 本文记录 complex-5/9 的瓶颈、实施结果与下一步方向；2026-10-25 已提交 c5/c9 的算子优化。
+>
+> **2026-10-25 更正**：c9 的 Filter 边界 LM 结果错误（Top-N 不是最大日期），
+> 旧 161.7 ms 作废；修复后 **187.2 ms**，与 neo4j 逐行一致。详见文末“更正”一节。
+>
+> **存储口径**：文中出现 `vprop`/`label_reverse` 的段落是 vertex_data 改造前的分析。
+> 当前 label + property 已合并为 `vertex_data`，并用 `getVertexCoalescePropertiesBatch`
+> 融合读取；编码与实施记录见 [kv-encoding.md](../storage/kv-encoding.md)。
 
 ## complex-9
 
@@ -51,7 +58,7 @@ DB hits            60,898
 - Expand 和日期过滤不是主要差距；
 - `coalesce(content, imageFile)` 在 **7,706 行上全部物化**，约 168ms；
 - Sort 前已经完成所有输出属性加载；TopN 本身没有收益；
-- 大 ID 批量顺序扫 vprop 表实测更慢（765ms），已回退。
+- 大 ID 批量顺序扫 vertex_data 属性记录实测更慢（765ms），已回退。
 
 ### 需要的改动
 
@@ -140,17 +147,18 @@ Limit
 |---|---:|
 | 原路径（`SKIP 0` 绕过改写） | 415.4 ms |
 | LIMIT 边界 LM + Top-N Sort | 245–249 ms |
-| 再加 Filter 边界 LM | **161.7 ms** |
+| 再加 Filter 边界 LM（**已撤回，结果错误**） | ~~161.7 ms~~ |
 
-20 行 × 6 列与原路径逐值一致；`EXPLAIN` 为
+20 行 × 6 列与原路径逐值一致（但**未与 neo4j 对照**，实际结果错误）；当时的 `EXPLAIN` 为
 `Project → LateMaterialize(20 行) → Limit → Sort → LateMaterialize(7,706 行) → Filter → PE`。
 
 ### 核心原因
 
 1. **物化顺序错位（已修）**：RETURN 的 content/imageFile/姓名在 LIMIT 前为 7,706 行物化；
    ORDER BY 的 `message.id` 在 Filter 前为 53,192 行物化。两层 LM 分别把它们移到 LIMIT / Filter 之后。
-2. **剩余主要成本是存储访问**：Filter 的 `creationDate` 仍需为 53,192 行做 label 批读 +
-   按命中 label 的 per-label vprop 批读（约 98 ms）；Expand 53k 边约 45 ms；Top-N Sort、LM、
+2. **剩余主要成本是存储访问**：改造前 Filter 的 `creationDate` 需为 53,192 行做 label 批读 +
+   按命中 label 的 per-label vprop 批读（约 98 ms）；当前已由 `vertex_data` 的
+   `getVertexCoalescePropertiesBatch` 融合为一次前缀扫描。Expand 53k 边约 45 ms；Top-N Sort、LM、
    20 行输出已接近 0。
 3. **判据**：带 `message.id` 的 ORDER BY 249.4 ms，不带 id 144.6 ms —— 105 ms 是 id 的
    预过滤物化，不是排序；这否证了“Sort 慢”的初始归因。
@@ -160,7 +168,7 @@ Limit
 - 旧 `vertex_data` 纯 X 属性合并的结论（complex-2..12 无稳定收益、complex-3 约 -20%）
   来自“宽行、多属性”的旧执行路径；现在 c9 每行只读 1 个属性，页局部性影响变小，
   必须在新计划上重新 A/B，不能直接外推。
-- 剩余 98 ms 是 label + per-label vprop 两次点查；compact `label_reverse`、
+- 改造前剩余 98 ms 是 label + per-label vprop 两次点查；当前融合读取已消除这次重复访问，保留此段作为历史推理。compact `label_reverse`、
   “label + hot property（creationDate/id）”合并、或 `Message.creationDate` 索引
   是三个候选方向，均需按本文口径 A/B。
 - c5 已于 2026-10-25 通过批处理 `LeftJoin` 实施（512 行/批）；BatchExpand 仍不适用，
@@ -178,3 +186,21 @@ Limit
   correlation 列/路径会变成 NULL（TCK Match7 named path 回归），因此右输出类型含
   `PATH`/`PATH_TOPOLOGY` 时回退逐行执行。
 - 剩余成本是 89k posts/creator 的 per-edge 读取；下一步可做 OUT/IN 邻接存储或进一步去相关。
+
+
+## 2026-10-25 更正：Filter 边界 LM 结果错误
+
+与 neo4j 同轮 A/B 时发现 c9 的 Top-20 日期不是最大的：
+
+- eugraph 返回最大 `1289221574224`；
+- 实际最大 `1289887072396`（同一消息 `343597708773` 两边日期一致）。
+
+根因：Filter 边界 split 把 Sort 需要、Filter 不需要的 `message.id` 延迟物化，
+并在 Sort **下方**放了 `LateMaterialize(after LIMIT)`。此处没有 LIMIT，
+sort key 仍是占位值，Sort 比较错误。
+
+修复：移除 filter-boundary split，只保留正确的 LIMIT-boundary 延迟物化。
+修复后 c9 **187.2 ms**，20 行与 neo4j 逐行一致；优化前的正确基线是 422 ms。
+
+最终同轮 A/B（5 轮 min）：c5 234.0 ms / neo4j 83.1；c9 187.2 / 28.1；
+c14 291.4 / 17.7；三者行均一致。

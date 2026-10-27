@@ -18,7 +18,7 @@ protected:
     void SetUp() override {
         db_path_ = "/tmp/eugraph_wt_graph_test_" + std::to_string(::getpid()) + "_" +
                    ::testing::UnitTest::GetInstance()->current_test_info()->name();
-        store_ = std::make_unique<test::TestSyncGraphDataStore>();
+        store_ = makeStore();
         ASSERT_TRUE(store_->open(db_path_));
 
         // Pre-create commonly used labels and edge labels
@@ -33,6 +33,12 @@ protected:
     void TearDown() override {
         store_.reset();
         std::filesystem::remove_all(db_path_);
+    }
+
+    /// Default: no adjacency cache (production configuration). Derived fixtures
+    /// override this to exercise the COMPLETE/OVERFLOW paths.
+    virtual std::unique_ptr<test::TestSyncGraphDataStore> makeStore() {
+        return std::make_unique<test::TestSyncGraphDataStore>();
     }
 
     static Properties makeProps(std::initializer_list<std::pair<uint16_t, PropertyValue>> items) {
@@ -53,6 +59,15 @@ protected:
 
     void commit(std::reference_wrapper<GraphSession> txn) {
         EXPECT_TRUE(store_->commitTransaction(txn));
+    }
+};
+
+/// Same fixture, but with a two-edge COMPLETE adjacency cache. Used to cover
+/// the N>0 code paths that production keeps disabled (N=0).
+class WTGraphStoreAdjCacheTest : public WTGraphStoreTest {
+protected:
+    std::unique_ptr<test::TestSyncGraphDataStore> makeStore() override {
+        return std::make_unique<test::TestSyncGraphDataStore>(2);
     }
 };
 
@@ -804,4 +819,303 @@ TEST_F(WTGraphStoreTest, TxnVisibility) {
     auto val = store_->getVertexProperty(store_->autoSession(), vid, 1, 0);
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(std::get<std::string>(*val), "no_txn");
+}
+// ==================== vertex_data / scan API coverage ====================
+
+TEST_F(WTGraphStoreTest, DropLabelRemovesVertexDataRecords) {
+    constexpr LabelId label_id = 30;
+    ASSERT_TRUE(store_->createLabel(label_id));
+
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 900, std::vector<std::pair<LabelId, Properties>>{{label_id, makeProps({{0, std::string("gone")}})}}));
+    commit(txn);
+
+    ASSERT_TRUE(store_->dropLabel(label_id));
+    ASSERT_TRUE(store_->createLabel(label_id));
+
+    // Both the label record and the per-label property records in vertex_data
+    // must be gone; dropping only label_fwd would leave them readable.
+    auto labels = store_->getVertexLabels(store_->autoSession(), 900);
+    EXPECT_FALSE(labels.contains(label_id));
+    EXPECT_FALSE(store_->getVertexProperty(store_->autoSession(), 900, label_id, 0).has_value());
+    EXPECT_FALSE(store_->getVertexProperties(store_->autoSession(), 900, label_id).has_value());
+    EXPECT_EQ(store_->countVerticesByLabel(store_->autoSession(), label_id), 0u);
+}
+
+TEST_F(WTGraphStoreTest, DropEdgeLabelRemovesAdjacencyEntries) {
+    constexpr EdgeLabelId edge_label = 30;
+    ASSERT_TRUE(store_->createEdgeLabel(edge_label));
+
+    auto txn = writeTxn();
+    for (VertexId vid : {910u, 911u, 912u}) {
+        ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    }
+    // 10000/10002 are the dropped label; 10001 stays and must remain visible.
+    ASSERT_TRUE(store_->insertEdge(txn, 10000, 910, 911, edge_label, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 10001, 910, 912, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 10002, 911, 910, edge_label, 1, Properties{}));
+    commit(txn);
+
+    auto scan = [&](VertexId vid, Direction dir) {
+        std::vector<EdgeId> ids;
+        store_->scanEdges(store_->autoSession(), vid, dir, std::nullopt,
+                          [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                              ids.push_back(e.edge_id);
+                              return true;
+                          });
+        return ids;
+    };
+
+    ASSERT_TRUE(store_->dropEdgeLabel(edge_label));
+
+    // The drop must delete edge_index rows, not just the per-label etype/eprop tables.
+    auto out_910 = scan(910, Direction::OUT);
+    ASSERT_EQ(out_910.size(), 1u);
+    EXPECT_EQ(out_910[0], 10001u);
+    EXPECT_TRUE(scan(911, Direction::IN).empty());
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 910, Direction::OUT, std::nullopt), 1u);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 911, Direction::OUT, std::nullopt), 0u);
+
+    // Re-creating the label must not resurrect the old adjacency entries.
+    ASSERT_TRUE(store_->createEdgeLabel(edge_label));
+    EXPECT_EQ(scan(910, Direction::OUT).size(), 1u);
+    size_t type_edges = 0;
+    store_->scanEdgesByType(store_->autoSession(), edge_label, std::nullopt, std::nullopt,
+                            [&](const ISyncGraphDataStore::EdgeTypeIndexEntry&) {
+                                ++type_edges;
+                                return true;
+                            });
+    EXPECT_EQ(type_edges, 0u);
+}
+
+TEST_F(WTGraphStoreTest, DeleteVertexClearsAllVertexDataRecords) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 920, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("old")}})}}));
+    ASSERT_TRUE(store_->addVertexLabel(txn, 920, 2));
+    ASSERT_TRUE(store_->putVertexProperty(txn, 920, 2, 0, std::string("old2")));
+    commit(txn);
+
+    auto del_txn = writeTxn();
+    ASSERT_TRUE(store_->deleteVertex(del_txn, 920));
+    commit(del_txn);
+
+    auto reinsert_txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        reinsert_txn, 920, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("new")}})}}));
+    commit(reinsert_txn);
+
+    auto labels = store_->getVertexLabels(store_->autoSession(), 920);
+    EXPECT_TRUE(labels.contains(1));
+    EXPECT_FALSE(labels.contains(2)) << "deleted vertex's second label record survived";
+    auto p1 = store_->getVertexProperty(store_->autoSession(), 920, 1, 0);
+    ASSERT_TRUE(p1.has_value());
+    EXPECT_EQ(std::get<std::string>(*p1), "new");
+    EXPECT_FALSE(store_->getVertexProperty(store_->autoSession(), 920, 2, 0).has_value())
+        << "deleted vertex's property record survived";
+}
+
+TEST_F(WTGraphStoreTest, CoalescePropertiesBatchAcrossLabels) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 930,
+        std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("A")}, {1, int64_t(42)}})},
+                                                    {2, makeProps({{0, std::string("B")}})}}));
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 931, std::vector<std::pair<LabelId, Properties>>{{2, makeProps({{0, std::string("C")}})}}));
+    commit(txn);
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}, {2, 0}, {1, 1}, {2, 1}};
+    auto out = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {930, 931, 999}, candidates);
+    ASSERT_EQ(out.size(), 3u);
+    ASSERT_EQ(out[0].size(), 3u);
+    EXPECT_EQ(std::get<std::string>(out[0][0]), "A");
+    EXPECT_EQ(std::get<std::string>(out[0][1]), "B");
+    EXPECT_EQ(std::get<int64_t>(out[0][2]), 42);
+    ASSERT_EQ(out[1].size(), 1u);
+    EXPECT_EQ(std::get<std::string>(out[1][0]), "C");
+    EXPECT_TRUE(out[2].empty());
+
+    auto empty_candidates = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {930}, {});
+    ASSERT_EQ(empty_candidates.size(), 1u);
+    EXPECT_TRUE(empty_candidates[0].empty());
+    auto empty_vids = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {}, candidates);
+    EXPECT_TRUE(empty_vids.empty());
+}
+
+TEST_F(WTGraphStoreTest, ScanEdgesBatchCoversSourcesAndDirections) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertEdge(txn, 13000, 960, 961, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 13001, 960, 962, 2, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 13002, 963, 960, 1, 0, Properties{}));
+    commit(txn);
+
+    GraphSession& session = store_->autoSession().get();
+    auto collect = [&](const std::vector<VertexId>& srcs, Direction dir, std::optional<EdgeLabelId> filter) {
+        std::vector<std::pair<VertexId, EdgeId>> got;
+        store_->scanEdgesBatch(session, srcs, dir, filter,
+                               [&](VertexId vid, const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                                   got.emplace_back(vid, e.edge_id);
+                                   return true;
+                               });
+        return got;
+    };
+
+    auto out = collect({960, 963}, Direction::OUT, std::nullopt);
+    EXPECT_EQ(out.size(), 3u);
+    auto in = collect({960}, Direction::IN, std::nullopt);
+    ASSERT_EQ(in.size(), 1u);
+    EXPECT_EQ(in[0].second, 13002u);
+    EXPECT_EQ(collect({960}, Direction::BOTH, std::nullopt).size(), 3u);
+    EXPECT_EQ(collect({960, 963}, Direction::OUT, 1).size(), 2u);
+    EXPECT_TRUE(collect({}, Direction::OUT, std::nullopt).empty());
+
+    size_t calls = 0;
+    store_->scanEdgesBatch(session, {960}, Direction::OUT, std::nullopt,
+                           [&](VertexId, const ISyncGraphDataStore::EdgeIndexEntry&) {
+                               ++calls;
+                               return false;
+                           });
+    EXPECT_EQ(calls, 1u) << "callback false must stop the scan";
+}
+
+// ==================== adjacency cache (N=2) ====================
+
+TEST_F(WTGraphStoreAdjCacheTest, CompleteCacheDrivesScanAndCount) {
+    auto txn = writeTxn();
+    for (VertexId vid : {1000u, 1001u, 1002u}) {
+        ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    }
+    ASSERT_TRUE(store_->insertEdge(txn, 14000, 1000, 1001, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 14001, 1000, 1002, 1, 1, Properties{}));
+    commit(txn);
+
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1000, Direction::OUT, std::nullopt), 2u);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1001, Direction::IN, std::nullopt), 1u);
+
+    size_t scanned = 0;
+    store_->scanEdges(store_->autoSession(), 1000, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry&) {
+                          ++scanned;
+                          return true;
+                      });
+    EXPECT_EQ(scanned, 2u);
+
+    auto cursor = store_->createEdgeScanCursor(store_->autoSession(), 1000, Direction::OUT, std::nullopt);
+    ASSERT_NE(cursor, nullptr);
+    size_t via_cursor = 0;
+    while (cursor->valid()) {
+        ++via_cursor;
+        cursor->next();
+    }
+    EXPECT_EQ(via_cursor, 2u);
+
+    size_t via_batch = 0;
+    store_->scanEdgesBatch(store_->autoSession(), {1000}, Direction::OUT, std::nullopt,
+                           [&](VertexId, const ISyncGraphDataStore::EdgeIndexEntry&) {
+                               ++via_batch;
+                               return true;
+                           });
+    EXPECT_EQ(via_batch, 2u);
+}
+
+TEST_F(WTGraphStoreAdjCacheTest, PromoteOnOverflowFallsBackToEdgeIndex) {
+    auto txn = writeTxn();
+    for (VertexId vid : {1010u, 1011u}) {
+        ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    }
+    for (uint64_t seq = 0; seq < 3; ++seq)
+        ASSERT_TRUE(store_->insertEdge(txn, 15000 + seq, 1010, 1011, 1, seq, Properties{}));
+    commit(txn);
+
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1010, Direction::OUT, std::nullopt), 3u);
+    size_t scanned = 0;
+    store_->scanEdges(store_->autoSession(), 1010, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry&) {
+                          ++scanned;
+                          return true;
+                      });
+    EXPECT_EQ(scanned, 3u) << "OVERFLOW must read the complete edge_index set";
+
+    auto del_txn = writeTxn();
+    ASSERT_TRUE(store_->deleteEdge(del_txn, 15001, 1, 1010, 1011, 1));
+    commit(del_txn);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1010, Direction::OUT, std::nullopt), 2u);
+}
+
+TEST_F(WTGraphStoreAdjCacheTest, DeleteFromCompleteCacheUpdatesCount) {
+    auto txn = writeTxn();
+    for (VertexId vid : {1020u, 1021u}) {
+        ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    }
+    ASSERT_TRUE(store_->insertEdge(txn, 16000, 1020, 1021, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 16001, 1020, 1021, 1, 1, Properties{}));
+    commit(txn);
+
+    auto del_txn = writeTxn();
+    ASSERT_TRUE(store_->deleteEdge(del_txn, 16000, 1, 1020, 1021, 0));
+    commit(del_txn);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1020, Direction::OUT, std::nullopt), 1u);
+
+    // The state is still COMPLETE and may cache another edge up to N.
+    auto add_txn = writeTxn();
+    ASSERT_TRUE(store_->insertEdge(add_txn, 16002, 1020, 1021, 1, 2, Properties{}));
+    commit(add_txn);
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1020, Direction::OUT, std::nullopt), 2u);
+    size_t scanned = 0;
+    store_->scanEdges(store_->autoSession(), 1020, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry&) {
+                          ++scanned;
+                          return true;
+                      });
+    EXPECT_EQ(scanned, 2u);
+}
+
+TEST_F(WTGraphStoreAdjCacheTest, DropEdgeLabelCleansCachedEntries) {
+    constexpr EdgeLabelId edge_label = 30;
+    ASSERT_TRUE(store_->createEdgeLabel(edge_label));
+
+    auto txn = writeTxn();
+    for (VertexId vid : {1030u, 1031u}) {
+        ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    }
+    ASSERT_TRUE(store_->insertEdge(txn, 17000, 1030, 1031, edge_label, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 17001, 1030, 1031, edge_label, 1, Properties{}));
+    commit(txn);
+
+    ASSERT_TRUE(store_->dropEdgeLabel(edge_label));
+    ASSERT_TRUE(store_->createEdgeLabel(edge_label));
+    EXPECT_EQ(store_->countDegree(store_->autoSession(), 1030, Direction::OUT, std::nullopt), 0u);
+    size_t scanned = 0;
+    store_->scanEdges(store_->autoSession(), 1030, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry&) {
+                          ++scanned;
+                          return true;
+                      });
+    EXPECT_EQ(scanned, 0u);
+}
+
+TEST_F(WTGraphStoreAdjCacheTest, CachedCursorHonorsLabelAndBothDirections) {
+    auto txn = writeTxn();
+    for (VertexId vid : {1040u, 1041u, 1042u}) {
+        ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    }
+    ASSERT_TRUE(store_->insertEdge(txn, 18000, 1040, 1041, 1, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 18001, 1040, 1042, 2, 0, Properties{}));
+    commit(txn);
+
+    auto count_cursor = [&](Direction dir, std::optional<EdgeLabelId> filter) {
+        auto cursor = store_->createEdgeScanCursor(store_->autoSession(), 1040, dir, filter);
+        size_t n = 0;
+        while (cursor && cursor->valid()) {
+            ++n;
+            cursor->next();
+        }
+        return n;
+    };
+    EXPECT_EQ(count_cursor(Direction::OUT, 1), 1u);
+    EXPECT_EQ(count_cursor(Direction::OUT, 2), 1u);
+    EXPECT_EQ(count_cursor(Direction::OUT, std::nullopt), 2u);
+    EXPECT_EQ(count_cursor(Direction::BOTH, std::nullopt), 2u);
 }

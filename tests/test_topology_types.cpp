@@ -515,3 +515,80 @@ TEST(TopologyTypesTest, MutableBorrowIsRefusedWhenThePayloadIsShared) {
     owner.buffer->list_data[0] = mk<ListValue>(*shared);
     EXPECT_NE(owner.borrowList(0), nullptr) << "载荷独占时必须允许可变借用";
 }
+
+// ==================== valueContentEquals: total equality for hash keys ====================
+
+namespace {
+
+Value makeList(std::initializer_list<Value> values) {
+    auto list = mk<ListValue>();
+    for (const auto& value : values)
+        list->elements.push_back(ValueStorage{value});
+    return Value(list);
+}
+
+Value makeMap(std::initializer_list<std::pair<std::string, Value>> entries) {
+    auto map = mk<MapValue>();
+    for (const auto& [key, value] : entries)
+        map->entries.emplace_back(key, ValueStorage{value});
+    return Value(map);
+}
+
+Value makePath(std::initializer_list<Value> values) {
+    auto path = mk<PathValue>();
+    for (const auto& value : values)
+        path->elements.push_back(ValueStorage{value});
+    return Value(path);
+}
+
+} // namespace
+
+TEST(TopologyTypesTest, ValueContentEqualsTreatsNullListsAsEqual) {
+    // valueEquals is three-valued here: null == null is unknown. Hash-based
+    // GROUP BY/DISTINCT need a total equivalence relation instead, otherwise
+    // [null] lands in a new bucket on every row.
+    Value a = makeList({Value{}, Value{int64_t{1}}});
+    Value b = makeList({Value{}, Value{int64_t{1}}});
+    EXPECT_TRUE(valueContentEquals(a, b));
+    EXPECT_TRUE(ValueContentEqual{}(a, b));
+    EXPECT_EQ(ValueHash{}(a), ValueHash{}(b));
+
+    Value only_null = makeList({Value{}});
+    Value two_nulls = makeList({Value{}, Value{}});
+    EXPECT_FALSE(valueContentEquals(only_null, two_nulls));
+    EXPECT_FALSE(valueContentEquals(only_null, a));
+}
+
+TEST(TopologyTypesTest, ValueContentEqualsHandlesNestedContainers) {
+    Value nested_a = makeList({makeList({Value{}}), Value{int64_t{2}}});
+    Value nested_b = makeList({makeList({Value{}}), Value{int64_t{2}}});
+    EXPECT_TRUE(valueContentEquals(nested_a, nested_b));
+
+    // Map equality is key-based and must ignore insertion order.
+    Value map_a = makeMap({{"a", Value{int64_t{1}}}, {"b", Value{}}});
+    Value map_b = makeMap({{"b", Value{}}, {"a", Value{int64_t{1}}}});
+    EXPECT_TRUE(valueContentEquals(map_a, map_b));
+
+    Value path_a = makePath({Value{int64_t{1}}, Value{}});
+    Value path_b = makePath({Value{int64_t{1}}, Value{}});
+    EXPECT_TRUE(valueContentEquals(path_a, path_b));
+}
+
+TEST(TopologyTypesTest, ValueContentEqualsRejectsDifferentContainers) {
+    EXPECT_FALSE(valueContentEquals(makeList({Value{}}), makeList({Value{int64_t{1}}})));
+    EXPECT_FALSE(valueContentEquals(makeMap({{"a", Value{int64_t{1}}}}), makeMap({{"a", Value{int64_t{2}}}})));
+    EXPECT_FALSE(valueContentEquals(makePath({Value{int64_t{1}}}), makePath({Value{int64_t{2}}})));
+
+    // A null value is not the same as an empty list.
+    EXPECT_FALSE(valueContentEquals(Value{}, makeList({})));
+}
+
+TEST(TopologyTypesTest, RowEqualHandlesNullListColumns) {
+    Row a{makeList({Value{}})};
+    Row b{makeList({Value{}})};
+    EXPECT_TRUE(RowEqual{}(a, b));
+    EXPECT_EQ(RowHash{}(a), RowHash{}(b));
+
+    Row c{makeList({Value{int64_t{1}}})};
+    EXPECT_FALSE(RowEqual{}(a, c));
+}

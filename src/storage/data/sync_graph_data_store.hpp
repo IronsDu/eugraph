@@ -26,7 +26,12 @@ namespace eugraph {
 ///  - DDL（create/drop table）是管理类操作 ⇒ 单次 admin session ✓
 class SyncGraphDataStore : public ISyncGraphDataStore {
 public:
-    SyncGraphDataStore() = default;
+    /// `adjacency_cache_capacity` is the per-direction COMPLETE-adjacency limit.
+    /// 0 keeps the current production behaviour: no state/adjacency keys in
+    /// `vertex_data`, every edge lives in `edge_index`. Tests set a small
+    /// non-zero value to exercise the COMPLETE/OVERFLOW paths.
+    explicit SyncGraphDataStore(uint32_t adjacency_cache_capacity = 0) noexcept
+        : adjacency_cache_capacity_(adjacency_cache_capacity) {}
     ~SyncGraphDataStore() override = default;
 
     SyncGraphDataStore(const SyncGraphDataStore&) = delete;
@@ -83,6 +88,9 @@ public:
     std::vector<LabelIdSet> getVertexLabelsBatch(GraphSession& session, const std::vector<VertexId>& vids) override;
     std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphSession& session, LabelId label_id,
                                                                     const std::vector<VertexId>& vids) override;
+    std::vector<std::vector<PropertyValue>>
+    getVertexCoalescePropertiesBatch(GraphSession& session, const std::vector<VertexId>& vids,
+                                     const std::vector<std::pair<LabelId, uint16_t>>& candidates) override;
     bool addVertexLabel(GraphSession& session, VertexId vid, LabelId label_id) override;
     bool removeVertexLabel(GraphSession& session, VertexId vid, LabelId label_id) override;
 
@@ -115,6 +123,9 @@ public:
     // Edge Traversal
     void scanEdges(GraphSession& session, VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
                    const std::function<bool(const EdgeIndexEntry&)>& callback) override;
+    void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
+                        std::optional<EdgeLabelId> label_filter,
+                        const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) override;
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid, Direction direction,
                                                           std::optional<EdgeLabelId> label_filter) override;
     void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
@@ -189,8 +200,32 @@ public:
                            const std::optional<std::vector<PropertyValue>>& end) override;
 
 private:
+    // ==================== vertex_data adjacency helpers ====================
+    struct AdjState {
+        KeyCodec::AdjacencyCacheState state = KeyCodec::AdjacencyCacheState::OVERFLOW;
+        uint32_t count = 0;
+    };
+
+    std::optional<AdjState> getAdjacencyState(WT_SESSION* session, VertexId vid, Direction direction);
+    bool putAdjacencyState(WT_SESSION* session, VertexId vid, Direction direction, KeyCodec::AdjacencyCacheState state,
+                           uint32_t count);
+    bool insertAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction, EdgeLabelId label_id,
+                             VertexId neighbor_id, uint64_t seq, EdgeId eid);
+    bool deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction, EdgeLabelId label_id,
+                             VertexId neighbor_id, uint64_t seq, EdgeId eid);
+    bool promoteAdjacency(WT_SESSION* session, VertexId vid, Direction direction, uint32_t cached_count);
+    bool collectCachedEdges(WT_SESSION* session, VertexId vid, Direction direction,
+                            std::optional<EdgeLabelId> label_filter,
+                            std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out);
+
+    /// Edge-index-only cursor used by `createEdgeScanCursor`'s overflow fallback.
+    std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
+    createEdgeIndexScanCursor(GraphSession& session, VertexId vid, Direction direction,
+                              std::optional<EdgeLabelId> label_filter);
+
     WtConnectionStore* conn_ = nullptr;
     SchemaDdl schema_ddl_;
+    uint32_t adjacency_cache_capacity_ = 0;
 };
 
 // ==================== Scan Cursor Implementations ====================
@@ -212,7 +247,6 @@ private:
     CursorHandle cursor_;
     bool valid_ = false;
     VertexId current_vid_ = 0;
-    std::string currentKey_;
     // label 前向表用 label-forward key，顶点存在表用 vertex-existence key。
     bool existence_keys_ = false;
 };
@@ -234,8 +268,57 @@ private:
     std::string prefix_;
     bool valid_ = false;
     ISyncGraphDataStore::EdgeIndexEntry current_;
-    std::string currentKey_;
-    std::string currentValue_;
+};
+
+/// Streaming cursor over cached (COMPLETE) adjacency records in vertex_data.
+/// Positions after the direction's state key and skips it on advances.
+class VertexDataEdgeScanCursor : public ISyncGraphDataStore::IEdgeScanCursor {
+public:
+    VertexDataEdgeScanCursor(GraphSession& session, CursorHandle cursor, std::string_view prefix,
+                             std::optional<EdgeLabelId> label_filter);
+    ~VertexDataEdgeScanCursor() override = default;
+
+    bool valid() const override {
+        return valid_;
+    }
+    const ISyncGraphDataStore::EdgeIndexEntry& entry() const override {
+        return current_;
+    }
+    void next() override;
+    bool cacheUsable() const {
+        return cache_usable_;
+    }
+
+private:
+    void readCurrent();
+
+    GraphSession& session_;
+    CursorHandle cursor_;
+    std::string prefix_;
+    std::optional<EdgeLabelId> label_filter_;
+    bool valid_ = false;
+    bool cache_usable_ = false;
+    ISyncGraphDataStore::EdgeIndexEntry current_{};
+};
+
+/// Materialized edge cursor for cached (COMPLETE) adjacency; also used for BOTH.
+class VectorEdgeScanCursor : public ISyncGraphDataStore::IEdgeScanCursor {
+public:
+    explicit VectorEdgeScanCursor(std::vector<ISyncGraphDataStore::EdgeIndexEntry> entries)
+        : entries_(std::move(entries)) {}
+    bool valid() const override {
+        return pos_ < entries_.size();
+    }
+    const ISyncGraphDataStore::EdgeIndexEntry& entry() const override {
+        return entries_[pos_];
+    }
+    void next() override {
+        ++pos_;
+    }
+
+private:
+    std::vector<ISyncGraphDataStore::EdgeIndexEntry> entries_;
+    size_t pos_ = 0;
 };
 
 class EdgeTypeScanCursorImpl : public ISyncGraphDataStore::IEdgeTypeScanCursor {
@@ -255,8 +338,6 @@ private:
     std::string prefix_;
     bool valid_ = false;
     ISyncGraphDataStore::EdgeTypeIndexEntry current_;
-    std::string currentKey_;
-    std::string currentValue_;
 };
 
 // ==================== Index Scan Cursor ====================

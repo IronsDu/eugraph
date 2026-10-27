@@ -183,6 +183,7 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeChunk() {
         co_return;
     }
     std::vector<Row> batch;
+    batch.reserve(batch_limit);
     std::vector<binder::BoundTypeKind> left_kinds;
     auto left_gen = cancellable(left_->executeChunk());
     while (auto left_chunk = co_await left_gen.next()) {
@@ -233,8 +234,9 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeBatch(std::vec
         }
 
     DataChunk out = ljMakeChunk(left_kinds.size() + right_output_types_.size());
+    std::vector<const Row*> matches;
     for (const auto& left : left_rows) {
-        std::vector<const Row*> matches;
+        matches.clear();
         for (const auto& right : right_rows) {
             bool same = true;
             for (size_t i = 0; i < left_correlation_cols_.size(); ++i) {

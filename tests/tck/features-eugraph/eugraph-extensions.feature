@@ -21,3 +21,16 @@ Feature: Eugraph extensions
       | lt   | le   |
       | null | true |
     And no side effects
+
+  Scenario: group by a list containing null
+    Given an empty graph
+    When executing query:
+      """
+      UNWIND [1, 1] AS x
+      WITH [null] AS l, count(*) AS c
+      RETURN l, c
+      """
+    Then the result should be, in any order:
+      | l      | c |
+      | [null] | 2 |
+    And no side effects

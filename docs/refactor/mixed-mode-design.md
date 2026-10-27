@@ -10,7 +10,7 @@
 
 ### 1.1 EuGraph 存储模型
 
-EuGraph 采用 WiredTiger 多表隔离设计。每个标签（Label）拥有独立的属性表 `vprop_{id}`，属性以 `{vertex_id:u64BE}{prop_id:u16BE}` 为 key 逐条存储。`prop_id` 在每个标签内独立编号、从 1 开始、永不复用。属性名与 `prop_id` 的映射保存在元数据 `LabelDef` 的 `PropertyDef` 列表中。
+EuGraph 采用 WiredTiger 多表隔离设计。顶点标签与属性合并在全局 `vertex_data` 表中：标签记录为 `{vertex_id:u64BE}{0x00}{label_id:u16BE}`，属性记录为 `{vertex_id:u64BE}{0x01}{label_id:u16BE}{prop_id:u16BE}`，按顶点前缀聚簇。`prop_id` 在每个标签内独立编号、从 1 开始、永不复用。属性名与 `prop_id` 的映射保存在元数据 `LabelDef` 的 `PropertyDef` 列表中。
 
 边（Edge）同样按边类型（EdgeLabel）隔离存储在 `eprop_{id}` 表中，机制与顶点一致。
 
@@ -93,7 +93,7 @@ CREATE (n:User:Employee {name: 'Alice'})
 - 使用并发安全的 map（如 `concurrent_hash_map` 或带锁的 `unordered_map`）管理 `__anon__` 的属性名 → `prop_id` 映射
 - 首次遇到新属性名时，分配新的 `prop_id`（递增），写入映射，并异步持久化到元数据
 - 不需要在 DML 事务中执行完整的 ALTER 流程（无需 `AlterVertexLabelPhysicalOp`，该算子已删除）
-- 实际的属性存储仍然使用 `vprop_{__anon_id}` 表的 `{vertex_id}{prop_id}` 格式
+- 实际的属性存储仍然使用 `vertex_data` 的 `{vertex_id}{0x01}{__anon_id}{prop_id}` 格式
 
 ### 2.3 读写路径
 
@@ -101,9 +101,9 @@ CREATE (n:User:Employee {name: 'Alice'})
 
 | 操作 | 路径 |
 |------|------|
-| 写入 `SET n.name = 'x'`（无 `::`，无标签匹配） | 查找 `__anon__` 的属性名 → `prop_id` 映射，若不存在则轻量分配新 `prop_id` → 按 `(vertex_id, prop_id)` 写入 |
-| 删除 `REMOVE n.name`（无 `::`，无标签匹配） | 查找 `__anon__` 映射获取 `prop_id` → 按 `(vertex_id, prop_id)` 删除 |
-| 创建 `CREATE (n {...})`（无标签） | 为新属性名分配 `prop_id` → 逐条写入 `vprop_{__anon_id}` |
+| 写入 `SET n.name = 'x'`（无 `::`，无标签匹配） | 查找 `__anon__` 的属性名 → `prop_id` 映射，若不存在则轻量分配新 `prop_id` → 写入 `vertex_data` 的 `(vid, __anon__, prop_id)` 记录 |
+| 删除 `REMOVE n.name`（无 `::`，无标签匹配） | 查找 `__anon__` 映射获取 `prop_id` → 删除 `vertex_data` 的 `(vid, __anon__, prop_id)` 记录 |
+| 创建 `CREATE (n {...})`（无标签） | 为新属性名分配 `prop_id` → 逐条写入 `vertex_data` 的 `__anon__` 属性记录 |
 
 注意：无 `::` 的属性写入在运行时根据节点实际持有的标签推断归属，先匹配实际标签的 schema，无匹配时才回退到 `__anon__`。详见第 3 节。
 
@@ -232,7 +232,7 @@ SET n.nickname = 'Tom'
 
 - 遍历该节点实际拥有的标签，查找哪些标签的 schema 定义了 `nickname`
 - 恰好一个标签 → 写入该标签的 `prop_id` 存储
-- 没有标签 → 查找/分配 `__anon__` 的 `prop_id`，写入 `vprop_{__anon_id}` 表
+- 没有标签 → 查找/分配 `__anon__` 的 `prop_id`，写入 `vertex_data` 的 `__anon__` 属性记录
 - 多个标签 → **运行时报错**，要求使用 `::`
 
 ### 5.2 REMOVE 语句：移除属性

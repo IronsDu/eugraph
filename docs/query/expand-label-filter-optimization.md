@@ -136,5 +136,5 @@ loader: --batch-size 5000 --rpc-connections 4 --parallel-files 4
 ## 7. 后续
 
 - 阈值可按实际标签基数自适应：例如 `label_count / neighbor_count` 决定扫描或点查；
-- 当前不做 IN/OUT 邻接缓存；缓存实验记录在独立研究文档，不进入本分支；
+- IN/OUT 邻接缓存已在 `feat/storage-vertex-data` 中实现，但默认关闭（N=0，`edge_index` 全量）；编码与实测见 [kv-encoding.md](../storage/kv-encoding.md)。本文的分析范围仍只限标签过滤；
 - 本分支只提交标签过滤优化及本分析文档。

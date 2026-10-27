@@ -82,8 +82,8 @@ protected:
     }
 };
 
-// 把 AsyncGenerator<vector<T>> 全部消费掉并计数（不保留结果 ⇒ 只验证流式扫描不丢条）
-template <typename T> size_t drain_batches(folly::coro::AsyncGenerator<std::vector<T>> gen) {
+// 把 caller-owned-buffer 的扫描流全部消费掉并计数
+template <typename T> size_t drain_batches(folly::coro::AsyncGenerator<std::span<const T>> gen) {
     size_t count = 0;
     while (auto batch = blockingWait(gen.next()))
         count += batch->size();
@@ -1533,7 +1533,8 @@ TEST_F(IndexE2ETest, VertexIndexEqualityScanStreamsBeyondBatch) {
 
     ASSERT_TRUE(session.begin_read());
     auto bound = env.async_data->for_session(session);
-    EXPECT_EQ(drain_batches(bound.scanVerticesByIndex(lid, 0, std::string("dup"))), N)
+    std::vector<VertexId> scan_batch;
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndex(lid, 0, std::string("dup"), scan_batch)), N)
         << "索引等值扫描必须流式返回全部命中，不得截断或 OOM";
     EXPECT_TRUE(session.commit().committed());
 }
@@ -1560,7 +1561,8 @@ TEST_F(IndexE2ETest, VertexIndexRangeScanStreamsBeyondBatch) {
     // range 下界是**排他**的（与既有 scanIndexRange 语义一致）⇒ 用 -1 覆盖 0..N-1
     const std::optional<PropertyValue> start = PropertyValue{static_cast<int64_t>(-1)};
     const std::optional<PropertyValue> end = PropertyValue{static_cast<int64_t>(N)};
-    EXPECT_EQ(drain_batches(bound.scanVerticesByIndexRange(lid, 0, start, end)), N)
+    std::vector<VertexId> scan_batch;
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndexRange(lid, 0, start, end, scan_batch)), N)
         << "索引 range 扫描必须流式返回全部命中";
     EXPECT_TRUE(session.commit().committed());
 }
@@ -1586,7 +1588,8 @@ TEST_F(IndexE2ETest, EdgeIndexScanStreamsBeyondBatch) {
 
     ASSERT_TRUE(session.begin_read());
     auto bound = env.async_data->for_session(session);
-    EXPECT_EQ(drain_batches(bound.scanEdgesByIndex(elid, 0, std::string("dup"))), N)
+    std::vector<EdgeIndexScanEntry> scan_batch;
+    EXPECT_EQ(drain_batches(bound.scanEdgesByIndex(elid, 0, std::string("dup"), scan_batch)), N)
         << "边索引扫描必须流式返回全部命中（旧实现会截断）";
     EXPECT_TRUE(session.commit().committed());
 }

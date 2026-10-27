@@ -26,9 +26,10 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanValuesPhysicalOp::executeChunk()
     auto appendVid = [&](VertexId vid) { chunk.appendVertexRefRow(out_column->get(), vid); };
     resetChunk();
 
+    std::vector<VertexId> scan_batch;
     for (const auto& value : *values_) {
         std::vector<PropertyValue> one{value};
-        auto gen = cancellable(store_.scanVerticesByIndexId(index_id_, one));
+        auto gen = cancellable(store_.scanVerticesByIndexId(index_id_, one, scan_batch));
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch) {
                 appendVid(vid);

@@ -6,32 +6,49 @@ using namespace eugraph;
 
 class KeyCodecTest : public ::testing::Test {};
 
-// ==================== Label Reverse Index (table:label_reverse) ====================
+// ==================== vertex_data (table:vertex_data) ====================
 
-TEST_F(KeyCodecTest, EncodeDecodeLabelReverseKey) {
-    auto key = KeyCodec::encodeLabelReverseKey(1, 100);
-
-    // No prefix byte: 8 + 2 = 10 bytes
-    EXPECT_EQ(key.size(), 10u);
-
-    auto [vertex_id, label_id] = KeyCodec::decodeLabelReverseKey(key);
-    EXPECT_EQ(vertex_id, 1u);
+TEST_F(KeyCodecTest, EncodeDecodeVertexDataLabelKey) {
+    auto key = KeyCodec::encodeVertexDataLabelKey(42, 100);
+    EXPECT_EQ(key.size(), 11u); // 8 + 1 kind + 2 label
+    auto [vertex_id, label_id] = KeyCodec::decodeVertexDataLabelKey(key);
+    EXPECT_EQ(vertex_id, 42u);
     EXPECT_EQ(label_id, 100u);
+    EXPECT_EQ(KeyCodec::vertexDataKind(key), KeyCodec::VertexDataKind::LABEL);
 }
 
-TEST_F(KeyCodecTest, LabelReverseKeyLargeValues) {
-    auto key = KeyCodec::encodeLabelReverseKey(0xFFFFFFFFFFFFFFFF, 0xFFFF);
-    auto [vertex_id, label_id] = KeyCodec::decodeLabelReverseKey(key);
-    EXPECT_EQ(vertex_id, 0xFFFFFFFFFFFFFFFF);
-    EXPECT_EQ(label_id, 0xFFFF);
+TEST_F(KeyCodecTest, VertexDataLabelPrefix) {
+    auto prefix = KeyCodec::encodeVertexDataLabelPrefix(42);
+    EXPECT_EQ(prefix.size(), 9u);
+    EXPECT_EQ(KeyCodec::encodeVertexDataLabelKey(42, 7).substr(0, 9), prefix);
 }
 
-TEST_F(KeyCodecTest, LabelReversePrefix) {
-    auto prefix = KeyCodec::encodeLabelReversePrefix(42);
-    EXPECT_EQ(prefix.size(), 8u);
+TEST_F(KeyCodecTest, EncodeDecodeVertexDataPropKey) {
+    auto key = KeyCodec::encodeVertexDataPropKey(42, 3, 9);
+    EXPECT_EQ(key.size(), 13u); // 8 + 1 kind + 2 label + 2 prop
+    auto [vertex_id, label_id, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
+    EXPECT_EQ(vertex_id, 42u);
+    EXPECT_EQ(label_id, 3u);
+    EXPECT_EQ(prop_id, 9u);
+    EXPECT_EQ(KeyCodec::vertexDataKind(key), KeyCodec::VertexDataKind::PROPERTY);
+}
 
-    auto full_key = KeyCodec::encodeLabelReverseKey(42, 5);
-    EXPECT_EQ(full_key.substr(0, 8), prefix);
+TEST_F(KeyCodecTest, VertexDataPropPrefix) {
+    auto all_props = KeyCodec::encodeVertexDataPropPrefix(42);
+    EXPECT_EQ(all_props.size(), 9u);
+    EXPECT_EQ(KeyCodec::encodeVertexDataPropKey(42, 3, 9).substr(0, 9), all_props);
+
+    auto label_props = KeyCodec::encodeVertexDataPropPrefix(42, 3);
+    EXPECT_EQ(label_props.size(), 11u);
+    EXPECT_EQ(KeyCodec::encodeVertexDataPropKey(42, 3, 9).substr(0, 11), label_props);
+}
+
+TEST_F(KeyCodecTest, VertexDataKeysSortWithinVertex) {
+    auto label = KeyCodec::encodeVertexDataLabelKey(42, 100);
+    auto prop = KeyCodec::encodeVertexDataPropKey(42, 3, 9);
+    // kind 0x00 < 0x01, so label records sort before property records
+    EXPECT_LT(label, prop);
+    EXPECT_EQ(KeyCodec::encodeVertexDataVertexPrefix(42), label.substr(0, 8));
 }
 
 // ==================== Label Forward Index (table:label_fwd_{id}) ====================
@@ -52,25 +69,98 @@ TEST_F(KeyCodecTest, LabelForwardKeySortOrder) {
     EXPECT_LT(key1, key2);
 }
 
-// ==================== Vertex Property Storage (table:vprop_{id}) ====================
+TEST_F(KeyCodecTest, VertexDataAdjacencyStateAndEdgeKeys) {
+    auto state = KeyCodec::encodeVertexDataAdjStateKey(42, Direction::OUT);
+    EXPECT_EQ(state.size(), 9u);
+    EXPECT_TRUE(KeyCodec::isVertexDataAdjStateKey(state));
+    auto edge_key = KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9});
+    EXPECT_FALSE(KeyCodec::isVertexDataAdjStateKey(edge_key));
 
-TEST_F(KeyCodecTest, EncodeDecodeVPropKey) {
-    auto key = KeyCodec::encodeVPropKey(42, 5);
-
-    // No prefix, no label_id: 8 + 2 = 10 bytes
-    EXPECT_EQ(key.size(), 10u);
-
-    auto [vertex_id, prop_id] = KeyCodec::decodeVPropKey(key);
-    EXPECT_EQ(vertex_id, 42u);
-    EXPECT_EQ(prop_id, 5u);
+    KeyCodec::VertexDataAdjEdgeKey in{42, Direction::IN, 3, 7, 9};
+    auto key = KeyCodec::encodeVertexDataAdjEdgeKey(in);
+    EXPECT_EQ(key.size(), 27u);
+    auto decoded = KeyCodec::decodeVertexDataAdjEdgeKey(key);
+    EXPECT_EQ(decoded.vertex_id, 42u);
+    EXPECT_EQ(decoded.direction, Direction::IN);
+    EXPECT_EQ(decoded.edge_label_id, 3u);
+    EXPECT_EQ(decoded.neighbor_id, 7u);
+    EXPECT_EQ(decoded.seq, 9u);
+    EXPECT_EQ(KeyCodec::vertexDataKind(key), KeyCodec::VertexDataKind::IN_ADJACENCY);
 }
 
-TEST_F(KeyCodecTest, VPropPrefix) {
-    auto prefix = KeyCodec::encodeVPropPrefix(100);
-    EXPECT_EQ(prefix.size(), 8u);
+TEST_F(KeyCodecTest, VertexDataAdjacencyStateValue) {
+    auto value = KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::COMPLETE, 64);
+    EXPECT_EQ(value.size(), 5u);
+    auto [state, count] = KeyCodec::decodeAdjacencyState(value);
+    EXPECT_EQ(state, KeyCodec::AdjacencyCacheState::COMPLETE);
+    EXPECT_EQ(count, 64u);
 
-    auto full_key = KeyCodec::encodeVPropKey(100, 3);
-    EXPECT_EQ(full_key.substr(0, 8), prefix);
+    auto overflow = KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::OVERFLOW, 0);
+    auto [s2, c2] = KeyCodec::decodeAdjacencyState(overflow);
+    EXPECT_EQ(s2, KeyCodec::AdjacencyCacheState::OVERFLOW);
+    EXPECT_EQ(c2, 0u);
+}
+
+TEST_F(KeyCodecTest, AdjacencyStateRoundTripsBoundaries) {
+    for (auto state : {KeyCodec::AdjacencyCacheState::COMPLETE, KeyCodec::AdjacencyCacheState::OVERFLOW}) {
+        for (uint32_t count : {0u, 1u, 0xFFFFFFFFu}) {
+            auto encoded = KeyCodec::encodeAdjacencyState(state, count);
+            ASSERT_EQ(encoded.size(), 5u);
+            auto [decoded_state, decoded_count] = KeyCodec::decodeAdjacencyState(encoded);
+            EXPECT_EQ(decoded_state, state);
+            EXPECT_EQ(decoded_count, count);
+        }
+    }
+}
+
+TEST_F(KeyCodecTest, AdjacencyStateRejectsTruncatedValue) {
+    // Malformed / short stored values must not be read out of bounds. The
+    // conservative result is OVERFLOW, which routes reads to edge_index.
+    for (size_t n = 0; n < 5; ++n) {
+        std::string short_value(n, '\0');
+        auto [state, count] = KeyCodec::decodeAdjacencyState(short_value);
+        EXPECT_EQ(state, KeyCodec::AdjacencyCacheState::OVERFLOW) << "size=" << n;
+        EXPECT_EQ(count, 0u) << "size=" << n;
+    }
+}
+
+TEST_F(KeyCodecTest, VertexDataKindCoversAllRecordTypes) {
+    EXPECT_EQ(KeyCodec::vertexDataKind(KeyCodec::encodeVertexDataLabelKey(1, 2)), KeyCodec::VertexDataKind::LABEL);
+    EXPECT_EQ(KeyCodec::vertexDataKind(KeyCodec::encodeVertexDataPropKey(1, 2, 3)), KeyCodec::VertexDataKind::PROPERTY);
+    EXPECT_EQ(KeyCodec::vertexDataKind(KeyCodec::encodeVertexDataAdjStateKey(1, Direction::OUT)),
+              KeyCodec::VertexDataKind::OUT_ADJACENCY);
+    EXPECT_EQ(KeyCodec::vertexDataKind(KeyCodec::encodeVertexDataAdjStateKey(1, Direction::IN)),
+              KeyCodec::VertexDataKind::IN_ADJACENCY);
+}
+
+TEST_F(KeyCodecTest, VertexDataAdjacencyPrefixAndSortOrder) {
+    auto out_state = KeyCodec::encodeVertexDataAdjStateKey(42, Direction::OUT);
+    EXPECT_EQ(KeyCodec::encodeVertexDataAdjPrefix(42, Direction::OUT), out_state);
+    EXPECT_EQ(KeyCodec::encodeVertexDataAdjPrefix(42, Direction::IN),
+              KeyCodec::encodeVertexDataAdjStateKey(42, Direction::IN));
+
+    // The state key is the prefix of every cached edge key in that direction.
+    auto edge = KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9});
+    EXPECT_EQ(edge.substr(0, out_state.size()), out_state);
+    EXPECT_TRUE(KeyCodec::isVertexDataAdjStateKey(out_state));
+    EXPECT_FALSE(KeyCodec::isVertexDataAdjStateKey(KeyCodec::encodeVertexDataVertexPrefix(42)));
+    EXPECT_FALSE(KeyCodec::isVertexDataAdjStateKey(edge));
+
+    // Edge keys sort by label, then neighbor, then seq inside one vertex prefix.
+    EXPECT_LT(KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9}),
+              KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 4, 1, 0}));
+    EXPECT_LT(KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9}),
+              KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 8, 0}));
+    EXPECT_LT(KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9}),
+              KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 10}));
+
+    // Decode must restore the physical direction as well as the IDs.
+    auto out_decoded = KeyCodec::decodeVertexDataAdjEdgeKey(edge);
+    EXPECT_EQ(out_decoded.vertex_id, 42u);
+    EXPECT_EQ(out_decoded.direction, Direction::OUT);
+    EXPECT_EQ(out_decoded.edge_label_id, 3u);
+    EXPECT_EQ(out_decoded.neighbor_id, 7u);
+    EXPECT_EQ(out_decoded.seq, 9u);
 }
 
 // ==================== Edge Index (table:edge_index) ====================

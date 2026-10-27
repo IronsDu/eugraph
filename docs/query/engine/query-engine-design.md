@@ -517,7 +517,7 @@ class PhysicalOperator {
 
 **EdgeIndexScan**：由 `Filter(Expand)` 推导产生（单类型时）。边索引 value 包含邻接信息，可直接产出 src/dst/edge 列。
 
-**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](projection-extract-design.md)）。
+**Expand**：对输入的每一行调用 `scanEdges(src_id, dir, label_filter, edge_scratch_)`，每条边产生一行输出。`edge_scratch_` 是算子的成员 vector，跨行/跨批复用；generator 每批最多 4096 条，内存不随 degree 线性增长。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](projection-extract-design.md)）。
 
 **Filter**：`VectorizedEvaluator` 求值 BoundExpression 谓词，DICTIONARY 选择向量标记有效行。
 
@@ -745,3 +745,40 @@ using Schema = vector<string>;   // 列名列表
 - **边属性过滤仅支持字面常量**：`{prop: value}` 中 value 必须为字面量（int/string/bool/double），不支持表达式或变量引用。
 - **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [ProjectionExtract 按需属性物化设计](projection-extract-design.md) PathElementPropertyRead 小节）。终点 dst 的属性由 `ProjectionExtractPhysicalOp` 按需加载。
 - **多 MATCH + VarLenExpand 未实现**：当前不支持多条 MATCH 子句中包含变长邻接的组合（属于多 MATCH + JOIN 的通用待实现项）。
+
+## 延迟物化（LateMaterialize）边界约束
+
+`LateMaterializePhysicalOp` 只能放在 **LIMIT 之后**，并且被延迟的列不得被 LIMIT
+之前的算子（Sort / Filter / Aggregate / Join 条件）读取。
+
+- 合法：`LIMIT(Project(...))` → `Project(LateMaterialize(LIMIT(...)))`；
+  只被 RETURN 使用、不参与 Sort/Filter 的列延后到 20 行。
+- 非法：Filter 与 Sort 之间插入 `LateMaterialize` 来延迟 **Sort key**。
+  该位置没有 LIMIT，sort key 仍是占位值，Sort 会按占位值选出错误的 Top-N。
+- 2026-10-25 已移除 filter-boundary split：LDBC c9 曾因此返回错误的 Top-20
+  （旧 161.7 ms 作废，修复后 187.2 ms）。详见
+  [ldbc-c5-c9-plan-analysis.md](../ldbc-c5-c9-plan-analysis.md)。
+
+新增任何物化边界优化，必须同时满足：
+
+1. 行结果与 neo4j 逐行一致（不能只与原路径比较，原路径可能同错）；
+2. 被延迟列的所有下游消费者都在 LIMIT 之后；
+3. EXPLAIN 中不得出现 `Sort` 下方的 `LateMaterialize(after LIMIT)`。
+
+## GROUP BY / DISTINCT 的 null 容器等价
+
+`valueEquals` 是**三值逻辑**：`null = null` 返回 unknown，列表里只要含 null 也返回 unknown。
+这符合 WHERE 谓词语义，但**不能直接用于哈希容器的键等价**——GROUP BY / DISTINCT 需要
+一个全等价关系。
+
+因此哈希容器使用独立的 `valueContentEquals`：
+
+- `null` 与 `null` 相等；
+- list / map / path 递归比较，元素级 null 视为相等；
+- 其他类型仍走 `valueEquals`；
+- 必须与 `ValueHash` 保持同一等价类。
+
+LDBC c1 的 `WITH friend, collect(...) AS unis, ... OPTIONAL MATCH ... WITH friend, collect(...) AS companies, unis`
+中，`unis = [null]`。旧代码用三值 `valueEquals` 做分组键比较，`[null] != [null]`，每个
+workAt 行都新建一个 group，最终同一 friend 出现多行、companies 各只有一条。修复后 c1
+15/15 行与 neo4j 一致；TCK 场景 `group by a list containing null` 覆盖该回归。

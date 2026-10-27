@@ -10,14 +10,15 @@
 
 - `id: uint64` — 系统生成的全局唯一 ID
 - 通过 `LabelIdSet` 持有多个标签（Person, User 等）
-- 属性按标签独立存储（每标签一个 `vprop_{id}` 表），按 prop_id 索引
+- 属性按标签独立存储（`vertex_data` 中 `{vid}{0x01}{label_id}{prop_id}` 记录），按 prop_id 索引
+- 标签集合存放在 `vertex_data` 的 `{vid}{0x00}{label_id}` 记录，`label_fwd_{id}` 负责按标签反向扫描
 
 ### Edge（边）
 
 - `id: uint64` — 系统生成的全局唯一 ID
 - `src_id / dst_id: uint64` — 源/目标顶点 ID
 - `label_id: uint16` — 边类型（KNOWS, LIVES_IN 等）
-- 方向：OUT/IN/BOTH，每条逻辑边在 `edge_index` 表中对应 OUT+IN 两条记录
+- 方向：OUT/IN/BOTH，每条逻辑边在 `edge_index` 表中对应 OUT+IN 两条记录（默认 N=0 时全量；邻接缓存 COMPLETE 时记录在 `vertex_data`，`edge_index` 只存 OVERFLOW 方向）
 - 属性按边类型独立存储（每边类型一个 `eprop_{id}` 表）
 
 ---
@@ -41,7 +42,7 @@
 - 删除列后 prop_id 保留空洞，新增列分配新 ID，避免旧数据被误读
 - 读取时只返回 `PropertyDef` 中定义的 prop_id，孤儿数据不可见
 - **多标签顶点的共享属性**：同一条 CREATE 里多个 label 都声明同名属性时，属性值会写入每个声明它的
-  label 表（`CREATE (p:Post:Message {id: ...})` 两边都有 `id`）。读取 `n.prop` 时
+  label 的 `vertex_data` 属性记录（`CREATE (p:Post:Message {id: ...})` 两边都有 `id`）。读取 `n.prop` 时
   `LoadVertexPropCoalesce` 对**相同值去重**，所以仍返回标量；不同值才按多标签语义返回 list。
   `n::Label.prop` 仍读该 label 自己的值。
 

@@ -24,20 +24,6 @@ void setItem(WT_CURSOR* cursor, std::string_view data) {
     cursor->set_key(cursor, &item);
 }
 
-std::string getValueFromCursor(WT_CURSOR* cursor) {
-    WT_ITEM item;
-    std::memset(&item, 0, sizeof(item));
-    cursor->get_value(cursor, &item);
-    return std::string(static_cast<const char*>(item.data), item.size);
-}
-
-std::string getKeyFromCursor(WT_CURSOR* cursor) {
-    WT_ITEM item;
-    std::memset(&item, 0, sizeof(item));
-    cursor->get_key(cursor, &item);
-    return std::string(static_cast<const char*>(item.data), item.size);
-}
-
 std::string_view getKeyViewFromCursor(WT_CURSOR* cursor) {
     WT_ITEM item;
     std::memset(&item, 0, sizeof(item));
@@ -85,22 +71,41 @@ bool SyncGraphDataStore::ensure_tables() {
         return false;
     }
     WtSession session = conn().make_session();
-    return schema_ddl_.ensure_tables(session, {TABLE_LABEL_REVERSE, TABLE_EDGE_INDEX, TABLE_VERTEX_EXISTENCE});
+    return schema_ddl_.ensure_tables(session, {TABLE_VERTEX_DATA, TABLE_EDGE_INDEX, TABLE_VERTEX_EXISTENCE});
 }
 
 bool SyncGraphDataStore::createLabel(LabelId label_id) {
     if (!isOpen())
         return false;
     WtSession session = conn().make_session();
-    return schema_ddl_.create_tables(session, {labelFwdTable(label_id), vpropTable(label_id)});
+    return schema_ddl_.create_tables(session, {labelFwdTable(label_id)});
 }
 
 bool SyncGraphDataStore::dropLabel(LabelId label_id) {
     if (!isOpen())
         return false;
     WtSession session = conn().make_session();
-    return schema_ddl_.drop_tables(session, {labelFwdTable(label_id), vpropTable(label_id)},
-                                   SchemaDdl::DropMode::CheckpointFirst);
+    const std::string label_fwd = labelFwdTable(label_id);
+
+    // Enumerate this label's vertices via label_fwd, then delete their
+    // vertex_data label/property records. This avoids a full vertex_data scan.
+    std::vector<VertexId> vids;
+    wt::table_scan(session.get(), label_fwd, {}, [&](std::string_view key, std::string_view) {
+        vids.push_back(KeyCodec::decodeLabelForwardKey(key));
+        return true;
+    });
+    for (VertexId vid : vids) {
+        wt::table_del(session.get(), TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataLabelKey(vid, label_id));
+        std::vector<std::string> prop_keys;
+        wt::table_scan(session.get(), TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataPropPrefix(vid, label_id),
+                       [&](std::string_view key, std::string_view) {
+                           prop_keys.emplace_back(key);
+                           return true;
+                       });
+        for (const auto& key : prop_keys)
+            wt::table_del(session.get(), TABLE_VERTEX_DATA, key);
+    }
+    return schema_ddl_.drop_tables(session, {label_fwd}, SchemaDdl::DropMode::CheckpointFirst);
 }
 
 bool SyncGraphDataStore::createEdgeLabel(EdgeLabelId edge_label_id) {
@@ -114,11 +119,34 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
     if (!isOpen())
         return false;
     WtSession session = conn().make_session();
+
+    // Remove this label's adjacency entries from vertex_data/edge_index before
+    // dropping the per-label tables. etype enumerates every edge of the label.
+    std::vector<KeyCodec::EdgeTypeIndexKey> edges;
+    wt::table_scan(session.get(), etypeTable(edge_label_id), {}, [&](std::string_view key, std::string_view) {
+        edges.push_back(KeyCodec::decodeEdgeTypeIndexKey(key));
+        return true;
+    });
+    for (const auto& e : edges) {
+        auto drop_one = [&](VertexId vid, Direction dir, VertexId neighbor) {
+            auto st = getAdjacencyState(session.get(), vid, dir);
+            if (st && st->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
+                KeyCodec::VertexDataAdjEdgeKey ck{vid, dir, edge_label_id, neighbor, e.seq};
+                wt::table_del(session.get(), TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjEdgeKey(ck));
+                uint32_t count = st->count > 0 ? st->count - 1 : 0;
+                putAdjacencyState(session.get(), vid, dir, KeyCodec::AdjacencyCacheState::COMPLETE, count);
+            } else {
+                KeyCodec::EdgeIndexKey ik{vid, dir, edge_label_id, neighbor, e.seq};
+                wt::table_del(session.get(), TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(ik));
+            }
+        };
+        drop_one(e.src_vertex_id, Direction::OUT, e.dst_vertex_id);
+        drop_one(e.dst_vertex_id, Direction::IN, e.src_vertex_id);
+    }
+
     return schema_ddl_.drop_tables(session, {etypeTable(edge_label_id), epropTable(edge_label_id)},
                                    SchemaDdl::DropMode::CheckpointFirst);
 }
-
-// ==================== Vertex ====================
 
 bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
                                       std::span<const std::pair<LabelId, Properties>> label_props) {
@@ -130,11 +158,19 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
     if (!wt::table_put(gs, TABLE_VERTEX_EXISTENCE, ve_key, {}))
         return false;
 
+    if (adjacency_cache_capacity_ > 0) {
+        for (Direction dir : {Direction::OUT, Direction::IN}) {
+            if (!wt::table_put(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjStateKey(vid, dir),
+                               KeyCodec::encodeAdjacencyState(KeyCodec::AdjacencyCacheState::COMPLETE, 0)))
+                return false;
+        }
+    }
+
     for (const auto& [label_id, props] : label_props) {
         if (label_id == INVALID_LABEL_ID)
             continue;
-        auto lr_key = KeyCodec::encodeLabelReverseKey(vid, label_id);
-        if (!wt::table_put(gs, TABLE_LABEL_REVERSE, lr_key, {}))
+        auto lr_key = KeyCodec::encodeVertexDataLabelKey(vid, label_id);
+        if (!wt::table_put(gs, TABLE_VERTEX_DATA, lr_key, {}))
             return false;
 
         auto lf_key = KeyCodec::encodeLabelForwardKey(vid);
@@ -143,9 +179,9 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
 
         for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
             if (props[prop_id].has_value()) {
-                auto vp_key = KeyCodec::encodeVPropKey(vid, prop_id);
+                auto vp_key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
                 auto vp_val = ValueCodec::encode(props[prop_id].value());
-                if (!wt::table_put(gs, vpropTable(label_id), vp_key, vp_val))
+                if (!wt::table_put(gs, TABLE_VERTEX_DATA, vp_key, vp_val))
                     return false;
             }
         }
@@ -161,15 +197,25 @@ bool SyncGraphDataStore::deleteVertex(GraphSession& gs, VertexId vid) {
 
     auto labels = getVertexLabels(gs, vid);
     for (LabelId label_id : labels) {
-        wt::table_del(gs, TABLE_LABEL_REVERSE, KeyCodec::encodeLabelReverseKey(vid, label_id));
+        wt::table_del(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataLabelKey(vid, label_id));
         wt::table_del(gs, labelFwdTable(label_id), KeyCodec::encodeLabelForwardKey(vid));
 
-        auto prefix = KeyCodec::encodeVPropPrefix(vid);
-        wt::table_scan(gs, vpropTable(label_id), prefix, [&](std::string_view key, std::string_view) {
-            wt::table_del(gs, vpropTable(label_id), key);
+        auto prefix = KeyCodec::encodeVertexDataPropPrefix(vid, label_id);
+        wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view) {
+            wt::table_del(gs, TABLE_VERTEX_DATA, key);
             return true;
         });
     }
+
+    // Remove every remaining vertex_data record (state + cached adjacency).
+    std::vector<std::string> data_keys;
+    wt::table_scan(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataVertexPrefix(vid),
+                   [&](std::string_view key, std::string_view) {
+                       data_keys.emplace_back(key);
+                       return true;
+                   });
+    for (const auto& key : data_keys)
+        wt::table_del(gs, TABLE_VERTEX_DATA, key);
 
     wt::table_del(gs, TABLE_VERTEX_EXISTENCE, KeyCodec::encodeVertexExistenceKey(vid));
 
@@ -183,12 +229,12 @@ std::optional<Properties> SyncGraphDataStore::getVertexProperties(GraphSession& 
     if (!session)
         return std::nullopt;
 
-    auto prefix = KeyCodec::encodeVPropPrefix(vid);
+    auto prefix = KeyCodec::encodeVertexDataPropPrefix(vid, label_id);
     Properties props;
     bool found_any = false;
 
-    wt::table_scan(gs, vpropTable(label_id), prefix, [&](std::string_view key, std::string_view value) {
-        auto [_, prop_id] = KeyCodec::decodeVPropKey(key);
+    wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view value) {
+        auto [_, __, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
         if (prop_id >= props.size())
             props.resize(prop_id + 1);
         props[prop_id] = ValueCodec::decode(value);
@@ -223,7 +269,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     }
     const bool all_unique = unique.size() == vids.size();
     std::vector<std::optional<Properties>> unique_out(all_unique ? 0 : unique.size());
-    const std::string table = vpropTable(label_id);
+    const std::string table = TABLE_VERTEX_DATA;
     CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
         const int error = cursor.error();
@@ -238,7 +284,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         props.resize(width);
         bool found = false;
         for (uint16_t pid : proj) {
-            auto key = KeyCodec::encodeVPropKey(unique[i], pid);
+            auto key = KeyCodec::encodeVertexDataPropKey(unique[i], label_id, pid);
             setItem(c, key);
             const int ret = c->search(c);
             if (ret == WT_NOTFOUND)
@@ -247,7 +293,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
                 gs.fail_from_wt(ret, "getVertexPropertiesBatchProjected: search failed");
                 return out;
             }
-            props[pid] = ValueCodec::decode(getValueFromCursor(c));
+            props[pid] = ValueCodec::decode(getValueViewFromCursor(c));
             found = true;
         }
         if (found)
@@ -266,8 +312,8 @@ std::optional<PropertyValue> SyncGraphDataStore::getVertexProperty(GraphSession&
     if (!session)
         return std::nullopt;
 
-    auto key = KeyCodec::encodeVPropKey(vid, prop_id);
-    auto val = wt::table_get(gs, vpropTable(label_id), key);
+    auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
+    auto val = wt::table_get(gs, TABLE_VERTEX_DATA, key);
     if (!val)
         return std::nullopt;
     return ValueCodec::decode(*val);
@@ -279,8 +325,8 @@ bool SyncGraphDataStore::putVertexProperty(GraphSession& gs, VertexId vid, Label
     if (!session)
         return false;
 
-    auto key = KeyCodec::encodeVPropKey(vid, prop_id);
-    return wt::table_put(gs, vpropTable(label_id), key, ValueCodec::encode(value));
+    auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
+    return wt::table_put(gs, TABLE_VERTEX_DATA, key, ValueCodec::encode(value));
 }
 
 bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, LabelId label_id,
@@ -291,8 +337,8 @@ bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, Lab
 
     for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
         if (props[prop_id].has_value()) {
-            auto key = KeyCodec::encodeVPropKey(vid, prop_id);
-            if (!wt::table_put(gs, vpropTable(label_id), key, ValueCodec::encode(props[prop_id].value())))
+            auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
+            if (!wt::table_put(gs, TABLE_VERTEX_DATA, key, ValueCodec::encode(props[prop_id].value())))
                 return false;
         }
     }
@@ -304,8 +350,8 @@ bool SyncGraphDataStore::deleteVertexProperty(GraphSession& gs, VertexId vid, La
     if (!session)
         return false;
 
-    auto key = KeyCodec::encodeVPropKey(vid, prop_id);
-    return wt::table_del(gs, vpropTable(label_id), key);
+    auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
+    return wt::table_del(gs, TABLE_VERTEX_DATA, key);
 }
 
 // ==================== Vertex Labels ====================
@@ -316,9 +362,9 @@ LabelIdSet SyncGraphDataStore::getVertexLabels(GraphSession& gs, VertexId vid) {
     if (!session)
         return labels;
 
-    auto prefix = KeyCodec::encodeLabelReversePrefix(vid);
-    wt::table_scan(gs, TABLE_LABEL_REVERSE, prefix, [&](std::string_view key, std::string_view) {
-        auto [_, label_id] = KeyCodec::decodeLabelReverseKey(key);
+    auto prefix = KeyCodec::encodeVertexDataLabelPrefix(vid);
+    wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view) {
+        auto [_, label_id] = KeyCodec::decodeVertexDataLabelKey(key);
         labels.insert(label_id);
         return true;
     });
@@ -345,17 +391,17 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
     }
     const bool all_unique = unique.size() == vids.size();
     std::vector<LabelIdSet> unique_out(all_unique ? 0 : unique.size());
-    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_LABEL_REVERSE);
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
     if (!cursor) {
         const int error = cursor.error();
-        gs.fail_from_wt(error, std::string("getVertexLabelsBatch: cannot open cursor on ") + TABLE_LABEL_REVERSE);
+        gs.fail_from_wt(error, std::string("getVertexLabelsBatch: cannot open cursor on ") + TABLE_VERTEX_DATA);
         return out;
     }
     auto* c = cursor.get();
     std::string prefix;
     for (size_t i = 0; i < unique.size(); ++i) {
         LabelIdSet& labels = all_unique ? out[i] : unique_out[i];
-        prefix = KeyCodec::encodeLabelReversePrefix(unique[i]);
+        prefix = KeyCodec::encodeVertexDataLabelPrefix(unique[i]);
         setItem(c, prefix);
         int exact = 0;
         int ret = c->search_near(c, &exact);
@@ -368,10 +414,10 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
         if (exact < 0)
             ret = c->next(c);
         while (ret == 0) {
-            std::string key = getKeyFromCursor(c);
+            std::string_view key = getKeyViewFromCursor(c);
             if (!key.starts_with(prefix))
                 break; // 正常结束：下一个 vid 的 key（ret == 0，不是错误）✓
-            auto [_, label_id] = KeyCodec::decodeLabelReverseKey(key);
+            auto [_, label_id] = KeyCodec::decodeVertexDataLabelKey(key);
             labels.insert(label_id);
             ret = c->next(c);
         }
@@ -406,7 +452,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     }
     const bool all_unique = unique.size() == vids.size();
     std::vector<std::optional<Properties>> unique_out(all_unique ? 0 : unique.size());
-    const std::string table = vpropTable(label_id);
+    const std::string table = TABLE_VERTEX_DATA;
     CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
         const int error = cursor.error();
@@ -417,7 +463,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     std::string prefix;
     for (size_t i = 0; i < unique.size(); ++i) {
         std::optional<Properties>& slot = all_unique ? out[i] : unique_out[i];
-        prefix = KeyCodec::encodeVPropPrefix(unique[i]);
+        prefix = KeyCodec::encodeVertexDataPropPrefix(unique[i], label_id);
         setItem(c, prefix);
         int exact = 0;
         int ret = c->search_near(c, &exact);
@@ -432,13 +478,13 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         Properties props;
         bool found = false;
         while (ret == 0) {
-            std::string key = getKeyFromCursor(c);
+            std::string_view key = getKeyViewFromCursor(c);
             if (!key.starts_with(prefix))
                 break; // 正常结束：下一个 vid 的 key（ret == 0，不是错误）✓
-            auto [_, prop_id] = KeyCodec::decodeVPropKey(key);
+            auto [_, __, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
             if (prop_id >= props.size())
                 props.resize(prop_id + 1);
-            props[prop_id] = ValueCodec::decode(getValueFromCursor(c));
+            props[prop_id] = ValueCodec::decode(getValueViewFromCursor(c));
             found = true;
             ret = c->next(c);
         }
@@ -456,13 +502,76 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
     return out;
 }
 
+std::vector<std::vector<PropertyValue>>
+SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std::vector<VertexId>& vids,
+                                                     const std::vector<std::pair<LabelId, uint16_t>>& candidates) {
+    std::vector<std::vector<PropertyValue>> out(vids.size());
+    if (vids.empty() || candidates.empty())
+        return out;
+
+    std::unordered_map<uint32_t, size_t> cand_index;
+    cand_index.reserve(candidates.size() * 2);
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        uint32_t key = (static_cast<uint32_t>(candidates[i].first) << 16) | candidates[i].second;
+        cand_index.emplace(key, i);
+    }
+
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "getVertexCoalescePropertiesBatch: cannot open cursor on table:vertex_data");
+        return out;
+    }
+    auto* c = cursor.get();
+    size_t out_index = 0;
+    // Reuse one candidate buffer across all vids: c9 calls this for 53k vertices.
+    std::vector<std::optional<PropertyValue>> found(candidates.size());
+    for (VertexId vid : vids) {
+        std::fill(found.begin(), found.end(), std::nullopt);
+        std::string prefix = KeyCodec::encodeVertexDataPropPrefix(vid);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND) {
+            ++out_index;
+            continue;
+        }
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "getVertexCoalescePropertiesBatch: search_near failed");
+            return out;
+        }
+        if (exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            std::string_view key = getKeyViewFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            auto [_, label_id, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
+            uint32_t key_id = (static_cast<uint32_t>(label_id) << 16) | prop_id;
+            auto it = cand_index.find(key_id);
+            if (it != cand_index.end())
+                found[it->second] = ValueCodec::decode(getValueViewFromCursor(c));
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexCoalescePropertiesBatch: next failed");
+            return out;
+        }
+        for (auto& v : found)
+            if (v)
+                out[out_index].push_back(std::move(*v));
+        ++out_index;
+    }
+    return out;
+}
+
 bool SyncGraphDataStore::addVertexLabel(GraphSession& gs, VertexId vid, LabelId label_id) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return false;
 
-    auto lr_key = KeyCodec::encodeLabelReverseKey(vid, label_id);
-    if (!wt::table_put(gs, TABLE_LABEL_REVERSE, lr_key, {}))
+    auto lr_key = KeyCodec::encodeVertexDataLabelKey(vid, label_id);
+    if (!wt::table_put(gs, TABLE_VERTEX_DATA, lr_key, {}))
         return false;
 
     auto lf_key = KeyCodec::encodeLabelForwardKey(vid);
@@ -474,12 +583,12 @@ bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, Label
     if (!session)
         return false;
 
-    wt::table_del(gs, TABLE_LABEL_REVERSE, KeyCodec::encodeLabelReverseKey(vid, label_id));
+    wt::table_del(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataLabelKey(vid, label_id));
     wt::table_del(gs, labelFwdTable(label_id), KeyCodec::encodeLabelForwardKey(vid));
 
-    auto prefix = KeyCodec::encodeVPropPrefix(vid);
-    wt::table_scan(gs, vpropTable(label_id), prefix, [&](std::string_view key, std::string_view) {
-        wt::table_del(gs, vpropTable(label_id), key);
+    auto prefix = KeyCodec::encodeVertexDataPropPrefix(vid, label_id);
+    wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view) {
+        wt::table_del(gs, TABLE_VERTEX_DATA, key);
         return true;
     });
 
@@ -515,22 +624,114 @@ void SyncGraphDataStore::scanAllVertices(GraphSession& gs, const std::function<b
 
 // ==================== Edge ====================
 
+std::optional<SyncGraphDataStore::AdjState> SyncGraphDataStore::getAdjacencyState(WT_SESSION* session, VertexId vid,
+                                                                                  Direction direction) {
+    auto val = wt::table_get(session, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjStateKey(vid, direction));
+    if (!val)
+        return std::nullopt;
+    auto [state, count] = KeyCodec::decodeAdjacencyState(*val);
+    return AdjState{state, count};
+}
+
+bool SyncGraphDataStore::putAdjacencyState(WT_SESSION* session, VertexId vid, Direction direction,
+                                           KeyCodec::AdjacencyCacheState state, uint32_t count) {
+    return wt::table_put(session, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjStateKey(vid, direction),
+                         KeyCodec::encodeAdjacencyState(state, count));
+}
+
+bool SyncGraphDataStore::promoteAdjacency(WT_SESSION* session, VertexId vid, Direction direction,
+                                          uint32_t cached_count) {
+    (void)cached_count;
+    const std::string prefix = KeyCodec::encodeVertexDataAdjPrefix(vid, direction);
+    std::vector<std::string> keys;
+    std::vector<std::pair<std::string, std::string>> entries; // edge_index key -> edge_id value
+    wt::table_scan(session, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view value) {
+        if (KeyCodec::isVertexDataAdjStateKey(key))
+            return true;
+        auto k = KeyCodec::decodeVertexDataAdjEdgeKey(key);
+        KeyCodec::EdgeIndexKey idx{k.vertex_id, direction, k.edge_label_id, k.neighbor_id, k.seq};
+        entries.emplace_back(KeyCodec::encodeEdgeIndexKey(idx), std::string(value));
+        keys.emplace_back(key);
+        return true;
+    });
+    for (const auto& [key, value] : entries)
+        if (!wt::table_put(session, TABLE_EDGE_INDEX, key, value))
+            return false;
+    for (const auto& key : keys)
+        wt::table_del(session, TABLE_VERTEX_DATA, key);
+    return putAdjacencyState(session, vid, direction, KeyCodec::AdjacencyCacheState::OVERFLOW, 0);
+}
+
+bool SyncGraphDataStore::insertAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
+                                             EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
+    const std::string edge_val = ValueCodec::encodeU64(eid);
+    if (adjacency_cache_capacity_ == 0) {
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
+    }
+    auto state = getAdjacencyState(session, vid, direction);
+    if (!state || state->state == KeyCodec::AdjacencyCacheState::OVERFLOW) {
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
+    }
+    if (state->count >= adjacency_cache_capacity_) {
+        if (!promoteAdjacency(session, vid, direction, state->count))
+            return false;
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
+    }
+    KeyCodec::VertexDataAdjEdgeKey key{vid, direction, label_id, neighbor_id, seq};
+    if (!wt::table_put(session, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjEdgeKey(key), edge_val))
+        return false;
+    return putAdjacencyState(session, vid, direction, KeyCodec::AdjacencyCacheState::COMPLETE, state->count + 1);
+}
+
+bool SyncGraphDataStore::deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
+                                             EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
+    (void)eid;
+    if (adjacency_cache_capacity_ == 0) {
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        wt::table_del(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx));
+        return true;
+    }
+    auto state = getAdjacencyState(session, vid, direction);
+    if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
+        KeyCodec::VertexDataAdjEdgeKey key{vid, direction, label_id, neighbor_id, seq};
+        wt::table_del(session, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjEdgeKey(key));
+        uint32_t count = state->count > 0 ? state->count - 1 : 0;
+        return putAdjacencyState(session, vid, direction, KeyCodec::AdjacencyCacheState::COMPLETE, count);
+    }
+    KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+    wt::table_del(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx));
+    return true;
+}
+
+bool SyncGraphDataStore::collectCachedEdges(WT_SESSION* session, VertexId vid, Direction direction,
+                                            std::optional<EdgeLabelId> label_filter,
+                                            std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out) {
+    auto state = getAdjacencyState(session, vid, direction);
+    if (!state || state->state != KeyCodec::AdjacencyCacheState::COMPLETE)
+        return false;
+    const std::string prefix = KeyCodec::encodeVertexDataAdjPrefix(vid, direction);
+    wt::table_scan(session, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view value) {
+        if (KeyCodec::isVertexDataAdjStateKey(key))
+            return true;
+        auto k = KeyCodec::decodeVertexDataAdjEdgeKey(key);
+        if (label_filter && k.edge_label_id != *label_filter)
+            return true;
+        out.push_back({k.neighbor_id, k.edge_label_id, k.seq, ValueCodec::decodeU64(value)});
+        return true;
+    });
+    return true;
+}
+
 bool SyncGraphDataStore::insertEdge(GraphSession& gs, EdgeId eid, VertexId src_id, VertexId dst_id,
                                     EdgeLabelId label_id, uint64_t seq, const Properties& props) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return false;
 
-    auto edge_id_val = ValueCodec::encodeU64(eid);
-
-    KeyCodec::EdgeIndexKey out_key{src_id, Direction::OUT, label_id, dst_id, seq};
-    if (!wt::table_put(gs, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(out_key), edge_id_val))
-        return false;
-
-    KeyCodec::EdgeIndexKey in_key{dst_id, Direction::IN, label_id, src_id, seq};
-    if (!wt::table_put(gs, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(in_key), edge_id_val))
-        return false;
-
+    const std::string edge_id_val = ValueCodec::encodeU64(eid);
     KeyCodec::EdgeTypeIndexKey type_key{src_id, dst_id, seq};
     if (!wt::table_put(gs, etypeTable(label_id), KeyCodec::encodeEdgeTypeIndexKey(type_key), edge_id_val))
         return false;
@@ -544,6 +745,10 @@ bool SyncGraphDataStore::insertEdge(GraphSession& gs, EdgeId eid, VertexId src_i
         }
     }
 
+    if (!insertAdjacencyEdge(gs.wt_session(), src_id, Direction::OUT, label_id, dst_id, seq, eid))
+        return false;
+    if (!insertAdjacencyEdge(gs.wt_session(), dst_id, Direction::IN, label_id, src_id, seq, eid))
+        return false;
     return true;
 }
 
@@ -553,11 +758,10 @@ bool SyncGraphDataStore::deleteEdge(GraphSession& gs, EdgeId eid, EdgeLabelId la
     if (!session)
         return false;
 
-    KeyCodec::EdgeIndexKey out_key{src_id, Direction::OUT, label_id, dst_id, seq};
-    wt::table_del(gs, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(out_key));
-
-    KeyCodec::EdgeIndexKey in_key{dst_id, Direction::IN, label_id, src_id, seq};
-    wt::table_del(gs, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(in_key));
+    if (!deleteAdjacencyEdge(gs.wt_session(), src_id, Direction::OUT, label_id, dst_id, seq, eid))
+        return false;
+    if (!deleteAdjacencyEdge(gs.wt_session(), dst_id, Direction::IN, label_id, src_id, seq, eid))
+        return false;
 
     KeyCodec::EdgeTypeIndexKey type_key{src_id, dst_id, seq};
     wt::table_del(gs, etypeTable(label_id), KeyCodec::encodeEdgeTypeIndexKey(type_key));
@@ -639,7 +843,7 @@ std::vector<std::optional<PropertyValue>> SyncGraphDataStore::getEdgePropertyBat
             out.resize(edge_ids.size());
             return out;
         }
-        out.emplace_back(ValueCodec::decode(getValueFromCursor(c)));
+        out.emplace_back(ValueCodec::decode(getValueViewFromCursor(c)));
     }
     return out;
 }
@@ -678,6 +882,21 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
         return;
     }
 
+    auto state = adjacency_cache_capacity_ > 0 ? getAdjacencyState(gs.wt_session(), vid, direction) : std::nullopt;
+    if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
+        const std::string prefix = KeyCodec::encodeVertexDataAdjPrefix(vid, direction);
+        wt::table_scan(gs, TABLE_VERTEX_DATA, prefix, [&](std::string_view key, std::string_view value) {
+            if (KeyCodec::isVertexDataAdjStateKey(key))
+                return true;
+            auto k = KeyCodec::decodeVertexDataAdjEdgeKey(key);
+            if (label_filter && k.edge_label_id != *label_filter)
+                return true;
+            EdgeIndexEntry entry{k.neighbor_id, k.edge_label_id, k.seq, ValueCodec::decodeU64(value)};
+            return callback(entry);
+        });
+        return;
+    }
+
     std::string prefix;
     if (label_filter) {
         prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter);
@@ -690,6 +909,88 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
         EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(value)};
         return callback(entry);
     });
+}
+
+// Edge-index-only cursor factory used by `createEdgeScanCursor`'s overflow
+// fallback.
+std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
+SyncGraphDataStore::createEdgeIndexScanCursor(GraphSession& gs, VertexId vid, Direction direction,
+                                              std::optional<EdgeLabelId> label_filter) {
+    if (!gs.wt_session() || direction == Direction::BOTH)
+        return nullptr;
+    const std::string prefix = label_filter ? KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter)
+                                            : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "cannot open cursor on table:edge_index");
+        return nullptr;
+    }
+    return std::make_unique<EdgeScanCursorImpl>(gs, std::move(cursor), prefix);
+}
+
+void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<VertexId>& src_ids, Direction direction,
+                                        std::optional<EdgeLabelId> label_filter,
+                                        const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) {
+    WT_SESSION* session = gs.wt_session();
+    if (!session || src_ids.empty())
+        return;
+    if (direction == Direction::BOTH) {
+        scanEdgesBatch(gs, src_ids, Direction::OUT, label_filter, callback);
+        scanEdgesBatch(gs, src_ids, Direction::IN, label_filter, callback);
+        return;
+    }
+    if (adjacency_cache_capacity_ > 0) {
+        for (VertexId vid : src_ids) {
+            auto cursor = createEdgeScanCursor(gs, vid, direction, label_filter);
+            if (!cursor)
+                continue;
+            while (cursor->valid()) {
+                if (!callback(vid, cursor->entry()))
+                    return;
+                cursor->next();
+            }
+        }
+        return;
+    }
+
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "scanEdgesBatch: cannot open cursor on table:edge_index");
+        return;
+    }
+    auto* c = cursor.get();
+    for (VertexId vid : src_ids) {
+        const std::string prefix = label_filter ? KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter)
+                                                : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND)
+            continue;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "scanEdgesBatch: search_near failed");
+            return;
+        }
+        if (exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            std::string_view key = getKeyViewFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            auto decoded = KeyCodec::decodeEdgeIndexKey(key);
+            EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
+                                 ValueCodec::decodeU64(getValueViewFromCursor(c))};
+            if (!callback(vid, entry))
+                return;
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "scanEdgesBatch: next failed");
+            return;
+        }
+    }
 }
 
 void SyncGraphDataStore::scanEdgesByType(GraphSession& gs, EdgeLabelId label_id, std::optional<VertexId> src_filter,
@@ -727,6 +1028,11 @@ uint64_t SyncGraphDataStore::countVerticesByLabel(GraphSession& gs, LabelId labe
 
 uint64_t SyncGraphDataStore::countDegree(GraphSession& gs, VertexId vid, Direction direction,
                                          std::optional<EdgeLabelId> label_filter) {
+    if (adjacency_cache_capacity_ > 0 && direction != Direction::BOTH && !label_filter) {
+        auto state = getAdjacencyState(gs.wt_session(), vid, direction);
+        if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE)
+            return state->count;
+    }
     uint64_t count = 0;
     scanEdges(gs, vid, direction, label_filter, [&](const EdgeIndexEntry&) {
         ++count;
@@ -801,9 +1107,8 @@ VertexScanCursorImpl::VertexScanCursorImpl(GraphSession& session, CursorHandle c
 VertexScanCursorImpl::~VertexScanCursorImpl() = default;
 
 void VertexScanCursorImpl::readCurrent() {
-    currentKey_ = getKeyFromCursor(cursor_.get());
-    current_vid_ = existence_keys_ ? KeyCodec::decodeVertexExistenceKey(currentKey_)
-                                   : KeyCodec::decodeLabelForwardKey(currentKey_);
+    const auto key = getKeyViewFromCursor(cursor_.get());
+    current_vid_ = existence_keys_ ? KeyCodec::decodeVertexExistenceKey(key) : KeyCodec::decodeLabelForwardKey(key);
     valid_ = true;
 }
 
@@ -947,30 +1252,122 @@ std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
 SyncGraphDataStore::createEdgeScanCursor(GraphSession& gs, VertexId vid, Direction direction,
                                          std::optional<EdgeLabelId> label_filter) {
     if (direction == Direction::BOTH) {
-        CursorHandle first = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
-        CursorHandle second = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
-        if (!first || !second) {
-            const int error = first ? second.error() : first.error();
-            gs.fail_from_wt(error, "createEdgeScanCursor: cannot open cursor on " + std::string(TABLE_EDGE_INDEX));
+        std::vector<EdgeIndexEntry> entries;
+        scanEdges(gs, vid, direction, label_filter, [&](const EdgeIndexEntry& e) {
+            entries.push_back(e);
+            return true;
+        });
+        return std::make_unique<VectorEdgeScanCursor>(std::move(entries));
+    }
+
+    if (adjacency_cache_capacity_ > 0) {
+        CursorHandle cache_cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+        if (!cache_cursor) {
+            const int error = cache_cursor.error();
+            gs.fail_from_wt(error, "createEdgeScanCursor: cannot open cursor on " + std::string(TABLE_VERTEX_DATA));
             return nullptr;
         }
-        return std::make_unique<MergedEdgeScanCursor>(gs, std::move(first), std::move(second), vid, label_filter);
+        auto cached = std::make_unique<VertexDataEdgeScanCursor>(
+            gs, std::move(cache_cursor), KeyCodec::encodeVertexDataAdjPrefix(vid, direction), label_filter);
+        if (cached->cacheUsable())
+            return cached;
     }
 
-    std::string prefix;
-    if (label_filter) {
-        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter);
-    } else {
-        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction);
-    }
+    return createEdgeIndexScanCursor(gs, vid, direction, label_filter);
+}
 
-    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
-    if (!cursor) {
-        const int error = cursor.error();
-        gs.fail_from_wt(error, "createEdgeScanCursor: cannot open cursor on " + std::string(TABLE_EDGE_INDEX));
-        return nullptr;
+// ==================== VertexDataEdgeScanCursorImpl ====================
+
+VertexDataEdgeScanCursor::VertexDataEdgeScanCursor(GraphSession& session, CursorHandle cursor, std::string_view prefix,
+                                                   std::optional<EdgeLabelId> label_filter)
+    : session_(session), cursor_(std::move(cursor)), prefix_(prefix), label_filter_(label_filter) {
+    if (!cursor_)
+        return;
+    auto* c = cursor_.get();
+    setItem(c, prefix_);
+    int exact = 0;
+    int ret = c->search_near(c, &exact);
+    if (ret == WT_NOTFOUND)
+        return;
+    if (ret != 0) {
+        session_.fail_from_wt(ret, "VertexDataEdgeScanCursor: search_near failed");
+        return;
     }
-    return std::make_unique<EdgeScanCursorImpl>(gs, std::move(cursor), prefix);
+    if (exact < 0)
+        ret = c->next(c);
+    if (ret != 0)
+        return;
+
+    const auto state_key = getKeyViewFromCursor(c);
+    if (!state_key.starts_with(prefix_)) {
+        cache_usable_ = true; // COMPLETE with zero edges
+        return;
+    }
+    if (!KeyCodec::isVertexDataAdjStateKey(state_key)) {
+        cache_usable_ = false;
+        return;
+    }
+    auto [state, count] = KeyCodec::decodeAdjacencyState(getValueViewFromCursor(c));
+    (void)count;
+    cache_usable_ = state == KeyCodec::AdjacencyCacheState::COMPLETE;
+    if (!cache_usable_)
+        return;
+
+    ret = c->next(c);
+    if (ret == WT_NOTFOUND) {
+        valid_ = false;
+        return;
+    }
+    if (ret != 0) {
+        session_.fail_from_wt(ret, "VertexDataEdgeScanCursor: next failed");
+        return;
+    }
+    readCurrent();
+}
+
+void VertexDataEdgeScanCursor::readCurrent() {
+    if (!cursor_)
+        return;
+    auto* c = cursor_.get();
+    while (true) {
+        const auto key = getKeyViewFromCursor(c);
+        if (!key.starts_with(prefix_)) {
+            valid_ = false;
+            return;
+        }
+        if (KeyCodec::isVertexDataAdjStateKey(key)) {
+            const int ret = c->next(c);
+            if (ret != 0) {
+                valid_ = false;
+                return;
+            }
+            continue;
+        }
+        auto k = KeyCodec::decodeVertexDataAdjEdgeKey(key);
+        if (label_filter_ && k.edge_label_id != *label_filter_) {
+            const int ret = c->next(c);
+            if (ret != 0) {
+                valid_ = false;
+                return;
+            }
+            continue;
+        }
+        current_ = {k.neighbor_id, k.edge_label_id, k.seq, ValueCodec::decodeU64(getValueViewFromCursor(c))};
+        valid_ = true;
+        return;
+    }
+}
+
+void VertexDataEdgeScanCursor::next() {
+    if (!cursor_ || !valid_)
+        return;
+    auto* c = cursor_.get();
+    const int ret = c->next(c);
+    if (ret != 0) {
+        valid_ = false;
+        return;
+    }
+    readCurrent();
 }
 
 // ==================== EdgeTypeScanCursorImpl ====================

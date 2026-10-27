@@ -151,6 +151,8 @@ eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
 `labels` / `relationships`；`headers.txt` 的列类型声明对应 `columns`；
 `:LABEL` 列对应 `label`；`--delimiter` 对应顶层 `delimiter`。
 
-sf0.1 语料的现成配置：[ldbc-sf01.schema.json](../design/ldbc-sf01.schema.json)
+sf0.1 语料的现成配置：
+- CsvBasic：[ldbc-sf01.schema.json](../design/ldbc-sf01.schema.json)
+- CsvComposite（`language` → `speaks`、含 `email`）：[ldbc-sf01-composite.schema.json](../design/ldbc-sf01-composite.schema.json)
 （数据一致性可用 `scripts/verify_loader_vs_neo4j.py` 核对，判据取自
 `ldbc_snb_interactive_v1_impls/cypher/scripts`）。

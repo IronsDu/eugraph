@@ -36,7 +36,7 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("needs the 'neo4j' Python driver")
 
-ID_PARAMS = {"personId", "messageId", "forumId", "commentId", "tagId"}
+ID_PARAMS = {"personId", "messageId", "forumId", "commentId", "tagId", "person1Id", "person2Id"}
 
 
 def load_param_parser(script: Path):
@@ -85,6 +85,8 @@ def main() -> int:
                          "而 eugraph 是 INTEGER，complex-7 的日期相减因此在 neo4j 上报 TypeError。"
                          "开启后只在 neo4j 侧把该字段包一层 toInteger()（eugraph 侧保持原版文本）")
     ap.add_argument("--json", default=None, help="把结果写成 JSON")
+    ap.add_argument("--override", default=None,
+                    help="逗号分隔 key=value，应用到所有声明该参数的查询（如 person1Id=933,person2Id=1129）")
     args = ap.parse_args()
 
     parse_params = load_param_parser(Path(__file__).with_name("bench_ldbc_interactive.py"))
@@ -108,7 +110,13 @@ def main() -> int:
     check_neo4j_ready(neo)
 
     # 参数：文件默认值 + 文档口径覆盖（personId=933；short 系列用 sf0.1 里真实存在的 messageId）
-    OVERRIDES = {"personId": 933, "messageId": 3}
+    OVERRIDES = {"personId": 933, "messageId": 3, "person1Id": 933, "person2Id": 1129}
+    if args.override:
+        for item in args.override.split(","):
+            if "=" not in item:
+                continue
+            k, v = item.split("=", 1)
+            OVERRIDES[k.strip()] = int(v) if v.strip().lstrip("-").isdigit() else v.strip()
 
     print(f"{'query':22} {'rows(eg/neo)':>13} {'eg min':>8} {'eg p50':>8} {'neo min':>8} {'neo p50':>8} {'ratio':>7}")
     print("-" * 84)

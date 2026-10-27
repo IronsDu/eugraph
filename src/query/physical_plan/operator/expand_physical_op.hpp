@@ -103,6 +103,7 @@ private:
     uint32_t allowed_dst_index_id_ = 0;
     EdgeLabelId allowed_edge_label_ = INVALID_EDGE_LABEL_ID;
     std::shared_ptr<std::vector<PropertyValue>> allowed_dst_values_;
+    std::vector<ISyncGraphDataStore::EdgeIndexEntry> edge_scratch_;
     std::optional<size_t> limit_hint_;
 };
 

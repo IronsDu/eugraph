@@ -63,6 +63,12 @@ public:
     virtual std::vector<LabelIdSet> getVertexLabelsBatch(GraphSession& session, const std::vector<VertexId>& vids) = 0;
     virtual std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphSession& session, LabelId label_id,
                                                                             const std::vector<VertexId>& vids) = 0;
+    /// Batch coalesced property fetch: for each vertex, collect values for the
+    /// given (label, prop) candidates in one prefix scan. Used by the
+    /// multi-label coalesce path to avoid a separate labels fetch.
+    virtual std::vector<std::vector<PropertyValue>>
+    getVertexCoalescePropertiesBatch(GraphSession& session, const std::vector<VertexId>& vids,
+                                     const std::vector<std::pair<LabelId, uint16_t>>& candidates) = 0;
     /// Batch fetch of a SUBSET of properties. Default implementation falls back to one
     /// point lookup per (row, property); implementations may override it to read the whole
     /// batch with a single cursor. Semantics must match the fallback exactly: `props` is
@@ -168,6 +174,10 @@ public:
     virtual void scanEdges(GraphSession& session, VertexId vid, Direction direction,
                            std::optional<EdgeLabelId> label_filter,
                            const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
+    /// One cursor for a whole batch of sources instead of one per vid.
+    virtual void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
+                                std::optional<EdgeLabelId> label_filter,
+                                const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) = 0;
     virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid,
                                                                   Direction direction,
                                                                   std::optional<EdgeLabelId> label_filter) = 0;

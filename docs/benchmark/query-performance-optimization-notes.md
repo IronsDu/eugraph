@@ -5,6 +5,11 @@
 >
 > 结论先行：本轮差距的大头不是「计划没选对」，而是**逐行重复物化/空查询**和
 > **属性/标签存储布局**。计划层面 neo4j 与 eugraph 的 join 顺序、date 谓词位置基本一致。
+>
+> **存储状态**：本文中的 `vprop` / `label_reverse` 是 2026-10-24 存储改造前的口径。
+> §5.1 的「labels + 常用属性收进同一条 vertex 记录」已经落地为 `vertex_data`（见
+> [kv-encoding.md](../storage/kv-encoding.md)）；保留原文是为了记录当时的推理与实测，
+> 不要按旧表名理解当前实现。
 
 ## 一、测量纪律（先定判据，再改代码）
 
@@ -185,8 +190,10 @@ source 都要一次 `search_near`，52k source ≈ 30–40 ms。
 - 每个顶点一条 adjacency row/table（源内连续，顺序扫描）；
 - 或给 `edge_index` 增加按源的覆盖索引/聚簇。
 
-`scanEdgesBatch` 用一把 cursor 只省 open/close，省不掉每源 `search_near`——本轮实测
-收益 <5%，已回退，不要重复投入。
+2026-10-25 实测：把 `scanEdgesBatch` 改为每 4,096 个 source 复用一个 cursor 后，
+c5 从 279.7 ms 降到 243.9 ms（约 -13%）；但仍然省不掉每源 `search_near`，
+剩余瓶颈仍是每源的 B-tree 定位。2026-10-26 的 caller-owned page/去拷贝没有稳定收益，
+不要继续做无测量的微调。
 
 ### 5.3 高选择性谓词的索引/CBO（creationDate）
 
@@ -217,7 +224,8 @@ label 的属性一次），可合并为一个 `getVertexPropCoalesce(vids, candi
 
 ### 5.5 不要做的事
 
-- **不要**为了“省 cursor”继续改 `scanEdgesBatch`：瓶颈是每源 search，不是 open/close。
+- **不要**继续做无测量的 cursor/vector 微调：共享 cursor 的一次性收益约 -13%，
+  之后 caller-owned page、去 key/value 拷贝的 A/B 在噪声/轻微回退范围；瓶颈是每源 search 与计划形状。
 - **不要**用“从 country 反向展开”的手写计划替代 CBO：已实测灾难性退化。
 - **不要**把 `WITH DISTINCT` 的完整 VERTEX 深拷贝换成“每行仍拷贝、只是少查一次”；
   要么共享句柄，要么推迟物化。

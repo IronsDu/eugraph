@@ -14,11 +14,52 @@ namespace eugraph {
 // No prefix bytes — table identity is determined by the WiredTiger table name.
 class KeyCodec {
 public:
-    // ==================== Label Reverse Index (table:label_reverse) ====================
-    // Key: {vertex_id:uint64 BE}{label_id:uint16 BE}
-    static std::string encodeLabelReverseKey(VertexId vertex_id, LabelId label_id);
-    static std::pair<VertexId, LabelId> decodeLabelReverseKey(std::string_view key);
-    static std::string encodeLabelReversePrefix(VertexId vertex_id);
+    /// vertex_data record kinds. All keys are {vertex_id:u64BE}{kind:u8}...
+    enum class VertexDataKind : uint8_t {
+        LABEL = 0x00,
+        PROPERTY = 0x01,
+        OUT_ADJACENCY = 0x02,
+        IN_ADJACENCY = 0x03,
+    };
+
+    enum class AdjacencyCacheState : uint8_t {
+        COMPLETE = 0,
+        OVERFLOW = 1,
+    };
+
+    // ==================== vertex_data (table:vertex_data) ====================
+    // {vertex}{0x00}{label_id:u16BE} -> empty
+    static std::string encodeVertexDataLabelKey(VertexId vertex_id, LabelId label_id);
+    static std::pair<VertexId, LabelId> decodeVertexDataLabelKey(std::string_view key);
+    static std::string encodeVertexDataLabelPrefix(VertexId vertex_id);
+
+    // {vertex}{0x01}{label_id:u16BE}{prop_id:u16BE} -> ValueCodec value
+    static std::string encodeVertexDataPropKey(VertexId vertex_id, LabelId label_id, uint16_t prop_id);
+    static std::tuple<VertexId, LabelId, uint16_t> decodeVertexDataPropKey(std::string_view key);
+    static std::string encodeVertexDataPropPrefix(VertexId vertex_id);                   // all props of vertex
+    static std::string encodeVertexDataPropPrefix(VertexId vertex_id, LabelId label_id); // props of one label
+
+    static std::string encodeVertexDataVertexPrefix(VertexId vertex_id); // every record of vertex
+    static VertexDataKind vertexDataKind(std::string_view key);
+
+    // Adjacency: state key is exactly {vertex}{kind}; each edge key appends
+    // {label}{neighbor}{seq} and maps to edge_id.
+    struct VertexDataAdjEdgeKey {
+        VertexId vertex_id;
+        Direction direction;
+        EdgeLabelId edge_label_id;
+        VertexId neighbor_id;
+        uint64_t seq;
+    };
+
+    static std::string encodeVertexDataAdjStateKey(VertexId vertex_id, Direction direction);
+    static std::string encodeVertexDataAdjPrefix(VertexId vertex_id, Direction direction);
+    static std::string encodeVertexDataAdjEdgeKey(const VertexDataAdjEdgeKey& key);
+    static VertexDataAdjEdgeKey decodeVertexDataAdjEdgeKey(std::string_view key);
+    static bool isVertexDataAdjStateKey(std::string_view key); // size == 9
+
+    static std::string encodeAdjacencyState(AdjacencyCacheState state, uint32_t count);
+    static std::pair<AdjacencyCacheState, uint32_t> decodeAdjacencyState(std::string_view value);
 
     // ==================== Label Forward Index (table:label_fwd_{id}) ====================
     // Key: {vertex_id:uint64 BE}
@@ -29,12 +70,6 @@ public:
     // Key: {vertex_id:uint64 BE} — enumerates every live vertex, including unlabeled ones.
     static std::string encodeVertexExistenceKey(VertexId vertex_id);
     static VertexId decodeVertexExistenceKey(std::string_view key);
-
-    // ==================== Vertex Property Storage (table:vprop_{id}) ====================
-    // Key: {vertex_id:uint64 BE}{prop_id:uint16 BE}
-    static std::string encodeVPropKey(VertexId vertex_id, uint16_t prop_id);
-    static std::pair<VertexId, uint16_t> decodeVPropKey(std::string_view key);
-    static std::string encodeVPropPrefix(VertexId vertex_id);
 
     // ==================== Edge Index (table:edge_index) ====================
     // Key: {vertex_id:uint64 BE}{direction:uint8}{edge_label_id:uint16 BE}{neighbor_id:uint64 BE}{seq:uint64 BE}

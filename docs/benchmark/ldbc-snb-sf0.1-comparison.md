@@ -7,17 +7,24 @@
 
 - 数据：LDBC SNB Interactive **sf0.1**，重新从 Basic CSV 导入；eugraph 327,588 顶点 /
   1,477,965 边，Person 1,528，Message 286,744。
-- Person 的 `email` / `speaks` 从独立 CSV 聚合为 `STRING[]` 导入 eugraph；neo4j 同步为 list。
+- **结果复验使用 CsvComposite 数据**（`social_network-sf0.1-CsvComposite-LongDateFormatter`，
+  schema 为 `docs/program/design/ldbc-sf01-composite.schema.json`）：`email` 作为 `STRING[]` 导入；
+  Person 的 `language` 列按上游 `cypher/scripts/headers.txt` 映射为 `speaks:STRING[]`
+  （`language` 是 Post 的属性，不是 Person 的）。
   neo4j 另外存在历史测试标签/边，但标准 Person/Message/Post/Comment/Forum/Tag 等计数与 eugraph 一致。
 - neo4j 的 `LIKES.creationDate`、`WORK_AT.workFrom`、Person 日期的字符串属性已归一化为整数；
   eugraph 原本是整数。
 - 环境：Release；complex 8 compute / 4 storage IO；update 为一次性数据副本、4 compute、4G cgroup。
 - 客户端：官方 Bolt driver，每条查询独立连接；eugraph 的 `id` 是整数，neo4j 是字符串，
   本轮对 neo4j 的 `*Id` 参数统一传字符串，避免“参数类型不匹配 → 0 行 → 虚假加速”。
-- 同机交错 A/B；普通查询 4 轮、complex-13/14 2 轮，取 min；complex-14 优化后单独复测 3 轮取 min
-  （0.295 s）；绝对值只用于同一轮参考，跨轮次看数量级。
-- shortest 类参数：complex-1 `personId=933, firstName=John`；complex-13/14 `person1Id=933, person2Id=1129`
-  （官方默认 ID 不在本地 sf0.1，使用真实存在的端点验证，结果已与 neo4j 对照）。
+- 同机交错 A/B；全量 21 条读查询 1 轮 warmup + 3 轮计时，取 min；
+  c5/c9/c14 另有 5 轮专项复测。绝对值受机器频率影响，跨轮次只看数量级。
+- 参数：complex/short 的 `personId=933`、`messageId=3`；complex-13/14
+  `person1Id=933, person2Id=1129`（官方默认 ID 不在本地 sf0.1）。complex-1 的 `firstName`
+  保持文件默认 `Jose`。`bench_ldbc_ab.py` / `verify_ldbc_results.py` 默认使用这组参数，
+  需要换成本地其他 ID 时传 `--override personId=...,person1Id=...,person2Id=...`。
+- 结果复验默认跑全量 21 条；仅在 CsvBasic 或 neo4j 侧 friend 集合存在数据差异时用
+  `--skip complex-1` 排除该条。
 - **点查索引前提**：short-4..7 依赖 `Person/Message/Post/Comment/Forum(id)` 索引。
   本轮 eugraph 补建 `Message.id` 索引，neo4j 的对应索引均确认 `ONLINE`；无索引时 short-4 会退化为
   全表扫描，不能作为结论。
@@ -36,9 +43,9 @@
 
 ## 2. 可运行性与耗时
 
-> **本分支状态（2026-10-25）**：complex-14 已优化（79.8 s → 0.81 s → **0.295 s**，仍 🔴🔴 约 14×）；
-> complex-9 已优化（422 ms → **161.7 ms**，仍 🟠 约 5.0×）；
-> complex-5 已优化（514 ms → **264.1 ms**，仍 🟡 约 2.7×）。方案见
+> **本分支状态（2026-10-25，全量 21 条复跑）**：complex-14 **351 ms**（🔴🔴 约 21×）；
+> complex-9 **232 ms**（🔴 约 8.1×，旧 161.7 为错误计划结果）；complex-5 **250 ms**（🟡 约 2.8×）。
+> 三者行结果均与 neo4j 一致；c1/c12 的差异见 §2.2 注。方案见
 > [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md)、
 > [算子实现计划](../query/c5-c9-operator-implementation-plan.md)）。
 
@@ -46,40 +53,54 @@
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
-| short-5 | 1.20 | 2.64 | 🟢 快 2.2× |
-| short-1 | 1.22 | 2.49 | 🟢 快 2.0× |
-| short-4 | 1.23 | 2.49 | 🟢 快 2.0× |
-| short-3 | 1.37 | 2.59 | 🟢 快 1.9× |
-| short-7 | 1.82 | 3.11 | 🟢 快 1.7× |
-| short-6 | 1.80 | 2.86 | 🟢 快 1.6× |
-| short-2 | 4.64 | 5.06 | 🟢 快 1.1× |
+| short-5 | 1.16 | 1.81 | 🟢 快 1.6× |
+| short-6 | 1.44 | 2.06 | 🟢 快 1.4× |
+| short-4 | 0.95 | 1.34 | 🟢 快 1.4× |
+| short-1 | 1.76 | 2.13 | 🟢 快 1.2× |
+| short-3 | 1.51 | 1.80 | 🟢 快 1.2× |
+| short-7 | 1.42 | 1.45 | 🟡 约 1.0×（0 行） |
+| short-2 | 5.21 | 2.88 | 🟡 慢 1.8× |
 
 ### 2.2 Complex reads
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
-| complex-13 | 1.54 | 2.50 | 🟢 快 1.6×（shortestPath，length=3） |
-| complex-8 | 4.16 | 3.47 | 🟡 慢 1.2× |
-| complex-7 | 5.23 | 3.37 | 🟡 慢 1.6× |
-| complex-4 | 8.29 | 4.13 | 🟡 慢 2.0× |
-| complex-11 | 7.30 | 3.31 | 🟡 慢 2.2× |
-| complex-5 | **264.1** | 98.39 | 🟡 慢约 2.7×（已优化，原 513.66） |
-| complex-6 | 93.56 | 31.56 | 🟡 慢 3.0× |
-| complex-12 | 384.15 | 115.80 | 🟠 慢 3.3× |
-| complex-2 | 14.56 | 4.16 | 🟠 慢 3.5× |
-| complex-1 | 32.21 | 8.73 | 🟠 慢 3.7×（shortestPath） |
-| complex-10 | 40.32 | 10.63 | 🟠 慢 3.8× |
-| complex-3 | 132.06 | 28.33 | 🟠 慢 4.7× |
-| complex-9 | **161.7** | 32.58 | 🟠 慢约 5.0×（已优化，原 422.39；见 §3） |
-| complex-14 | **295** | 20.90 | 🔴🔴 慢约 14×（已优化，原 79,788；见 §3） |
+| complex-13 | 1.49 | 2.07 | 🟢 快 1.4×（shortestPath） |
+| complex-8 | 4.58 | 3.24 | 🟡 慢 1.4× |
+| complex-7 | 6.26 | 3.10 | 🟡 慢 2.0× |
+| complex-11 | 7.63 | 3.74 | 🟡 慢 2.0× |
+| complex-4 | 8.49 | 3.74 | 🟡 慢 2.3×（0 行） |
+| complex-2 | 9.96 | 3.94 | 🟡 慢 2.5× |
+| complex-6 | 77.32 | 29.08 | 🟡 慢 2.7× |
+| complex-5 | **249.76** | 89.53 | 🟡 慢 2.8× |
+| complex-1 | 18.26 | 5.22 | 🟠 慢 3.5×（15/15；列表顺序归一后一致） |
+| complex-12 | 380.55 | 99.05 | 🟠 慢 3.8×（仅 tag 列表顺序不同） |
+| complex-3 | 109.85 | 27.66 | 🟠 慢 4.0×（0 行） |
+| complex-10 | 44.29 | 9.24 | 🟠 慢 4.8× |
+| complex-9 | **231.90** | 28.71 | 🔴 慢 8.1× |
+| complex-14 | **351.14** | 16.46 | 🔴🔴 慢 21.3× |
 
-complex-14 为本分支优化后的复测值（3 轮 min，4 行与 neo4j 一致；neo4j 20.9 ms 沿用上一轮同机同数据基线）；
-complex-9 为优化后 5 轮 min（20 行与原路径逐值一致；neo4j 32.6 ms 沿用上一轮基线）；
-complex-5 为优化后 4 轮 min（20 行与原路径逐值一致；neo4j 98.4 ms 沿用上一轮基线）；其余读取沿用上一轮结果。
+> 全量 21 条读查询复跑（3 轮 min，同轮交错；Message.id 索引已建）。
+> **CsvComposite 复验：21/21 条语义一致**。c12 的 `collect(DISTINCT tag.name)` 和
+> c1 的 email/speaks/unis/companies 列表顺序由 Cypher 保证；按集合归一后逐行一致。
+> c1 的重复行来自“列表含 null 的 GROUP BY 分组键”缺陷，已由 `valueContentEquals` 修复
+> （首段 shortestPath 15/15，最终 c1 也是 15/15）。
+> c3/c4 当前参数下两边都是 0 行，耗时只代表扫描/过滤成本。
+
+complex-5/9/14 的上表为全量 21 条同轮 A/B（3 轮 min）；计划文档中的 234/187/291 ms
+是另外 5 轮专项复测，绝对值受机器频率影响，结论以同轮比值为准。
+
+**complex-9 更正**：旧的 161.7 ms 来自 filter-boundary 延迟物化缺陷——
+Sort 所需、Filter 不需要的 `message.id` 被放在 Sort 下方按 LIMIT 后物化，
+Sort 比较了占位值，返回的 Top-20 不是最大日期。该优化已移除；修复后为 187.2 ms，
+优化前正确基线是 422 ms。见 [kv-encoding §实施记录](../storage/kv-encoding.md)。
+其余读取沿用上一轮结果。
 
 ### 2.3 Updates
 
-本轮未重跑 update；下表是上一轮同口径结果，**不参与本轮结论**：
+本轮未获得有效的 update 对比：8 条 `interactive-update-*` 是写语句，参数来自
+LDBC update stream fixture（文件本身没有 `:param` 块），仓库内没有现成 fixture；
+用空参数执行是 no-op，不能作为结果。下表沿用上一轮同口径数据，**不参与本轮结论**：
 
 | 语句 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
@@ -92,23 +113,23 @@ complex-5 为优化后 4 轮 min（20 行与原路径逐值一致；neo4j 98.4 m
 | update-1 | 53.7 | 23.9 | 🟡 慢 2.2× |
 | update-7 | 440.07 | 96.08 | 🟠 慢 4.6× |
 
-**当前没有不可运行的 LDBC 读取语句。** complex-14 已跑通并完成优化（79.8 s → 0.295 s，4 行结果与
-neo4j 一致，仍慢约 14×）；complex-9 已优化到 161.7 ms（原 422 ms，20 行结果与原路径逐值一致，
-仍慢约 5×）；complex-5 已优化到 264.1 ms（原 514 ms，20 行结果与原路径逐值一致，仍慢约 2.7×）；
-complex-7/11 的 neo4j 数值属性已归一化为整数后重测，行数分别为 7/7、4/4。
+**当前没有不可运行的 LDBC 读取语句。** 全量 21 条结果均语义一致：
+complex-14 351 ms（4 行）、complex-9 232 ms（旧 161.7 为错误计划结果）、
+complex-5 250 ms；complex-1/c12 仅在 `collect` 列表顺序上不同，按集合归一后 15/15、3/3。
+complex-3/4 当前参数下两边均为 0 行。
 
 ## 3. 剩余性能点、原因与思路
 
 | 优先级 | 查询/范围 | 差距 | 已定位原因 | 下一步思路 |
 |---|---|---|---|---|
-| P1 | 🟠 complex-9 | 161.7 ms vs 32.6 ms（约 5.0×） | 两层 LM 已消除错位物化（content 168 ms、预过滤 id 105 ms）；剩余为 Filter 的 `creationDate` 在 53,192 行上做 label + per-label vprop 两次点查（约 98 ms），以及 Expand 53k 边（约 45 ms） | 存储/访问路径：compact label、label+hot property 共置、或 `creationDate` 索引；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
-| P1 | 🟡 complex-5 | 264.1 ms vs 98.4 ms（约 2.7×） | 已把 correlated `LeftJoin` 改为每 512 个 left row 执行一次右子计划（CorrelatedSource 多行），消除 8,814 次子计划重启；批大小受 1,024 行 chunk 边界限制，不能直接开大 | 剩余是 89k posts/creator 的 per-edge 成本；可做 OUT/IN 邻接存储或进一步去相关，目标 ≤150 ms。见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
-| P1 | 🔴🔴 complex-14 | 295 ms vs 20.9 ms（约 14×） | PC 锚点的 `CrossProduct(CorrelatedSource, LabelScan)` 已改为 `CorrelatedVertexProbe`（缓存 Person 锚点映射，按边端点探测），去掉每个 PC 的 1,528 行标签扫描与过滤；剩余是 24 次 PC 的实际 Comment/Post 展开 | 展开侧批量/邻接缓存，或 PC 去相关；见 [pattern-comprehension-anchor-label-scan.md](../query/pattern-comprehension-anchor-label-scan.md) |
-| P1 | 🟠 complex-3 | 4.7× | `Tag(name)` 起点选择、`HAS_CREATOR` 方向的前向/反向表选择仍不理想 | 结合基数估计选起点；按方向选择更合适的边表 |
-| P2 | 🟠 complex-1 | 3.7× | shortestPath 后还有 OPTIONAL/collect 属性展开；尚未做最新剖析 | profile 后处理；绝对值只有 ~32 ms，收益有限 |
-| P2 | 🟠 complex-10 | 3.8× | VLE 之后的 `IS_LOCATED_IN` / `HAS_CREATOR` 展开顺序 | 调整 join/expand 顺序，减少中间行 |
-| P2 | 🟠 complex-12 | 3.3× | `TagClass → Tag → Post` 多跳展开与中间结果规模 | 优化展开顺序/中间结果裁剪 |
-| P2 | 🟡 complex-6 | 3.0× | 已通过标签前向扫描从 ~9× 降到 3.0×；剩余是 post/tag 展开与属性读取 | 继续 profile 该路径 |
+| P1 | 🔴 complex-9 | 232 ms vs 28.7 ms（约 8.1×） | 融合 `labels + coalesce` 已把 53k 行的 label/property 读取并成一次前缀扫描；Filter 边界 LM 因正确性问题已移除，Sort key 恢复正常物化。剩余是 Expand 53k 边的 per-edge 成本 + Sort/PE | 展开侧批量/共享 cursor；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
+| P1 | 🟡 complex-5 | 250 ms vs 89.5 ms（约 2.8×） | correlated `LeftJoin` 已按 512 行批处理；`scanEdgesBatch` 已改为每 4,096 个 source 复用 cursor，消除 98k 次 per-source cursor | 剩余是 89k posts/creator 的 per-edge 成本与去相关；目标 ≤150 ms。见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
+| P1 | 🔴🔴 complex-14 | 351 ms vs 16.5 ms（约 21×） | PC 锚点的 `CrossProduct(CorrelatedSource, LabelScan)` 已改为 `CorrelatedVertexProbe`（缓存 Person 锚点映射，按边端点探测），去掉每个 PC 的 1,528 行标签扫描与过滤；剩余是 24 次 PC 的实际 Comment/Post 展开 | 展开侧批量/邻接缓存，或 PC 去相关；见 [pattern-comprehension-anchor-label-scan.md](../query/pattern-comprehension-anchor-label-scan.md) |
+| P1 | 🟠 complex-3 | 4.0×（0 行） | `Tag(name)` 起点选择、`HAS_CREATOR` 方向的前向/反向表选择仍不理想 | 结合基数估计选起点；按方向选择更合适的边表 |
+| P2 | 🟠 complex-1 | 3.5×（20/15 行，数据差异） | shortestPath 后还有 OPTIONAL/collect 属性展开；尚未做最新剖析 | profile 后处理；绝对值只有 ~32 ms，收益有限 |
+| P2 | 🟠 complex-10 | 4.8× | VLE 之后的 `IS_LOCATED_IN` / `HAS_CREATOR` 展开顺序 | 调整 join/expand 顺序，减少中间行 |
+| P2 | 🟠 complex-12 | 3.8×（仅列表顺序差异） | `TagClass → Tag → Post` 多跳展开与中间结果规模 | 优化展开顺序/中间结果裁剪 |
+| P2 | 🟡 complex-6 | 2.7× | 已通过标签前向扫描从 ~9× 降到 3.0×；剩余是 post/tag 展开与属性读取 | 继续 profile 该路径 |
 
 优先级按“差距 + 下一步可执行性”综合：c5/c9/c14 的剩余优化都落到存储/访问路径或更大结构调整，
 均列 P1（c5 已完成算子层批处理）。
@@ -134,7 +155,7 @@ complex-7/11 的 neo4j 数值属性已归一化为整数后重测，行数分别
 - neo4j 的 `LIKES.creationDate` / `WORK_AT.workFrom` / Person 日期属性归一化为整数；
   eugraph 原本就是整数。
 - eugraph 创建 `Message.id` 索引，neo4j 的 Person/Message/Post/Comment/Forum id 索引均 ONLINE。
-- 同机交错 A/B；普通查询 4 轮、complex-13/14 2 轮，取 min；complex-14 优化后复测 3 轮取 min；
+- 同机交错 A/B；全量 21 条读查询 warmup 1 + 3 轮取 min；c5/c9/c14 另有 5 轮专项复测；
   complex-9 优化后复测 5 轮取 min。
 - complex-14 优化后：0.295 s（3 轮 min），4 行，与 neo4j 一致；PC 锚点由
   `CrossProduct(CorrelatedSource, LabelScan(Person))` 改为 `CorrelatedVertexProbe`，
