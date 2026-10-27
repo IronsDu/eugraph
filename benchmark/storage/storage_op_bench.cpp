@@ -7,10 +7,12 @@
 
 #include <unistd.h>
 
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -115,9 +117,13 @@ BENCHMARK_F(WtSeekBench, SearchNearPrefix)(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations());
 }
 
-folly::coro::Task<void> dispatchLoop(eugraph::IoScheduler& io, size_t n) {
+folly::coro::Task<void> dispatchLoop(eugraph::IoScheduler& io, size_t n, std::thread::id caller,
+                                     std::atomic<uint64_t>& cross_thread) {
     for (size_t i = 0; i < n; ++i)
-        co_await io.dispatchVoid([] {});
+        co_await io.dispatchVoid([&cross_thread, caller] {
+            if (std::this_thread::get_id() != caller)
+                cross_thread.fetch_add(1, std::memory_order_relaxed);
+        });
 }
 
 class DispatchBench : public benchmark::Fixture {
@@ -135,9 +141,12 @@ protected:
 
 BENCHMARK_F(DispatchBench, EmptyDispatchVoid)(benchmark::State& state) {
     constexpr size_t kBatch = 64;
+    const auto caller = std::this_thread::get_id();
+    std::atomic<uint64_t> cross_thread{0};
     for (auto _ : state)
-        folly::coro::blockingWait(dispatchLoop(*io_, kBatch));
+        folly::coro::blockingWait(dispatchLoop(*io_, kBatch, caller, cross_thread));
     state.SetItemsProcessed(state.iterations() * kBatch);
+    state.counters["cross_thread"] = static_cast<double>(cross_thread.load(std::memory_order_relaxed));
 }
 
 } // namespace
