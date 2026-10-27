@@ -8,6 +8,7 @@
 #include "storage/data/index_maintenance.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/kv/value_codec.hpp"
+#include "storage/storage_op_metrics.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
@@ -44,6 +45,14 @@ public:
     /// 投递到 Storage IO 池都是一次跨池调度；用于按查询统计线程切换开销。
     [[nodiscard]] uint64_t ioDispatches() const noexcept {
         return io_stats_.dispatches;
+    }
+
+    /// 本条语句在 IO 线程上执行的 WT cursor seek 次数（search / search_near）。
+    [[nodiscard]] uint64_t wtSearchCount() const noexcept {
+        return io_stats_.seeks->wt_search.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] uint64_t wtSearchNearCount() const noexcept {
+        return io_stats_.seeks->wt_search_near.load(std::memory_order_relaxed);
     }
 
     /// 按存储方法聚合的 dispatch 明细（top 5），用于定位是哪类调用在放大。
@@ -706,6 +715,7 @@ private:
 
     struct IoStats {
         uint64_t dispatches = 0;
+        std::shared_ptr<StorageOpCounters> seeks = std::make_shared<StorageOpCounters>();
         std::unordered_map<uint32_t, uint64_t> by_line;
         std::unordered_map<uint32_t, std::string> line_names;
     };
@@ -738,16 +748,34 @@ private:
     template <typename F>
     folly::coro::Task<std::invoke_result_t<F>> dispatch(F func,
                                                         std::source_location loc = std::source_location::current()) {
-        if (ioTraceEnabled())
+        const bool trace = ioTraceEnabled();
+        if (trace)
             recordDispatch(loc);
-        return io_.dispatch(std::move(func));
+        if (!trace)
+            return io_.dispatch(std::move(func));
+
+        auto* counters = io_stats_.seeks.get();
+        auto wrapped = [func = std::move(func), counters]() mutable -> std::invoke_result_t<F> {
+            StorageOpMetricsScope scope(counters);
+            return func();
+        };
+        return io_.dispatch(std::move(wrapped));
     }
 
     template <typename F>
     folly::coro::Task<void> dispatchVoid(F func, std::source_location loc = std::source_location::current()) {
-        if (ioTraceEnabled())
+        const bool trace = ioTraceEnabled();
+        if (trace)
             recordDispatch(loc);
-        return io_.dispatchVoid(std::move(func));
+        if (!trace)
+            return io_.dispatchVoid(std::move(func));
+
+        auto* counters = io_stats_.seeks.get();
+        auto wrapped = [func = std::move(func), counters]() mutable {
+            StorageOpMetricsScope scope(counters);
+            func();
+        };
+        return io_.dispatchVoid(std::move(wrapped));
     }
 
     ISyncGraphDataStore& store_;

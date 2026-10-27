@@ -10,6 +10,8 @@
 
 #include "storage/kv/index_key_codec.hpp"
 
+#include "storage/storage_op_metrics.hpp"
+
 namespace eugraph {
 
 // ==================== WT Item Helpers (local) ====================
@@ -286,7 +288,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         for (uint16_t pid : proj) {
             auto key = KeyCodec::encodeVertexDataPropKey(unique[i], label_id, pid);
             setItem(c, key);
-            const int ret = c->search(c);
+            const int ret = (recordWtSearch(), c->search(c));
             if (ret == WT_NOTFOUND)
                 continue;
             if (ret != 0) {
@@ -404,7 +406,7 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
         prefix = KeyCodec::encodeVertexDataLabelPrefix(unique[i]);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND)
             continue;
         if (ret != 0) {
@@ -466,7 +468,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         prefix = KeyCodec::encodeVertexDataPropPrefix(unique[i], label_id);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND)
             continue;
         if (ret != 0) {
@@ -531,7 +533,7 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
         std::string prefix = KeyCodec::encodeVertexDataPropPrefix(vid);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND) {
             ++out_index;
             continue;
@@ -833,7 +835,7 @@ std::vector<std::optional<PropertyValue>> SyncGraphDataStore::getEdgePropertyBat
     for (EdgeId eid : edge_ids) {
         key = KeyCodec::encodeEPropKey(eid, prop_id);
         setItem(c, key);
-        int ret = c->search(c);
+        int ret = (recordWtSearch(), c->search(c));
         if (ret == WT_NOTFOUND) {
             out.emplace_back(std::nullopt);
             continue;
@@ -966,7 +968,7 @@ void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<Vert
                                                 : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND)
             continue;
         if (ret != 0) {
@@ -1147,7 +1149,7 @@ EdgeScanCursorImpl::EdgeScanCursorImpl(GraphSession& session, CursorHandle curso
     auto* c = cursor_.get();
     setItem(c, prefix_);
     int exact = 0;
-    int ret = c->search_near(c, &exact);
+    int ret = (recordWtSearchNear(), c->search_near(c, &exact));
     if (ret != 0 && ret != WT_NOTFOUND) {
         session_.fail_from_wt(ret, "EdgeScanCursor: search_near failed");
         return;
@@ -1286,7 +1288,7 @@ VertexDataEdgeScanCursor::VertexDataEdgeScanCursor(GraphSession& session, Cursor
     auto* c = cursor_.get();
     setItem(c, prefix_);
     int exact = 0;
-    int ret = c->search_near(c, &exact);
+    int ret = (recordWtSearchNear(), c->search_near(c, &exact));
     if (ret == WT_NOTFOUND)
         return;
     if (ret != 0) {
@@ -1384,7 +1386,7 @@ EdgeTypeScanCursorImpl::EdgeTypeScanCursorImpl(GraphSession& session, CursorHand
     } else {
         setItem(c, prefix_);
         int exact = 0;
-        ret = c->search_near(c, &exact);
+        ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret != 0 && ret != WT_NOTFOUND) {
             session_.fail_from_wt(ret, "EdgeTypeScanCursor: search_near failed");
             return;
@@ -1725,7 +1727,7 @@ void IndexScanCursorImpl::position() {
     if (!spec_.start_key.empty()) {
         setItem(c, spec_.start_key);
         int cmp = 0;
-        ret = c->search_near(c, &cmp);
+        ret = (recordWtSearchNear(), c->search_near(c, &cmp));
         if (ret == WT_NOTFOUND)
             return; // 没有命中
         if (ret != 0) {

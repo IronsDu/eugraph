@@ -70,10 +70,11 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 **Bolt 模式**：`BoltConnection::dispatchMessage` 通过 `scheduleOn(computeExecutor())` 把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接（`src/service/bolt/bolt_server.cpp`）。存储调用再从 Compute 池跳转到 Storage IO 池。因此 Bolt 模式下 `--compute-threads` 才是实际承载查询执行的线程池。
 
-> 统计一条语句发起了多少次 `io_.dispatch`：设置 `EUGRAPH_IO_TRACE=1`，语句结束时日志会输出
-> `[io-trace] io_dispatches=<N> by_call=<top5> query=<text>`。N 是该语句 `AsyncGraphDataStore`
-> 实例发起的 dispatch 次数；`by_call` 按存储方法拆分（如 `scanCursorStream` / `scanEdgesBatch` /
-> `getVertexLabelsBatch`），用于定位是哪类调用在放大。
+> 统计一条语句的 IO 成本：设置 `EUGRAPH_IO_TRACE=1`，语句结束时日志会输出
+> `[io-trace] io_dispatches=<N> wt_search=<N> wt_search_near=<N> by_call=<top5> query=<text>`。
+> `io_dispatches` 是该语句 `AsyncGraphDataStore` 发起的 dispatch 次数；`wt_search`/`wt_search_near`
+> 是该语句在 IO 线程上执行的 WT 精确 seek / 前缀 seek 次数；`by_call` 按存储方法拆分。
+> 单次成本与归因方法见 [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
 
 > Bolt 之所以能"整条消息都在 Compute 池上"，是因为它把响应整体物化成 `std::vector<uint8_t>` 后才 `via(socket EventBase)` 写回；Thrift 是流式 RPC，generator 由框架在消费方线程恢复，**不能照搬 Bolt 的做法**（见下方待办 2）。
 

@@ -72,9 +72,11 @@ struct StreamContext {
         if (trace == nullptr || *trace == '\0')
             return;
         const uint64_t dispatches = query_store->ioDispatches();
-        if (dispatches != 0)
-            spdlog::info("[io-trace] io_dispatches={} {} query={}", dispatches, query_store->ioDispatchSummary(),
-                         query_text);
+        const uint64_t searches = query_store->wtSearchCount();
+        const uint64_t search_nears = query_store->wtSearchNearCount();
+        if (dispatches != 0 || searches != 0 || search_nears != 0)
+            spdlog::info("[io-trace] io_dispatches={} wt_search={} wt_search_near={} {} query={}", dispatches, searches,
+                         search_nears, query_store->ioDispatchSummary(), query_text);
     }
 
     /// 提交本语句的事务（无会话/显式事务 ⇒ 幂等成功 ✓）；必须检查返回值 ✓

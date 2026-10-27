@@ -5,6 +5,8 @@
 #include <cstring>
 #include <spdlog/spdlog.h>
 
+#include "storage/storage_op_metrics.hpp"
+
 namespace eugraph {
 
 // ==================== WT Item Helpers ====================
@@ -63,7 +65,7 @@ int putWithCursor(WT_CURSOR* cursor, const std::string& table, std::string_view 
 /// 返回 0 / WT_NOTFOUND / 其他错误码 ✓
 int getWithCursor(WT_CURSOR* cursor, std::string_view key, std::string& out) {
     setItem(cursor, key);
-    const int ret = cursor->search(cursor);
+    const int ret = (recordWtSearch(), cursor->search(cursor));
     if (ret != 0)
         return ret;
     return getValueFromCursor(cursor, out);
@@ -91,7 +93,7 @@ int scanRangeWithCursor(WT_CURSOR* c, std::string_view start_key, bool exclusive
     if (!start_key.empty()) {
         setItem(c, start_key);
         int cmp = 0;
-        ret = c->search_near(c, &cmp);
+        ret = (recordWtSearchNear(), c->search_near(c, &cmp));
         if (ret == WT_NOTFOUND)
             return 0;
         if (ret != 0)
