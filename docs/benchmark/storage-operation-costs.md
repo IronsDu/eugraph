@@ -87,7 +87,7 @@ WT session/cursor 绑定在 compute 线程，直接拿到 IO 线程使用会超�
 因此当前生产 `IoScheduler` **仍保持 inline**；真正的跨线程修复需要先把 WT session
 按 IO 线程绑定（或写入路径不跨线程），这属于独立改造。
 
-### 3.3 先做批量读取：c14 已从 291 ms 降到 130 ms
+### 3.3 先做批量读取：c14 已从 291 ms 降到 119.5 ms
 
 `PathElementPropertyRead` 和属性求值改用 `batchGetVertexData`，把
 `getVertexLabels` + 每 label 的 `getVertexProperties` 合并为每 chunk 一次批量调用。
@@ -96,10 +96,10 @@ WT session/cursor 绑定在 compute 线程，直接拿到 IO 线程使用会超�
 |---|---:|---:|---:|---:|---:|---:|
 | complex-5 | 29,894 | 122,390 | 106 | **67.2 ms** | ~254 ms | **26%** |
 | complex-9 | 0 | 107,131 | 473 | **44.0 ms** | ~191 ms | **23%** |
-| complex-14（批量后） | 0 | 72,727 | **696** | **29.9 ms** | ~130 ms | **23%** |
+| complex-14（批量后） | 0 | 72,727 | **696** | **29.9 ms** | ~119.5 ms | **25%** |
 
 c14 批量前是 163,703 次 search_near、91,672 次 dispatch、wall ~291 ms；
-批量后 dispatch 降到 696，wall 约 **130 ms**（inline 路径）。
+批量后 dispatch 降到 696，wall 约 **119.5 ms**（inline 路径）。
 
 ## 4. 结论
 

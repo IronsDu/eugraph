@@ -157,30 +157,24 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
    "索引存在且点查命中"的校验，失败即报错退出；
 4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。
 
-## ASan TCK：CREATE 场景 SEGV（2026-10-28）
+## ASan TCK：深 CREATE 栈溢出（2026-10-28，已修复）
 
-**命令**：
+**现象**：ASan TCK 在 `Create4.feature` 的 `[2] Many CREATE clauses` 崩溃，
+栈顶显示 `ColumnBuffer::~ColumnBuffer()` 的 SEGV，因此最初被误判为内存生命周期问题。
 
-```bash
-ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
-  ctest --test-dir build/asan -R '^tck_tests$' --output-on-failure
-```
+**根因**：109 个嵌套 CREATE 子句对应 109 层 CREATE 算子协程；ASan 的 redzone
+放大每帧后，默认 8 MiB 线程栈在深层执行/销毁时耗尽。非 ASan 构建帧更小，不触发。
 
-**结果**：TCK 约 44 s 后 server crash，失败在
-`third_party/openCypher/tck/features/clauses/create/Create4.feature` 的
-`[2] Many CREATE clauses`。
+**修复**：
 
-**ASan 栈**：
+- `tests/tck/run_tck.py` 在启动 server 的 `preexec_fn` 中把 `RLIMIT_STACK` soft limit
+  提升到 64 MiB（hard limit 仍生效）；
+- 不是修改 DataChunk/ColumnBuffer 的所有权，也没有改动生产执行语义。
 
-```text
-AddressSanitizer: SEGV in operator delete
-  ColumnBuffer::~ColumnBuffer()          data_chunk.hpp:82
-  DataChunk::~DataChunk()                data_chunk.hpp:764
-  AsyncGenerator<DataChunk>::NextResult::~NextResult()
-  CreateNodePhysicalOp::executeChunk()   create_node_physical_op.cpp:292
-  CreateEdgePhysicalOp::executeChunk()   create_edge_physical_op.cpp:48
-```
+**验证**：
 
-Release 构建的全量 TCK 1306/1306 通过；该崩溃只在 ASan 下出现，属于
-CREATE/DataChunk 内存生命周期问题，**不是本次 batch/metrics 改动引入的路径**。
-在修复前 ASan TCK 不能作为绿色门禁。
+- ASan `Create4.feature`：**2/2 passed**；
+- ASan 全量 TCK：**3905/3957 passed、0 failed、0 sanitizer 报告、801 s**；
+- Release 全量 TCK：1306/1306 passed。
+
+ASan TCK 现在是绿色门禁。

@@ -72,13 +72,13 @@
 | complex-4 | 8.49 | 3.74 | 🟡 慢 2.3×（0 行） |
 | complex-2 | 9.96 | 3.94 | 🟡 慢 2.5× |
 | complex-6 | 77.32 | 29.08 | 🟡 慢 2.7× |
-| complex-5 | **249.76** | 89.53 | 🟡 慢 2.8× |
+| complex-5 | **246.5** | 92.58 | 🟡 慢 2.7× |
 | complex-1 | 18.26 | 5.22 | 🟠 慢 3.5×（15/15；列表顺序归一后一致） |
 | complex-12 | 380.55 | 99.05 | 🟠 慢 3.8×（仅 tag 列表顺序不同） |
 | complex-3 | 109.85 | 27.66 | 🟠 慢 4.0×（0 行） |
 | complex-10 | 44.29 | 9.24 | 🟠 慢 4.8× |
-| complex-9 | **231.90** | 28.71 | 🔴 慢 8.1× |
-| complex-14 | **351.14** | 16.46 | 🔴🔴 慢 21.3× |
+| complex-9 | **177.1** | 29.23 | 🔴 慢 6.1× |
+| complex-14 | **119.5** | 18.08 | 🔴 慢 6.6×（批量读取后） |
 
 > 全量 21 条读查询复跑（3 轮 min，同轮交错；Message.id 索引已建）。
 > **CsvComposite 复验：21/21 条语义一致**。c12 的 `collect(DISTINCT tag.name)` 和
@@ -122,11 +122,11 @@ complex-3/4 当前参数下两边均为 0 行。
 
 | 优先级 | 查询/范围 | 差距 | 已定位原因 | 下一步思路 |
 |---|---|---|---|---|
-| P1 | 🔴 complex-9 | 232 ms vs 28.7 ms（约 8.1×） | 融合 `labels + coalesce` 已把 53k 行的 label/property 读取并成一次前缀扫描；Filter 边界 LM 因正确性问题已移除，Sort key 恢复正常物化。剩余是 Expand 53k 边的 per-edge 成本 + Sort/PE | 展开侧批量/共享 cursor；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
-| P1 | 🟡 complex-5 | 250 ms vs 89.5 ms（约 2.8×） | correlated `LeftJoin` 已按 512 行批处理；`scanEdgesBatch` 已改为每 4,096 个 source 复用 cursor，消除 98k 次 per-source cursor | 剩余是 89k posts/creator 的 per-edge 成本与去相关；目标 ≤150 ms。见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
-| P1 | 🔴🔴 complex-14 | 351 ms vs 16.5 ms（约 21×） | PC 锚点的 `CrossProduct(CorrelatedSource, LabelScan)` 已改为 `CorrelatedVertexProbe`（缓存 Person 锚点映射，按边端点探测），去掉每个 PC 的 1,528 行标签扫描与过滤；剩余是 24 次 PC 的实际 Comment/Post 展开 | 展开侧批量/邻接缓存，或 PC 去相关；见 [pattern-comprehension-anchor-label-scan.md](../query/pattern-comprehension-anchor-label-scan.md) |
+| P1 | 🔴 complex-9 | 177 ms vs 29.2 ms（约 6.1×） | 融合 `labels + coalesce` 已把 53k 行的 label/property 读取并成一次前缀扫描；Filter 边界 LM 因正确性问题已移除，Sort key 恢复正常物化。剩余是 Expand 53k 边的 per-edge 成本 + Sort/PE | 展开侧批量/共享 cursor；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
+| P1 | 🟡 complex-5 | 247 ms vs 92.6 ms（约 2.7×） | correlated `LeftJoin` 已按 512 行批处理；`scanEdgesBatch` 已改为每 4,096 个 source 复用 cursor，消除 98k 次 per-source cursor | 剩余是 89k posts/creator 的 per-edge 成本与去相关；目标 ≤150 ms。见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
+| P1 | 🔴 complex-14 | 119.5 ms vs 18.1 ms（约 6.6×） | PC 锚点的 `CrossProduct(CorrelatedSource, LabelScan)` 已改为 `CorrelatedVertexProbe`（缓存 Person 锚点映射，按边端点探测），去掉每个 PC 的 1,528 行标签扫描与过滤；剩余是 24 次 PC 的实际 Comment/Post 展开 | 展开侧批量/邻接缓存，或 PC 去相关；见 [pattern-comprehension-anchor-label-scan.md](../query/pattern-comprehension-anchor-label-scan.md) |
 | P1 | 🟠 complex-3 | 4.0×（0 行） | `Tag(name)` 起点选择、`HAS_CREATOR` 方向的前向/反向表选择仍不理想 | 结合基数估计选起点；按方向选择更合适的边表 |
-| P2 | 🟠 complex-1 | 3.5×（20/15 行，数据差异） | shortestPath 后还有 OPTIONAL/collect 属性展开；尚未做最新剖析 | profile 后处理；绝对值只有 ~32 ms，收益有限 |
+| P2 | 🟠 complex-1 | 2.7×（15/15；列表顺序归一后一致） | shortestPath 后还有 OPTIONAL/collect 属性展开；尚未做最新剖析 | profile 后处理；绝对值只有 ~32 ms，收益有限 |
 | P2 | 🟠 complex-10 | 4.8× | VLE 之后的 `IS_LOCATED_IN` / `HAS_CREATOR` 展开顺序 | 调整 join/expand 顺序，减少中间行 |
 | P2 | 🟠 complex-12 | 3.8×（仅列表顺序差异） | `TagClass → Tag → Post` 多跳展开与中间结果规模 | 优化展开顺序/中间结果裁剪 |
 | P2 | 🟡 complex-6 | 2.7× | 已通过标签前向扫描从 ~9× 降到 3.0×；剩余是 post/tag 展开与属性读取 | 继续 profile 该路径 |
