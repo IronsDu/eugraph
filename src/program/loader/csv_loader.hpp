@@ -4,6 +4,7 @@
 #include "program/shell/rpc_client.hpp"
 #include "service/thrift/gen-cpp2/EuGraphService.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -12,6 +13,8 @@
 
 namespace eugraph {
 namespace loader {
+
+class ProgressReporter;
 
 /// CSV 列类型。与 thrift PropertyType 一一对应；DATETIME/TIME/DURATION 解析为
 /// 对应的 temporal 值（kind 由类型名决定），数组类型按 ';' 拆分。
@@ -78,12 +81,28 @@ struct FileSpec {
     /// 全局默认 → 文件级覆盖。
     std::optional<std::string> delimiter;
     std::optional<std::string> date_format;
+    /// 预扫描得到的记录数（不含表头；-1 = 尚未扫描）。由 scanRowCounts 填充，
+    /// 只用于进度分母与计划表，不参与数据解析。
+    int64_t expected_rows = -1;
+};
+
+/// schema 里声明的一条待执行 Cypher 语句（before_load / after_load）。
+struct LoadStatement {
+    std::string cypher;
+    bool ignore_error = false; ///< true = 失败只告警（用于重跑时 CREATE INDEX 已存在这类情况）
 };
 
 /// schema 配置（JSON）解析结果：装载入口的唯一来源。
 struct SchemaConfig {
     std::filesystem::path schema_path;
     std::filesystem::path data_dir;
+    /// 目标图（运行期去向，由命令行 --graph 设置，**不来自 JSON**）。
+    /// 不存在时由 loadAll 自动创建；装载、DDL、语句全部作用于这张图。
+    std::string graph = "default";
+    /// 装载前 / 装载后要执行的 Cypher 语句（按声明顺序、单连接串行执行）。
+    /// before_load 在 schema DDL 之后、任何数据写入之前；after_load 在点与边全部写完之后。
+    std::vector<LoadStatement> before_load;
+    std::vector<LoadStatement> after_load;
     /// 时间列的默认解析格式（全局）：epoch_ms | epoch_s | epoch_us | epoch_ns | iso。
     /// 文件级可用 FileSpec::date_format 覆盖。
     std::string date_format = "epoch_ms";
@@ -120,6 +139,26 @@ const std::string& resolveDateFormat(const SchemaConfig& config, const FileSpec&
 
 // ==================== 装载阶段 ====================
 
+/// 预扫描每个声明文件的记录数（复用 CSV 记录切分规则，不物化字段）。
+/// 结果写进 FileSpec::expected_rows，作为进度分母与计划表；畸形 CSV 在此一次性抛错
+/// （发生在任何 DDL / 写入之前，不会留下半张图）。
+void scanRowCounts(SchemaConfig& config);
+
+/// 确保目标图存在（不存在则创建）。返回是否本次新建。
+/// 拒绝空名与 `neo4j` / `system`：它们是服务端对 default 的别名，建出同名图会让
+/// 写入与查询落到不同的图上。
+bool ensureGraph(shell::EuGraphRpcClient& client, const std::string& graph_name);
+
+/// 语句执行阶段。
+enum class StatementPhase {
+    BEFORE_LOAD, ///< schema DDL 之后、任何数据写入之前
+    AFTER_LOAD,  ///< 点与边全部写完之后
+};
+
+/// 顺序执行 schema 里声明的语句（drain 流，确保写语句真正执行完成）。
+/// 失败抛 std::runtime_error，消息含阶段、序号与语句原文；标记了 on_error=ignore 的只告警。
+void runStatements(shell::EuGraphRpcClient& client, const SchemaConfig& config, StatementPhase phase);
+
 /// 创建所有顶点标签（含主键声明）与边类型。
 void createLabels(shell::EuGraphRpcClient& client, const SchemaConfig& config);
 void createEdgeLabels(shell::EuGraphRpcClient& client, const SchemaConfig& config);
@@ -129,11 +168,33 @@ void createPrimaryKeyIndexes(shell::EuGraphRpcClient& client, const SchemaConfig
 
 /// 装载全部顶点文件。返回 {写入顶点数, 主键重复跳过数}。
 std::pair<int64_t, int64_t> loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
-                                         const SchemaConfig& config, int batch_size, int concurrency);
+                                         const SchemaConfig& config, int batch_size, int concurrency,
+                                         ProgressReporter* progress = nullptr);
 
 /// 装载全部边文件。返回 {写入边数, 端点未解析跳过数}。
 std::pair<int64_t, int64_t> loadEdges(const std::vector<shell::EuGraphRpcClient*>& clients, const SchemaConfig& config,
-                                      int batch_size, int concurrency);
+                                      int batch_size, int concurrency, ProgressReporter* progress = nullptr);
+
+/// 统一装载管线的一次运行参数。
+struct LoadOptions {
+    int batch_size = 500;
+    int parallel_files = 1;
+    ProgressReporter* progress = nullptr; ///< 可空；非空时输出计划表与进度
+};
+
+/// 统一装载管线的一次运行结果。
+struct LoadResult {
+    int64_t vertices_written = 0;
+    int64_t vertices_duplicate = 0;
+    int64_t edges_written = 0;
+    int64_t edges_skipped = 0;
+};
+
+/// 唯一装载管线（loader_main 与集成测试共用，保证「执行顺序」本身被测试覆盖）：
+///   目标图 → schema DDL（标签/边类型/主键索引）→ before_load → 点 → 边 → after_load
+/// 开始前先预扫描行数并打印装载计划；config 由本函数填充 expected_rows（故取非 const）。
+LoadResult loadAll(const std::vector<shell::EuGraphRpcClient*>& clients, SchemaConfig& config,
+                   const LoadOptions& options);
 
 /// 校验：数据目录下的 CSV 是否都在 schema 里声明过（未声明的文件多半是配置漏写）。
 /// 返回未声明的文件列表（相对 data_dir）。

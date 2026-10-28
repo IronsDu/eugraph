@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -46,6 +47,14 @@ struct CsvFile {
 ///
 /// 失败即抛 std::runtime_error，消息含文件:行号（畸形引号、行字段数与表头不符）。
 CsvFile readCsvFile(const std::filesystem::path& path, const CsvDialect& dialect);
+
+/// 预扫描：按**与 readCsvFile 完全相同的记录切分规则**统计数据记录数（不含表头）。
+///
+/// 意义在于给进度条一个精确分母：直接数物理行会把「引号内换行」这类合法记录数错，
+/// 两套实现也会随规则演进悄悄漂移。因此两者共用同一个解析内核，本函数只是丢弃字段。
+/// 校验同样生效（列数与表头不符、引号未闭合、空文件都抛错）——预扫描因此成了
+/// 「装载前一次性暴露畸形 CSV」的关卡，不会等写了一半数据才发现文件有问题。
+std::size_t countCsvRecords(const std::filesystem::path& path, const CsvDialect& dialect);
 
 } // namespace loader
 } // namespace eugraph

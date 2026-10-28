@@ -1,4 +1,5 @@
 #include "program/loader/csv_loader.hpp"
+#include "program/loader/loader_progress.hpp"
 #include "program/shell/rpc_client.hpp"
 
 #include <args.hxx>
@@ -6,6 +7,7 @@
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -13,6 +15,29 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace {
+
+eugraph::loader::ProgressMode parseProgressMode(const std::string& raw) {
+    if (raw == "auto")
+        return eugraph::loader::ProgressMode::AUTO;
+    if (raw == "plain")
+        return eugraph::loader::ProgressMode::PLAIN;
+    if (raw == "off")
+        return eugraph::loader::ProgressMode::OFF;
+    throw std::runtime_error("--progress must be auto|plain|off, got '" + raw + "'");
+}
+
+std::string formatElapsed(std::chrono::steady_clock::duration elapsed) {
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed);
+    oss.precision(1);
+    oss << static_cast<double>(ms) / 1000.0 << "s";
+    return oss.str();
+}
+
+} // namespace
 
 int main(int argc, char* argv[]) {
     // Parse our args before folly::Init to avoid gflags conflicts
@@ -25,6 +50,10 @@ int main(int argc, char* argv[]) {
         parser, "path", "Schema config (JSON). Required: the only declaration entry point", {"schema"});
     args::ValueFlag<std::string> data_dir_flag(
         parser, "path", "Data directory; schema 'file' paths are resolved against it. Required", {"data-dir"});
+    args::ValueFlag<std::string> graph_flag(parser, "name", "Target graph; created when missing (default: default)",
+                                            {"graph"}, "default");
+    args::ValueFlag<std::string> progress_flag(parser, "mode", "Progress display: auto (bar on a TTY) | plain | off",
+                                               {"progress"}, "auto");
     args::ValueFlag<int> batch_size_flag(parser, "n", "Records per RPC batch", {"batch-size"}, 500);
     args::ValueFlag<int> rpc_connections_flag(parser, "n", "Number of concurrent RPC connections", {"rpc-connections"},
                                               1);
@@ -53,6 +82,7 @@ int main(int argc, char* argv[]) {
     const int port = args::get(port_flag);
     const std::string schema_path = args::get(schema_flag);
     const std::string data_dir = args::get(data_dir_flag);
+    const std::string graph_name = args::get(graph_flag);
     const int batch_size = args::get(batch_size_flag);
     const int rpc_connections = args::get(rpc_connections_flag);
     const int parallel_files = args::get(parallel_files_flag);
@@ -69,11 +99,51 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    eugraph::loader::ProgressMode progress_mode;
+    try {
+        progress_mode = parseProgressMode(args::get(progress_flag));
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << '\n';
+        return 1;
+    }
+
     // folly::Init only needs program name; our custom flags confuse gflags
     int folly_argc = 1;
     folly::Init init(&folly_argc, &argv);
 
     spdlog::set_level(spdlog::level::info);
+
+    // 先连服务器：端口写错 / 服务没起时立刻失败，不要等解析完 schema、扫完数据目录才发现。
+    //
+    // 注意 `EuGraphRpcClient::connect()` 只建 channel（惰性连接），返回 true 不代表对端可达；
+    // 因此这里用一次真实 RPC（listGraphs）做握手验证。
+    auto reachable = [&](eugraph::shell::EuGraphRpcClient& c, int index) {
+        try {
+            (void)c.listGraphs();
+            return true;
+        } catch (const std::exception& e) {
+            spdlog::error("[loader] Cannot reach server {}:{} (connection {} of {}): {}", host, port, index,
+                          rpc_connections, e.what());
+            return false;
+        }
+    };
+
+    eugraph::shell::EuGraphRpcClient client(host, port);
+    if (!client.connect() || !reachable(client, 1))
+        return 1;
+
+    std::vector<std::unique_ptr<eugraph::shell::EuGraphRpcClient>> extra_clients;
+    std::vector<eugraph::shell::EuGraphRpcClient*> clients;
+    clients.reserve(static_cast<size_t>(rpc_connections));
+    clients.push_back(&client);
+    for (int i = 1; i < rpc_connections; i++) {
+        auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port);
+        if (!extra->connect() || !reachable(*extra, i + 1))
+            return 1;
+        extra_clients.push_back(std::move(extra));
+        clients.push_back(extra_clients.back().get());
+    }
+    spdlog::info("[loader] Connected to {}:{} with {} RPC connection(s)", host, port, clients.size());
 
     eugraph::loader::SchemaConfig config;
     try {
@@ -82,6 +152,8 @@ int main(int argc, char* argv[]) {
         spdlog::error("[loader] schema error: {}", e.what());
         return 1;
     }
+    // 目标图是运行期去向（不来自 schema），由 --graph 决定
+    config.graph = graph_name;
 
     if (config.undeclared_files == "error") {
         auto undeclared = eugraph::loader::findUndeclaredCsvFiles(config);
@@ -96,53 +168,27 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eugraph::shell::EuGraphRpcClient client(host, port);
-    if (!client.connect()) {
-        spdlog::error("[loader] Failed to connect to server at {}:{}", host, port);
-        return 1;
-    }
+    spdlog::info("[loader] graph='{}', parallel-files={}, batch-size={}", config.graph, parallel_files, batch_size);
 
-    std::vector<std::unique_ptr<eugraph::shell::EuGraphRpcClient>> extra_clients;
-    std::vector<eugraph::shell::EuGraphRpcClient*> clients;
-    clients.reserve(static_cast<size_t>(rpc_connections));
-    clients.push_back(&client);
-    for (int i = 1; i < rpc_connections; i++) {
-        auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port);
-        if (!extra->connect()) {
-            spdlog::error("[loader] Failed to open extra RPC connection to {}:{}", host, port);
-            return 1;
-        }
-        extra_clients.push_back(std::move(extra));
-        clients.push_back(extra_clients.back().get());
-    }
-
-    spdlog::info("[loader] Connected to {}:{} with {} RPC connection(s), parallel-files={}", host, port, clients.size(),
-                 parallel_files);
-
+    const auto started = std::chrono::steady_clock::now();
     try {
-        spdlog::info("[loader] Creating labels...");
-        eugraph::loader::createLabels(client, config);
-        spdlog::info("[loader] Creating edge labels...");
-        eugraph::loader::createEdgeLabels(client, config);
+        eugraph::loader::ProgressReporter progress(progress_mode, std::cerr);
+        eugraph::loader::LoadOptions options;
+        options.batch_size = batch_size;
+        options.parallel_files = parallel_files;
+        options.progress = &progress;
+        const auto result = eugraph::loader::loadAll(clients, config, options);
 
-        // 先建主键唯一索引：批量写入会在同一事务内维护它，装载期即可用于解析边端点
-        spdlog::info("[loader] Creating primary key unique indexes...");
-        eugraph::loader::createPrimaryKeyIndexes(client, config);
-
-        spdlog::info("[loader] Loading vertex data...");
-        auto [vertices_written, vertices_dup] =
-            eugraph::loader::loadVertices(clients, config, batch_size, parallel_files);
-        spdlog::info("[loader] Vertices: {} written, {} skipped (duplicate primary key)", vertices_written,
-                     vertices_dup);
-
-        spdlog::info("[loader] Loading edge data...");
-        auto [edges_written, edges_skipped] = eugraph::loader::loadEdges(clients, config, batch_size, parallel_files);
-        spdlog::info("[loader] Edges: {} written, {} skipped (endpoint unresolved)", edges_written, edges_skipped);
+        spdlog::info("[loader] Vertices: {} written, {} skipped (duplicate primary key)", result.vertices_written,
+                     result.vertices_duplicate);
+        spdlog::info("[loader] Edges: {} written, {} skipped (endpoint unresolved)", result.edges_written,
+                     result.edges_skipped);
+        spdlog::info("[loader] All data loaded into graph '{}' in {}", config.graph,
+                     formatElapsed(std::chrono::steady_clock::now() - started));
     } catch (const std::exception& e) {
         spdlog::error("[loader] load failed: {}", e.what());
         return 1;
     }
 
-    spdlog::info("[loader] All data loaded successfully.");
     return 0;
 }
