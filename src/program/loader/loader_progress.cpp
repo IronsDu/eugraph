@@ -445,6 +445,18 @@ void ProgressReporter::endPhase() {
     completed_.clear();
 }
 
+void ProgressReporter::flush() {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!enabled_ || !phase_active_)
+        return;
+    if (interactive_) {
+        renderLocked();
+        return;
+    }
+    out_ << truncateVisible(overallLineLocked(), kMaxLineColumns) << '\n';
+    out_.flush();
+}
+
 void ProgressReporter::info(const std::string& message) {
     std::lock_guard<std::mutex> lock(mu_);
     infoLocked(message, /*is_warning=*/false);

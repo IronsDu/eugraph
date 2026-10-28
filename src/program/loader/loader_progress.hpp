@@ -74,6 +74,10 @@ public:
     void endFile(const std::string& item, const std::string& file, int64_t written, int64_t skipped);
     void endPhase();
 
+    /// 立即重绘一次（交互模式；PLAIN 模式立即打一行状态，OFF 无操作）。
+    /// 供调用方在推进了一大批数据后主动刷新，也让测试不必依赖 ticker 的时序。
+    void flush();
+
     /// 装载途中打印一行日志：先擦掉进度块、打印后重绘，避免日志与动画交错。
     void info(const std::string& message);
     void warn(const std::string& message);

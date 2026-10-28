@@ -195,8 +195,7 @@ TEST(ProgressInteractiveTest, BlockShowsOverallBarFileBarAndCounts) {
         progress.beginPhase("vertices", "labels", {{"Person", 1, 200, ""}});
         progress.beginFile("Person", "person.csv", 200);
         progress.addRows("Person", "person.csv", 50);
-        // 渲染由 100ms 的 ticker 驱动；等一拍让最新数值真正画出来
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        progress.flush(); // 立即重绘，不依赖 ticker 的 100ms 时序
     }
     const std::string text = out.str();
     ASSERT_FALSE(text.empty());
@@ -223,7 +222,7 @@ TEST(ProgressInteractiveTest, LongFileNamesKeepBarCountsAndWidth) {
         progress.beginPhase("edges", "types", {{"HAS_INTEREST", 1, 1000, "Person -> Tag"}});
         progress.beginFile("HAS_INTEREST", file, 1000);
         progress.addRows("HAS_INTEREST", file, 500);
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        progress.flush();
     }
     const std::string text = out.str();
     EXPECT_TRUE(ansiWellFormed(text));
