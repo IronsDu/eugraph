@@ -479,6 +479,7 @@ if(EUGRAPH_BUILD_TESTS)
         tests/test_key_codec.cpp
         tests/test_value_codec.cpp
         tests/test_graph_store_wt.cpp
+        tests/test_storage_op_metrics.cpp
     )
 
     target_include_directories(eugraph_tests PRIVATE
@@ -595,6 +596,12 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(query_executor_tests wiredtiger_ext)
     gtest_add_tests(TARGET query_executor_tests)
+
+    # Exercise the opt-in [io-trace] statement log path (StreamContext destructor,
+    # dispatch counter/summary). The normal gtest run keeps EUGRAPH_IO_TRACE unset.
+    add_test(NAME io_trace_logging
+             COMMAND query_executor_tests --gtest_filter=QueryExecutorTest.ShortestPathEndpointPropertiesTriggerPrefetch --gtest_brief=1)
+    set_tests_properties(io_trace_logging PROPERTIES ENVIRONMENT "EUGRAPH_IO_TRACE=1")
 
     # Typed expression evaluator tests
     add_executable(evaluator_typed_tests
@@ -1074,4 +1081,5 @@ endif()
 if(EUGRAPH_ENABLE_BENCHMARK)
     find_package(benchmark CONFIG REQUIRED)
     add_subdirectory(benchmark/evaluator)
+    add_subdirectory(benchmark/storage)
 endif()

@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+import resource
 import shutil
 import signal
 import socket
@@ -16,6 +17,17 @@ import subprocess
 import sys
 import time
 from collections import Counter
+
+
+def raise_server_stack_limit() -> None:
+    """ASan doubles coroutine frame size; Create4's 109 nested CREATE clauses
+    need more than the default 8 MiB stack. Set the soft limit in the child
+    before exec (the hard limit still applies)."""
+    try:
+        _, hard = resource.getrlimit(resource.RLIMIT_STACK)
+        resource.setrlimit(resource.RLIMIT_STACK, (64 * 1024 * 1024, hard))
+    except (ValueError, OSError):
+        pass
 
 
 def tcp_probe(host: str, port: int, timeout_s: float = 1.0) -> bool:
@@ -519,6 +531,7 @@ def main():
         stdin=subprocess.DEVNULL,
         stdout=server_log,
         stderr=subprocess.STDOUT,
+        preexec_fn=raise_server_stack_limit,
     )
 
     # ---- Wait for server ----

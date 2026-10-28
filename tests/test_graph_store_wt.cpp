@@ -1119,3 +1119,56 @@ TEST_F(WTGraphStoreAdjCacheTest, CachedCursorHonorsLabelAndBothDirections) {
     EXPECT_EQ(count_cursor(Direction::OUT, std::nullopt), 2u);
     EXPECT_EQ(count_cursor(Direction::BOTH, std::nullopt), 2u);
 }
+
+// ==================== vertex data batch ====================
+
+TEST_F(WTGraphStoreTest, GetVertexDataBatchLabelsAndProperties) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 960,
+        std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("A")}, {1, int64_t(7)}})}}));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, 961,
+                             std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("B")}})},
+                                                                         {2, makeProps({{0, std::string("C")}})}}));
+    ASSERT_TRUE(store_->insertVertex(txn, 962, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    commit(txn);
+
+    auto data = store_->getVertexDataBatch(store_->autoSession(), {960, 961, 962, 999});
+    ASSERT_EQ(data.size(), 4u);
+
+    EXPECT_EQ(data[0].labels.size(), 1u);
+    EXPECT_TRUE(data[0].labels.contains(1));
+    ASSERT_EQ(data[0].properties.count(1), 1u);
+    const auto& p960 = data[0].properties.at(1);
+    ASSERT_EQ(p960.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(*p960[0]), "A");
+    EXPECT_EQ(std::get<int64_t>(*p960[1]), 7);
+
+    EXPECT_EQ(data[1].labels.size(), 2u);
+    EXPECT_TRUE(data[1].labels.contains(1));
+    EXPECT_TRUE(data[1].labels.contains(2));
+    EXPECT_EQ(std::get<std::string>(*data[1].properties.at(1)[0]), "B");
+    EXPECT_EQ(std::get<std::string>(*data[1].properties.at(2)[0]), "C");
+
+    EXPECT_TRUE(data[2].labels.contains(1));
+    EXPECT_TRUE(data[2].properties.empty());
+    EXPECT_TRUE(data[3].labels.empty());
+    EXPECT_TRUE(data[3].properties.empty());
+
+    EXPECT_TRUE(store_->getVertexDataBatch(store_->autoSession(), {}).empty());
+}
+
+TEST_F(WTGraphStoreTest, GetVertexDataBatchKeepsDuplicateInputOrder) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 965, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("D")}})}}));
+    commit(txn);
+
+    auto data = store_->getVertexDataBatch(store_->autoSession(), {965, 965, 999, 965});
+    ASSERT_EQ(data.size(), 4u);
+    EXPECT_TRUE(data[0].labels.contains(1));
+    EXPECT_TRUE(data[1].labels.contains(1));
+    EXPECT_TRUE(data[2].labels.empty());
+    EXPECT_TRUE(data[3].labels.contains(1));
+}

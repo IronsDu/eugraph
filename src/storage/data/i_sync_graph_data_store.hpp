@@ -61,6 +61,13 @@ public:
 
     virtual LabelIdSet getVertexLabels(GraphSession& session, VertexId vid) = 0;
     virtual std::vector<LabelIdSet> getVertexLabelsBatch(GraphSession& session, const std::vector<VertexId>& vids) = 0;
+    struct VertexDataBatchEntry {
+        LabelIdSet labels;
+        std::unordered_map<LabelId, Properties> properties;
+    };
+    /// Labels + all properties for each vid, one prefix scan per vertex.
+    virtual std::vector<VertexDataBatchEntry> getVertexDataBatch(GraphSession& session,
+                                                                 const std::vector<VertexId>& vids) = 0;
     virtual std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphSession& session, LabelId label_id,
                                                                             const std::vector<VertexId>& vids) = 0;
     /// Batch coalesced property fetch: for each vertex, collect values for the

@@ -31,14 +31,15 @@ public:
     /// Dispatch a callable returning non-void to the IO thread pool.
     template <typename F> folly::coro::Task<std::invoke_result_t<F>> dispatch(F func) {
         using R = std::invoke_result_t<F>;
-        auto ioTask = folly::coro::co_invoke([f = std::move(func)]() -> folly::coro::Task<R> { co_return f(); });
+        auto ioTask =
+            folly::coro::co_invoke([f = std::move(func)]() mutable -> folly::coro::Task<R> { co_return f(); });
         auto result = co_await folly::coro::co_viaIfAsync(io_ka_, std::move(ioTask));
         co_return std::move(result);
     }
 
     /// Dispatch a void-returning callable to the IO thread pool.
     template <typename F> folly::coro::Task<void> dispatchVoid(F func) {
-        auto ioTask = folly::coro::co_invoke([f = std::move(func)]() -> folly::coro::Task<void> {
+        auto ioTask = folly::coro::co_invoke([f = std::move(func)]() mutable -> folly::coro::Task<void> {
             f();
             co_return;
         });

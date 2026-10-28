@@ -10,6 +10,8 @@
 
 #include "storage/kv/index_key_codec.hpp"
 
+#include "storage/storage_op_metrics.hpp"
+
 namespace eugraph {
 
 // ==================== WT Item Helpers (local) ====================
@@ -286,7 +288,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         for (uint16_t pid : proj) {
             auto key = KeyCodec::encodeVertexDataPropKey(unique[i], label_id, pid);
             setItem(c, key);
-            const int ret = c->search(c);
+            const int ret = (recordWtSearch(), c->search(c));
             if (ret == WT_NOTFOUND)
                 continue;
             if (ret != 0) {
@@ -404,7 +406,7 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
         prefix = KeyCodec::encodeVertexDataLabelPrefix(unique[i]);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND)
             continue;
         if (ret != 0) {
@@ -429,6 +431,71 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
     if (!all_unique) {
         for (size_t i = 0; i < vids.size(); ++i)
             out[i] = unique_out[unique_of[i]];
+    }
+    return out;
+}
+
+std::vector<ISyncGraphDataStore::VertexDataBatchEntry>
+SyncGraphDataStore::getVertexDataBatch(GraphSession& gs, const std::vector<VertexId>& vids) {
+    std::vector<VertexDataBatchEntry> out(vids.size());
+    if (vids.empty())
+        return out;
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "getVertexDataBatch: cannot open cursor on table:vertex_data");
+        return out;
+    }
+    auto* c = cursor.get();
+    for (size_t i = 0; i < vids.size(); ++i) {
+        const std::string label_prefix = KeyCodec::encodeVertexDataLabelPrefix(vids[i]);
+        setItem(c, label_prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: label search failed");
+            return out;
+        }
+        if (ret == 0 && exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            const auto key = getKeyViewFromCursor(c);
+            if (!key.starts_with(label_prefix))
+                break;
+            auto [_, label_id] = KeyCodec::decodeVertexDataLabelKey(key);
+            out[i].labels.insert(label_id);
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: label next failed");
+            return out;
+        }
+
+        const std::string prop_prefix = KeyCodec::encodeVertexDataPropPrefix(vids[i]);
+        setItem(c, prop_prefix);
+        exact = 0;
+        ret = (recordWtSearchNear(), c->search_near(c, &exact));
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: prop search failed");
+            return out;
+        }
+        if (ret == 0 && exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            const auto key = getKeyViewFromCursor(c);
+            if (!key.starts_with(prop_prefix))
+                break;
+            auto [_, label_id, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
+            auto& props = out[i].properties[label_id];
+            if (prop_id >= props.size())
+                props.resize(prop_id + 1);
+            props[prop_id] = ValueCodec::decode(getValueViewFromCursor(c));
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexDataBatch: prop next failed");
+            return out;
+        }
     }
     return out;
 }
@@ -466,7 +533,7 @@ std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBa
         prefix = KeyCodec::encodeVertexDataPropPrefix(unique[i], label_id);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND)
             continue;
         if (ret != 0) {
@@ -531,7 +598,7 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
         std::string prefix = KeyCodec::encodeVertexDataPropPrefix(vid);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND) {
             ++out_index;
             continue;
@@ -833,7 +900,7 @@ std::vector<std::optional<PropertyValue>> SyncGraphDataStore::getEdgePropertyBat
     for (EdgeId eid : edge_ids) {
         key = KeyCodec::encodeEPropKey(eid, prop_id);
         setItem(c, key);
-        int ret = c->search(c);
+        int ret = (recordWtSearch(), c->search(c));
         if (ret == WT_NOTFOUND) {
             out.emplace_back(std::nullopt);
             continue;
@@ -966,7 +1033,7 @@ void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<Vert
                                                 : KeyCodec::encodeEdgeIndexPrefix(vid, direction);
         setItem(c, prefix);
         int exact = 0;
-        int ret = c->search_near(c, &exact);
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret == WT_NOTFOUND)
             continue;
         if (ret != 0) {
@@ -1147,7 +1214,7 @@ EdgeScanCursorImpl::EdgeScanCursorImpl(GraphSession& session, CursorHandle curso
     auto* c = cursor_.get();
     setItem(c, prefix_);
     int exact = 0;
-    int ret = c->search_near(c, &exact);
+    int ret = (recordWtSearchNear(), c->search_near(c, &exact));
     if (ret != 0 && ret != WT_NOTFOUND) {
         session_.fail_from_wt(ret, "EdgeScanCursor: search_near failed");
         return;
@@ -1286,7 +1353,7 @@ VertexDataEdgeScanCursor::VertexDataEdgeScanCursor(GraphSession& session, Cursor
     auto* c = cursor_.get();
     setItem(c, prefix_);
     int exact = 0;
-    int ret = c->search_near(c, &exact);
+    int ret = (recordWtSearchNear(), c->search_near(c, &exact));
     if (ret == WT_NOTFOUND)
         return;
     if (ret != 0) {
@@ -1384,7 +1451,7 @@ EdgeTypeScanCursorImpl::EdgeTypeScanCursorImpl(GraphSession& session, CursorHand
     } else {
         setItem(c, prefix_);
         int exact = 0;
-        ret = c->search_near(c, &exact);
+        ret = (recordWtSearchNear(), c->search_near(c, &exact));
         if (ret != 0 && ret != WT_NOTFOUND) {
             session_.fail_from_wt(ret, "EdgeTypeScanCursor: search_near failed");
             return;
@@ -1725,7 +1792,7 @@ void IndexScanCursorImpl::position() {
     if (!spec_.start_key.empty()) {
         setItem(c, spec_.start_key);
         int cmp = 0;
-        ret = c->search_near(c, &cmp);
+        ret = (recordWtSearchNear(), c->search_near(c, &cmp));
         if (ret == WT_NOTFOUND)
             return; // 没有命中
         if (ret != 0) {

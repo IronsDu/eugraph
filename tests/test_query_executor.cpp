@@ -9860,3 +9860,54 @@ TEST_F(QueryExecutorTest, ScanVerticesSpansMultipleIoBatches) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), static_cast<int64_t>(kVertices));
 }
+
+// ==================== vertex data batch / prefetch ====================
+
+TEST_F(QueryExecutorTest, AsyncBatchGetVertexData) {
+    insertTestVertices();
+
+    auto data = blockingWait(async_data_->batchGetVertexData({1, 2, 999}));
+    ASSERT_EQ(data.size(), 3u);
+    EXPECT_TRUE(data[0].labels.contains(PERSON_LABEL));
+    ASSERT_EQ(data[0].properties.count(PERSON_LABEL), 1u);
+    ASSERT_EQ(data[0].properties.at(PERSON_LABEL).size(), 1u);
+    ASSERT_TRUE(data[0].properties.at(PERSON_LABEL)[0].has_value());
+    EXPECT_EQ(std::get<std::string>(*data[0].properties.at(PERSON_LABEL)[0]), "name1");
+    EXPECT_TRUE(data[1].labels.contains(PERSON_LABEL));
+    EXPECT_TRUE(data[2].labels.empty());
+    EXPECT_TRUE(data[2].properties.empty());
+}
+
+TEST_F(QueryExecutorTest, ShortestPathEndpointPropertiesTriggerPrefetch) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'sp1'})-[:KNOWS]->"
+                                     "(b:Person {name: 'sp2'})-[:KNOWS]->(c:Person {name: 'sp3'})")
+                    .error.empty());
+
+    auto result = execSync(*executor_, "MATCH p = shortestPath((a:Person {name: 'sp1'})-[:KNOWS*1..3]-"
+                                       "(c:Person {name: 'sp3'})) "
+                                       "WITH p, relationships(p) AS rels "
+                                       "RETURN startNode(rels[0]).name AS s, "
+                                       "       endNode(rels[size(rels) - 1]).name AS e");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "sp1");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "sp3");
+}
+
+TEST_F(QueryExecutorTest, ShortestPathEndpointDynamicPropertyTriggersPrefetch) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'dp1'})-[:KNOWS]->"
+                                     "(b:Person {name: 'dp2'})-[:KNOWS]->(c:Person {name: 'dp3'})")
+                    .error.empty());
+
+    auto result = execSyncParams(*executor_,
+                                 "MATCH p = shortestPath((a:Person {name: 'dp1'})-[:KNOWS*1..3]-"
+                                 "(c:Person {name: 'dp3'})) "
+                                 "WITH p, relationships(p) AS rels "
+                                 "RETURN startNode(rels[0])[$key] AS s, "
+                                 "       endNode(rels[size(rels) - 1])[$key] AS e",
+                                 {{"key", Value(std::string("name"))}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "dp1");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "dp3");
+}

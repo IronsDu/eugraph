@@ -156,3 +156,25 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
 3. loader 的 DDL 超时改为可配置（或对建索引用更长超时），并在加载结束做
    "索引存在且点查命中"的校验，失败即报错退出；
 4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。
+
+## ASan TCK：深 CREATE 栈溢出（2026-10-28，已修复）
+
+**现象**：ASan TCK 在 `Create4.feature` 的 `[2] Many CREATE clauses` 崩溃，
+栈顶显示 `ColumnBuffer::~ColumnBuffer()` 的 SEGV，因此最初被误判为内存生命周期问题。
+
+**根因**：109 个嵌套 CREATE 子句对应 109 层 CREATE 算子协程；ASan 的 redzone
+放大每帧后，默认 8 MiB 线程栈在深层执行/销毁时耗尽。非 ASan 构建帧更小，不触发。
+
+**修复**：
+
+- `tests/tck/run_tck.py` 在启动 server 的 `preexec_fn` 中把 `RLIMIT_STACK` soft limit
+  提升到 64 MiB（hard limit 仍生效）；
+- 不是修改 DataChunk/ColumnBuffer 的所有权，也没有改动生产执行语义。
+
+**验证**：
+
+- ASan `Create4.feature`：**2/2 passed**；
+- ASan 全量 TCK：**3905/3957 passed、0 failed、0 sanitizer 报告、801 s**；
+- Release 全量 TCK：1306/1306 passed。
+
+ASan TCK 现在是绿色门禁。

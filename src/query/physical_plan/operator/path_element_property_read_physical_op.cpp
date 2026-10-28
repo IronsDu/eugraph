@@ -16,19 +16,17 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
         const size_t input_cols = chunk->numColumns();
         const size_t row_count = chunk->numRows();
 
-        // The path column is rebuilt here (PathTopology -> PathValue, then
-        // element enrichment). Previously this rewrote a materialised
-        // std::vector<Row> copy of the whole chunk just to feed the output
-        // column; the payload only ever lives for this loop, so it is kept in a
-        // per-column buffer instead of a full row materialisation.
         std::vector<Value> path_out(row_count);
+        std::vector<VertexId> pending_vids;
+        std::unordered_map<VertexId, size_t> pending_pos;
 
+        // Pass 1: build PathValue and collect every vertex that still needs
+        // labels/properties. Loading them per element used one dispatch per
+        // vertex (c14: ~90k); batch them into one IO dispatch per chunk.
         for (size_t i = 0; i < row_count; ++i) {
             if (path_col_idx_ >= input_cols)
                 continue;
             Value val = chunk->columns[path_col_idx_].getValue(i);
-            // Phase D: accept both PathTopology (topology-stage) and PathValue
-            // (legacy RBO path). Upgrade PathTopology to PathValue in-place.
             if (std::holds_alternative<PathTopologyPtr>(val)) {
                 auto& pt = (*std::get<PathTopologyPtr>(val));
                 PathValue pv;
@@ -53,20 +51,46 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
                 continue;
             }
             auto& pv = (*std::get<PathValuePtr>(val));
+            for (auto& elem : pv.elements) {
+                if (!std::holds_alternative<VertexValuePtr>(elem.value))
+                    continue;
+                auto& vv = (*std::get<VertexValuePtr>(elem.value));
+                if (vv.labels.has_value() && !vv.properties.empty())
+                    continue;
+                auto [it, inserted] = pending_pos.try_emplace(vv.id, pending_vids.size());
+                if (inserted)
+                    pending_vids.push_back(vv.id);
+            }
+            path_out[i] = std::move(val);
+        }
 
+        std::unordered_map<VertexId, ISyncGraphDataStore::VertexDataBatchEntry> vertex_data;
+        if (!pending_vids.empty()) {
+            auto batch = co_await store_.batchGetVertexData(pending_vids);
+            vertex_data.reserve(pending_vids.size());
+            for (size_t j = 0; j < pending_vids.size() && j < batch.size(); ++j)
+                vertex_data.emplace(pending_vids[j], std::move(batch[j]));
+        }
+
+        // Pass 2: fill the path vertices from the batch, edges still use the
+        // per-edge path (c14 has no edge-property reads on the hot path).
+        for (size_t i = 0; i < row_count; ++i) {
+            auto& val = path_out[i];
+            if (!std::holds_alternative<PathValuePtr>(val))
+                continue;
+            auto& pv = (*std::get<PathValuePtr>(val));
             for (auto& elem : pv.elements) {
                 if (std::holds_alternative<VertexValuePtr>(elem.value)) {
                     auto& vv = (*std::get<VertexValuePtr>(elem.value));
-                    if (!vv.labels.has_value() || vv.properties.empty()) {
-                        auto labels = co_await store_.getVertexLabels(vv.id);
-                        if (!vv.labels.has_value())
-                            vv.labels = labels;
-                        for (auto lid : labels) {
-                            auto props = co_await store_.getVertexProperties(vv.id, lid);
-                            if (props)
-                                vv.properties[lid] = std::move(*props);
-                        }
-                    }
+                    if (vv.labels.has_value() && !vv.properties.empty())
+                        continue;
+                    auto it = vertex_data.find(vv.id);
+                    if (it == vertex_data.end())
+                        continue;
+                    if (!vv.labels.has_value())
+                        vv.labels = it->second.labels;
+                    if (vv.properties.empty())
+                        vv.properties = it->second.properties;
                 } else if (std::holds_alternative<EdgeValuePtr>(elem.value)) {
                     auto& ev = (*std::get<EdgeValuePtr>(elem.value));
                     if (!ev.properties.has_value() || ev.properties->empty()) {
@@ -76,7 +100,6 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
                     }
                 }
             }
-            path_out[i] = std::move(val);
         }
 
         DataChunk output;
