@@ -79,9 +79,10 @@ co_await co_viaIfAsync(io_ka_, std::move(ioTask));
 
 ### 3.2 真正跨线程会破坏写入路径
 
-临时改成 `co_withExecutor(io_ka_, ...) + co_viaIfAsync(caller, ...)` 后，
-`CrossThreadDispatchVoid` 全部跨线程、返回 compute 线程；c14 的 per-endpoint 读取也从
-1.4 s 降到 154 ms。但全量 TCK 在 `CREATE` 场景（MatchWhere1）挂起：
+临时改成 `co_withExecutor(io_ka_, ...)`（不再手动 `co_viaIfAsync` 回 caller executor；
+`co_withExecutor` 的 await 会恢复到原执行流）后，`CrossThreadDispatchVoid` 全部跨线程、
+`return_thread=0`；c14 的 per-endpoint 读取也从 1.4 s 降到 154 ms。但全量 TCK 在
+`CREATE` 场景（MatchWhere1）挂起：
 WT session/cursor 绑定在 compute 线程，直接拿到 IO 线程使用会超时/死锁。
 
 因此当前生产 `IoScheduler` **仍保持 inline**；真正的跨线程修复需要先把 WT session

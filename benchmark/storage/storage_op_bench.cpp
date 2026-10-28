@@ -137,18 +137,21 @@ folly::coro::Task<void> dispatchLoop(eugraph::IoScheduler& io, size_t n, std::at
 /// Measure a real compute -> IO -> compute round trip independently of the
 /// production IoScheduler path (which is currently inline until sessions are
 /// IO-thread bound).
+///
+/// `co_withExecutor` binds the child task to the IO executor and, when the
+/// child completes, resumes the awaiting coroutine on its original executor;
+/// no manual `co_viaIfAsync` back-hop is needed.
 folly::coro::Task<void> dispatchCrossLoop(eugraph::IoScheduler& io, size_t n, std::atomic<uint64_t>& cross_thread,
                                           std::atomic<uint64_t>& return_thread) {
     const auto caller = std::this_thread::get_id();
-    auto caller_executor = co_await folly::coro::co_current_executor;
     for (size_t i = 0; i < n; ++i) {
-        auto io_task = folly::coro::co_invoke([&cross_thread, caller]() -> folly::coro::Task<void> {
-            if (std::this_thread::get_id() != caller)
-                cross_thread.fetch_add(1, std::memory_order_relaxed);
-            co_return;
-        });
-        auto on_io = folly::coro::co_withExecutor(folly::getKeepAliveToken(io.executor()), std::move(io_task));
-        co_await folly::coro::co_viaIfAsync(std::move(caller_executor), std::move(on_io));
+        co_await folly::coro::co_withExecutor(
+            folly::getKeepAliveToken(io.executor()),
+            folly::coro::co_invoke([&cross_thread, caller]() -> folly::coro::Task<void> {
+                if (std::this_thread::get_id() != caller)
+                    cross_thread.fetch_add(1, std::memory_order_relaxed);
+                co_return;
+            }));
         if (std::this_thread::get_id() != caller)
             return_thread.fetch_add(1, std::memory_order_relaxed);
     }
