@@ -82,6 +82,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 主键/外部键引用（loader 主键化） | [program/design/loader-design.md] | `src/program/loader/`, `proto/eugraph.thrift`, `src/storage/data/` |
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md], [storage/session-cursor-pool-design.md] | `src/storage/` |
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
+| 性能剖析 / 指标与 trace | [debugging/metrics-and-tracing.md] | `src/query/physical_plan/`, `src/query/executor/`, `src/storage/data/async_graph_data_store.hpp` |
 | 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/common/schema/graph_schema.hpp` |
 | 表达式求值相关 | [query/syntax/cypher-syntax.md], [query/engine/query-engine-design.md] | `executor/vectorized_evaluator.cpp`, `binder/` |
 | 时间类型/时间运算语义 | [query/engine/temporal-semantics.md] | `src/common/types/temporal_value.*`, `function/scalar/temporal_functions.hpp` |
@@ -196,6 +197,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [调试笔记](debugging/debugging-notes.md) | 典型 bug 排查过程与经验总结 |
+| [指标与诊断日志](debugging/metrics-and-tracing.md) | `EUGRAPH_OP_TRACE` / `EUGRAPH_IO_TRACE` / plan/pred/DPL debug 的开关、字段、归因语义与限制 |
 
 ## 测试
 
