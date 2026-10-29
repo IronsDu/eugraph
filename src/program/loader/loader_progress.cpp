@@ -269,7 +269,9 @@ ProgressReporter::ProgressReporter(ProgressMode mode, std::ostream& out, bool fo
     enabled_ = mode != ProgressMode::OFF;
     interactive_ = enabled_ && mode == ProgressMode::AUTO &&
                    (force_interactive || (&out == &std::cerr && ::isatty(::fileno(stderr)) != 0));
-    animate_ = interactive_ || (enabled_ && mode == ProgressMode::PLAIN);
+    // 测试模式（force_interactive）不启动 ticker：渲染只发生在 begin*/flush/endFile/endPhase，
+    // 用例因此与线程调度、机器负载无关（生产路径仍然由 ticker 以 ~10fps 原地刷新）。
+    animate_ = (interactive_ && !force_interactive) || (enabled_ && mode == ProgressMode::PLAIN);
     const char* no_color = std::getenv("NO_COLOR");
     const char* term = std::getenv("TERM");
     color_ = interactive_ && no_color == nullptr && (term == nullptr || std::strcmp(term, "dumb") != 0);
