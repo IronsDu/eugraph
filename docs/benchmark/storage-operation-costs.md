@@ -1,5 +1,8 @@
 # Storage 操作成本：WT seek 与 IO dispatch
 
+> 环境变量、日志字段与限制统一见
+> [指标与诊断日志](../debugging/metrics-and-tracing.md)。
+
 目标：把一条语句的成本拆成两个可测量项：
 
 ```text
