@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <unordered_set>
 
 #include "common/types/temporal_value.hpp"
@@ -31,6 +32,56 @@ bool isAggregateFunctionName(const std::string& name) {
     return lower == "count" || lower == "sum" || lower == "avg" || lower == "min" || lower == "max" ||
            lower == "collect" || lower == "percentile_cont" || lower == "percentile_disc" ||
            lower == "percentilecont" || lower == "percentiledisc" || lower == "st_dev" || lower == "st_dev_p";
+}
+
+/// Fold numeric binary operations over two literals at bind time. Parameters
+/// are already replaced by BoundLiteral here, so `$a + $b + 1` in an inline
+/// property map can become a single literal and let index selection see a
+/// constant (update-7's `Message.id = $replyToPostId + $replyToCommentId + 1`).
+/// Only +, -, * on int64/double are folded; division/NULL/overflow stay as
+/// expressions so runtime semantics (and errors) are unchanged.
+std::optional<Value> foldNumericBinary(cypher::BinaryOperator op, const Value& left, const Value& right,
+                                       BoundTypeKind result_kind) {
+    if (op != cypher::BinaryOperator::ADD && op != cypher::BinaryOperator::SUB && op != cypher::BinaryOperator::MUL)
+        return std::nullopt;
+
+    if (result_kind == BoundTypeKind::INT64) {
+        const auto* a = std::get_if<int64_t>(&left);
+        const auto* b = std::get_if<int64_t>(&right);
+        if (!a || !b)
+            return std::nullopt;
+        __int128 r = 0;
+        if (op == cypher::BinaryOperator::ADD)
+            r = static_cast<__int128>(*a) + *b;
+        else if (op == cypher::BinaryOperator::SUB)
+            r = static_cast<__int128>(*a) - *b;
+        else
+            r = static_cast<__int128>(*a) * *b;
+        if (r < std::numeric_limits<int64_t>::min() || r > std::numeric_limits<int64_t>::max())
+            return std::nullopt;
+        return Value(static_cast<int64_t>(r));
+    }
+
+    if (result_kind == BoundTypeKind::DOUBLE) {
+        auto number = [](const Value& v) -> std::optional<double> {
+            if (const auto* i = std::get_if<int64_t>(&v))
+                return static_cast<double>(*i);
+            if (const auto* d = std::get_if<double>(&v))
+                return *d;
+            return std::nullopt;
+        };
+        const auto a = number(left);
+        const auto b = number(right);
+        if (!a || !b)
+            return std::nullopt;
+        if (op == cypher::BinaryOperator::ADD)
+            return Value(*a + *b);
+        if (op == cypher::BinaryOperator::SUB)
+            return Value(*a - *b);
+        return Value(*a * *b);
+    }
+
+    return std::nullopt;
 }
 
 // Detect aggregate function calls inside a Cypher expression subtree.
@@ -166,6 +217,13 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 if (!err_msg.empty()) {
                     error(err_msg);
                     return std::nullopt;
+                }
+
+                if (const auto* ll = std::get_if<BoundLiteral>(&*left)) {
+                    if (const auto* rl = std::get_if<BoundLiteral>(&*right)) {
+                        if (auto folded = foldNumericBinary(ptr->op, ll->value, rl->value, result_type.kind))
+                            return BoundExpression(BoundLiteral(*folded));
+                    }
                 }
 
                 auto bin = std::make_unique<BoundBinaryOp>();
