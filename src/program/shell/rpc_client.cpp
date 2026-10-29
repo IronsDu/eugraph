@@ -129,7 +129,9 @@ EuGraphRpcClient::batchInsertVertices(const std::string& label_name, std::vector
     auto t0 = nowMs();
     auto resp =
         client_->semifuture_batchInsertVertices(label_name, std::move(records), graph_name).via(evb_.get()).get();
-    spdlog::info("[rpc_client] batchInsertVertices: {} records, {}ms", *resp.count(), nowMs() - t0);
+    // 每个批次一条：loader 装载一个 sf0.1 语料会产生数千行。降到 debug，
+    // 否则 INFO 日志会把装载进度块冲散（排障时把 spdlog 级别调到 debug 即可）。
+    spdlog::debug("[rpc_client] batchInsertVertices: {} records, {}ms", *resp.count(), nowMs() - t0);
     return resp;
 }
 
@@ -140,8 +142,8 @@ EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_name, std::vect
     auto t0 = nowMs();
     auto resp =
         client_->semifuture_batchInsertEdges(edge_label_name, std::move(records), graph_name).via(evb_.get()).get();
-    spdlog::info("[rpc_client] batchInsertEdges: inserted={}, skipped_unresolved={}, {}ms", *resp.inserted(),
-                 *resp.skipped_unresolved(), nowMs() - t0);
+    spdlog::debug("[rpc_client] batchInsertEdges: inserted={}, skipped_unresolved={}, {}ms", *resp.inserted(),
+                  *resp.skipped_unresolved(), nowMs() - t0);
     return resp;
 }
 

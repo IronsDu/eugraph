@@ -18,6 +18,9 @@
 eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data --host 127.0.0.1 --port 9090
 ```
 
+启动时会**先连服务器并做一次真实 RPC 握手**（`listGraphs`），再解析 schema、扫数据目录 ——
+端口写错或服务没起会立刻报 `Cannot reach server ...`，不会白跑完前面几步才失败。
+
 并行装载示例：
 
 ```bash
@@ -35,10 +38,19 @@ eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
 | `--batch-size` | 500 | 每 RPC 批次的记录数 |
 | `--rpc-connections` | 1 | 到 server 的并发 RPC 连接数；每个连接对应一个独立 EventBase 线程 |
 | `--parallel-files` | 1 | 最多同时装载多少个 CSV 文件 |
+| `--graph` | `default` | 装载到哪张图；**不存在则自动创建**。`neo4j` / `system` 是服务端的 default 别名，会被拒绝（否则写入与查询会落到不同的图） |
+| `--progress` | `auto` | 进度显示：`auto`（TTY 上原地刷新进度块，输出被重定向时退化为日志）/ `plain`（只打日志行）/ `off`（完全静默，脚本用） |
 | `--no-schema-strict` | 关 | 打开后：schema 未声明的列回落到采样推断（默认报错并列出列名） |
 
 > **没有** `--nodes` / `--relationships` / `--pk` / `--types` / `--date-format` / `--delimiter` /
 > `--skip-undeclared-check`：这些都是数据声明，已全部收进 schema 文件。传入会直接报未知参数。
+
+### 目标图
+
+`--graph <name>` 决定装载到哪张图：**不存在则自动创建**（服务端 `createGraph` 幂等，重复装载直接复用）。
+
+- schema 里**不能**写图名（写了会报错并提示改用 `--graph`）：装到哪张图是运行期决定，不是数据声明；
+- `neo4j` / `system` 是服务端对 `default` 的别名，作为 `--graph` 会被拒绝 —— 拿它建图会建出一张同名、但查询永远不会走到的图。
 
 ## schema 文件
 
@@ -46,12 +58,41 @@ eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
 
 | 字段 | 说明 |
 |------|------|
-| `labels` | 顶点：`标签名 → [文件条目, ...]` |
+| `nodes` | 顶点：`标签名 → [文件条目, ...]`（原字段名 `labels`，已改名，老写法直接报错） |
 | `relationships` | 边：`边类型名 → [文件条目, ...]` |
+| `before_load` | 装载**前**要执行的 Cypher 语句数组（schema 的标签/索引 DDL 之后、任何数据写入之前） |
+| `after_load` | 装载**后**要执行的 Cypher 语句数组（点与边全部写完之后），用来声明"装载完成时的状态"，典型是建索引 |
 | `delimiter` | 字段分隔符**全局默认**（默认 `"|"`；支持多字符，如 `"::"`；`"\t"`/`"tab"` 表示制表符） |
 | `date_format` | 时间列解析格式**全局默认**（默认 `"epoch_ms"`；可选 `epoch_s`/`epoch_us`/`epoch_ns`/`iso`） |
 | `undeclared_files` | 数据目录里有未声明 CSV 时的行为：`"error"`（默认，报错并列出文件）或 `"ignore"` |
 | `ignore` | 属于本数据集但不参与初始装载的文件（如 LDBC 的 `updateStream_*.csv`） |
+
+### 装载前 / 装载后的语句
+
+schema 是「装载完成时的完整状态」的声明，因此索引这类 DDL 可以一并写进 schema，不必装完再进 shell 手工执行。
+
+```jsonc
+{
+  "nodes": { /* ... */ },
+  "relationships": { /* ... */ },
+
+  "before_load": [
+    "CREATE INDEX idx_Person_name FOR (n:Person) ON (n.name)"      // 数据之前建：装载期由写路径维护
+  ],
+  "after_load": [
+    "CREATE INDEX idx_Message_id FOR (n:Message) ON (n.id)",        // 典型：点/边装完后建索引
+    { "statement": "CREATE INDEX idx_Tag_name FOR (n:Tag) ON (n.name)", "on_error": "ignore" }
+  ]
+}
+```
+
+规则：
+
+- 元素是**字符串**，或 `{"statement": "...", "on_error": "fail" | "ignore"}`；默认 `fail`。
+- 单连接、按数组顺序执行；`before_load` 在 schema 的标签 / 边类型 / 主键索引 DDL **之后**、任何数据之前，`after_load` 在点与边全部写完之后。
+- 任意一条失败即中止装载，报错包含阶段、序号与语句原文；`on_error: "ignore"` 只告警并继续。
+- 幂等：引擎没有 `IF NOT EXISTS`，**在同一张图上重跑**时已存在的索引会让 `CREATE INDEX` 失败 —— 给该条加 `on_error: "ignore"` 即可（主键索引由 loader 按名字判断，重跑无需额外配置）。
+- 写的是普通 Cypher，`CREATE INDEX` / `CREATE UNIQUE INDEX` / `DROP INDEX` / `MATCH ... DETACH DELETE` 等都能用。
 
 ### 命名规则（容易踩的一点）
 
@@ -67,7 +108,7 @@ eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
   "delimiter": "|",              // 全局默认；文件条目里可覆盖
   "date_format": "epoch_ms",     // 全局默认；文件条目里可覆盖
   "undeclared_files": "error",
-  "labels": {
+  "nodes": {
     "Person": [{
       "file": "dynamic/person_0_0.csv",
       "pk": "id",                                   // 属性名；复合主键写成数组 ["tenantId","userId"]
@@ -145,10 +186,28 @@ eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
 - 分隔符按**整体**匹配，支持多字符（`"::"`）；
 - 每行做列数校验，不等于表头列数即报错，消息含 `文件:行号:期望:实际`。
 
+## 进度显示
+
+`--progress auto`（默认）在终端里画一块原地刷新的进度：
+
+```text
+[vertices] 3/8 labels  45% [===========>  ···        ] 147,000/327,588 rows 12.3s avg 11.9k/s
+  ok Person   person_0_0.csv  9,890 rows (written 9,890)  2.1s      ← 装完定格、换行装下一个
+  ·· Place    place_0_0.csv  78% [=============>  ···  ] 1,140/1,460  1.8s 633/s   ← 正在装载：原地刷新
+```
+
+视觉：紫色渐变 `=` + `==>` 箭头 + 未填充区的暗色流光，行尾是「已耗时 / 均速 / 实时速度」；
+交互期隐藏光标、结束恢复。`NO_COLOR=1` 或 `TERM=dumb` 自动去色，非 TTY 完全不输出控制符。
+
+- 开跑前先打印**装载计划**（每个标签/边类型的文件数与总行数），所以一开始就知道要装哪些标签、哪些边；
+- 总进度固定第一行；每个文件一行，正在装载的行原地刷新（滑动方块跑马灯），装完定格保留；`--parallel-files>1` 时最多 N 行同时刷新；
+- 行数分母来自**启动时预扫描**：无引号文件按物理行快速计数（`io::LineReader`），出现引号字段时回落到与解析相同的精确计数（带引号的换行不会被多数）；畸形 CSV 在动 DDL 之前就报错退出；
+- 输出被重定向（管道 / CI）时自动退化为逐文件日志行，不输出任何 ANSI 控制符；`--progress off` 完全静默。
+
 ## 与 neo4j-admin import 的对照
 
 `neo4j-admin import` 的 `--nodes` / `--relationships` 在这里的等价物就是 schema 的
-`labels` / `relationships`；`headers.txt` 的列类型声明对应 `columns`；
+`nodes` / `relationships`；`headers.txt` 的列类型声明对应 `columns`；
 `:LABEL` 列对应 `label`；`--delimiter` 对应顶层 `delimiter`。
 
 sf0.1 语料的现成配置：

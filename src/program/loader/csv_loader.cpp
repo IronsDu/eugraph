@@ -1,12 +1,15 @@
 #include "program/loader/csv_loader.hpp"
 
 #include "common/types/temporal_value.hpp"
+#include "program/loader/loader_progress.hpp"
 
+#include <folly/Try.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <exception>
 #include <fstream>
 #include <mutex>
@@ -630,6 +633,48 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
             throw std::runtime_error("schema: unknown date_format '" + cfg.date_format + "'");
     }
 
+    if (doc.contains("graph"))
+        throw std::runtime_error("schema: 'graph' must not be set in the schema file; pass --graph <name> instead "
+                                 "(the target graph is a runtime destination, not a data declaration)");
+
+    // 装载前 / 装载后要执行的语句：数组，元素是字符串或 {"statement": ..., "on_error": "fail"|"ignore"}。
+    auto parse_statements = [&](const char* key, std::vector<LoadStatement>& out) {
+        if (!doc.contains(key))
+            return;
+        if (!doc[key].is_array())
+            throw std::runtime_error(std::string("schema: '") + key + "' must be an array of Cypher statements");
+        size_t index = 0;
+        for (const auto& item : doc[key]) {
+            const std::string where = std::string(key) + "[" + std::to_string(index++) + "]";
+            LoadStatement stmt;
+            if (item.is_string()) {
+                stmt.cypher = item.get<std::string>();
+            } else if (item.is_object()) {
+                static const std::set<std::string> kKeys = {"statement", "on_error"};
+                for (auto it = item.begin(); it != item.end(); ++it) {
+                    if (!kKeys.count(it.key()))
+                        throw std::runtime_error("schema: " + where + ": unknown field '" + it.key() +
+                                                 "' (only 'statement' and 'on_error' are accepted)");
+                }
+                stmt.cypher = reqString(item, "statement", "schema: " + where);
+                if (item.contains("on_error")) {
+                    const std::string mode = reqString(item, "on_error", "schema: " + where);
+                    if (mode == "ignore")
+                        stmt.ignore_error = true;
+                    else if (mode != "fail")
+                        throw std::runtime_error("schema: " + where + ".on_error must be \"fail\" or \"ignore\"");
+                }
+            } else {
+                throw std::runtime_error("schema: " + where + " must be a string or an object {statement, on_error}");
+            }
+            if (stmt.cypher.empty())
+                throw std::runtime_error("schema: " + where + ": statement must not be empty");
+            out.push_back(std::move(stmt));
+        }
+    };
+    parse_statements("before_load", cfg.before_load);
+    parse_statements("after_load", cfg.after_load);
+
     // 读文件（用于非 strict 推断 / strict 校验 / 方言相关的表头解析）统一用「全局默认方言」；
     // 文件级覆盖在 FileSpec 解析完成后由 resolveDialect 生效。
     CsvDialect dialect;
@@ -640,18 +685,18 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
         return p.is_absolute() ? p : data_dir / p;
     };
 
-    // 先解析 labels（顶点），再解析 relationships（边；端点标签要校验）
-    if (!doc.contains("labels") || !doc["labels"].is_object())
-        throw std::runtime_error("schema: missing object field 'labels' (map of label -> files)");
+    // 先解析 nodes（顶点），再解析 relationships（边；端点标签要校验）
+    if (!doc.contains("nodes") || !doc["nodes"].is_object())
+        throw std::runtime_error("schema: missing object field 'nodes' (map of node label -> files)");
     if (!doc.contains("relationships") || !doc["relationships"].is_object())
         throw std::runtime_error("schema: missing object field 'relationships' (map of edge type -> files)");
 
-    for (auto label_it = doc["labels"].begin(); label_it != doc["labels"].end(); ++label_it) {
+    for (auto label_it = doc["nodes"].begin(); label_it != doc["nodes"].end(); ++label_it) {
         const std::string label = label_it.key();
         if (!label_it.value().is_array() || label_it.value().empty())
-            throw std::runtime_error("schema: labels." + label + " must be a non-empty array of files");
+            throw std::runtime_error("schema: nodes." + label + " must be a non-empty array of files");
         for (const auto& entry : label_it.value()) {
-            const std::string where = "labels." + label + "[" + entry.dump().substr(0, 60) + "]";
+            const std::string where = "nodes." + label + "[" + entry.dump().substr(0, 60) + "]";
             if (!entry.is_object())
                 throw std::runtime_error("schema: " + where + " must be an object");
             FileSpec fs;
@@ -1039,7 +1084,7 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
             auto it = label_has_pk.find(lbl);
             if (it == label_has_pk.end())
                 throw std::runtime_error("schema: relationships." + fs.element + " (" + fs.declared_file +
-                                         "): " + role + "_label '" + lbl + "' is not declared under labels");
+                                         "): " + role + "_label '" + lbl + "' is not declared under nodes");
             if (!it->second)
                 throw std::runtime_error("schema: relationships." + fs.element + " (" + fs.declared_file +
                                          "): " + role + "_label '" + lbl +
@@ -1108,6 +1153,49 @@ std::vector<std::string> labelPrimaryKeyNames(const SchemaConfig& config, const 
 
 } // namespace
 
+/// 执行一条不取结果的 Cypher（DDL / 只写语句）并**消费整条流**。
+/// 写语句是惰性执行的：只发起不消费等于没执行；流上的异常也不会从调用处抛出。
+void runCypherNoResult(shell::EuGraphRpcClient& client, const std::string& query, const std::string& graph) {
+    auto [meta, stream] = client.executeCypher(query, graph);
+    (void)meta;
+    std::string stream_error;
+    std::move(stream).subscribeInline([&stream_error](folly::Try<thrift_service::ResultRowBatch> batch) {
+        if (batch.hasException())
+            stream_error = batch.exception().what().toStdString();
+    });
+    if (!stream_error.empty())
+        throw std::runtime_error(stream_error);
+}
+
+/// 当前图里已有的索引名（SHOW INDEXES 的第一列）。
+std::set<std::string> existingIndexNames(shell::EuGraphRpcClient& client, const std::string& graph) {
+    std::set<std::string> names;
+    auto [meta, stream] = client.executeCypher("SHOW INDEXES", graph);
+    (void)meta;
+    std::string stream_error;
+    std::move(stream).subscribeInline([&names, &stream_error](folly::Try<thrift_service::ResultRowBatch> batch) {
+        // 流的结束帧既不是 value 也不是 exception（空 Try）：必须先判 hasValue，
+        // 否则 operator-> 会抛 UsingUninitializedTry。
+        if (!batch.hasValue()) {
+            if (batch.hasException())
+                stream_error = batch.exception().what().toStdString();
+            return;
+        }
+        for (const auto& row : *batch->rows()) {
+            const auto& values = *row.values();
+            if (values.empty())
+                continue;
+            const auto& cell = values.front();
+            // ResultValue 是独立的 union（不是 PropertyValueThrift），string_val 枚举不能混用
+            if (cell.getType() == thrift_service::ResultValue::Type::string_val)
+                names.insert(cell.get_string_val());
+        }
+    });
+    if (!stream_error.empty())
+        throw std::runtime_error("SHOW INDEXES failed: " + stream_error);
+    return names;
+}
+
 void createLabels(shell::EuGraphRpcClient& client, const SchemaConfig& config) {
     for (const auto& label : allLabels(config)) {
         auto props = toThriftProps(config.merged_properties.at(label));
@@ -1123,12 +1211,12 @@ void createLabels(shell::EuGraphRpcClient& client, const SchemaConfig& config) {
         //   ② 属性集不同（同一标签由多个文件供给，如 Comment/Post 共享 Message）→ 增量合并。
         // 主键声明不一致由服务端报错（不允许改主键定义），这里不吞异常。
         try {
-            client.createLabel(label, props, "default", pk);
+            client.createLabel(label, props, config.graph, pk);
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("already exists") == std::string::npos)
                 throw;
             spdlog::info("[loader] label '{}' exists; merging {} declared properties", label, props.size());
-            client.createLabel(label, props, "default", pk, props);
+            client.createLabel(label, props, config.graph, pk, props);
         }
     }
 }
@@ -1152,11 +1240,18 @@ void createEdgeLabels(shell::EuGraphRpcClient& client, const SchemaConfig& confi
         }
         auto props = toThriftProps(merged);
         spdlog::info("[loader] Creating edge label '{}' with {} properties", type, props.size());
-        client.createEdgeLabel(type, props, "default");
+        client.createEdgeLabel(type, props, config.graph);
     }
 }
 
 void createPrimaryKeyIndexes(shell::EuGraphRpcClient& client, const SchemaConfig& config) {
+    // 先读出已有索引名：重跑时必须跳过已建好的主键索引。
+    //
+    // 旧实现是「照建，然后捕获错误消息里的 'already exists'」—— 但服务端把错误翻译成
+    // TApplicationException 后，消息变成 "Failed to create index (duplicate name?)"，
+    // 匹配不到就上抛，于是「同一张图上重跑 loader」必定失败（幂等只是文档里的说法）。
+    // 索引名是确定性生成的，按名字查询既准确又不依赖错误文案。
+    const auto existing = existingIndexNames(client, config.graph);
     for (const auto& label : allLabels(config)) {
         auto pk = labelPrimaryKeyNames(config, label);
         if (pk.empty())
@@ -1170,18 +1265,14 @@ void createPrimaryKeyIndexes(shell::EuGraphRpcClient& client, const SchemaConfig
             on += "n." + name;
         }
         index_name += "_unique";
-        // 先建索引：批量写入会在同一事务内维护它，因此装载期索引始终可用
-        std::string query = "CREATE UNIQUE INDEX " + index_name + " FOR (n:" + label + ") ON (" + on + ")";
-        try {
-            spdlog::info("[loader] {}", query);
-            client.executeCypher(query, "default");
-        } catch (const std::exception& e) {
-            // 已存在（幂等重跑）继续；其它错误上抛
-            std::string msg = e.what();
-            if (msg.find("already exists") == std::string::npos)
-                throw;
+        if (existing.count(index_name) > 0) {
             spdlog::info("[loader] unique index '{}' already exists, reusing", index_name);
+            continue;
         }
+        // 先建索引：批量写入会在同一事务内维护它，因此装载期索引始终可用
+        const std::string query = "CREATE UNIQUE INDEX " + index_name + " FOR (n:" + label + ") ON (" + on + ")";
+        spdlog::info("[loader] {}", query);
+        runCypherNoResult(client, query, config.graph);
     }
 }
 
@@ -1253,9 +1344,16 @@ struct PkKey {
 /// 行级标签在装载前必须先建好标签，否则批量写入时服务端会报 "Label not found"。
 /// 属性定义跟随主标签：这些标签下的顶点由同一批 CSV 列供给，属性与主标签一致
 /// （主标签负责索引，行级标签用于按名字查询）。
-void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config) {
+void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config,
+                     ProgressReporter* progress) {
     if (fs.row_labels.empty())
         return;
+    auto log_info = [&](const std::string& message) {
+        if (progress != nullptr)
+            progress->info(message);
+        else
+            spdlog::info("{}", message);
+    };
     const auto& merged = config.merged_properties.at(fs.element);
 
     // 按来源逐个取样：derived 直接建，列来源扫一遍取值（并集去重）
@@ -1288,23 +1386,28 @@ void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
     }
     for (const auto& name : names) {
         auto props = toThriftProps(merged);
-        spdlog::info("[loader] Creating row label '{}' (same properties as '{}')", name, fs.element);
+        log_info("[loader] Creating row label '" + name + "' (same properties as '" + fs.element + "')");
         try {
-            client.createLabel(name, props, "default", /*pk_props=*/{});
+            client.createLabel(name, props, config.graph, /*pk_props=*/{});
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("already exists") == std::string::npos)
                 throw;
             // 同一行级标签可能由多个主标签供给（Comment/Post → Message）：属性取并集
-            spdlog::info("[loader] row label '{}' exists; merging {} properties", name, props.size());
-            client.createLabel(name, props, "default", /*pk_props=*/{}, props);
+            log_info("[loader] row label '" + name + "' exists; merging " + std::to_string(props.size()) +
+                     " properties");
+            client.createLabel(name, props, config.graph, /*pk_props=*/{}, props);
         }
     }
 }
 
 void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config, int batch_size,
-                       int64_t& written, int64_t& duplicates) {
+                       int64_t& written, int64_t& duplicates, ProgressReporter* progress) {
     const CsvDialect dialect = resolveDialect(config, fs);
     CsvFile csv = readCsvFile(fs.path, dialect);
+    // 进度分母优先用预扫描值（记录数，与 readCsvFile 同规则）；未预扫描时退回本文件实际行数。
+    const int64_t file_rows = fs.expected_rows >= 0 ? fs.expected_rows : static_cast<int64_t>(csv.rows.size());
+    if (progress != nullptr)
+        progress->beginFile(fs.element, fs.declared_file, file_rows);
 
     // 解析列号（属性 / 主键 / 行级标签）
     auto props = fs.columns;
@@ -1384,29 +1487,41 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, cons
 
         batch.push_back(std::move(rec));
         if (static_cast<int>(batch.size()) >= batch_size) {
-            auto resp = client.batchInsertVertices(fs.element, std::move(batch), "default");
+            const auto rows_in_batch = static_cast<int64_t>(batch.size());
+            auto resp = client.batchInsertVertices(fs.element, std::move(batch), config.graph);
             file_written += *resp.inserted();
             file_dup += *resp.duplicate_pk();
+            if (progress != nullptr)
+                progress->addRows(fs.element, fs.declared_file, rows_in_batch);
             batch.clear();
             batch.reserve(static_cast<size_t>(batch_size));
         }
     }
     if (!batch.empty()) {
-        auto resp = client.batchInsertVertices(fs.element, std::move(batch), "default");
+        const auto rows_in_batch = static_cast<int64_t>(batch.size());
+        auto resp = client.batchInsertVertices(fs.element, std::move(batch), config.graph);
         file_written += *resp.inserted();
         file_dup += *resp.duplicate_pk();
+        if (progress != nullptr)
+            progress->addRows(fs.element, fs.declared_file, rows_in_batch);
     }
 
-    spdlog::info("[loader] Loaded {} vertices for '{}' ({} duplicate pk skipped)", file_written, where, file_dup);
+    if (progress != nullptr)
+        progress->endFile(fs.element, fs.declared_file, file_written, file_dup);
+    else
+        spdlog::info("[loader] Loaded {} vertices for '{}' ({} duplicate pk skipped)", file_written, where, file_dup);
     written += file_written;
     duplicates += file_dup;
 }
 
 void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config, int batch_size,
-                     int64_t& written, int64_t& skipped) {
+                     int64_t& written, int64_t& skipped, ProgressReporter* progress) {
     const CsvDialect dialect = resolveDialect(config, fs);
     CsvFile csv = readCsvFile(fs.path, dialect);
     const std::string where = fs.declared_file;
+    const int64_t file_rows = fs.expected_rows >= 0 ? fs.expected_rows : static_cast<int64_t>(csv.rows.size());
+    if (progress != nullptr)
+        progress->beginFile(fs.element, fs.declared_file, file_rows);
 
     std::vector<PropertySpec> src_cols = fs.src;
     std::vector<PropertySpec> dst_cols = fs.dst;
@@ -1446,8 +1561,12 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
         }
         return text;
     };
-    spdlog::info("[loader] {}: src = {}, dst = {}", fs.declared_file, describe_endpoint(src_cols),
-                 describe_endpoint(dst_cols));
+    const std::string endpoints_line = "[loader] " + fs.declared_file + ": src = " + describe_endpoint(src_cols) +
+                                       ", dst = " + describe_endpoint(dst_cols);
+    if (progress != nullptr)
+        progress->info(endpoints_line);
+    else
+        spdlog::info("{}", endpoints_line);
 
     // 端点主键值来自本文件的列，但发给服务端时要带上**目标标签**的主键属性名与类型
     // （类型必须取目标标签的声明，否则 INT64 主键会被当成 STRING 编码，索引查不到）。
@@ -1533,36 +1652,46 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
 
         batch.push_back(std::move(rec));
         if (static_cast<int>(batch.size()) >= batch_size) {
-            auto resp = client.batchInsertEdges(fs.element, std::move(batch), "default");
+            const auto rows_in_batch = static_cast<int64_t>(batch.size());
+            auto resp = client.batchInsertEdges(fs.element, std::move(batch), config.graph);
             written += *resp.inserted();
             skipped += *resp.skipped_unresolved();
+            if (progress != nullptr)
+                progress->addRows(fs.element, fs.declared_file, rows_in_batch);
             batch.clear();
             batch.reserve(static_cast<size_t>(batch_size));
         }
     }
     if (!batch.empty()) {
-        auto resp = client.batchInsertEdges(fs.element, std::move(batch), "default");
+        const auto rows_in_batch = static_cast<int64_t>(batch.size());
+        auto resp = client.batchInsertEdges(fs.element, std::move(batch), config.graph);
         written += *resp.inserted();
         skipped += *resp.skipped_unresolved();
+        if (progress != nullptr)
+            progress->addRows(fs.element, fs.declared_file, rows_in_batch);
     }
-    spdlog::info("[loader] Loaded edges for '{}' ({} written, {} skipped: endpoint unresolved)", where, written,
-                 skipped);
+    if (progress != nullptr)
+        progress->endFile(fs.element, fs.declared_file, written, skipped);
+    else
+        spdlog::info("[loader] Loaded edges for '{}' ({} written, {} skipped: endpoint unresolved)", where, written,
+                     skipped);
 }
 
 } // namespace
 
 std::pair<int64_t, int64_t> loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
-                                         const SchemaConfig& config, int batch_size, int concurrency) {
+                                         const SchemaConfig& config, int batch_size, int concurrency,
+                                         ProgressReporter* progress) {
     // 行级标签必须在并发装载之前建好（并发阶段边建边写会有竞态）
     if (!clients.empty()) {
         for (const auto& fs : config.vertex_files)
-            createRowLabels(*clients.front(), fs, config);
+            createRowLabels(*clients.front(), fs, config, progress);
     }
 
     std::atomic<int64_t> written{0}, duplicates{0};
     runFilesParallel(clients, config.vertex_files.size(), concurrency, [&](shell::EuGraphRpcClient& client, size_t i) {
         int64_t w = 0, d = 0;
-        loadOneVertexFile(client, config.vertex_files[i], config, batch_size, w, d);
+        loadOneVertexFile(client, config.vertex_files[i], config, batch_size, w, d, progress);
         written += w;
         duplicates += d;
     });
@@ -1570,15 +1699,143 @@ std::pair<int64_t, int64_t> loadVertices(const std::vector<shell::EuGraphRpcClie
 }
 
 std::pair<int64_t, int64_t> loadEdges(const std::vector<shell::EuGraphRpcClient*>& clients, const SchemaConfig& config,
-                                      int batch_size, int concurrency) {
+                                      int batch_size, int concurrency, ProgressReporter* progress) {
     std::atomic<int64_t> written{0}, skipped{0};
     runFilesParallel(clients, config.edge_files.size(), concurrency, [&](shell::EuGraphRpcClient& client, size_t i) {
         int64_t w = 0, s = 0;
-        loadOneEdgeFile(client, config.edge_files[i], config, batch_size, w, s);
+        loadOneEdgeFile(client, config.edge_files[i], config, batch_size, w, s, progress);
         written += w;
         skipped += s;
     });
     return {written.load(), skipped.load()};
+}
+
+// ==================== 目标图 / 语句 / 统一管线 ====================
+
+void scanRowCounts(SchemaConfig& config) {
+    for (auto& fs : config.vertex_files)
+        fs.expected_rows = static_cast<int64_t>(countCsvRecords(fs.path, resolveDialect(config, fs)));
+    for (auto& fs : config.edge_files)
+        fs.expected_rows = static_cast<int64_t>(countCsvRecords(fs.path, resolveDialect(config, fs)));
+}
+
+bool ensureGraph(shell::EuGraphRpcClient& client, const std::string& graph_name) {
+    if (graph_name.empty())
+        throw std::runtime_error("--graph must not be empty");
+    // neo4j / system 是服务端对 default 的别名（见 GraphService::resolveGraph）。
+    // 拿它去建图会建出一张同名但谁也不会查询的图，随后写入与查询落到不同图上 ——
+    // 这里直接拒绝，而不是静默改名成 default。
+    if (graph_name == "neo4j" || graph_name == "system")
+        throw std::runtime_error("--graph '" + graph_name +
+                                 "' is an alias of the 'default' graph on the server; use --graph default instead");
+
+    for (const auto& entry : client.listGraphs()) {
+        if (*entry.name() == graph_name) {
+            spdlog::info("[loader] Using existing graph '{}' (id={})", graph_name, *entry.graph_id());
+            return false;
+        }
+    }
+    auto created = client.createGraph(graph_name);
+    spdlog::info("[loader] Created graph '{}' (id={})", graph_name, *created.graph_id());
+    return true;
+}
+
+void runStatements(shell::EuGraphRpcClient& client, const SchemaConfig& config, StatementPhase phase) {
+    const auto& statements = phase == StatementPhase::BEFORE_LOAD ? config.before_load : config.after_load;
+    const char* phase_name = phase == StatementPhase::BEFORE_LOAD ? "before_load" : "after_load";
+    for (size_t i = 0; i < statements.size(); ++i) {
+        const auto& stmt = statements[i];
+        spdlog::info("[loader] {} statement {}/{}: {}", phase_name, i + 1, statements.size(), stmt.cypher);
+        const auto started = std::chrono::steady_clock::now();
+        try {
+            runCypherNoResult(client, stmt.cypher, config.graph);
+        } catch (const std::exception& e) {
+            if (stmt.ignore_error) {
+                spdlog::warn("[loader] {} statement {} ignored (on_error=ignore): {}", phase_name, i + 1, e.what());
+                continue;
+            }
+            throw std::runtime_error(std::string("schema ") + phase_name + " statement " + std::to_string(i + 1) +
+                                     " failed: " + e.what() + " (statement: " + stmt.cypher + ")");
+        }
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        spdlog::info("[loader] {} statement {} done in {}ms", phase_name, i + 1, elapsed_ms);
+    }
+}
+
+namespace {
+
+/// 装载计划：按「标签 / 边类型 → 文件数与总行数」，顺序 = schema 里的声明顺序。
+LoadPlan buildPlan(const SchemaConfig& config) {
+    LoadPlan plan;
+    plan.graph = config.graph;
+    auto add = [](std::vector<PlanItem>& items, const std::string& name, const std::string& detail,
+                  const FileSpec& fs) {
+        auto it = std::find_if(items.begin(), items.end(), [&](const PlanItem& item) { return item.name == name; });
+        if (it == items.end()) {
+            PlanItem item;
+            item.name = name;
+            item.detail = detail;
+            items.push_back(std::move(item));
+            it = std::prev(items.end());
+        }
+        it->files += 1;
+        if (fs.expected_rows > 0)
+            it->rows += fs.expected_rows;
+    };
+    for (const auto& fs : config.vertex_files)
+        add(plan.nodes, fs.element, /*detail=*/"", fs);
+    for (const auto& fs : config.edge_files)
+        add(plan.edges, fs.element, fs.src_label + " -> " + fs.dst_label, fs);
+    return plan;
+}
+
+} // namespace
+
+LoadResult loadAll(const std::vector<shell::EuGraphRpcClient*>& clients, SchemaConfig& config,
+                   const LoadOptions& options) {
+    if (clients.empty() || clients.front() == nullptr)
+        throw std::runtime_error("loadAll: at least one RPC client is required");
+
+    // 预扫描：进度分母 + 计划表；畸形 CSV 在动 DDL 之前就暴露
+    scanRowCounts(config);
+    const LoadPlan plan = buildPlan(config);
+    if (options.progress != nullptr)
+        options.progress->printPlan(plan);
+
+    ensureGraph(*clients.front(), config.graph);
+
+    spdlog::info("[loader] Creating labels...");
+    createLabels(*clients.front(), config);
+    spdlog::info("[loader] Creating edge labels...");
+    createEdgeLabels(*clients.front(), config);
+    // 先建主键唯一索引：批量写入会在同一事务内维护它，装载期即可用于解析边端点
+    spdlog::info("[loader] Creating primary key unique indexes...");
+    createPrimaryKeyIndexes(*clients.front(), config);
+
+    runStatements(*clients.front(), config, StatementPhase::BEFORE_LOAD);
+
+    LoadResult result;
+    if (options.progress != nullptr)
+        options.progress->beginPhase("vertices", "labels", plan.nodes);
+    auto [vertices_written, vertices_duplicate] =
+        loadVertices(clients, config, options.batch_size, options.parallel_files, options.progress);
+    result.vertices_written = vertices_written;
+    result.vertices_duplicate = vertices_duplicate;
+    if (options.progress != nullptr)
+        options.progress->endPhase();
+
+    if (options.progress != nullptr)
+        options.progress->beginPhase("edges", "types", plan.edges);
+    auto [edges_written, edges_skipped] =
+        loadEdges(clients, config, options.batch_size, options.parallel_files, options.progress);
+    result.edges_written = edges_written;
+    result.edges_skipped = edges_skipped;
+    if (options.progress != nullptr)
+        options.progress->endPhase();
+
+    runStatements(*clients.front(), config, StatementPhase::AFTER_LOAD);
+    return result;
 }
 
 std::vector<std::string> findUndeclaredCsvFiles(const SchemaConfig& config) {

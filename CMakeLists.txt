@@ -437,11 +437,17 @@ target_link_libraries(eugraph-shell PRIVATE
 add_library(eugraph_loader_lib STATIC
     src/program/loader/csv_loader.cpp
     src/program/loader/csv_reader.cpp
+    src/program/loader/loader_progress.cpp
     src/program/shell/rpc_client.cpp
 )
 
 target_include_directories(eugraph_loader_lib PUBLIC
     "${PROJECT_SOURCE_DIR}/src"
+)
+
+# 预扫描计数用的 vendored 头文件（third_party/csv/csv.h，BSD-3）；只在 csv_reader.cpp 内部使用
+target_include_directories(eugraph_loader_lib PRIVATE
+    "${PROJECT_SOURCE_DIR}/third_party/csv"
 )
 
 target_link_libraries(eugraph_loader_lib PUBLIC
@@ -831,6 +837,23 @@ if(EUGRAPH_BUILD_TESTS)
     )
 
     gtest_add_tests(TARGET csv_reader_tests)
+
+    # CSV Loader progress / plan formatting unit tests (no server needed)
+    add_executable(loader_progress_tests
+        tests/test_loader_progress.cpp
+    )
+
+    target_include_directories(loader_progress_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(loader_progress_tests PRIVATE
+        eugraph_loader_lib
+        GTest::gtest_main
+        dl
+    )
+
+    gtest_add_tests(TARGET loader_progress_tests)
 
     # CSV Loader integration tests
     add_executable(loader_integration_tests

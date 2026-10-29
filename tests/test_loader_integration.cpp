@@ -31,6 +31,8 @@
 #include <folly/SocketAddress.h>
 #include <folly/coro/BlockingWait.h>
 #include <fstream>
+#include <stdexcept>
+#include <vector>
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
@@ -112,37 +114,49 @@ protected:
                                         strict_types);
     }
 
-    /// 执行 Cypher 并返回「第一行第一列」的格式化文本；查询报错或空结果返回 nullopt。
-    std::optional<std::string> querySingle(const std::string& cypher) {
-        try {
-            auto [meta, stream] = client_->executeCypher(cypher, "default");
-            auto gen = std::move(stream).toAsyncGenerator();
-            std::optional<std::string> out;
-            folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
-                while (auto batch = co_await gen.next()) {
-                    for (const auto& row : *batch->rows()) {
-                        const auto& vals = *row.values();
-                        if (!out.has_value() && !vals.empty())
-                            out = eugraph::service::thrift::formatResultValue(vals[0]);
-                    }
+    /// 执行 Cypher 并返回全部行（每行是格式化后的单元格文本）；查询报错时抛异常。
+    std::vector<std::vector<std::string>> queryAll(const std::string& graph, const std::string& cypher) {
+        auto [meta, stream] = client_->executeCypher(cypher, graph);
+        (void)meta;
+        auto gen = std::move(stream).toAsyncGenerator();
+        std::vector<std::vector<std::string>> rows;
+        folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
+            while (auto batch = co_await gen.next()) {
+                for (const auto& row : *batch->rows()) {
+                    std::vector<std::string> cells;
+                    for (const auto& value : *row.values())
+                        cells.push_back(eugraph::service::thrift::formatResultValue(value));
+                    rows.push_back(std::move(cells));
                 }
-            }());
-            return out;
+            }
+        }());
+        return rows;
+    }
+
+    /// 执行 Cypher 并返回「第一行第一列」的格式化文本；查询报错或空结果返回 nullopt。
+    std::optional<std::string> querySingle(const std::string& cypher, const std::string& graph = "default") {
+        try {
+            auto rows = queryAll(graph, cypher);
+            if (rows.empty() || rows.front().empty())
+                return std::nullopt;
+            return rows.front().front();
         } catch (const std::exception&) {
             return std::nullopt;
         }
     }
 
-    std::string runLoad() {
+    /// 走唯一装载管线（与 eugraph-loader 完全同一条路径，含建图/语句/预扫描）。
+    std::string runLoad(const std::string& graph = "default") {
         auto config = loadConfig();
-        loader::createLabels(*client_, config);
-        loader::createEdgeLabels(*client_, config);
-        loader::createPrimaryKeyIndexes(*client_, config);
+        config.graph = graph;
+        loader::LoadOptions options;
+        options.batch_size = 100;
+        options.parallel_files = 1;
         std::vector<shell::EuGraphRpcClient*> clients{client_.get()};
-        auto [vw, vd] = loader::loadVertices(clients, config, 100, 1);
-        auto [ew, es] = loader::loadEdges(clients, config, 100, 1);
-        return "vertices=" + std::to_string(vw) + " dup=" + std::to_string(vd) + " edges=" + std::to_string(ew) +
-               " skipped=" + std::to_string(es);
+        const auto result = loader::loadAll(clients, config, options);
+        return "vertices=" + std::to_string(result.vertices_written) +
+               " dup=" + std::to_string(result.vertices_duplicate) + " edges=" + std::to_string(result.edges_written) +
+               " skipped=" + std::to_string(result.edges_skipped);
     }
 };
 
@@ -152,7 +166,7 @@ TEST_F(LoaderE2ETest, LoadsVerticesAndResolvesEdgesByPrimaryKey) {
     writeFile("person.csv", "id|name\n1|alice\n2|bob\n");
     writeFile("knows.csv", "Person.id|Person.id|since\n1|2|2020\n2|1|2021\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "person.csv", "pk": "id",
+      "nodes": { "person": [ { "file": "person.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
       "relationships": { "knows": [ { "file": "knows.csv", "src": {"index": 0}, "dst": {"index": 1},
                                       "src_label": "person", "dst_label": "person",
@@ -187,7 +201,7 @@ TEST_F(LoaderE2ETest, RenamesPropertiesAndKeepsRowLabelAsExtra) {
     writeFile("person.csv", "id\n1\n");
     writeFile("person_located.csv", "Person.id|Place.id\n1|1\n1|2\n");
     writeSchema(R"({
-      "labels": { "place": [ { "file": "place.csv", "pk": "id",
+      "nodes": { "place": [ { "file": "place.csv", "pk": "id",
                                "columns": { "id": "INT64", "name": "STRING", "url": "STRING" },
                                "label": [{ "header": "type" }] } ],
                   "person": [ { "file": "person.csv", "pk": "id",
@@ -222,7 +236,7 @@ TEST_F(LoaderE2ETest, RenamesPropertiesAndKeepsRowLabelAsExtra) {
 TEST_F(LoaderE2ETest, RenamedPropertyKeepsSourceColumn) {
     writeFile("org.csv", "id|type|name\n7|company|Acme\n");
     writeSchema(R"({
-      "labels": { "organisation": [ { "file": "org.csv", "pk": "id",
+      "nodes": { "organisation": [ { "file": "org.csv", "pk": "id",
                                       "columns": { "id": "INT64",
                                                    "kind": { "header": "type", "type": "STRING" },
                                                    "name": "STRING" },
@@ -241,7 +255,7 @@ TEST_F(LoaderE2ETest, RenamedPropertyKeepsSourceColumn) {
 TEST_F(LoaderE2ETest, DeclaredTypesAreRespected) {
     writeFile("t.csv", "id|tags|score|flag\n1|a;b|1.5|true\n");
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "t.csv", "pk": "id",
+      "nodes": { "thing": [ { "file": "t.csv", "pk": "id",
                                "columns": { "id": "INT64", "tags": "STRING[]",
                                             "score": "DOUBLE", "flag": "BOOL" } } ] },
       "relationships": {}
@@ -264,7 +278,7 @@ TEST_F(LoaderE2ETest, CompositePrimaryKeyResolvesEndpoints) {
     writeFile("user.csv", "id|name\n5|alice\n");
     writeFile("belongs.csv", "tenant|id|uid\n1|5|5\n2|5|5\n");
     writeSchema(R"({
-      "labels": { "membership": [ { "file": "membership.csv", "pk": ["tenantId", "userId"],
+      "nodes": { "membership": [ { "file": "membership.csv", "pk": ["tenantId", "userId"],
                                     "columns": { "tenantId": { "header": "tenant", "type": "STRING" },
                                                  "userId": { "header": "id", "type": "INT64" } } } ],
                   "user": [ { "file": "user.csv", "pk": "id",
@@ -294,7 +308,7 @@ TEST_F(LoaderE2ETest, CompositePrimaryKeyResolvesEndpoints) {
 TEST_F(LoaderE2ETest, DuplicatePrimaryKeyIsSkippedAndIndexStaysClean) {
     writeFile("p.csv", "id|name\n1|first\n1|second\n2|third\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "person": [ { "file": "p.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
       "relationships": {}
     })");
@@ -315,7 +329,7 @@ TEST_F(LoaderE2ETest, RejectsEndpointLabelWithoutPrimaryKey) {
     writeFile("b.csv", "id|a_id\n1|1\n");
     // thing 未声明主键 → 被边引用时必须报错（缺陷存在时会静默按 0 端点写入或跳过整份边文件）
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "a.csv", "columns": { "id": "INT64", "name": "STRING" } } ],
+      "nodes": { "thing": [ { "file": "a.csv", "columns": { "id": "INT64", "name": "STRING" } } ],
                   "edge":  [ { "file": "b.csv", "pk": "id",
                                "columns": { "id": "INT64", "a_id": "INT64" } } ] },
       "relationships": { "rel": [ { "file": "b.csv", "src": "id", "dst": "a_id",
@@ -332,7 +346,7 @@ TEST_F(LoaderE2ETest, RejectsEndpointLabelWithoutPrimaryKey) {
 TEST_F(LoaderE2ETest, RejectsUndeclaredEndpointLabel) {
     writeFile("a.csv", "id|ref\n1|1\n");
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": { "rel": [ { "file": "a.csv", "src": "id", "dst": "ref",
                                     "src_label": "thing", "dst_label": "nonexistent" } ] }
     })");
@@ -347,7 +361,7 @@ TEST_F(LoaderE2ETest, RejectsUndeclaredEndpointLabel) {
 TEST_F(LoaderE2ETest, RejectsPrimaryKeyNotDeclaredInColumns) {
     writeFile("a.csv", "id\n1\n");
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "a.csv", "pk": "nope", "columns": { "id": "INT64" } } ] },
+      "nodes": { "thing": [ { "file": "a.csv", "pk": "nope", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     try {
@@ -360,7 +374,7 @@ TEST_F(LoaderE2ETest, RejectsPrimaryKeyNotDeclaredInColumns) {
 
 TEST_F(LoaderE2ETest, RejectsMissingDataFile) {
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "missing.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "thing": [ { "file": "missing.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     try {
@@ -376,7 +390,7 @@ TEST_F(LoaderE2ETest, RejectsMissingDataFile) {
 TEST_F(LoaderE2ETest, StrictRejectsUndeclaredColumns) {
     writeFile("p.csv", "id|name|score\n1|alice|7\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "p.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "person": [ { "file": "p.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     try {
@@ -393,7 +407,7 @@ TEST_F(LoaderE2ETest, StrictRejectsUndeclaredColumns) {
 TEST_F(LoaderE2ETest, NonStrictInfersUndeclaredColumns) {
     writeFile("p.csv", "id|name|score\n1|alice|7\n2|bob|9\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "p.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "person": [ { "file": "p.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     auto config = loadConfig(/*strict_types=*/false);
@@ -420,7 +434,7 @@ TEST_F(LoaderE2ETest, PerFileDelimiterOverridesGlobal) {
     writeFile("b.csv", "id::score\n2::99\n"); // 用文件级 '::'（多字符）
     writeSchema(R"({
       "delimiter": "|",
-      "labels": {
+      "nodes": {
         "person": [ { "file": "a.csv", "pk": "id",
                       "columns": { "id": "INT64", "name": "STRING" } } ],
         "thing":  [ { "file": "b.csv", "pk": "id", "delimiter": "::",
@@ -450,7 +464,7 @@ TEST_F(LoaderE2ETest, PerFileDateFormatOverridesGlobal) {
     writeFile("sec.csv", "id|creationDate\n2|1700000000\n");
     writeSchema(R"({
       "date_format": "epoch_ms",
-      "labels": {
+      "nodes": {
         "msEvent":  [ { "file": "ms.csv", "pk": "id",
                         "columns": { "id": "INT64", "creationDate": "DATETIME" } } ],
         "secEvent": [ { "file": "sec.csv", "pk": "id", "date_format": "epoch_s",
@@ -486,7 +500,7 @@ TEST_F(LoaderE2ETest, UndeclaredFilesIgnoreSuppressesFailure) {
     writeFile("extra.csv", "id\n1\n");
     writeSchema(R"({
       "undeclared_files": "ignore",
-      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     auto config = loadConfig();
@@ -498,7 +512,7 @@ TEST_F(LoaderE2ETest, UndeclaredFilesIgnoreSuppressesFailure) {
 TEST_F(LoaderE2ETest, UndeclaredFilesDefaultsToError) {
     writeFile("a.csv", "id\n1\n");
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     EXPECT_EQ(loadConfig().undeclared_files, "error");
@@ -508,7 +522,7 @@ TEST_F(LoaderE2ETest, RejectsBadDelimiterInSchema) {
     writeFile("a.csv", "id\n1\n");
     writeSchema(R"({
       "delimiter": "   ",
-      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     EXPECT_THROW(loadConfig(), std::runtime_error);
@@ -520,7 +534,7 @@ TEST_F(LoaderE2ETest, RejectsBadDelimiterInSchema) {
 TEST_F(LoaderE2ETest, MultipleLabelColumnsEachContribute) {
     writeFile("p.csv", "id|name|type|tier\n1|Delhi|city|gold\n2|India|country|silver\n");
     writeSchema(R"({
-      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "Place": [ { "file": "p.csv", "pk": "id",
                                "columns": { "id": "INT64", "name": "STRING", "type": "STRING", "tier": "STRING" },
                                "label": [ { "header": "type", "case": "capitalize" },
                                           { "header": "tier", "case": "capitalize" } ] } ] },
@@ -547,7 +561,7 @@ TEST_F(LoaderE2ETest, MultipleLabelColumnsEachContribute) {
 TEST_F(LoaderE2ETest, StaticAndColumnSourcesMix) {
     writeFile("p.csv", "id|type\n1|city\n2|country\n");
     writeSchema(R"({
-      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "Place": [ { "file": "p.csv", "pk": "id",
                                "columns": { "id": "INT64", "type": "STRING" },
                                "label": [ { "derived": ["Entity"] },
                                           { "header": "type", "case": "capitalize" } ] } ] },
@@ -569,7 +583,7 @@ TEST_F(LoaderE2ETest, StaticAndColumnSourcesMix) {
 TEST_F(LoaderE2ETest, DuplicateRowLabelsAreDeduplicated) {
     writeFile("p.csv", "id|type\n1|city\n");
     writeSchema(R"({
-      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "Place": [ { "file": "p.csv", "pk": "id",
                                "columns": { "id": "INT64", "type": "STRING" },
                                "label": [ { "derived": ["City"] },
                                           { "header": "type", "case": "capitalize" } ] } ] },
@@ -586,7 +600,7 @@ TEST_F(LoaderE2ETest, DuplicateRowLabelsAreDeduplicated) {
 TEST_F(LoaderE2ETest, RowLabelEqualToPrimaryIsDropped) {
     writeFile("p.csv", "id|type\n1|place\n2|city\n");
     writeSchema(R"({
-      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "Place": [ { "file": "p.csv", "pk": "id",
                                "columns": { "id": "INT64", "type": "STRING" },
                                "label": [ { "header": "type", "case": "capitalize" } ] } ] },
       "relationships": {}
@@ -603,7 +617,7 @@ TEST_F(LoaderE2ETest, LabelByIndexEqualsLabelByHeader) {
     writeFile("by_header.csv", "id|type\n1|city\n2|country\n");
     writeFile("by_index.csv", "id|type\n1|city\n2|country\n");
     writeSchema(R"({
-      "labels": {
+      "nodes": {
         "A": [ { "file": "by_header.csv", "pk": "id", "columns": { "id": "INT64", "type": "STRING" },
                  "label": [ { "header": "type", "case": "capitalize" } ] } ],
         "B": [ { "file": "by_index.csv", "pk": "id", "columns": { "id": "INT64", "type": "STRING" },
@@ -627,7 +641,7 @@ TEST_F(LoaderE2ETest, LabelByIndexEqualsLabelByHeader) {
 TEST_F(LoaderE2ETest, DuplicateHeaderLabelsRequireIndex) {
     writeFile("p.csv", "id|:LABEL|:LABEL\n1|Comment|Message\n");
     writeSchema(R"({
-      "labels": { "Comment": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "Comment": [ { "file": "p.csv", "pk": "id",
                                  "columns": { "id": "INT64" },
                                  "label": [ { "index": 1 }, { "index": 2 } ] } ] },
       "relationships": {}
@@ -642,7 +656,7 @@ TEST_F(LoaderE2ETest, DuplicateHeaderLabelsRequireIndex) {
     // 只用 header 指向重名列 → 报错并提示用 index
     writeFile("q.csv", "id|:LABEL|:LABEL\n1|X|Y\n");
     writeSchema(R"({
-      "labels": { "Comment": [ { "file": "q.csv", "pk": "id",
+      "nodes": { "Comment": [ { "file": "q.csv", "pk": "id",
                                  "columns": { "id": "INT64" },
                                  "label": [ { "header": ":LABEL" } ] } ] },
       "relationships": {}
@@ -661,7 +675,7 @@ TEST_F(LoaderE2ETest, DuplicateHeaderLabelsRequireIndex) {
 TEST_F(LoaderE2ETest, ObjectLabelFormIsRejectedWithMigrationHint) {
     writeFile("p.csv", "id|type\n1|city\n");
     writeSchema(R"({
-      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "Place": [ { "file": "p.csv", "pk": "id",
                                "columns": { "id": "INT64", "type": "STRING" },
                                "label": { "header": "type", "case": "capitalize" } } ] },
       "relationships": {}
@@ -680,7 +694,7 @@ TEST_F(LoaderE2ETest, ObjectLabelFormIsRejectedWithMigrationHint) {
 TEST_F(LoaderE2ETest, DerivedAndHeaderTogetherAreRejected) {
     writeFile("p.csv", "id|type\n1|city\n");
     writeSchema(R"({
-      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "Place": [ { "file": "p.csv", "pk": "id",
                                "columns": { "id": "INT64", "type": "STRING" },
                                "label": [ { "derived": ["City"], "header": "type" } ] } ] },
       "relationships": {}
@@ -697,7 +711,7 @@ TEST_F(LoaderE2ETest, ReportsUndeclaredCsvFiles) {
     writeFile("a.csv", "id\n1\n");
     writeFile("extra.csv", "id\n1\n");
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "nodes": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
     auto config = loadConfig();
@@ -711,7 +725,7 @@ TEST_F(LoaderE2ETest, ReportsUndeclaredCsvFiles) {
 TEST_F(LoaderE2ETest, HandlesBomAndQuotedFields) {
     writeFile("p.csv", "\xEF\xBB\xBFid|name|note\n1|\"a|b\"|\"say \"\"hi\"\"\"\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "person": [ { "file": "p.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING", "note": "STRING" } } ] },
       "relationships": {}
     })");
@@ -728,7 +742,7 @@ TEST_F(LoaderE2ETest, HandlesCommaDelimiterFromSchema) {
     writeFile("p.csv", "id,name\n1,alice\n");
     writeSchema(R"({
       "delimiter": ",",
-      "labels": { "person": [ { "file": "p.csv", "pk": "id",
+      "nodes": { "person": [ { "file": "p.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
       "relationships": {}
     })");
@@ -753,7 +767,7 @@ TEST_F(LoaderE2ETest, RejectsAmbiguousEndpointColumnName) {
     writeFile("person.csv", "id|name\n1|alice\n2|bob\n");
     writeFile("knows.csv", "Person.id|Person.id|since\n1|2|2020\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "person.csv", "pk": "id",
+      "nodes": { "person": [ { "file": "person.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
       "relationships": { "knows": [ { "file": "knows.csv", "src": "Person.id", "dst": "Person.id",
                                       "src_label": "person", "dst_label": "person",
@@ -773,7 +787,7 @@ TEST_F(LoaderE2ETest, ResolvesEndpointByColumnIndex) {
     writeFile("person.csv", "id|name\n1|a\n2|b\n3|c\n");
     writeFile("knows.csv", "Person.id|Person.id|since\n1|2|2020\n2|3|2021\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "person.csv", "pk": "id",
+      "nodes": { "person": [ { "file": "person.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
       "relationships": { "knows": [ { "file": "knows.csv", "src": {"index": 0}, "dst": {"index": 1},
                                       "src_label": "person", "dst_label": "person",
@@ -794,7 +808,7 @@ TEST_F(LoaderE2ETest, RejectsSrcAndDstResolvingToSameColumn) {
     writeFile("person.csv", "id|name\n1|alice\n2|bob\n");
     writeFile("knows.csv", "Person.id|Person.id|since\n1|2|2020\n");
     writeSchema(R"({
-      "labels": { "person": [ { "file": "person.csv", "pk": "id",
+      "nodes": { "person": [ { "file": "person.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
       "relationships": { "knows": [ { "file": "knows.csv", "src": {"index": 0}, "dst": {"index": 0},
                                       "src_label": "person", "dst_label": "person",
@@ -819,7 +833,7 @@ TEST_F(LoaderE2ETest, RejectsCollidingCompositeEndpoints) {
     writeFile("thing.csv", "a|b|c\n1|2|3\n");
     writeFile("edge.csv", "a|b|c\n1|2|3\n");
     writeSchema(R"({
-      "labels": { "thing": [ { "file": "thing.csv", "pk": "a",
+      "nodes": { "thing": [ { "file": "thing.csv", "pk": "a",
                                "columns": { "a": "INT64", "b": "INT64", "c": "INT64" } } ] },
       "relationships": { "rel": [ { "file": "edge.csv", "src": ["a","b"], "dst": ["b","c"],
                                     "src_label": "thing", "dst_label": "thing" } ] }
@@ -829,6 +843,182 @@ TEST_F(LoaderE2ETest, RejectsCollidingCompositeEndpoints) {
         FAIL() << "expected colliding composite endpoints to be rejected";
     } catch (const std::exception& e) {
         EXPECT_NE(std::string(e.what()).find("endpoint"), std::string::npos) << e.what();
+    }
+}
+
+// ==================== 目标图：--graph 语义 ====================
+
+TEST_F(LoaderE2ETest, CreatesRequestedGraphAndLoadsIntoIt) {
+    writeFile("thing.csv", "id|name\n1|a\n2|b\n");
+    writeSchema(R"({
+      "nodes": { "thing": [ { "file": "thing.csv", "pk": "id",
+                              "columns": { "id": "INT64", "name": "STRING" } } ] },
+      "relationships": {}
+    })");
+
+    // g2 在装载前不存在：没有「不存在则创建」这一步，装载本身就会报 Graph not found
+    auto summary = runLoad("g2");
+    EXPECT_NE(summary.find("vertices=2"), std::string::npos) << summary;
+
+    bool created = false;
+    for (const auto& info : client_->listGraphs()) {
+        if (*info.name() == "g2")
+            created = true;
+    }
+    EXPECT_TRUE(created) << "loadAll 没有创建目标图 'g2'";
+
+    // 数据必须落在 g2（若图名被写死成 default，这里会查不到 label）
+    auto in_g2 = querySingle("MATCH (n:thing) RETURN count(*)", "g2");
+    ASSERT_TRUE(in_g2.has_value()) << "g2 里查不到 thing";
+    EXPECT_EQ(*in_g2, "2");
+}
+
+TEST_F(LoaderE2ETest, RejectsAliasedOrEmptyGraphName) {
+    // neo4j / system 是服务端对 default 的别名：拿它建图会让写入与查询落到不同的图上
+    EXPECT_THROW(loader::ensureGraph(*client_, "neo4j"), std::runtime_error);
+    EXPECT_THROW(loader::ensureGraph(*client_, "system"), std::runtime_error);
+    EXPECT_THROW(loader::ensureGraph(*client_, ""), std::runtime_error);
+}
+
+// ==================== schema 语句：before_load / after_load ====================
+
+TEST_F(LoaderE2ETest, BeforeLoadStatementsRunBeforeData) {
+    writeFile("thing.csv", "id\n1\n2\n");
+    writeSchema(R"({
+      "nodes": { "thing": [ { "file": "thing.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "relationships": {},
+      "before_load": [ "MATCH (n:thing) DETACH DELETE n" ]
+    })");
+
+    auto summary = runLoad();
+    // 语句若在数据之后执行，两个顶点会被删掉 → vertices=2 且 count=0
+    EXPECT_NE(summary.find("vertices=2"), std::string::npos) << summary;
+    auto count = querySingle("MATCH (n:thing) RETURN count(*)");
+    ASSERT_TRUE(count.has_value());
+    EXPECT_EQ(*count, "2");
+}
+
+TEST_F(LoaderE2ETest, AfterLoadStatementsRunAfterData) {
+    writeFile("thing.csv", "id\n1\n2\n");
+    writeSchema(R"({
+      "nodes": { "thing": [ { "file": "thing.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "relationships": {},
+      "after_load": [ "MATCH (n:thing) DETACH DELETE n" ]
+    })");
+
+    auto summary = runLoad();
+    // 数据先写、语句后执行 → 全被删掉；若语句在数据前执行则会剩 2 个
+    EXPECT_NE(summary.find("vertices=2"), std::string::npos) << summary;
+    auto count = querySingle("MATCH (n:thing) RETURN count(*)");
+    ASSERT_TRUE(count.has_value());
+    EXPECT_EQ(*count, "0");
+}
+
+TEST_F(LoaderE2ETest, AfterLoadStatementCreatesPublicIndex) {
+    writeFile("thing.csv", "id|name\n1|a\n2|b\n");
+    // 用带分隔符的 raw string：语句里的 `ON (n.name)` 会与默认的 `)"` 终止符冲突
+    writeSchema(R"json({
+      "nodes": { "thing": [ { "file": "thing.csv", "pk": "id",
+                              "columns": { "id": "INT64", "name": "STRING" } } ] },
+      "relationships": {},
+      "after_load": [ "CREATE INDEX idx_thing_name FOR (n:thing) ON (n.name)" ]
+    })json");
+
+    runLoad();
+
+    bool found = false;
+    std::string dump;
+    for (const auto& row : queryAll("default", "SHOW INDEXES")) {
+        dump += "[";
+        for (const auto& cell : row)
+            dump += cell + " | ";
+        dump += "]\n";
+        if (row.empty() || row[0].find("idx_thing_name") == std::string::npos)
+            continue;
+        found = true;
+        ASSERT_GE(row.size(), 5u) << row[0];
+        EXPECT_NE(row[1].find("thing"), std::string::npos) << row[1];
+        EXPECT_NE(row[4].find("PUBLIC"), std::string::npos) << row[4];
+    }
+    EXPECT_TRUE(found) << "after_load 没有创建索引（语句未执行 / 未 drain 流）\nSHOW INDEXES:\n" << dump;
+}
+
+TEST_F(LoaderE2ETest, StatementFailureAbortsWithStatementContext) {
+    writeFile("thing.csv", "id\n1\n");
+    writeSchema(R"({
+      "nodes": { "thing": [ { "file": "thing.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "relationships": {},
+      "after_load": [ "THIS IS NOT CYPHER" ]
+    })");
+
+    try {
+        runLoad();
+        FAIL() << "错误的语句必须让装载失败，而不是被静默忽略";
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("after_load"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("statement 1"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("THIS IS NOT CYPHER"), std::string::npos) << msg;
+    }
+}
+
+TEST_F(LoaderE2ETest, OnErrorIgnoreAllowsRerun) {
+    writeFile("thing.csv", "id|name\n1|a\n");
+    const std::string nodes = R"("nodes": { "thing": [ { "file": "thing.csv", "pk": "id",
+                              "columns": { "id": "INT64", "name": "STRING" } } ] })";
+    const std::string create_index = "CREATE INDEX idx_thing_name FOR (n:thing) ON (n.name)";
+    const std::string rest = ", \"relationships\": {}";
+
+    writeSchema("{" + nodes + rest + ", \"after_load\": [ \"" + create_index + "\" ] }");
+    EXPECT_NO_THROW(runLoad());
+
+    // 同一份 schema 重跑：索引已存在，默认必须失败（不静默吞错误）
+    EXPECT_THROW(runLoad(), std::runtime_error);
+
+    // 显式 on_error=ignore：重跑成功，且索引仍在
+    writeSchema("{" + nodes + rest + ", \"after_load\": [ { \"statement\": \"" + create_index +
+                "\", \"on_error\": \"ignore\" } ] }");
+    EXPECT_NO_THROW(runLoad());
+
+    bool found = false;
+    std::string dump;
+    for (const auto& row : queryAll("default", "SHOW INDEXES")) {
+        dump += "[";
+        for (const auto& cell : row)
+            dump += cell + " | ";
+        dump += "]\n";
+        if (!row.empty() && row[0].find("idx_thing_name") != std::string::npos)
+            found = true;
+    }
+    EXPECT_TRUE(found) << "SHOW INDEXES:\n" << dump;
+}
+
+// ==================== schema 键：nodes 取代 labels ====================
+
+TEST_F(LoaderE2ETest, RejectsLegacyLabelsKey) {
+    writeFile("thing.csv", "id\n1\n");
+    writeSchema(R"({
+      "labels": { "thing": [ { "file": "thing.csv", "pk": "id", "columns": { "id": "INT64" } } ] }
+    })");
+    try {
+        loadConfig();
+        FAIL() << "'labels' 已改名为 'nodes'，不应再被接受";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("'nodes'"), std::string::npos) << e.what();
+    }
+}
+
+TEST_F(LoaderE2ETest, RejectsGraphKeyInSchema) {
+    writeFile("thing.csv", "id\n1\n");
+    writeSchema(R"({
+      "graph": "g2",
+      "nodes": { "thing": [ { "file": "thing.csv", "pk": "id", "columns": { "id": "INT64" } } ] }
+    })");
+    try {
+        loadConfig();
+        FAIL() << "目标图是运行期去向，写进 schema 必须报错而不是被静默忽略";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("--graph"), std::string::npos) << e.what();
     }
 }
 

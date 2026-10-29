@@ -36,12 +36,16 @@ eugraph-server --thrift-port 9090 --data-dir ./eugraph-data --compute-threads 4
 # 1. 启动 server
 eugraph-server -d ./eugraph-data
 
-# 2. 导入数据
-eugraph-loader --data-dir ./social_network-sf0.1-CsvComposite-LongDateFormatter
+# 2. 导入数据（schema 是必填的唯一声明入口；--graph 指定装到哪张图，不存在会自动创建）
+eugraph-loader --schema ./docs/program/design/ldbc-sf01-composite.schema.json \
+    --data-dir ./social_network-sf0.1-CsvComposite-LongDateFormatter \
+    --host 127.0.0.1 --port 9090 --graph default
 
 # 3. 连接 shell
 eugraph-shell --host 127.0.0.1 --port 9090
 ```
+
+loader 会**先连服务器并做一次真实 RPC 握手**，再解析 schema；端口写错会立刻报错。
 
 ## 架构参考
 

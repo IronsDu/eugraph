@@ -261,4 +261,67 @@ TEST_F(CsvReaderTest, RealLdbcLikeLine) {
     EXPECT_EQ(f.rows[0].fields[6], "About Rupert Murdoch, t newer");
 }
 
+// ==================== 预扫描：记录数必须与解析结果一致 ====================
+
+TEST_F(CsvReaderTest, CountRecordsMatchesParsedRowsWithQuotedNewline) {
+    // BOM + CRLF + 引号内换行：物理上是 3 行，但只有 2 条记录。
+    // 朴素地数 '\n' 会得到 3，进度分母随之偏大 —— 这条用例专门区分两种实现。
+    write("\xEF\xBB\xBFid|note\r\n1|\"a\r\nb\"\r\n2|plain\r\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_EQ(eugraph::loader::countCsvRecords(path_, dialect), 2u);
+    auto f = eugraph::loader::readCsvFile(path_, dialect);
+    ASSERT_EQ(f.rows.size(), 2u);
+    EXPECT_EQ(f.rows[0].fields[1], "a\r\nb");
+}
+
+TEST_F(CsvReaderTest, CountsHeaderOnlyFileAsZero) {
+    write("id|name\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_EQ(eugraph::loader::countCsvRecords(path_, dialect), 0u);
+}
+
+TEST_F(CsvReaderTest, CountsEmptyTrailingLinesAsNoRecord) {
+    write("id|name\n1|a\n\n2|b\n\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_EQ(eugraph::loader::countCsvRecords(path_, dialect), 2u);
+    EXPECT_EQ(eugraph::loader::readCsvFile(path_, dialect).rows.size(), 2u);
+}
+
+TEST_F(CsvReaderTest, CountKeepsFieldCountValidation) {
+    // 预扫描必须和解析做同样的校验：畸形文件在装载前就暴露，而不是写了一半数据才发现
+    write("a|b\n1|2|3\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_THROW(eugraph::loader::countCsvRecords(path_, dialect), std::runtime_error);
+}
+
+TEST_F(CsvReaderTest, CountRejectsUnterminatedQuote) {
+    write("a|b\n1|\"unterminated\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_THROW(eugraph::loader::countCsvRecords(path_, dialect), std::runtime_error);
+}
+
+TEST_F(CsvReaderTest, CountFastPathHandlesCrlfAndBlankLines) {
+    // 无引号：走 LineReader 快速计数（物理行 = 记录行）。CRLF 与空行都要与解析结果一致。
+    write("id|name|extra\r\n1|a|x\r\n\r\n2|b|y\r\n\r\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_EQ(eugraph::loader::countCsvRecords(path_, dialect), 2u);
+    EXPECT_EQ(eugraph::loader::readCsvFile(path_, dialect).rows.size(), 2u);
+}
+
+TEST_F(CsvReaderTest, CountFallsBackWhenQuotedFieldsPresent) {
+    // 引号字段（即使不跨行）一律走精确解析：快速路径只处理「确定没有引号」的文件
+    write("id|name\n1|\"a|b\"\n2|\"c\"\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_EQ(eugraph::loader::countCsvRecords(path_, dialect), 2u);
+    auto f = eugraph::loader::readCsvFile(path_, dialect);
+    ASSERT_EQ(f.rows.size(), 2u);
+    EXPECT_EQ(f.rows[0].fields[1], "a|b");
+}
+
+TEST_F(CsvReaderTest, CountFastPathRejectsFieldMismatchOnLaterLine) {
+    write("a|b|c\n1|2|3\n4|5\n");
+    eugraph::loader::CsvDialect dialect;
+    EXPECT_THROW(eugraph::loader::countCsvRecords(path_, dialect), std::runtime_error);
+}
+
 } // namespace

@@ -262,7 +262,7 @@ service EuGraphService {
 
 **连带简化：端点标签不再需要「推导」**。既然边文件由 schema 列出，`src_label`/`dst_label` 就是**必填字段**（端点对象只接受列引用，不再接受 `label`），上一版的四级推导链（配置 → 表头 `(Group)` → 列名 `Person.id` 前缀 → 文件名约定）**整条删除**，§7.3 只剩「schema 里写什么用什么」。
 
-**JSON 结构**：顶层按**图元素**分组（`labels` = 顶点标签 → 文件列表，`relationships` = 边类型 → 文件列表），标签名/边类型名**就是配置的键**，不再需要任何推导。完整可用的 sf0.1 配置见 [ldbc-sf01.schema.json](ldbc-sf01.schema.json)（CsvBasic）与
+**JSON 结构**：顶层按**图元素**分组（`nodes` = 顶点标签 → 文件列表，`relationships` = 边类型 → 文件列表），标签名/边类型名**就是配置的键**，不再需要任何推导。完整可用的 sf0.1 配置见 [ldbc-sf01.schema.json](ldbc-sf01.schema.json)（CsvBasic）与
 [ldbc-sf01-composite.schema.json](ldbc-sf01-composite.schema.json)（CsvComposite，`language` → `speaks`）。
 
 > JSON 无注释语法，所以示例用 `//` 仅作说明；正式文件里用顶层 `"_comment": [...]` 数组承载说明（loader 忽略未知顶层字段与 `_` 前缀字段）。
@@ -273,7 +273,7 @@ service EuGraphService {
   "date_format": "epoch_ms",
 
   // 键 = 顶点标签。值为该标签的文件列表（同一标签可以由多个文件供给）
-  "labels": {
+  "nodes": {
     "person": [
       { "file": "dynamic/person_0_0.csv",
         "pk": "id",
@@ -340,16 +340,18 @@ service EuGraphService {
 
 | 字段 | 含义 |
 |---|---|
-| `labels` | **键 = 顶点标签名**（这就是要创建的标签），值为该标签的**文件列表** |
-| `labels.<label>[].file` | 相对 `--data-dir` 的数据文件路径（必填） |
-| `labels.<label>[].pk` | 可选。该标签的主键：**属性名**（`columns` 的键）或属性名**数组**（复合主键，顺序即元组顺序，§5.4）。不写 = 该标签无主键 |
-| `labels.<label>[].columns` | **属性名 → 列声明**（键 = 属性名；来源列用 `header`，缺省与键同名） |
-| `labels.<label>[].label` | 可选。行的**额外标签**来源：`{"header": "列名", "case": …}`、`{"column": n}` 或 `{"derived": [...]}`；不写则该文件的行只带本键声明的标签 |
+| `nodes` | **键 = 顶点标签名**（这就是要创建的标签），值为该标签的**文件列表** |
+| `nodes.<label>[].file` | 相对 `--data-dir` 的数据文件路径（必填） |
+| `nodes.<label>[].pk` | 可选。该标签的主键：**属性名**（`columns` 的键）或属性名**数组**（复合主键，顺序即元组顺序，§5.4）。不写 = 该标签无主键 |
+| `nodes.<label>[].columns` | **属性名 → 列声明**（键 = 属性名；来源列用 `header`，缺省与键同名） |
+| `nodes.<label>[].label` | 可选。行的**额外标签**来源：`{"header": "列名", "case": …}`、`{"column": n}` 或 `{"derived": [...]}`；不写则该文件的行只带本键声明的标签 |
 | `relationships` | **键 = 边类型名**（这就是要创建的边类型），值为该边类型的**文件列表** |
 | `relationships.<type>[].file` | 数据文件路径（必填） |
 | `relationships.<type>[].src` / `.dst` | 端点列引用，**只有两种写法**：`"列名"`（须在本文件表头中**唯一匹配**）或 `{"index": N}`（0 基列号，列名重复时使用） |
-| `relationships.<type>[].src_label` / `.dst_label` | **必填**：端点顶点标签，必须在 `labels` 中声明过且该标签声明了主键（`label` 不再写在端点对象里） |
-| `relationships.<type>[].columns` | 边属性：规则同 `labels.<label>[].columns` |
+| `relationships.<type>[].src_label` / `.dst_label` | **必填**：端点顶点标签，必须在 `nodes` 中声明过且该标签声明了主键（`label` 不再写在端点对象里） |
+| `relationships.<type>[].columns` | 边属性：规则同 `nodes.<label>[].columns` |
+| `before_load` | 装载**前**执行的 Cypher 语句数组（在 schema 的标签/边类型/主键索引 DDL 之后、任何数据之前）；元素为字符串或 `{"statement": ..., "on_error": "fail"\|"ignore"}`，见 §7.6 |
+| `after_load` | 装载**后**执行的 Cypher 语句数组（点与边全部写完之后），用于声明「装载完成时的状态」（典型是建索引），见 §7.6 |
 | `date_format` | 时间列的解析格式**全局默认**：`epoch_ms`(默认) / `epoch_s` / `epoch_us` / `epoch_ns` / `iso`；文件级可覆盖 |
 | `ignore` | 属于本数据集但**不参与初始装载**的文件（相对 `--data-dir`）；用于 LDBC 的 `updateStream_*.csv` 等更新流，避免被「文件未声明」校验拦下 |
 | `_comment` 及其它 `_` 前缀键 | 忽略（承载说明文字） |
@@ -440,7 +442,7 @@ service EuGraphService {
 ```
 
 - 不提供默认值。缺 `src_label`/`dst_label` 即**启动时报错**（而不是运行期整文件跳过边）——这正是现状最坑的失败模式（[csv_loader.cpp](../../../src/program/loader/csv_loader.cpp#L825-L830) 在找不到 group 时静默跳过整个边文件）；
-- 启动时校验 `src_label`/`dst_label` 必须是 `labels` 里声明过的键，且该标签声明了主键（无主键的标签无法被边引用）；
+- 启动时校验 `src_label`/`dst_label` 必须是 `nodes` 里声明过的键，且该标签声明了主键（无主键的标签无法被边引用）；
 - 端点对象内也可写 `label`（等价写法），例如 `"src": { "Person.id": { "type": "INT64", "label": "person" } }`；两种写法同时给出且不一致则报错。
 
 **生成配置时注意两个坑**（都由语料实测暴露，配置模板已按此处理）：
@@ -456,6 +458,8 @@ service EuGraphService {
 --schema <file.json>                                 # 必填：唯一的声明入口
 --data-dir <dir>                                     # 必填：schema 里 file 的基准目录
 --host 127.0.0.1 --port 9090                         # 连哪个服务端
+--graph <name>                                       # 装到哪张图（默认 default；不存在则自动创建，见 §7.5）
+--progress auto|plain|off                            # 进度显示方式（默认 auto，见 §7.7）
 --batch-size 2000 --rpc-connections 2 --parallel-files 2
 --no-schema-strict                                   # 未声明的列回落到采样推断（默认 strict：报错并列出列名）
 ```
@@ -484,7 +488,7 @@ service EuGraphService {
 {
   "delimiter": "|",              // 全局默认
   "date_format": "epoch_ms",     // 全局默认
-  "labels": {
+  "nodes": {
     "Person": [{
       "file": "dynamic/person_0_0.csv",
       "pk": "id",
@@ -567,7 +571,7 @@ CSV 里的解析失败（`std::stoll("abc")`、非法 ISO）当前会抛 `std::i
 **配置语法**：`pk` 只写**属性名**（`columns` 的键），单列用字符串、复合用数组（数组顺序即元组顺序）。它从哪一列取值、什么类型，**全部由 `columns` 里那条声明决定**，`pk` 不重复写 —— 这消除了「同一列在两处被描述、可能互相矛盾」的一整类配置错误。完整可跑示例见 [composite-key-example.schema.json](composite-key-example.schema.json)（多租户 `(tenantId, userId)` 场景）：
 
 ```jsonc
-"labels": {
+"nodes": {
   "user": [ {
     "file": "users.csv",
     "pk": "userId",                                     // 单列：属性名
@@ -696,7 +700,7 @@ CREATE UNIQUE INDEX idx_place_id_unique FOR (n:place) ON (n.id)
 CREATE UNIQUE INDEX idx_membership_tenantId_userId_unique FOR (n:membership) ON (n.tenantId, n.userId)   // 复合键
 ```
 
-- filter label 就是 **schema 的键**（`labels` 的键），accessor 是主键列，**弱 accessor**（按属性名解析）；
+- filter label 就是 **schema 的键**（`nodes` 的键），accessor 是主键列，**弱 accessor**（按属性名解析）；
 - 一条索引即覆盖该标签的全部顶点：schema 键是主标签，**行级 `label.header` 产生的额外标签不影响覆盖面** —— 例如 `place` 文件里 `:LABEL=city` 的顶点带 `[place, city]` 两个标签，弱 accessor 会从 `vertex_data` 的 `city` 标签属性记录里按属性名取到 `id`，条目照样进 `(n:place)` 这条索引；
 - 因此 `MATCH (n:city {id: 5})` **仍然能命中** `place` 上的索引（规划器按 `city` 标签找不到索引时会回退为标签扫描 + 过滤，结果正确）；想让 `city` 也直接走索引，可另建一条 `(n:city) ON (n.id)`（可选，非必需）。
 - **列顺序 = 主键元组顺序**，与 `pk_prop_ids` 必须一致（顺序错了等值点查就匹配不上，§5.4）。
@@ -753,7 +757,7 @@ bool parseNodeSpec / parseRelationshipSpec(...);                        // --nod
 struct CsvFileInfo {
     std::filesystem::path path;
     std::string label;                 // 顶点标签（取自 schema 的键）或边类型（同上）
-    bool is_vertex = false;            // 由它出现在 labels 还是 relationships 下决定
+    bool is_vertex = false;            // 由它出现在 nodes 还是 relationships 下决定
     // 删除：label 列表推导 / src_label / dst_label / edge_type / stem 约定
 };
 
@@ -780,11 +784,19 @@ struct EdgeFileSpec {
     std::string src_label, dst_label;                // 必填
     std::vector<ColumnSpec> columns;
 };
+struct LoadStatement {
+    std::string cypher;
+    bool ignore_error = false;                       // on_error: "ignore"
+};
 struct SchemaConfig {
-    std::map<std::string, std::vector<NodeFileSpec>> labels;          // 标签 → 文件列表
+    std::string graph = "default";                   // 目标图（运行期，来自 --graph；不存在则由 ensureGraph 创建）
+    std::vector<LoadStatement> before_load;          // DDL 之后、数据之前
+    std::vector<LoadStatement> after_load;           // 点+边全部写完之后
+    std::map<std::string, std::vector<NodeFileSpec>> nodes;          // 标签 → 文件列表
     std::map<std::string, std::vector<EdgeFileSpec>> relationships;   // 边类型 → 文件列表
     CsvDateFormats date_format = CsvDateFormats::EPOCH_MS;
 };
+// 预扫描结果写在 NodeFileSpec/EdgeFileSpec::expected_rows（记录数，不含表头），只作进度分母
 
 // 装载上下文：只有「标签 → 主键属性名」
 struct PkNameMap {
@@ -797,7 +809,7 @@ struct PkNameMap {
 ### 7.2 顶点装载
 
 ```text
-for (label, files) in schema.labels:
+for (label, files) in schema.nodes:
   for file_spec in files:
     每行 → VertexRecord {
       labels     = [label] + extra_label(该行取值)        // label 是 schema 的键；extra_label 即 label.header/derived
@@ -816,7 +828,7 @@ for (label, files) in schema.labels:
 `createLabel` 调用时带上该标签的 `pk_props` —— 就是配置里的属性名数组（按元组顺序；未声明则空），无需任何名字到列的转换。点装载结束后**为每个实际承载主键属性的标签**建唯一索引（§6.3）：
 
 ```text
-targets = schema.labels 的键中「声明了主键」的那些   // 不再需要剔除命名空间标签：主标签就是键本身
+targets = schema.nodes 的键中「声明了主键」的那些   // 不再需要剔除命名空间标签：主标签就是键本身
 for label in targets:
     CREATE UNIQUE INDEX idx_{label}_{pk1}[_{pk2}...]_unique
         FOR (n:{label}) ON (n.{pk1}[, n.{pk2}...])       // 列顺序 = 主键元组顺序
@@ -847,9 +859,9 @@ for each edge file:
 
 | 情况 | 处理 |
 |---|---|
-| `src_label` 在 schema 的 `labels` 里，且声明了主键 | 正常取主键名与类型 |
+| `src_label` 在 schema 的 `nodes` 里，且声明了主键 | 正常取主键名与类型 |
 | `src_label` 未声明主键（标签存在但无 `pk`） | 报错：**该边引用了一个不可解析的标签**（无主键就无法定位顶点）。要么给该标签声明主键，要么修正 `src_label` |
-| `src_label` 不在 schema 的 `labels` 里 | 启动时配置校验即报错（拼错标签名是最常见的配置错误） |
+| `src_label` 不在 schema 的 `nodes` 里 | 启动时配置校验即报错（拼错标签名是最常见的配置错误） |
 | 边两端指向同一列（自指边，如 `person_knows_person`） | 合法，正常处理 |
 
 > 上一版设计里的四级标签推导（配置 → 表头 `(Group)` → 列名 `Person.id` 前缀 → 文件名约定）已全部删除：边文件由 schema 列出，端点标签是配置里的显式字段，不需要也不应该再猜。
@@ -857,6 +869,86 @@ for each edge file:
 ### 7.4 两阶段顺序
 
 保持「先点后边」。差别在于第二阶段不再依赖 loader 内存映射，而依赖服务端索引 —— 这使「点文件分批多次运行」「增量补边」成为可能（后续独立任务，本次不做）。
+
+### 7.5 目标图：`--graph`（不存在则创建）
+
+**问题**：图名原先在 loader 里硬编码成 `"default"`（9 处调用点）。多图支持早已在服务端就绪（`GraphManager` / `CatalogStore`），但 loader 只能装默认图，等于把「装到哪张图」写死在了程序里。
+
+**口径**：图名是**运行期去向**，由命令行 `--graph <name>` 决定，不写进 schema。
+
+| 项 | 处置 |
+|---|---|
+| 默认值 | `default`（与 shell / server 的默认图一致） |
+| 图不存在 | 装载前调用 `createGraph(name)` —— 服务端 `GraphManager::createGraph` **本身幂等**（已存在直接返回），因此「不存在则创建」一次 RPC 即可 |
+| 写入目标 | `createLabel` / `createEdgeLabel` / 主键索引 DDL / `batchInsertVertices` / `batchInsertEdges` / 语句 全部使用该图名（替换 9 处硬编码） |
+| schema 里写 `graph` | **报错**并指向 `--graph`：图名不是数据声明，写进 schema 会被静默忽略、装到 default，是最难查的一类错 |
+| `neo4j` / `system` | **拒绝**：服务端把这两个名字当 default 的别名（`GraphService::resolveGraph`）。拿它去建图会建出一张同名但查询永远走不到的图，写入与查询落到不同图上 |
+
+实现：`SchemaConfig::graph`（默认 `"default"`，由 `loader_main` 从 `--graph` 赋值）+ `ensureGraph(client, graph)`（返回是否新建，日志区分 created / existing）。
+
+### 7.6 装载前 / 装载后的语句（`before_load` / `after_load`）
+
+**问题**：schema 只能表达「装进来的数据」，不能表达「装完之后图应该是什么样」。索引就是装载后状态的一部分（典型：官方 short 查询依赖 `Message.id` 索引），此前只能在装完后进 shell 手工 `CREATE INDEX` —— schema 不完整，且这一步无法 review、无法复现。
+
+**口径**：schema 顶层新增两个语句数组，装载前/后各执行一遍，使 schema 成为「装载后状态」的完整声明。
+
+```jsonc
+"before_load": [
+  "CREATE INDEX idx_Person_name FOR (n:Person) ON (n.name)"
+],
+"after_load": [
+  "CREATE INDEX idx_Message_id FOR (n:Message) ON (n.id)",
+  { "statement": "CREATE INDEX idx_Tag_name FOR (n:Tag) ON (n.name)", "on_error": "ignore" }
+]
+```
+
+| 规则 | 说明 |
+|---|---|
+| 元素形式 | 字符串，或 `{"statement": "...", "on_error": "fail"\|"ignore"}`；默认 `fail`（未知字段、空语句、非法 `on_error` 均启动即报错） |
+| 执行位置 | `before_load` 在 schema 的标签 / 边类型 / 主键索引 DDL **之后**、任何数据写入之前；`after_load` 在点与边全部写完之后 |
+| 为什么 before 在 DDL 之后 | 语句通常要引用 schema 声明的标签（`CREATE INDEX FOR (n:Person)`）；放在 DDL 之前会撞「Label not found」 |
+| 执行方式 | 单连接、按数组顺序；**必须消费整条流**——写语句是惰性执行的，只发起不消费等于没执行，且流上的异常不会从调用处抛出（`subscribeInline` 的结束帧是空 `Try`，必须先判 `hasValue` 再取 `rows()`） |
+| 失败语义 | 默认中止装载，错误含阶段、序号与语句原文；`on_error: "ignore"` 只告警并继续 |
+| 幂等 | 引擎没有 `IF NOT EXISTS`：同一张图上重跑时 `CREATE INDEX` 会失败。典型写法是给该条加 `on_error: "ignore"` |
+
+**顺带修掉的幂等缺陷**：`createPrimaryKeyIndexes` 原先是「照建、捕获错误消息里的 `already exists`」，但服务端把错误翻译成 `TApplicationException` 后消息变成 `Failed to create index (duplicate name?)`，匹配不到就上抛 —— 于是「同一张图上重跑 loader」必定失败，幂等只存在于文档里。改为**先 `SHOW INDEXES` 取已有索引名、按名字跳过**：索引名是确定性生成的，不依赖错误文案（§12.5 记录）。
+
+### 7.7 进度显示
+
+**问题**：装载前不知道要装哪些标签/边、各多少行；装载中只有每个文件装完一行日志，长跑时无法判断「现在到哪了、还要多久」。
+
+**口径**：启动先打印**装载计划**，运行期显示「总进度（固定第一行）+ 每个文件一行（原地刷新、跑马灯）」。
+
+```text
+[loader] Load plan: graph 'default', 8 node label(s) / 15 edge type(s), 327,588 / 1,477,965 rows
+[loader]   nodes  Person            1 file        9,890 rows
+[loader]   edges  KNOWS             1 file      180,623 rows  (Person -> Person)
+...
+[vertices] 3/8 labels  45% [===========>  ···        ] 147,000/327,588 rows 12.3s  avg 11.9k/s  ← 总进度：固定第一行
+  ok Person   person_0_0.csv  9,890 rows (written 9,890)  2.1s                                    ← 装完定格
+  ·· Place    place_0_0.csv  78% [=============>  ···  ] 1,140/1,460  1.8s  633/s                ← 正在装载：原地刷新
+```
+
+| 项 | 设计 |
+|---|---|
+| 预扫描 | `countCsvRecords()` 有两条路径：① **快速路径**用 vendored `third_party/csv/csv.h` 的 `io::LineReader` 按物理行计数（仅当文件里没有引号字符时成立）；② 一旦出现引号字符（可能跨行）或超长行，回落到 `parseCsv` —— 与 `readCsvFile()` **同一个记录切分内核**，保证分母始终等于实际记录数。两条路径都做列数校验（报错文案与解析完全一致），畸形 CSV 在**动 DDL 之前**就暴露。实测 sf0.1 语料 61.6MB / 181 万记录：快速路径 81ms，整文件解析 436ms（约 5.4×） |
+| 渲染 | 进度块整体重绘：擦掉 N 行（`ESC[{N}F` + `ESC[J`）、重画。装完的文件行留在块内（超上限的历史行挤成普通行，进入终端回滚区）；滑块在未填充区往返移动（~10fps，独立 ticker 线程） |
+| 并发 | `--parallel-files>1` 时最多 N 行同时原地刷新；计数与渲染共用一把锁，分项进度按「标签/边类型」聚合 |
+| 非 TTY | 自动退化为逐文件日志行，**不输出任何 ANSI 控制符**；`--progress off` 完全静默（脚本/CI） |
+| 视觉 | 已填充段是 24bit 紫色渐变的 `=`、边界是 `==>` 高亮箭头、未填充区有一段缓慢往返的暗色流光；行尾给「已耗时 / 均速（/ 实时速度）」；交互期隐藏光标，结束与析构时恢复。`NO_COLOR` 或 `TERM=dumb` 自动关闭颜色（字符结构不变），非 TTY 完全不输出转义 |
+| 与日志共存 | 进度写 stderr；装载途中的 INFO 走 `ProgressReporter::info()`（先擦块、再打日志、再重绘），避免日志被动画覆盖；批量 RPC 的「每批一行」日志从 INFO 降为 debug（sf0.1 会产生数千行，足以冲散进度块） |
+
+### 7.8 启动顺序：先验证服务器可达
+
+装载前的顺序是「args → **连接并握手验证** → schema 解析/校验 → 装载」。
+
+- 动机：schema 解析会读文件、做 strict 列校验，之后还要扫数据目录；如果端口写错或服务没起，
+  这些工作全白做，最后才报一个连接失败。
+- **关键事实**：`EuGraphRpcClient::connect()` 只创建 channel（惰性连接），返回 `true` 不代表对端可达
+  —— 实测连 `127.0.0.1:1` 也会返回成功。因此紧接一次真实 RPC（`listGraphs()`）做握手验证：
+  失败即报 `Cannot reach server <host>:<port> (connection N of M): ...` 并退出，
+  多连接（`--rpc-connections`）逐条验证，避免装载中途才暴露某条连接不可用。
+- schema 错误仍然在连接成功之后报（顺序变了、能力不变）。
 
 ---
 
@@ -872,6 +964,10 @@ for each edge file:
 | 时序解析器位置 | `parseDatetimeStr` 等从 `function/scalar` 匿名命名空间**上提到 `common/types`** | 纯搬家 + TCK 回归；属代码组织变更，不是行为变更 |
 | 行级标签 | **语义变化（简化）**：不再抢占主标签，只追加；主标签 = schema 键 | 属性与索引归属统一到 schema 键，消除「属性在 `city` 下、索引建在 `place` 上」的错位 |
 | Loader 命令行 | **行为变化（刻意）**：`--nodes` / `--relationships` 与目录扫描模式**删除**；`--schema`、`--data-dir` 变为必填 | 装载入口唯一（schema 文件），少约 158 行代码与两条并行代码路径；现有调用脚本需改写：`--nodes=Place:City=static/place.csv` ⇒ `"place": [{"file": "static/place.csv", "label": [{"header": "type", "case": "capitalize"}]}]`（[loader.md](../usage/loader.md) 待同步） |
+| schema 顶层键 | **破坏性变更（已确认，不做别名）**：`labels` 改名为 `nodes` | 仓库内 3 份 fixture、集成测试 33 处与两份文档同步改名；老写法只报通用的 `missing object field 'nodes'`，不保留兼容分支 |
+| schema 新增字段 | `before_load` / `after_load`（§7.6）；`graph` **禁止**写进 schema | 既有 schema 不受影响；语句失败即中止，`on_error: "ignore"` 支持重跑 |
+| Loader 参数 | 新增 `--graph` / `--progress` | 默认行为不变（装 default、auto 进度）；图不存在时自动创建（§7.5） |
+| 主键索引幂等 | **修缺陷**：由「捕获错误文案 `already exists`」改为「先查 `SHOW INDEXES`、按索引名跳过」（§7.6 末） | 同一张图上重跑不再在 DDL 阶段失败；该缺陷此前被「每次都装新图」的用法掩盖 |
 | 主键索引的 filter label | **明确**：建在 schema 键（主标签）上 + 弱 accessor，一条覆盖该标签全部顶点（§6.3） | 行级标签不影响覆盖面；`MATCH (n:place {id:X})` 走索引 |
 | 批量导入路径 | **行为变化（修缺陷）**：`batchInsertVertices` 由「不维护索引」改为「维护索引」（§6.2） | 消除「批量导入后索引静默变脏」；该端点只有 loader 使用 |
 | 重复主键 | **语义不变**（first-wins），现状是静默 | 新增告警日志；可选开关 `--on-duplicate-pk`（取值 `error` 或 `skip`） |
@@ -923,6 +1019,14 @@ for each edge file:
 | 集成：主键即普通索引 | 查询侧验证 | 计划中 `MATCH (n:person {id: $id})` 使用该索引 —— 与旧设计（主键表不接规划器）相比这是新增能力 |
 | 集成：类型声明 | sf0.1 + schema JSON 装载后读回类型 | `email` = STRING_ARRAY、`length` = INT64、`birthday` = INT64（按配置而非推断） |
 | 回归：TCK | 时序解析器搬家后 | TCK 时序用例全绿，报告与基线一致 |
+| 集成：目标图（§7.5） | `graph="g2"`（装载前不存在），装载后查 g2 | g2 被创建（`listGraphs` 可见）且点数 = CSV 行数；若图名仍写死 `default`，g2 的查询会因标签不存在而失败 |
+| 集成：`--graph` 别名 | `ensureGraph(client, "neo4j")` / `"system"` / `""` | 三者都报错；缺陷存在时会建出一张查询走不到的同名图 |
+| 集成：语句顺序（§7.6） | `before_load` 与 `after_load` 各写 `MATCH (n:thing) DETACH DELETE n` | before → 装载后 count = N（语句先于数据，删不到东西）；after → count = 0（数据先写、语句后删）。顺序反了会得到相反数字 |
+| 集成：语句建索引 | `after_load: ["CREATE INDEX idx_thing_name FOR (n:thing) ON (n.name)"]` | `SHOW INDEXES` 出现该索引且 state = `PUBLIC`；不执行语句时该行不存在（也覆盖「流必须被 drain」） |
+| 集成：语句失败 | `after_load: ["THIS IS NOT CYPHER"]` | 装载失败，错误含阶段名、`statement 1` 与语句原文 |
+| 集成：重跑幂等（§7.6 末） | 同一 schema 连跑两次；第三次给该条加 `on_error: "ignore"` | 第二次必须失败（不能静默吞错误）；第三次成功且索引仍在；**主键索引不再导致重跑失败**（旧实现匹配 `already exists` 文案，翻译后匹配不到） |
+| 单元：记录数预扫描 | BOM + CRLF + 引号内换行的文件 | `countCsvRecords` = 2（物理行 3），且等于 `readCsvFile` 的行数；列数不符 / 引号未闭合同样抛错 |
+| 单元：进度与计划表 | 计划表格式、并行分项聚合、非 TTY 无 ANSI、OFF 静默 | 见 [test_loader_progress.cpp](../../../tests/test_loader_progress.cpp)：漏标签/漏总数、丢计数、输出控制符、OFF 仍输出，都会失败 |
 | 回归：neo4j 对照 | 按 [ldbc-snb-sf0.1-comparison.md](../../benchmark/ldbc-snb-sf0.1-comparison.md) 跑 complex-1..14 | 与本方案前逐行一致（装载语义不得改变查询结果）；标签名按配置实际写入的值核对（§6.4） |
 
 ---
@@ -934,21 +1038,28 @@ for each edge file:
 3. **批量写入维护索引（机制改造）**：索引条目收集/校验逻辑从 `query/physical_plan/operator` 下沉到 `storage/data`，`batchInsertVertices` / `batchInsertEdges` 改签名带 `label_defs` 并在同事务写索引条目；query 算子改调新位置 + 全量回归（这一步独立于 loader，可单独验证）；
 4. **元数据**：`LabelDef.pk_prop_ids`（**有序**，复合主键即多元素）、`meta_codec` 编解码（直接改格式，不做兼容分支）、`createLabel` 的主键声明与「配套唯一索引按同序覆盖」校验 + 单元测试；
 5. **Thrift 协议 + 服务端解析**：`PkKey` / `PkRef`（`keys` 列表天然支持复合键）/ 返回类型变更、`GraphService` 两条路径改为走索引（**按元组**预检 + `scanVerticesByIndexId`）+ `test_rpc_integration`；
-6. **Loader 改造（单一入口）**：删除 `--nodes`/`--relationships` 与目录扫描（约 158 行）、`LoadedIdMaps` → `PkNameMap`、顶点/边装载按 `labels`/`relationships` 分组改写（含**复合主键的元组取值与索引 DDL**、行级标签只追加不抢主标签）、`createUniqueIdIndexes` 改为「按 schema 键 + 声明的 pk 列」并**移到点装载之前**（§6.3）+ 集成测试；
+6. **Loader 改造（单一入口）**：删除 `--nodes`/`--relationships` 与目录扫描（约 158 行）、`LoadedIdMaps` → `PkNameMap`、顶点/边装载按 `nodes`/`relationships` 分组改写（含**复合主键的元组取值与索引 DDL**、行级标签只追加不抢主标签）、`createUniqueIdIndexes` 改为「按 schema 键 + 声明的 pk 列」并**移到点装载之前**（§6.3）+ 集成测试；
 7. **JSON schema + 类型配置**：schema 解析并并入 `csv_loader.{hpp,cpp}`（未单独拆 `schema_config.*`）、分隔符与时间格式的**全局默认 + 文件级覆盖**、`undeclared_files`、`--no-schema-strict` 与 strict/推断两种语义、时序类型接入；用交付配置 `social_network-sf0.1-CsvComposite-LongDateFormatter/loader-schema.json` 做 sf0.1 全量装载验收；
 8. **文档同步**：本文件的 §6/§7/§8 随实现更新、[loader.md](../usage/loader.md) 补配置说明、[rpc-service.md](../../service/rpc-service.md) 更新批量端点、[data-model.md](../../architecture/data-model.md) 补主键语义；
-9. **基准复测**：SF0.1 装载耗时 + 查询结果对照（§9 判据）。
+9. **基准复测**：SF0.1 装载耗时 + 查询结果对照（§9 判据）；
+10. **本轮增量（目标图 / 语句 / 进度，§7.5–§7.7）**：① `csv_reader` 抽出记录切分内核并新增 `countCsvRecords`（与解析同规则）；② 新增 `loader_progress.{hpp,cpp}`（计划表 + 原地刷新进度块 + 非 TTY 退化）；③ `SchemaConfig` 增 `graph` / `before_load` / `after_load`，schema 键 `labels` → `nodes`；④ `loadAll()` 统一管线（main 与集成测试共用同一执行顺序）；⑤ 修主键索引重跑幂等；⑥ 启动顺序改为「先连服务器并做一次真实 RPC 握手」；⑦ 进度视觉对齐参考实现（渐变 `=` + `==>` + 耗时/均速/实时速度 + 光标管理）；⑧ 文档与 fixture schema 同步。
 
 ---
 
 ## 12. 当前限制
 
-### 12.1 loader 不为派生标签与二级属性建索引
+### 12.1 loader 不**推断**派生标签与二级属性上的索引
 
-loader 只为 schema 声明的主键建 `UNIQUE` 索引；查询里对**派生标签**（如 `Message`，由 `Post`/`Comment`
-带出）或**二级属性**（非主键）建索引需要显式 `CREATE INDEX`（回填由服务端完成）。
-官方 `short` 系列依赖 `Person.id`（loader 已建）与 `Message.id`（需显式建）——
-不建索引时这些查询退化为全表扫描。
+loader 只为 schema 声明的主键建 `UNIQUE` 索引；对**派生标签**（如 `Message`，由 `Post`/`Comment`
+带出）或**二级属性**（非主键）上的索引，loader 不会猜 —— 但可以在 schema 里用 `after_load` 显式声明（§7.6）：
+
+```jsonc
+"after_load": [ { "statement": "CREATE INDEX idx_Message_id FOR (n:Message) ON (n.id)", "on_error": "ignore" } ]
+```
+
+`ldbc-sf01.schema.json` / `ldbc-sf01-composite.schema.json` 已经带上这一条（官方 `short` 系列依赖
+`Person.id` 与 `Message.id`；不建 `Message.id` 这些查询会退化为全表扫描）。
+回填由服务端完成，`CREATE INDEX` 返回前已置 `PUBLIC`（§12.3）。
 
 ### 12.2 不支持 neo4j 的 `CREATE CONSTRAINT` 语法
 
@@ -972,3 +1083,14 @@ CREATE CONSTRAINT ON (n:Person) ASSERT n.id IS UNIQUE;
 
 仍待补：① 回填**分块提交**（单事务数十万条写入是缓存/更新链表的规模风险）；
 ② 置 `PUBLIC` 前校验条目数（目标集合非空而条目为 0 ⇒ 拒绝上线）。
+
+### 12.4 语句不支持 `IF NOT EXISTS`
+
+引擎没有 `CREATE INDEX IF NOT EXISTS`，所以 `after_load` 里的 `CREATE INDEX` 在**同一张图上重跑**时会失败。
+现在的做法是给该条声明 `on_error: "ignore"`（§7.6）；`--graph` 指向新图时不存在该问题。
+「让 DDL 本身幂等」需要在语法 / 语义层另做决定（会改变 `CREATE INDEX` 对已存在索引的返回值），不在本轮范围。
+
+### 12.5 装载期进度是「已处理行数」
+
+进度按**处理过的记录数**推进（批大小 × 已提交批数），完成行再给出「写入 / 跳过」两个口径
+（主键重复 first-wins、端点未解析都会让写入数小于处理数）。因此进度 100% 不等于「写入数 = 行数」。
