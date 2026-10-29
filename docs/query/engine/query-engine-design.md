@@ -564,6 +564,12 @@ class PhysicalOperator {
   变成 `BoundLiteral`，`bind_expression` 对 `+` / `-` / `*` 的 int64/double 字面量做常量折叠
   （溢出、除零、字符串拼接不折叠，保持运行时语义）。这让 update-7 的
   `Message.id = $replyToPostId + $replyToCommentId + 1` 走 `IndexScan`，而不是 286k 全扫描。
+- `Unwind(list) + Filter(CrossProduct(..., LabelScan))` 上形如
+  `right_var.prop = unwind_var` 的等值条件，会改写成 `Apply(left=Unwind,
+  right=IndexScanValues)` 的**逐行索引探测**：每个 unwind 行只 seek 一次，而不是扫全 label。
+  `IndexScanValues` 对重复 key 是逐值拼接（不去重），`Apply` 丢弃无匹配行，与
+  `CrossProduct + Filter` 的多重性/空匹配语义一致。LDBC update 的
+  `UNWIND $tagIds AS tagId MATCH (t:Tag {id: tagId})` 因此不再为每个 tag 扫 16,080 行。
 
 可索引谓词提取通过 `collectBoundConditions()` / `tryExtractBoundCondition()`，支持等值和范围条件。
 

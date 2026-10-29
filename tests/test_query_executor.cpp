@@ -1772,6 +1772,33 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+/// `UNWIND list AS key MATCH (v:Label {prop: key})` 不能退化成
+/// CrossProduct + LabelScan（LDBC update 的 Tag 循环会为每个 tag 扫 16k 行），
+/// 应改写成 Apply + IndexScanValues 的逐行索引探测。
+TEST_F(QueryExecutorTest, UnwindMatchPlansCorrelatedIndexProbe) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {id: 7}), (b:Person {id: 8})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_probe FOR (n:Person) ON (n.id)").error.empty());
+
+    const std::string query = "UNWIND [7, 8] AS pid MATCH (p:Person {id: pid}) RETURN p.id AS id ORDER BY id";
+    const std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty());
+    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
+    EXPECT_NE(plan_text.find("Apply"), std::string::npos) << plan_text;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 7);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 8);
+
+    // IndexScanValues concatenates per-value matches: duplicate keys must not
+    // be deduplicated (CrossProduct + Filter preserves the same multiplicity).
+    auto duplicated = execSync(*executor_, "UNWIND [7, 7] AS pid MATCH (p:Person {id: pid}) RETURN count(*) AS n");
+    ASSERT_TRUE(duplicated.error.empty()) << duplicated.error;
+    ASSERT_EQ(duplicated.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(duplicated.rows[0][0]), 2);
+}
+
 /// update-7 的 `Message.id = $a + $b + 1`：参数在 Binder 里已是 literal，
 /// 再把 literal 算术折叠成单个 literal 后，索引选择才能看到常量并走 IndexScan。
 TEST_F(QueryExecutorTest, ParameterArithmeticFoldsIntoIndexSeek) {

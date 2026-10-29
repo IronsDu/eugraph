@@ -35,8 +35,12 @@ public:
     std::string toString() const override {
         return "Apply";
     }
-    void setValueSink(IndexScanValuesPhysicalOp* sink) {
+    /// `scalar_correlation` wraps the single correlation value into a
+    /// one-element list before feeding an IndexScanValues sink (per-row index
+    /// probe); the default expects a list-valued correlation column.
+    void setValueSink(IndexScanValuesPhysicalOp* sink, bool scalar_correlation = false) {
         value_sink_ = sink;
+        scalar_correlation_ = scalar_correlation;
     }
     std::vector<const PhysicalOperator*> children() const override {
         return {left_.get(), right_.get()};
@@ -47,6 +51,7 @@ private:
     std::unique_ptr<PhysicalOperator> right_;
     CorrelatedSourcePhysicalOp* correlated_source_;
     IndexScanValuesPhysicalOp* value_sink_ = nullptr;
+    bool scalar_correlation_ = false;
     std::vector<uint32_t> left_correlation_cols_;
     std::vector<binder::BoundType> right_output_types_;
 };

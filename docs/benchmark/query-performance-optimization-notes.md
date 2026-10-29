@@ -541,3 +541,38 @@ base 逐条一致，c5/c9/c14 与 neo4j 逐行一致（id 的 int/string 表示�
 **验证**：新增 `QueryExecutorTest.ParameterArithmeticFoldsIntoIndexSeek`
 （断言 EXPLAIN 含 `IndexScan` 且结果正确）；Release `query_executor_tests`
 596/596；全量 TCK 3905/3957 scenarios，0 failed。
+
+### 8.14 UNWIND + MATCH 的逐行索引探测（2026-10-29）
+
+update-7 的常量折叠解决了 `Message.id` 的等值索引；update-4/6/7 剩余的 20–29 ms 里，
+op-trace 显示 `UNWIND $tagIds AS tagId MATCH (t:Tag {id: tagId})` 是
+`CrossProduct + LabelScan(Tag)`：2 个 tag 触发 32,160 行（16,080 × 2），Tag 的 id coalesce
+占了 12.6–19.1 ms（update-4 最高）。
+
+**修复**：planner 新增 `tryPlanCorrelatedIndexProbe`。识别
+`BoundUnwindOp + BoundBinaryJoinOp + Filter(right.prop = unwind_var)`，且 right 标记为
+单 label、该 label 上有单属性 PUBLIC 索引时：
+
+```
+Apply(left=Unwind, right=IndexScanValues(label, index))
+  ↑ 每个 left 行注入一个标量 key（Apply 新增 scalar correlation 模式）
+```
+
+- 每个 unwind 行只做一次索引 seek；`IndexScanValues` 对重复 key 逐值拼接（不丢重复），
+  `Apply` 丢无匹配行——与 `CrossProduct + Filter` 语义一致；
+- 不要求 list 是常量：动态 list 也能逐行探测；
+- 索引不是单属性 / label 多标签 / 右侧不是直接 LabelScan 时保持原计划。
+
+**结果（E→N→N→E，3 轮 min）**：
+
+| | eugraph | neo4j | 比值 |
+|---|---:|---:|---:|
+| update-1 | 26.00 ms | 31.25 ms | 0.83× |
+| update-4 | 7.16 ms | 16.95 ms | 0.42× |
+| update-6 | 7.58 ms | 17.47 ms | 0.43× |
+| update-7 | 7.44 ms | 17.80 ms | 0.42× |
+| update-2/3/5/8 | 6.8–7.0 ms | 7.8–8.1 ms | 0.85–0.90× |
+
+**验证**：新增 `QueryExecutorTest.UnwindMatchPlansCorrelatedIndexProbe`
+（EXPLAIN 必须含 `Apply` + `IndexScanValues`，重复 key 计数为 2）；
+`query_executor_tests` 597/597；全量 TCK 3905/3957 scenarios，0 failed。
