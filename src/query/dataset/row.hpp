@@ -281,6 +281,31 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
         return hasNull ? std::optional<bool>(std::nullopt) : std::optional<bool>(true);
     }
 
+    // Graph entities compare by identity, even when one side is still a topology
+    // reference (VertexRef / EdgeKey) and the other a materialized object. Cypher
+    // node/relationship equality is identity equality, and the two representations
+    // of the same entity must not answer "different" just because the variant
+    // alternatives differ. This is what lets `x IN collect(y)` keep working when
+    // the list was materialized but x is still a reference -- and what lets the
+    // planner avoid materializing an object only a membership test needs.
+    {
+        auto entity = [](const Value& v) -> std::pair<int, uint64_t> {
+            if (const auto* r = std::get_if<VertexRef>(&v))
+                return {1, r->id};
+            if (const auto* p = std::get_if<VertexValuePtr>(&v))
+                return {1, (*p)->id};
+            if (const auto* k = std::get_if<EdgeKey>(&v))
+                return {2, k->id};
+            if (const auto* p = std::get_if<EdgeValuePtr>(&v))
+                return {2, (*p)->id};
+            return {0, 0};
+        };
+        const auto [ka, ia] = entity(a);
+        const auto [kb, ib] = entity(b);
+        if (ka != 0 && ka == kb)
+            return ia == ib;
+    }
+
     // Vertices, edges and bytes. The variant holds handles, so the built-in
     // comparison below would compare pointers rather than payloads; reach through
     // and keep each type's own semantics (entities by identity, bytes by content).

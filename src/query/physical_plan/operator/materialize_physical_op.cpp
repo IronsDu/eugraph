@@ -41,7 +41,7 @@ folly::coro::AsyncGenerator<DataChunk> MaterializePhysicalOp::executeChunk() {
         co_return;
     }
     if (disabled_) {
-        auto child_gen = cancellable(child_->executeChunk());
+        auto child_gen = cancellable(child_->executeChunkTraced());
         while (auto chunk = co_await child_gen.next())
             co_yield std::move(*chunk);
         co_return;
@@ -49,7 +49,7 @@ folly::coro::AsyncGenerator<DataChunk> MaterializePhysicalOp::executeChunk() {
 
     // First execution: drain the child once. If it is too large, drop the
     // cache and re-run the (read-only) child as a plain stream.
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     while (auto chunk = co_await child_gen.next()) {
         if (chunk->count == 0)
             continue;
@@ -69,7 +69,7 @@ folly::coro::AsyncGenerator<DataChunk> MaterializePhysicalOp::executeChunk() {
     }
 
     if (disabled_) {
-        auto retry = cancellable(child_->executeChunk());
+        auto retry = cancellable(child_->executeChunkTraced());
         while (auto chunk = co_await retry.next())
             co_yield std::move(*chunk);
         co_return;

@@ -259,7 +259,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
 
     // Phase 2: per-row creation
     if (child_) {
-        auto child_gen = cancellable(child_->executeChunk());
+        auto child_gen = cancellable(child_->executeChunkTraced());
         while (auto chunk = co_await child_gen.next()) {
             // Buffer all created rows for this input chunk and yield only
             // after the whole chunk is processed. Downstream operators may

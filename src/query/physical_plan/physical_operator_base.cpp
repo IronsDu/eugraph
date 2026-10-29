@@ -1,11 +1,20 @@
 #include "query/physical_plan/physical_operator_base.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <ctime>
+#include <thread>
 
 namespace eugraph {
 namespace compute {
 
 namespace {
+
+uint64_t threadCpuNs() {
+    timespec ts{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
 
 /// Column kind implied by a runtime Value. `nullptr` means "no opinion" (NULL or a
 /// kind this helper does not classify), which callers treat as "keep looking".
@@ -101,6 +110,66 @@ folly::coro::AsyncGenerator<DataChunk> wrapRowsToChunkGenerator(std::vector<Row>
     chunk.sel = SelectionVector::identity(chunk.count);
 
     co_yield std::move(chunk);
+}
+
+folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunkTraced() {
+    if (!query_ctx_ || !query_ctx_->opTraceEnabled())
+        return executeChunk();
+    return executeChunkTracedImpl();
+}
+
+folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunkTracedImpl() {
+    auto* previous = tls_current_op_trace;
+    if (!trace_record_)
+        trace_record_ = query_ctx_->addOpTrace(toString(), tls_current_op_trace);
+    tls_current_op_trace = trace_record_.get();
+    struct RestoreCurrentTrace {
+        OpTraceRecord* previous;
+        ~RestoreCurrentTrace() {
+            tls_current_op_trace = previous;
+        }
+    } restore{previous};
+
+    auto start_wall = std::chrono::steady_clock::now();
+    auto start_thread = std::this_thread::get_id();
+    auto start_cpu = threadCpuNs();
+    auto child_gen = executeChunk();
+    while (true) {
+        auto chunk = co_await child_gen.next();
+        const auto now_wall = std::chrono::steady_clock::now();
+        trace_record_->wall_ns +=
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now_wall - start_wall).count());
+        // CLOCK_THREAD_CPUTIME_ID is per-thread: after a cross-thread resume the
+        // difference can be negative, which used to wrap the uint64 counter into
+        // an absurd inclusive time. Only account CPU when the coroutine resumed on
+        // the thread that started the interval.
+        const auto now_thread = std::this_thread::get_id();
+        if (now_thread == start_thread) {
+            const auto now_cpu = threadCpuNs();
+            if (now_cpu >= start_cpu)
+                trace_record_->cpu_ns += now_cpu - start_cpu;
+        }
+        start_wall = now_wall;
+        start_thread = now_thread;
+        start_cpu = threadCpuNs();
+        if (!chunk.has_value())
+            break;
+        ++trace_record_->chunks;
+        trace_record_->rows += chunk->count;
+        // The caller (and any sibling it pulls) runs while this generator is
+        // suspended. Restore the caller's record before yielding, otherwise a
+        // sibling's record is attached to this operator -- which made LeftJoin's
+        // right sub-plan show up under its left child and inflated the join's
+        // "self" time by the whole right side.
+        tls_current_op_trace = previous;
+        co_yield std::move(*chunk);
+        tls_current_op_trace = trace_record_.get();
+        // Do not charge time spent by downstream operators after this yield to
+        // this operator: reset wall/CPU/thread when the generator is resumed.
+        start_wall = std::chrono::steady_clock::now();
+        start_thread = std::this_thread::get_id();
+        start_cpu = threadCpuNs();
+    }
 }
 
 } // namespace compute

@@ -45,7 +45,7 @@ folly::coro::AsyncGenerator<DataChunk> SkipPhysicalOp::executeChunk() {
         remaining = evaluateSkip(*expr_, eval_ctx_);
     }
 
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();

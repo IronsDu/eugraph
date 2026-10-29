@@ -79,6 +79,12 @@ seek 约 44 ms，剩余主要是 53k message 的扫描/排序/输出。
 
 ## 优先级
 
-1. c14 PC 融合 + 锚点下推（当前 119.5 ms，目标 <100 ms）；
-2. c5 vertex-list semi-join（当前 246.5 ms，目标 <150 ms）；
-3. c9 日期索引/反向 join（当前 177.1 ms）。
+2026-10-29 更新：c5/c9 的“过滤前物化”已由 Filter 边界延迟物化消除
+（c5 242→159 ms，c9 177→109 ms，见
+[query-performance-optimization-notes.md](../benchmark/query-performance-optimization-notes.md#812-2026-10-29-第二轮filter-边界物化--实体引用不物化)）。
+剩余差距在 per-edge / per-row 成本：
+
+1. c5：Filter 前仍是 89,415 条 CONTAINER_OF + 89,415 条 HAS_CREATOR 的 Expand（约 126 ms CPU）。
+   下一步做 `dst IN list` 下推进 Expand，或从 174 个 friend 反向展开后与 forum 半连接；
+2. c9：53k 条 HAS_CREATOR 边 + creationDate coalesce（id 预取已消除）；
+3. c14：两路 PC 各约 57 ms，anchor 已基本下推，剩余是 per-edge Expand/PE，需单独拆解。

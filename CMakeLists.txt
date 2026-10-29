@@ -603,6 +603,11 @@ if(EUGRAPH_BUILD_TESTS)
              COMMAND query_executor_tests --gtest_filter=QueryExecutorTest.ShortestPathEndpointPropertiesTriggerPrefetch --gtest_brief=1)
     set_tests_properties(io_trace_logging PROPERTIES ENVIRONMENT "EUGRAPH_IO_TRACE=1")
 
+    # Exercise the opt-in [op-trace] operator timing/row-count path.
+    add_test(NAME op_trace_logging
+             COMMAND query_executor_tests --gtest_filter=QueryExecutorTest.ShortestPathEndpointPropertiesTriggerPrefetch --gtest_brief=1)
+    set_tests_properties(op_trace_logging PROPERTIES ENVIRONMENT "EUGRAPH_OP_TRACE=1")
+
     # Typed expression evaluator tests
     add_executable(evaluator_typed_tests
         tests/test_evaluator_typed.cpp

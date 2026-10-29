@@ -519,6 +519,11 @@ class PhysicalOperator {
 
 **Expand**：对输入的每一行调用 `scanEdges(src_id, dir, label_filter, edge_scratch_)`，每条边产生一行输出。`edge_scratch_` 是算子的成员 vector，跨行/跨批复用；generator 每批最多 4096 条，内存不随 degree 线性增长。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](projection-extract-design.md)）。
 
+> 2026-10-29：批量路径现在按输入 chunk 预解析一次 `row_src_ids`，并直接把
+> `VertexRef` / `EdgeKey` 写入输出 `ColumnBuffer` 的 typed data，不再逐边经过
+> `Value` + `Column::setValue`。c5/c9/c14 本地约再降 5–8%。
+
+
 **Filter**：`VectorizedEvaluator` 求值 BoundExpression 谓词，DICTIONARY 选择向量标记有效行。
 
 **Project**：`VectorizedEvaluator` 求值 BoundExpression 投影项，写入新 FLAT 列。
@@ -746,7 +751,9 @@ using Schema = vector<string>;   // 列名列表
 - **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [ProjectionExtract 按需属性物化设计](projection-extract-design.md) PathElementPropertyRead 小节）。终点 dst 的属性由 `ProjectionExtractPhysicalOp` 按需加载。
 - **多 MATCH + VarLenExpand 未实现**：当前不支持多条 MATCH 子句中包含变长邻接的组合（属于多 MATCH + JOIN 的通用待实现项）。
 
-## 延迟物化（LateMaterialize）边界约束
+## 物化边界：LIMIT 与 Filter
+
+### LIMIT 边界（LateMaterialize）
 
 `LateMaterializePhysicalOp` 只能放在 **LIMIT 之后**，并且被延迟的列不得被 LIMIT
 之前的算子（Sort / Filter / Aggregate / Join 条件）读取。
@@ -759,11 +766,76 @@ using Schema = vector<string>;   // 列名列表
   （旧 161.7 ms 作废，修复后 187.2 ms）。详见
   [ldbc-c5-c9-plan-analysis.md](../ldbc-c5-c9-plan-analysis.md)。
 
+### Filter 边界（2026-10-29，已落地）
+
+Filter 不增加行数，也不改写 PE 所依赖的 passthrough（VertexRef / EdgeKey）列。
+因此**谓词不读、且 Filter 子树内没有任何算子读**的 PE 输出列可以在 Filter 之后再物化：
+
+- `computeFilterDeferredSlots` = `extraction_info` 的 PE 输出 slot
+  − 谓词引用的 slot − 子树 `collectOpSlots` 引用的 slot − 外层已延迟的 slot；
+  比较一律走 `sameBinding`（raw slot 或其 canonical slot 匹配）。
+- 规划子树时 `ctx.deferred_slots = 外层 ∪ 本次`；Filter 包装完成后只对“本次”调用
+  `materializeDeferred(..., as_late_materialize=false)`，再恢复外层集合。
+- **物化发生在父算子（Sort / Join / Aggregate）规划之前**，父算子按追加后的 layout 编译。
+  这是与 2026-10-25 失败尝试的关键区别：那次把 materialize 放在 Sort 下方，但 Sort 仍按
+  未追加列的旧 layout 编译，sort key 是占位值，c9 的 Top-20 错误。
+- 嵌套边界只上移自己新增的集合；外层已延迟的列不会被内层提前物化。
+- Join 的 correlation slot（`BoundSemiJoinOp` / `BoundLeftJoinOp` /
+  `BoundPatternComprehensionApplyOp`）由 `collectOpSlots` 收集，绝不延迟；join 在解析
+  correlation slot 前调用 `ensureSlotLayout`，因为延迟 PE 可能让 Expand / VarLenExpand
+  这类“规划期不发布 layout”的孩子保持空 layout（否则会报
+  `SemiJoin: left slot N not found in left slot layout (size 0)`，c10 曾复现）。
+- 相关子计划不从外层继承延迟集合：规划 `PatternComprehensionApply` / `SemiJoin` /
+  `LeftJoin` 的 right 子计划时先清空 `ctx.deferred_slots`（左/外侧流仍按外层集合延迟）。
+- **含 PatternComprehensionApply 的语句整体关闭 Filter 边界**
+  （`ctx.defer_disabled_by_pc`），且 PC 的 right 子计划内（`correlated_subplan_depth>0`）
+  也关闭：PC 的 list/unwind/pattern 管线会消费一种“没有任何 slot 引用命名”的表示
+  （例如 `collect(post)` 里已构造的 post），把该构造移到 Filter 之上会改变 PC 看到的
+  值。2026-10-29 的 `ListComprehensionPatternPredicate*` 两个回退就是该形态；
+  左连接/SemiJoin 的 right 子计划只清空外层集合，**不**关闭其内部 Filter 边界
+  （LDBC c5 的收益正来自 LeftJoin right 内部的 `friend IN friends` Filter 边界）。
+- **Project/Aggregate 直接位于 Filter 之上且转发整个实体**时也不做边界：Project 输出的是
+  改名/重槽后的 source slot，延迟的 Construct 列在 Filter 之上按原 slot 追加，别名读取仍是
+  NULL。openCypher TCK 的 `WITH other WHERE r IS NULL` / TriadicSelection1 回归即此形态
+  （`ctx.suppress_filter_defer`，2026-10-29 修复）。只转发标量/属性表达式的 Project 不受
+  影响（`PropertyExtractPlanTest.EdgePropertyExtract` 仍保留 Filter 上方的 PE）。
+
+实测（本地 sf0.1，4 compute / 4 storage IO）：c9 181.5→120.7 ms，c5 240.1→179.8 ms；
+21 条 LDBC 读查询结果哈希与基线逐条一致。
+
+### 实体引用不物化（2026-10-29，已落地）
+
+Cypher 的节点/关系相等是**身份相等**。`valueEquals` 现在把
+`VertexRef` / `VertexValuePtr`、`EdgeKey` / `EdgeValuePtr` 都折叠到 id 再比较，
+因此 `x IN collect(y)` 在 list 已物化、x 仍是引用时也能正确命中。
+
+在此基础上：
+
+- `rewriteRefCompatiblePredicates` 在 requirements collection 之前把
+  `x IN list` 的 `x` 降到 source `VERTEX_REF` / `EDGE_KEY` 列，membership-only 的变量
+  不再产生 Construct 列；
+- `rewriteInternalEdgeUniqueness` 把 `__edge_unique` 的参数改绑 source `EdgeKey`
+  （`edgeUniqueScalar` 接受 EdgeKey，只用 edge id），关系唯一性不再要求构造整条边。
+
+两者都只改变“从哪一列读”，不改变谓词结果；c5 的右子计划因此从
+“89,415 行先构造 friend/forum/edge”变成“Expand + Filter，262 行再物化”。
+
+### 延迟槽必须按 canonical slot 识别
+
+`computeDeferredSlots` 从 RETURN Project 收集的是 canonical slot，而 `PEPlan` 里
+`prop_slot_ids` / `coalesce_vertices` / `object_slot_id` 可能仍持有别名链上的原始 slot。
+`buildDeferredPlans` 和 `dispatchProjectionExtract` 必须用
+`optimizer::getCanonicalSlot(ctx.alias_map, slot)` 做二次匹配；只做裸
+`deferred.contains(slot)` 会把本应延迟的列继续在 LIMIT 前物化。
+2026-10-28 修复后本地 c5/c9/c14 分别约 276→225ms、184→160ms、138→119ms，
+21 条 LDBC 读查询结果哈希与修复前逐条一致。
+
 新增任何物化边界优化，必须同时满足：
 
 1. 行结果与 neo4j 逐行一致（不能只与原路径比较，原路径可能同错）；
-2. 被延迟列的所有下游消费者都在 LIMIT 之后；
-3. EXPLAIN 中不得出现 `Sort` 下方的 `LateMaterialize(after LIMIT)`。
+2. 被延迟列的所有下游消费者都在边界之后，且不在边界之前的 Filter / Sort / Join 条件里；
+3. LIMIT 边界之外不得把 `LateMaterialize(after LIMIT)` 放在 Sort 下方；Filter 边界必须用
+   普通 PE，并在父算子规划之前把列追加进 layout。
 
 ## GROUP BY / DISTINCT 的 null 容器等价
 

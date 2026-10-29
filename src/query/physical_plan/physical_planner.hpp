@@ -93,6 +93,25 @@ struct PlanContext {
     /// LateMaterializePhysicalOp after the limit. Cleared immediately after
     /// the child is planned.
     std::optional<std::unordered_set<binder::SlotId>> deferred_slots;
+    /// > 0 while planning a PatternComprehensionApply's right sub-plan.
+    /// Filters in that scope must not apply the filter-boundary deferral: the
+    /// PC pipeline decides its own row representations (a pattern endpoint may
+    /// need a materialized vertex even when no expression names its slot), and
+    /// deferring a PE column there silently changes what the pattern matches.
+    /// LeftJoin/SemiJoin right sides only drop the outer deferred set; their
+    /// inner filters may still defer (LDBC c5 relies on it).
+    int correlated_subplan_depth = 0;
+    /// Statements with a PatternComprehensionApply skip the filter-boundary
+    /// deferral entirely: a PC's linked list/unwind pipeline can consume a
+    /// representation (e.g. the constructed vertex collected into `posts`)
+    /// that no slot reference below the boundary names, so moving that
+    /// construction above a Filter changes what the PC later sees.
+    bool defer_disabled_by_pc = false;
+    /// True while planning the direct child of a Project/Aggregate. If that
+    /// child is a Filter, a boundary there would re-append PE columns that the
+    /// Project/Aggregate above does not forward (TCK WithWhere1:
+    /// `WITH other WHERE r IS NULL` returned NULL vertices).
+    bool suppress_filter_defer = false;
 
     /// Edge variable named by startNode()/endNode() in the anchor Filter
     /// currently being planned. Used to find the correlation column in a PC

@@ -345,7 +345,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     ctx->phys_op = std::move(phys_op);
     // One attach call reaches the whole tree (base class recurses over children).
     ctx->phys_op->setQueryContext(ctx->query_context);
-    ctx->gen = ctx->phys_op->executeChunk();
+    ctx->gen = ctx->phys_op->executeChunkTraced();
 
     co_return ctx;
 }

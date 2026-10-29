@@ -258,3 +258,261 @@ EUGRAPH_PLAN_DEBUG=1 EUGRAPH_PRED_DEBUG=1 ./build-release/eugraph-server ...
 - [查询值拷贝性能剖析](query-value-copy-profiling.md)：complex-10 的逐层归因与 GDB 采样方法；
 - [ProjectionExtract 设计](../query/engine/projection-extract-design.md) §3.4：本轮的批处理/共享句柄不变量；
 - [存储接口](../storage/interfaces.md)：batch API 的去重语义与失败约定。
+
+## 八、2026-10-29 当前状态（临时记录，供继续优化）
+
+> 远端 58（10.87.56.58）在最后一轮 Expand 优化后 SSH 22 端口变为
+> `Connection refused`（ping 正常），因此 **Expand typed-buffer 改动尚未部署到 58**；
+> 58 上运行的仍是上一版 canonical-slot Release。下面本地数据是把 58 的
+> `eugraph-data` 拷到本地 idle 机器测得，不代表 58 当前负载下的绝对值。
+
+### 8.1 测量口径
+
+- 数据：58 的 LDBC sf0.1 `eugraph-data`（327,588 顶点 / 1,477,965 边）；
+- 本地 Release，4 compute / 4 storage IO / 4 thrift IO / 1 bolt IO；
+- `scripts/bench_ldbc_interactive.py`，warmup 2 + 3 轮取 min；
+- old/new 用同一份数据、同一参数，c5/c9/c14 参数为
+  `person1Id=933, person2Id=1129, messageId=3`；
+- 21 条读查询结果用 Python driver 取回后做 sha256 对比，old/new 逐条一致。
+
+### 8.2 临时结果
+
+| 查询 | 最初 | canonical 修复后 | + Expand typed buffer |
+|---|---:|---:|---:|
+| complex-14 | 138 ms | 117–125 ms | **114.5 ms** |
+| complex-5 | 276 ms | 225–247 ms | **229.6 ms** |
+| complex-9 | 184 ms | 159–173 ms | **160.6 ms** |
+
+合计约 **13–17%**，距离 neo4j 仍远（c14 ~6.4×、c5 ~2.5×、c9 ~5.5×）。
+远端 58 负载高（load 10–14），同一二进制在 58 上可到 c14 400ms+、c5 900ms+，
+只能看相对趋势。
+
+### 8.3 已落地改动
+
+1. `aac518a5`：`EUGRAPH_OP_TRACE=1` 算子级 rows/chunks/self/inclusive CPU+wall；
+   `executeChunkTraced` 默认关闭时直接返回原 generator。
+2. `04c501dd`：`buildDeferredPlans` / `dispatchProjectionExtract` 按 canonical slot
+   匹配 deferred set；修复别名链上 PE 列仍在 LIMIT 前物化的问题。
+3. `30c1fdca`：Expand 每个 chunk 预解析 `row_src_ids`，`VertexRef` / `EdgeKey`
+   直接写输出 typed buffer，去掉逐边 `Value` + `Column::setValue`。
+
+### 8.4 已尝试但回退
+
+- **Filter 边界延迟物化**：c5/c9 慢约 10%，3 个 list/pattern comprehension 测试回归；
+  回退。
+- **coalesce 属性合并读取**：同一 source 的多 spec 合并为一次 `batchGetVertexData`
+  或新增 keyed coalesce API，c5/c9/c14 均变慢（读了过多无关属性）；回退，接口改动未保留。
+
+### 8.5 当前瓶颈与下一步
+
+- **c14**：两个 PC 共享的 `a <- HAS_CREATOR - comment` 前缀只占约 25% 中间边，
+  单独做 PC 共享前缀不足以解释 6.5×；优先级低于每边 Expand 成本。
+- **c5**：89k post/creator 先展开再过滤；需要 friends 集合下推、反向邻接或 semi-join。
+- **c9**：53k message 仍要读 id + creationDate；需要更合适的覆盖访问路径。
+- **Expand 下一步**：目前仍是 `scanEdgesBatch -> vector<BatchedEdge> -> 输出列`；
+  可继续做“IO 线程直接填 typed 列”或按 `(src,dir,label)` 的邻接局部性/缓存。
+  这是 c5/c9/c14 的共同项，优先于 PC 融合。
+
+### 8.6 复现
+
+```bash
+# 本地用 58 的数据副本
+rsync -a root@10.87.56.58:/root/eugraph/eugraph-data/ /tmp/eugraph-data-remote/
+cmake --build --preset release --target eugraph-server -j2
+./build/release/eugraph-server --data-dir /tmp/eugraph-data-remote \
+  --bolt-port 17688 --compute-threads 4 --storage-io-threads 4 \
+  --thrift-io-threads 4 --bolt-io-threads 1
+
+python3 scripts/bench_ldbc_interactive.py \
+  --queries-dir /tmp/ldbc_impls/cypher/queries --uri bolt://127.0.0.1:17688 \
+  --warmup 2 --iters 3 --only complex-14,complex-9,complex-5 \
+  --override person1Id=933,person2Id=1129,messageId=3
+```
+
+### 8.7 58 恢复后的远端复测（2026-10-29 10:36）
+
+SSH 恢复后在 58 上部署了 Expand typed-buffer Release，并与 58 上的
+`eugraph-server.bak.canonical` 做了同机顺序 A/B（warmup 3 + 5 轮，4/4 配置）：
+
+| 查询 | canonical | + Expand | 变化 |
+|---|---:|---:|---:|
+| complex-14 | 412.0 ms | 398.7 ms | -3% |
+| complex-5 | 895.0 ms | 815.9 ms | -9% |
+| complex-9 | 579.1 ms | 584.8 ms | ~0（噪声） |
+
+58 的负载在测量期间从 0.8 漂到 3.8，绝对值明显高于本地 idle（c14 ~115ms、
+c5 ~230ms、c9 ~161ms），远端 A/B 只能确认 Expand 对 c5 有稳定收益，c14/c9 被噪声掩盖。
+当前 58 上运行的是 Expand 版本，端口 7688。
+
+### 8.9 已回退：Message.creationDate 索引 join 不计入公平对比
+
+2026-10-29 曾临时给 eugraph 建 `Message.creationDate` 索引并放宽
+`tryPlanFilterDestinationIndexJoin` 对显式 `(message:Message)` 的限制，本地 c9
+从 160.6ms 降到 71.4ms。但 **neo4j 基线没有该索引**，这属于给 eugraph 单方面增加
+访问路径，不能作为同 schema 的对比结论。
+
+已处理：
+
+- 回退 planner 改动（`d0cccef6`、记录 `3667da3f` 均已 revert）；
+- 删除 58 与本地测试数据上的 `idx_message_creationDate`；
+- 58 公平 baseline c9 复测约 **594ms**（1GB cache、无该索引）。
+
+后续若要评估日期索引，必须同时给 neo4j 建等价索引并重新 A/B，或单独作为
+“eugraph 可选索引收益”记录，不得混入 LDBC 公平对比表。
+
+### 8.10 已回退：PC 前缀 Expand cache
+
+为验证 c14 共享前缀的实际收益，曾按 `(src, direction, label)` 缓存 PC 右子计划中
+Expand 的原始邻接结果，并把缓存放在语句级 `QueryContext`（上限 100k edge），由
+`PatternComprehensionApply` 启用。
+
+本地结果：c14 114.5→112.9ms（约 1%），c5/c9 无稳定变化。原因是共享的
+`a <- HAS_CREATOR - comment` 只占总中间边约四分之一，而缓存查找/存储又把收益吃掉。
+复杂度与收益不匹配，已回退，未提交。
+
+### 8.11 继续线索（2026-10-29）
+
+**分支/提交**
+
+- 分支：`perf/c14-pc-fusion`
+- 保留提交：`aac518a5`（op trace）、`04c501dd`（canonical deferred）、
+  `30c1fdca`（Expand typed buffer）
+- 索引 join 与其文档已 revert：`acc1c652` / `4484b6d5`，公平性说明 `9caea9ea`
+- PC 前缀 Expand cache 试算未提交实现，只记录 `75efa1b8`
+
+**公平 baseline（本地 idle，58 数据副本，4/4，warmup 2 + 3 轮）**
+
+| 查询 | 最初 | 当前 |
+|---|---:|---:|
+| c14 | 138 ms | 114.5 ms |
+| c5 | 276 ms | 229.6 ms |
+| c9 | 184 ms | 160.6 ms |
+
+- 21 条 LDBC 读查询结果哈希与最初逐条一致；
+- 未跑全量 ctest；只跑 Expand/Path/Edge/MultiLabel/Order 等定向测试（233 个）。
+
+**58 状态**
+
+- 当前运行无 `Message.creationDate` 索引的公平 Release；
+- 端口 7688，`--wt-cache-size-mb=1024`；
+- 公平 c9 复测约 594 ms；远端负载高，c14/c5 绝对值不可直接引用。
+
+**可复现数据/脚本**
+
+- 58 数据副本：`/tmp/eugraph-data-remote`；
+- LDBC queries：`/tmp/ldbc_impls/cypher/queries`；
+- 单引擎 benchmark：`scripts/bench_ldbc_interactive.py`；
+- 21 条结果哈希脚本可参考 `/tmp/hash_all.py`（临时脚本，未入库）。
+
+**下一步优先做 c5，不要先做 c14 PC 融合**
+
+- c14 PC 前缀共享上限约 25%，实测 cache 只约 1%，不足以弥补 6× 差距；
+- c5 是 89k post/creator 行先展开再过滤，需要：
+  1. friends 集合下推；
+  2. 反向邻接（从 174 个 friend 反向 `HAS_CREATOR`）；
+  3. 或 vertex-list semi-join；
+- 任何新访问路径都必须与 neo4j 同 schema 对比，**不得单方面加索引**。
+
+### 8.12 2026-10-29 第二轮：Filter 边界物化 + 实体引用不物化
+
+延续 §8.11 的 c5 优先。先用 op-trace + IO trace + neo4j PROFILE 复测，发现两处
+指标/执行层面的问题，再落地两个通用机制。
+
+**指标可信化（先修工具）**
+
+`[op-trace]` 的 TLS 指针在 `co_yield` 时没有还给调用方：一个算子先 pull 左孩子、
+再 pull 右孩子时，右孩子的 parent 被记成左孩子。c5 因此把 `LeftJoin` 打印成
+`self_cpu=170.6ms`，而 `incl=235.7` 减去左 64.3、右 167.0 只剩 **4.4ms**——
+右子计划被错误缩进到左孩子下面。另有一处 `incl_cpu_ms=18446744072266`，是跨线程
+恢复后 `CLOCK_THREAD_CPUTIME_ID` 差值为负造成的 uint64 下溢。
+
+修复：yield 前恢复 `tls_current_op_trace`、resume 后重新安装；CPU 只在同一线程
+计时，负差值丢弃。新增 `OperatorTraceTest.SiblingChildrenAttachToTheirOwnParent`
+（修复前失败）并保留。
+
+**机制 1：Filter 边界延迟物化（`physical_planner.cpp`）**
+
+`computeFilterDeferredSlots` 从 PE 输出 slot 中剔除谓词引用、子树引用、外层已延迟的
+slot；子树规划时置 `ctx.deferred_slots`，Filter 包装后用普通 PE
+（`materializeDeferred(..., as_late_materialize=false)`）把列追加回来，**再让父算子
+（Sort/Join）按新 layout 编译**。这是与 2026-10-25 失败尝试的关键区别（那次在 Sort
+下方放 LateMaterialize，但 Sort 仍按旧 layout 编译，sort key 是占位值）。
+
+同时补了两处 join 健壮性：
+
+- `collectOpSlots` 收集 `BoundSemiJoinOp` / `BoundLeftJoinOp` /
+  `BoundPatternComprehensionApplyOp` 的 correlation slot，边界不得延迟它们；
+- join 解析 correlation slot 前 `ensureSlotLayout`：延迟 PE 可能让 Expand /
+  VarLenExpand 这类规划期不发布 layout 的孩子保持空 layout。c10 因此曾报
+  `SemiJoin: left slot 2 not found in left slot layout (size 0)`，已修复并用
+  `AntiJoinAboveVarLenExpandResolvesCorrelationSlot` 回归。
+
+**机制 2：实体引用不物化（`row.hpp` + `column_rewrite.cpp`）**
+
+- `valueEquals` 把 `VertexRef`/`VertexValuePtr`、`EdgeKey`/`EdgeValuePtr` 折叠到 id；
+- `rewriteRefCompatiblePredicates` 把 `x IN list` 的 x 降到 source `VERTEX_REF`/`EDGE_KEY`；
+- `rewriteInternalEdgeUniqueness` 把 `__edge_unique` 参数降到 source `EdgeKey`。
+
+c5 的 `friend IN friends` 因此不再要求 Filter 前构造 friend；`__edge_unique` 也不再
+要求构造两条匿名边，PE 在 89,415 行上直接消失（Filter 前只剩 Expand + Filter）。
+
+**探针与结果**
+
+单查询探针（同一二进制、warmup 3 + 5 轮 min，4/4，cache 1024）：
+
+| 探针 | 结果 |
+|---|---:|
+| c9 带 `ORDER BY message.id` | 181.8 ms |
+| c9 去掉 `message.id`（只作探针） | **105.3 ms**（id 预取约 76.5 ms） |
+| c5 右子计划 PE（Filter 前 89,415 行） | 114.0 + 33.8 ms |
+| c5 只跑左支（VLE + HAS_MEMBER） | 56.4 ms |
+
+21 条 LDBC 读查询同机交错 A/B（2026-10-29 16:28，base = HEAD，opt = 本改动；
+构建目录 `build-release`（Release，`-O3 -DNDEBUG`），base→opt→opt→base 各 2 轮取 min，
+4/4，无 `Message.creationDate` 索引）：
+
+| 查询 | base | opt | 变化 |
+|---|---:|---:|---:|
+| c5 | 240.1 | 179.8 | -25.1% |
+| c9 | 181.5 | 120.7 | -33.5% |
+| c14 | 118.2 | 111.5 | -5.7% |
+| c10 | 34.6 | 31.3 | -9.5% |
+| c3 | 104.9 | 67.8 | -35.4% |
+| c12 | 293.8 | 253.0 | -13.9% |
+| short-4 | 1048.7 | 302.1 | -71.2% |
+
+其余查询无 >10% 回退（c13 0.8→0.9 ms、short-5/6 +1%，均为噪声）；21 条结果哈希与
+base 逐条一致，c5/c9/c14 与 neo4j 逐行一致（id 的 int/string 表示除外）。
+完整 21 条 eugraph/neo4j 表见 [ldbc-snb-sf0.1-comparison.md](ldbc-snb-sf0.1-comparison.md)
+§2.2（CsvComposite 副本、8/4）；本节 base/opt 是 4/4、vdata 副本上的优化 A/B。
+
+**剩余瓶颈**
+
+- c5 179.8 ms（同轮 neo4j 85.5）：Filter 前已是 Expand(CONTAINER_OF) +
+  Expand(HAS_CREATOR)（约 126 ms CPU）+ Filter，per-edge 成本主导。下一步是
+  `dst IN list` 下推进 Expand（减少 89,415 行的输出/后置过滤）或从 174 个 friend
+  反向展开再与 forum 集合半连接（join reorder）。
+- c9 120.7 ms（neo4j 27.9）：53k 条 HAS_CREATOR 边 + creationDate coalesce + 53k→7.7k
+  过滤仍占大头；id 预取已消除。
+- c14 111.5 ms（neo4j 14.6）：两路 PC 各约 57 ms，filter 引用 a/b/r，可延迟列有限；
+  剩余是 per-edge Expand/PE，需单独拆解。
+
+**收口（同日 15:05）**
+
+- 含 PatternComprehensionApply 的语句整体关闭 Filter 边界（`ctx.defer_disabled_by_pc`），
+  PC 的 right 子计划内也关闭（`correlated_subplan_depth`）。原因：PC 的 list/unwind/pattern
+  管线会消费“没有任何 slot 引用命名”的构造表示（如 `collect(post)` 里的已构造 post），
+  把构造移到 Filter 之上会改变 PC 看到的值——`ListComprehensionPatternPredicate*` 两个
+  回退即此形态。
+- LeftJoin / SemiJoin 的 right 子计划只清空外层 deferred 集合，**不**关闭其内部 Filter
+  边界（c5 的收益正来自 LeftJoin right 内部的 `friend IN friends` Filter 边界）。
+- 同日 idle 单查询（4/4，warmup 3 + 5 轮 min，CPU 较高频时）：c5 **157.7 ms**、
+  c9 **109.6 ms**、c14 **105.4 ms**、c10 **29.3 ms**；21 条结果哈希与 base 一致。
+- 2026-10-29 16:28 重新做全量 A/B（CPU 2.6–4.3 GHz，base→opt→opt→base）：
+  c5 240.1→**179.8**、c9 181.5→**120.7**、c14 118.2→**111.5**、c10 34.6→**31.3** ms；
+  21 条哈希与 base 逐条一致。完整表见 comparison §2.2。
+- 计划形状测试 `PropertyExtractPlanTest.EdgePropertyExtract` 已按“Filter 上方多一个
+  PE”更新；此前失败的两个 list-comprehension 测试恢复通过。
+- 按开发者要求未跑全量 TCK；本地 ctest 去掉 `tck_tests` 后全部通过
+  （`bolt_python_driver_integration_tests` 首次因本机基准 server 占用 19090 失败，
+  释放端口后单测通过，不是代码问题）。

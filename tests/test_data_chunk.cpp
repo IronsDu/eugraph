@@ -455,3 +455,33 @@ TEST(EdgeIndexScanLayout, SingleBoundVariableLandsInColumnZero) {
     EXPECT_EQ(layoutFor(false, false, true).edge, 0);
     EXPECT_EQ(layoutFor(true, false, false).src, 0);
 }
+
+// ==================== entity equality across representations ====================
+
+/// Cypher node/relationship equality is identity equality. A VertexRef and a
+/// materialized VertexValue for the same node must compare equal, otherwise
+/// `x IN collect(y)` silently answers "not in list" whenever the list was
+/// materialized and x was not. The planner relies on this to keep a
+/// membership-only variable on its VertexRef column.
+TEST(ValueEquality, EntityReferenceEqualsMaterializedEntity) {
+    auto vertex = mk<VertexValue>();
+    vertex->id = 42;
+    const Value ref = VertexRef{42};
+    const Value materialized = vertex;
+
+    EXPECT_EQ(valueEquals(ref, materialized), std::optional<bool>(true));
+    EXPECT_EQ(valueEquals(materialized, ref), std::optional<bool>(true));
+
+    auto other = mk<VertexValue>();
+    other->id = 43;
+    EXPECT_EQ(valueEquals(ref, Value(other)), std::optional<bool>(false));
+
+    auto edge = mk<EdgeValue>();
+    edge->id = 7;
+    EdgeKey key;
+    key.id = 7;
+    EXPECT_EQ(valueEquals(key, Value(edge)), std::optional<bool>(true));
+
+    // Null still propagates as unknown rather than turning into "not equal".
+    EXPECT_FALSE(valueEquals(ref, Value{}).has_value());
+}

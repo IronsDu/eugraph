@@ -204,3 +204,39 @@ sort key 仍是占位值，Sort 比较错误。
 
 最终同轮 A/B（5 轮 min）：c5 234.0 ms / neo4j 83.1；c9 187.2 / 28.1；
 c14 291.4 / 17.7；三者行均一致。
+
+## 2026-10-29 后续：Filter 边界 + 实体引用不物化
+
+c9 的 `message.id` 预取（Sort key，53,192 行）与 c5 的 89,415 行 pattern 构造，都由同一条
+机制消除：**Filter 谓词不读的 PE 列延迟到 Filter 之后**，并在父算子规划前补回 layout
+（详见 [query-engine-design.md](engine/query-engine-design.md#filter-边界2026-10-29已落地)）。
+
+配套改动：
+
+- `valueEquals` 按 id 折叠 `VertexRef`/`VertexValue`、`EdgeKey`/`EdgeValue`；
+- `x IN list` 的 x 降到 source 引用（`rewriteRefCompatiblePredicates`）；
+- `__edge_unique` 参数降到 source `EdgeKey`（`rewriteInternalEdgeUniqueness`）。
+
+当前计划（c5 右侧）：
+
+```text
+Filter(friend IN friends)                 # 89,415 → 262，读 VertexRef + list
+  Expand(post<-CONTAINER_OF-forum)        # 89,415
+    Expand(friend<-HAS_CREATOR-post)      # 89,415
+      CorrelatedSource
+ProjectionExtract(...)                    # 仅 262 行
+```
+
+c9 计划：
+
+```text
+Limit → Project → LateMaterialize(20 行)
+  → Sort(date DESC, id ASC)               # id 在 Filter 后由 PE 追加
+    → Filter(creationDate < maxDate)      # 53,192 → 7,706
+      → ProjectionExtract(creationDate)   # 只读 1 个 coalesce
+        → Expand(HAS_CREATOR)
+```
+
+本地 sf0.1（4/4）：c5 **242.1 → 158.7 ms**，c9 **176.7 → 109.1 ms**；21 条 LDBC 结果哈希
+与基线一致，c5/c9 与 neo4j 逐行一致。剩余成本分别是 Expand 的 per-edge 扫描（c5 约
+126 ms CPU）和 53k 行 coalesce（c9），不再包含“过滤前物化输出列”。

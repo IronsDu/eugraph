@@ -288,6 +288,21 @@ bool rewriteExpression(binder::BoundExpression& expr, const PEPlans& plans, cons
 /// PhysicalPlanner::planBound.
 std::string describeBoundExpression(const binder::BoundExpression& expr);
 
+/// Internal MATCH relationship-uniqueness predicate (`__edge_unique`) only
+/// consumes edge ids. At bind time its arguments carry the EDGE object type,
+/// which makes ProjectionExtract construct whole EdgeValues for every expanded
+/// row before the predicate can run. Rebind those arguments to the variable's
+/// source EDGE_KEY slot: `edgeUniqueScalar` accepts EdgeKey as well as Edge, so
+/// the predicate keeps its semantics and the topology column is enough.
+void rewriteInternalEdgeUniqueness(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots);
+
+/// Membership (`x IN list`) compares values, never properties. When `x` is a
+/// graph entity the comparison is identity-only, so it can read the source
+/// VertexRef / EdgeKey column instead of forcing a materialized object. Lower
+/// those operands before requirements collection; `valueEquals` folds the two
+/// representations by id, so the result is unchanged.
+void rewriteRefCompatiblePredicates(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots);
+
 /// Walk a BoundLogicalOperator tree and lower all BoundExpressions to
 /// slot-based references. Unlike the legacy column-index rewriter, this
 /// pass requires no base_col / ProjectResetMap / LeftJoinColMap machinery

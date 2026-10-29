@@ -1,8 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace eugraph {
 namespace compute {
@@ -32,9 +36,46 @@ using QueryCancel = std::shared_ptr<const std::atomic<bool>>;
 /// (BoltSession::abandonStream, StreamAbandonRollback). Rolling back from here
 /// would free the WT session while operator destructors are still closing the
 /// cursors that live in it.
+struct OpTraceRecord {
+    std::string name;
+    uint64_t chunks = 0;
+    uint64_t rows = 0;
+    uint64_t wall_ns = 0;
+    uint64_t cpu_ns = 0;
+    OpTraceRecord* parent = nullptr;
+    uint32_t depth = 0;
+};
+
+/// Parent record of the operator currently being constructed. The traced
+/// wrapper installs it while executeChunk() runs, so a child can record which
+/// subtree it belongs to. Execution is single-threaded per statement.
+inline thread_local OpTraceRecord* tls_current_op_trace = nullptr;
+
 class QueryContext {
 public:
-    explicit QueryContext(QueryCancel cancel = nullptr) : cancel_(std::move(cancel)) {}
+    explicit QueryContext(QueryCancel cancel = nullptr)
+        : cancel_(std::move(cancel)), op_trace_(enabledFromEnv("EUGRAPH_OP_TRACE")) {}
+
+    /// Operator-level trace is opt-in: disabled means executeChunkTraced() returns
+    /// the operator's generator directly, with no wrapper coroutine.
+    bool opTraceEnabled() const noexcept {
+        return op_trace_;
+    }
+
+    /// Register one operator execution record. Execution is pull-based and
+    /// single-threaded, so no synchronization is needed here.
+    std::shared_ptr<OpTraceRecord> addOpTrace(std::string name, OpTraceRecord* parent) {
+        auto record = std::make_shared<OpTraceRecord>();
+        record->name = std::move(name);
+        record->parent = parent;
+        record->depth = parent ? parent->depth + 1 : 0;
+        op_trace_records_.push_back(record);
+        return record;
+    }
+
+    const std::vector<std::shared_ptr<OpTraceRecord>>& opTraceRecords() const noexcept {
+        return op_trace_records_;
+    }
 
     /// True once the caller cancelled this statement (for Bolt: the client went
     /// away). Operators read it as they consume upstream chunks; a cancelled
@@ -44,7 +85,14 @@ public:
     }
 
 private:
+    static bool enabledFromEnv(const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && *value != '\0';
+    }
+
     QueryCancel cancel_;
+    bool op_trace_ = false;
+    std::vector<std::shared_ptr<OpTraceRecord>> op_trace_records_;
 };
 
 } // namespace compute

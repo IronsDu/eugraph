@@ -79,6 +79,20 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 > 写入路径的 WT session 尚未做 IO 线程绑定，不能直接改成跨线程。
 > 单次成本与归因方法见 [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
 
+> 算子级耗时：设置 `EUGRAPH_OP_TRACE=1`，语句结束输出每个物理算子的
+> `[op-trace] <indent>op=<name> rows=<N> chunks=<N> self_cpu_ms=<x> incl_cpu_ms=<y>
+> self_wall_ms=<x> incl_wall_ms=<y>`。`incl_*` 含子树，`self_* = incl_* - 直接子算子 incl_*`；
+> CPU 时间来自 `CLOCK_THREAD_CPUTIME_ID`，wall 时间在负载高时包含调度等待，应优先看 CPU。
+> 相关子计划（如 PC）的记录按算子实例累计；空结果算子也会出现（rows=0）。
+> 该开关默认关闭，关闭时 `executeChunkTraced()` 直接返回原 generator，不额外包协程。
+>
+> 归因语义（2026-10-29 修正）：记录在算子**第一次被 resume** 时按当时的
+> `tls_current_op_trace` 挂到父记录；generator 在 `co_yield` 前把 TLS 还给调用方，
+> resume 后再装回自己，因此“先 pull 左孩子、再 pull 右孩子”的 join 不会把右孩子
+> 记到左孩子名下（此前 c5 的 `LeftJoin self_cpu` 因此虚高 166 ms）。
+> `CLOCK_THREAD_CPUTIME_ID` 是每线程时钟：跨线程 resume 的区间不计 CPU（否则差值为负
+> 会让 uint64 计数下溢成 1.8e13 ms），所以 `incl_cpu` 可能小于同一算子的 `incl_wall`。
+
 > Bolt 之所以能"整条消息都在 Compute 池上"，是因为它把响应整体物化成 `std::vector<uint8_t>` 后才 `via(socket EventBase)` 写回；Thrift 是流式 RPC，generator 由框架在消费方线程恢复，**不能照搬 Bolt 的做法**（见下方待办 2）。
 
 ### 已知问题与待办

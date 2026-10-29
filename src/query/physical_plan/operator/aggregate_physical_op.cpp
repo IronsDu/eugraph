@@ -26,7 +26,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
 
     bool has_aggregates = !aggregates_.empty();
 
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     ExpressionEvaluator evaluator(eval_ctx_);
 
     while (auto chunk = co_await child_gen.next()) {

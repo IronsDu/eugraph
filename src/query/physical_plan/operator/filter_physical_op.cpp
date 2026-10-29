@@ -244,14 +244,14 @@ folly::coro::AsyncGenerator<DataChunk> FilterPhysicalOp::executeChunk() {
         if (truth == StaticTruth::False)
             co_return;
         if (truth == StaticTruth::True) {
-            auto child_gen = cancellable(child_->executeChunk());
+            auto child_gen = cancellable(child_->executeChunkTraced());
             while (auto chunk = co_await child_gen.next())
                 co_yield std::move(*chunk);
             co_return;
         }
     }
 
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
