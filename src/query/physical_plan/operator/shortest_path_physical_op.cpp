@@ -402,7 +402,7 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
     if (dst_filter_index_id_ != 0)
         co_await loadAllowed(dst_filter_index_id_, dst_filter_value_, dst_allowed);
 
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     while (auto chunk = co_await child_gen.next()) {
         if (!chunk || chunk->numRows() == 0)
             continue;

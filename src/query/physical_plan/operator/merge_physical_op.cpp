@@ -1167,7 +1167,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
     }
 
     // Phase 3: per-row processing — yield one chunk per row
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     while (auto chunk = co_await child_gen.next()) {
         for (size_t row = 0; row < chunk->count; ++row) {
             bool start_created = false;

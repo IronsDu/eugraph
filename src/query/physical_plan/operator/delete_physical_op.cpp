@@ -100,7 +100,7 @@ void DeletePhysicalOp::compileExpressions(const TupleSlotLayout& input_layout) {
 }
 
 folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     ExpressionEvaluator evaluator(eval_ctx_);
 
     while (auto chunk = co_await child_gen.next()) {

@@ -36,7 +36,7 @@ bool isHeavyPassthrough(binder::BoundTypeKind kind) {
 } // namespace
 
 folly::coro::AsyncGenerator<DataChunk> UnwindPhysicalOp::executeChunk() {
-    auto gen = cancellable(child_->executeChunk());
+    auto gen = cancellable(child_->executeChunkTraced());
     const size_t num_input_cols = input_schema_.size();
 
     // Rows produced from one input row all carry a byte-identical pass-through

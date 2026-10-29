@@ -8,6 +8,7 @@
     "          Comment/Post 追加公共父标签 Message（neo4j --nodes=Comment:Message）。",
     "键的含义：columns 与 pk 用【图里的属性名】，src / dst / label 用【CSV 里的列名】。",
     "pk 只写属性名（本例都是 id），来源列与类型由 columns 决定 —— 与 neo4j 的 id:ID(Group) 语义等价。",
+    "id 列固定 INT64：参考实现 import-to-neo4j.sh 使用 --id-type=INTEGER。不要按本地默认 STRING 导入的 neo4j 改成字符串（会破坏 ORDER BY id / id+1 等数值语义）。",
     "place.type / organisation.type 是行级标签来源（label.header），取值原样作标签、首字母大写。",
     "行级标签是追加标签：place 文件的顶点带 [Place, City|Country|Continent]，主标签始终是 Place。",
     "所有列类型显式声明、不依赖采样推断。",

@@ -66,17 +66,38 @@ struct StreamContext {
     StreamContext() = default;
 
     ~StreamContext() {
-        if (!query_store)
-            return;
-        const char* trace = std::getenv("EUGRAPH_IO_TRACE");
-        if (trace == nullptr || *trace == '\0')
-            return;
-        const uint64_t dispatches = query_store->ioDispatches();
-        const uint64_t searches = query_store->wtSearchCount();
-        const uint64_t search_nears = query_store->wtSearchNearCount();
-        if (dispatches != 0 || searches != 0 || search_nears != 0)
-            spdlog::info("[io-trace] io_dispatches={} wt_search={} wt_search_near={} {} query={}", dispatches, searches,
-                         search_nears, query_store->ioDispatchSummary(), query_text);
+        if (query_store) {
+            const char* trace = std::getenv("EUGRAPH_IO_TRACE");
+            if (trace != nullptr && *trace != '\0') {
+                const uint64_t dispatches = query_store->ioDispatches();
+                const uint64_t searches = query_store->wtSearchCount();
+                const uint64_t search_nears = query_store->wtSearchNearCount();
+                if (dispatches != 0 || searches != 0 || search_nears != 0)
+                    spdlog::info("[io-trace] io_dispatches={} wt_search={} wt_search_near={} {} query={}", dispatches,
+                                 searches, search_nears, query_store->ioDispatchSummary(), query_text);
+            }
+        }
+        if (query_context && query_context->opTraceEnabled()) {
+            const auto& records = query_context->opTraceRecords();
+            for (const auto& record : records) {
+                uint64_t child_wall_ns = 0;
+                uint64_t child_cpu_ns = 0;
+                for (const auto& other : records) {
+                    if (other->parent == record.get()) {
+                        child_wall_ns += other->wall_ns;
+                        child_cpu_ns += other->cpu_ns;
+                    }
+                }
+                const uint64_t self_wall_ns = record->wall_ns > child_wall_ns ? record->wall_ns - child_wall_ns : 0;
+                const uint64_t self_cpu_ns = record->cpu_ns > child_cpu_ns ? record->cpu_ns - child_cpu_ns : 0;
+                const std::string indent(record->depth * 2, ' ');
+                spdlog::info("[op-trace] {}{} rows={} chunks={} self_cpu_ms={:.3f} incl_cpu_ms={:.3f} "
+                             "self_wall_ms={:.3f} incl_wall_ms={:.3f}",
+                             indent, record->name, record->rows, record->chunks, static_cast<double>(self_cpu_ns) / 1e6,
+                             static_cast<double>(record->cpu_ns) / 1e6, static_cast<double>(self_wall_ns) / 1e6,
+                             static_cast<double>(record->wall_ns) / 1e6);
+            }
+        }
     }
 
     /// 提交本语句的事务（无会话/显式事务 ⇒ 幂等成功 ✓）；必须检查返回值 ✓

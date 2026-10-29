@@ -15,7 +15,7 @@ std::string PathBuildPhysicalOp::toString() const {
 }
 
 folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
 
     while (auto chunk = co_await child_gen.next()) {
         const size_t input_cols = chunk->numColumns();

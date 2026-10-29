@@ -6,6 +6,8 @@
 #include "query/dataset/row_identity.hpp"
 
 #include "query/executor/query_executor.hpp"
+#include "query/physical_plan/physical_operator_base.hpp"
+#include "query/physical_plan/query_context.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
@@ -15,6 +17,7 @@
 #include "test_sync_store.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
 #include <limits>
@@ -8765,8 +8768,11 @@ TEST_F(PropertyExtractPlanTest, ExpandBothSidesPropertyExtract) {
 }
 
 TEST_F(PropertyExtractPlanTest, EdgePropertyExtract) {
+    // The Filter reads r.since (edge property PE below it). a.name is only
+    // needed by the RETURN Project above the Filter, so the filter-boundary
+    // deferral materializes it in a second PE between Project and Filter.
     expectPlanOrder("MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name, r.since",
-                    {"Project", "Filter", "ProjectionExtract", "Expand", "ProjectionExtract", "LabelScan"});
+                    {"Project", "ProjectionExtract", "Filter", "ProjectionExtract", "Expand", "LabelScan"});
 }
 
 // Execution tests — verify results are correct.
@@ -9910,4 +9916,152 @@ TEST_F(QueryExecutorTest, ShortestPathEndpointDynamicPropertyTriggersPrefetch) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "dp1");
     EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "dp3");
+}
+
+// ==================== operator-level trace attribution ====================
+
+namespace {
+
+/// Yields one INT64 chunk of `rows` rows.
+class TraceConstOp : public PhysicalOperator {
+public:
+    TraceConstOp(std::string name, size_t rows) : name_(std::move(name)), rows_(rows) {}
+
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
+        DataChunk chunk;
+        chunk.columns.push_back(Column::flat(binder::BoundTypeKind::INT64, rows_));
+        for (size_t i = 0; i < rows_; ++i)
+            chunk.columns[0].setValue(i, static_cast<int64_t>(i));
+        chunk.count = rows_;
+        chunk.sel = SelectionVector::identity(rows_);
+        co_yield std::move(chunk);
+    }
+
+    std::string toString() const override {
+        return name_;
+    }
+
+private:
+    std::string name_;
+    size_t rows_;
+};
+
+/// Pulls one chunk from the left child and then creates/pulls the right child
+/// while the left generator is still suspended at its yield. Pull-based joins
+/// (LeftJoin) create their right sub-plan at exactly this point.
+class TraceTwoChildOp : public PhysicalOperator {
+public:
+    TraceTwoChildOp(std::unique_ptr<PhysicalOperator> left, std::unique_ptr<PhysicalOperator> right)
+        : left_(std::move(left)), right_(std::move(right)) {}
+
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
+        auto left = left_->executeChunkTraced();
+        auto left_chunk = co_await left.next(); // left suspends inside its yield
+        auto right = right_->executeChunkTraced();
+        auto right_chunk = co_await right.next();
+        if (left_chunk)
+            co_yield std::move(*left_chunk);
+        if (right_chunk)
+            co_yield std::move(*right_chunk);
+        while (auto chunk = co_await left.next())
+            (void)chunk;
+    }
+
+    std::string toString() const override {
+        return "TraceTwoChild";
+    }
+
+    std::vector<const PhysicalOperator*> children() const override {
+        return {left_.get(), right_.get()};
+    }
+
+private:
+    std::unique_ptr<PhysicalOperator> left_;
+    std::unique_ptr<PhysicalOperator> right_;
+};
+
+} // namespace
+
+TEST(OperatorTraceTest, SiblingChildrenAttachToTheirOwnParent) {
+    setenv("EUGRAPH_OP_TRACE", "1", 1);
+    auto ctx = std::make_shared<QueryContext>();
+    unsetenv("EUGRAPH_OP_TRACE");
+    ASSERT_TRUE(ctx->opTraceEnabled());
+
+    TraceTwoChildOp op(std::make_unique<TraceConstOp>("left", 1), std::make_unique<TraceConstOp>("right", 1));
+    op.setQueryContext(ctx);
+    auto gen = op.executeChunkTraced();
+    while (auto chunk = blockingWait(gen.next()))
+        (void)chunk;
+
+    const auto& records = ctx->opTraceRecords();
+    ASSERT_EQ(records.size(), 3u);
+    EXPECT_EQ(records[0]->name, "TraceTwoChild");
+    EXPECT_EQ(records[1]->name, "left");
+    EXPECT_EQ(records[2]->name, "right");
+    // The right child is created while the left child is suspended at a yield;
+    // it must still attach to the operator that pulled it, not to its sibling.
+    EXPECT_EQ(records[1]->parent, records[0].get());
+    EXPECT_EQ(records[2]->parent, records[0].get());
+    // A cross-thread resume must not wrap the CPU counter (uint64 underflow).
+    for (const auto& record : records)
+        EXPECT_LT(record->cpu_ns, 60'000'000'000ULL);
+}
+
+// ==================== Filter-boundary deferred materialization ====================
+
+/// The Filter reads `age`; `name` is only needed by the Sort above it. That
+/// makes `name` an output-only PE column at the Filter boundary: it is loaded
+/// after the Filter and appended before the Sort is planned. The regression
+/// this guards against is the 2026-10-25 one, where the sort key was deferred
+/// but the Sort still compiled against the layout without it and ordered by
+/// placeholders (c9 returned a wrong Top-20).
+TEST_F(QueryExecutorTest, FilterBoundaryDeferredSortKeyKeepsCorrectTopN) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:Person {name: 'delta', age: 40}), "
+                                     "(:Person {name: 'alpha', age: 20}), "
+                                     "(:Person {name: 'charlie', age: 30}), "
+                                     "(:Person {name: 'bravo', age: 60})")
+                    .error.empty());
+
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE n.age < 50 "
+                                       "RETURN n.name AS name ORDER BY name DESC LIMIT 2");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "delta");
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "charlie");
+}
+
+/// A correlated anti-join above a VarLenExpand used to see an empty left slot
+/// layout when a materialization boundary removed the PE that supplied it:
+/// "SemiJoin: left slot N not found in left slot layout (size 0)". The join
+/// now derives the layout from the child schema when the operator did not
+/// publish one.
+TEST_F(QueryExecutorTest, AntiJoinAboveVarLenExpandResolvesCorrelationSlot) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->"
+                                     "(b:Person {name: 'b'})-[:KNOWS]->"
+                                     "(c:Person {name: 'c'})")
+                    .error.empty());
+
+    auto result = execSync(*executor_, "MATCH (p:Person {name: 'a'})-[:KNOWS*2..2]-(f:Person) "
+                                       "WHERE NOT (f)-[:KNOWS]-(p) AND f.name > 'a' "
+                                       "RETURN f.name AS name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "c");
+}
+
+/// `WITH other WHERE r IS NULL` has a Project directly above the Filter. A
+/// filter-boundary deferral there re-appends the projected vertex's PE column
+/// above the Filter, but the Project does not forward it -- the projected
+/// vertex comes back NULL (openCypher TCK: Filter for an unbound node /
+/// relationship variable, TriadicSelection1).
+TEST_F(QueryExecutorTest, OptionalMatchWithWhereNullKeepsProjectedVertex) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:A), (b:B {id: 1}), (c:B {id: 2}), (a)-[:T]->(b)").error.empty());
+
+    auto result = execSync(*executor_, "MATCH (other:B) OPTIONAL MATCH (a)-[r]->(other) "
+                                       "WITH other WHERE r IS NULL RETURN other.id AS id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
 }

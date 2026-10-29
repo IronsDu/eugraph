@@ -6,7 +6,7 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executePerRow() {
-    auto left_gen = cancellable(left_->executeChunk());
+    auto left_gen = cancellable(left_->executeChunkTraced());
 
     while (auto left_chunk = co_await left_gen.next()) {
         if (!left_chunk || left_chunk->count == 0)
@@ -30,7 +30,7 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executePerRow() {
             }
 
             // Execute the right sub-plan
-            auto right_gen = cancellable(right_->executeChunk());
+            auto right_gen = cancellable(right_->executeChunkTraced());
             bool matched = false;
 
             while (auto right_chunk = co_await right_gen.next()) {
@@ -185,7 +185,7 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeChunk() {
     std::vector<Row> batch;
     batch.reserve(batch_limit);
     std::vector<binder::BoundTypeKind> left_kinds;
-    auto left_gen = cancellable(left_->executeChunk());
+    auto left_gen = cancellable(left_->executeChunkTraced());
     while (auto left_chunk = co_await left_gen.next()) {
         if (left_chunk->count == 0)
             continue;
@@ -224,7 +224,7 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeBatch(std::vec
     correlated_source_->setRows(std::move(corr_rows));
 
     std::vector<Row> right_rows;
-    auto right_gen = cancellable(right_->executeChunk());
+    auto right_gen = cancellable(right_->executeChunkTraced());
     while (auto right_chunk = co_await right_gen.next())
         for (size_t r = 0; r < right_chunk->count; ++r) {
             Row row;

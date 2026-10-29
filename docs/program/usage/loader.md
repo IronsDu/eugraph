@@ -210,6 +210,12 @@ schema 是「装载完成时的完整状态」的声明，因此索引这类 DDL
 `nodes` / `relationships`；`headers.txt` 的列类型声明对应 `columns`；
 `:LABEL` 列对应 `label`；`--delimiter` 对应顶层 `delimiter`。
 
+**id 类型**：参考实现固定用 `import-to-neo4j.sh --id-type=INTEGER`，因此 schema 里
+`id:ID(...)` 对应 `INT64`（见 [ldbc-sf01-composite.schema.json](../design/ldbc-sf01-composite.schema.json)）。
+本地 neo4j 曾用默认 `--id-type=STRING` 导入（`id` 为字符串），2026-10-29 已就地转为
+`INTEGER`，与参考实现一致。不要把 loader schema 改成 `STRING`：那会破坏 `ORDER BY id`、
+`id + 1` 等数值语义；对照时驱动侧用 `id_type=long` 即可。
+
 sf0.1 语料的现成配置：
 - CsvBasic：[ldbc-sf01.schema.json](../design/ldbc-sf01.schema.json)
 - CsvComposite（`language` → `speaks`、含 `email`）：[ldbc-sf01-composite.schema.json](../design/ldbc-sf01-composite.schema.json)

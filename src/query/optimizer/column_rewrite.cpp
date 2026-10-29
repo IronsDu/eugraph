@@ -5,6 +5,7 @@
 
 #include "query/planner/binder/join_equality.hpp"
 
+#include "query/planner/bound_expression/bound_binary_op.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
 #include "query/planner/bound_expression/bound_map.hpp"
@@ -1871,6 +1872,63 @@ std::string describeBoundExpression(const binder::BoundExpression& expr) {
         },
         expr);
     return out;
+}
+
+void rewriteInternalEdgeUniqueness(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots) {
+    std::visit(
+        [&](auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                if (!v)
+                    return;
+                auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&v->predicate);
+                if (!call || !*call || !(*call)->func_def || (*call)->func_def->name != "__edge_unique")
+                    return;
+                for (auto& arg : (*call)->args) {
+                    auto* ref = std::get_if<binder::BoundColumnRef>(&arg);
+                    if (!ref || ref->type.kind != binder::BoundTypeKind::EDGE)
+                        continue;
+                    auto it = var_slots.find(ref->name);
+                    if (it == var_slots.end())
+                        continue;
+                    ref->slot_id = it->second;
+                    ref->type = binder::BoundType::EdgeKey();
+                }
+            }
+        },
+        op);
+    forEachChild(op, [&](auto& child) { rewriteInternalEdgeUniqueness(child, var_slots); });
+}
+
+void rewriteRefCompatiblePredicates(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots) {
+    std::visit(
+        [&](auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                if (!v)
+                    return;
+                auto* bin = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&v->predicate);
+                if (!bin || !*bin || (*bin)->op != cypher::BinaryOperator::IN)
+                    return;
+                auto* ref = std::get_if<binder::BoundColumnRef>(&(*bin)->left);
+                if (!ref)
+                    return;
+                binder::BoundType lowered;
+                if (ref->type.kind == binder::BoundTypeKind::VERTEX)
+                    lowered = binder::BoundType::VertexRef();
+                else if (ref->type.kind == binder::BoundTypeKind::EDGE)
+                    lowered = binder::BoundType::EdgeKey();
+                else
+                    return;
+                auto it = var_slots.find(ref->name);
+                if (it == var_slots.end())
+                    return;
+                ref->slot_id = it->second;
+                ref->type = lowered;
+            }
+        },
+        op);
+    forEachChild(op, [&](auto& child) { rewriteRefCompatiblePredicates(child, var_slots); });
 }
 
 void rewriteColumnIndices(binder::BoundLogicalOperator& op, const PEPlans& plans, const SlotResolver& resolver) {

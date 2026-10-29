@@ -28,6 +28,11 @@ public:
     /// row<->chunk bridge alive that nothing called.
     virtual folly::coro::AsyncGenerator<DataChunk> executeChunk() = 0;
 
+    /// Execute through the optional operator-level trace. With EUGRAPH_OP_TRACE
+    /// unset this returns executeChunk() directly (no extra coroutine); when
+    /// enabled it records rows/chunks/inclusive wall for this operator.
+    folly::coro::AsyncGenerator<DataChunk> executeChunkTraced();
+
     virtual std::string toString() const = 0;
     virtual std::vector<const PhysicalOperator*> children() const {
         return {};
@@ -110,6 +115,9 @@ public:
     }
 
 protected:
+    /// Coroutine used only when EUGRAPH_OP_TRACE is enabled.
+    folly::coro::AsyncGenerator<DataChunk> executeChunkTracedImpl();
+
     function::EvalContext eval_ctx_;
     TupleSlotLayout slot_layout_;
 
@@ -148,6 +156,9 @@ private:
     /// Per-statement execution state; null for operators built outside a statement
     /// (unit tests), where cancelled() is then simply false.
     std::shared_ptr<QueryContext> query_ctx_;
+    /// Lazily created on the first traced execution; shared with QueryContext so
+    /// the record survives until statement teardown.
+    std::shared_ptr<OpTraceRecord> trace_record_;
 };
 
 // ── Conversion utilities ──

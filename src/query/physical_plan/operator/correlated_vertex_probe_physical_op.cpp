@@ -50,7 +50,7 @@ folly::coro::AsyncGenerator<DataChunk> CorrelatedVertexProbePhysicalOp::executeC
     if (!cache_built_ && !cache_disabled_) {
         cache_built_ = true;
         size_t total = 0;
-        auto right_gen = cancellable(right_->executeChunk());
+        auto right_gen = cancellable(right_->executeChunkTraced());
         while (auto chunk = co_await right_gen.next()) {
             if (chunk->count == 0)
                 continue;
@@ -73,7 +73,7 @@ folly::coro::AsyncGenerator<DataChunk> CorrelatedVertexProbePhysicalOp::executeC
         }
     }
 
-    auto left_gen = cancellable(left_->executeChunk());
+    auto left_gen = cancellable(left_->executeChunkTraced());
     while (auto left_chunk = co_await left_gen.next()) {
         if (left_chunk->count == 0)
             continue;
@@ -88,7 +88,7 @@ folly::coro::AsyncGenerator<DataChunk> CorrelatedVertexProbePhysicalOp::executeC
                 continue;
 
             if (cache_disabled_) {
-                auto right_gen = cancellable(right_->executeChunk());
+                auto right_gen = cancellable(right_->executeChunkTraced());
                 while (auto right_chunk = co_await right_gen.next()) {
                     for (size_t rr = 0; rr < right_chunk->count; ++rr) {
                         VertexId vid = vertexIdOf(right_chunk->getValue(right_vertex_col_, rr));

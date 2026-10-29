@@ -157,7 +157,14 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
     if (info.empty())
         return std::move(child_result);
 
-    auto is_deferred = [&ctx](binder::SlotId sid) { return ctx.deferred_slots && ctx.deferred_slots->contains(sid); };
+    auto is_deferred = [&ctx](binder::SlotId sid) {
+        if (!ctx.deferred_slots)
+            return false;
+        if (ctx.deferred_slots->contains(sid))
+            return true;
+        auto canonical = optimizer::getCanonicalSlot(ctx.alias_map, sid);
+        return canonical != binder::INVALID_SLOT_ID && ctx.deferred_slots->contains(canonical);
+    };
 
     std::vector<ColumnSpec> specs;
     Schema output_schema;
@@ -577,10 +584,41 @@ static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordere
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 if (v)
                     collectOpSlots(v->child, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
+                if (v) {
+                    // Correlation slots are resolved from the left layout by the
+                    // physical join; a materialization boundary above must not
+                    // defer them.
+                    for (const auto& [left_slot, right_slot] : v->correlation) {
+                        if (left_slot != binder::INVALID_SLOT_ID)
+                            out.insert(left_slot);
+                        if (right_slot != binder::INVALID_SLOT_ID)
+                            out.insert(right_slot);
+                    }
+                    collectOpSlots(v->left, out, has_write);
+                    collectOpSlots(v->right, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
+                if (v) {
+                    for (const auto& corr : v->correlation) {
+                        if (corr.left_slot != binder::INVALID_SLOT_ID)
+                            out.insert(corr.left_slot);
+                    }
+                    collectOpSlots(v->left, out, has_write);
+                    collectOpSlots(v->right, out, has_write);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                if (v) {
+                    for (const auto& corr : v->correlation) {
+                        if (corr.left_slot != binder::INVALID_SLOT_ID)
+                            out.insert(corr.left_slot);
+                        if (corr.right_slot != binder::INVALID_SLOT_ID)
+                            out.insert(corr.right_slot);
+                    }
+                    collectOpSlots(v->left, out, has_write);
+                    collectOpSlots(v->right, out, has_write);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
                     collectOpSlots(v->left, out, has_write);
@@ -653,6 +691,176 @@ static bool isPEOutputSlot(const PlanContext& ctx, binder::SlotId slot) {
     return false;
 }
 
+/// Subtree traits that make a filter-boundary deferral unsafe.
+enum class SubtreeTrait {
+    /// PC sub-plans carry representation demands not visible as slot references.
+    PatternComprehension,
+};
+
+static bool subtreeHasTrait(const binder::BoundLogicalOperator& op, SubtreeTrait trait) {
+    bool found = false;
+    std::function<void(const binder::BoundLogicalOperator&)> visit = [&](const binder::BoundLogicalOperator& node) {
+        std::visit(
+            [&](const auto& v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                    if (v && trait == SubtreeTrait::PatternComprehension)
+                        found = true;
+                }
+                if (found)
+                    return;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
+                    if (v)
+                        visit(v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+                    if (v && v->child)
+                        visit(*v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                    if (v) {
+                        visit(v->child);
+                        visit(v->body);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                    if (v) {
+                        visit(v->left);
+                        visit(v->right);
+                    }
+                }
+            },
+            node);
+    };
+    visit(op);
+    return found;
+}
+
+/// True when two slot ids denote the same binding through the alias chain.
+static bool sameBinding(const PlanContext& ctx, binder::SlotId a, binder::SlotId b) {
+    if (a == b)
+        return true;
+    if (a == binder::INVALID_SLOT_ID || b == binder::INVALID_SLOT_ID)
+        return false;
+    const auto ca = optimizer::getCanonicalSlot(ctx.alias_map, a);
+    const auto cb = optimizer::getCanonicalSlot(ctx.alias_map, b);
+    return (ca != binder::INVALID_SLOT_ID && ca == b) || (cb != binder::INVALID_SLOT_ID && cb == a) ||
+           (ca != binder::INVALID_SLOT_ID && ca == cb);
+}
+
+/// True when a Project/Aggregate item forwards a whole graph entity. Such an
+/// alias is the case a filter-boundary deferral cannot cross: the Project
+/// outputs the (renamed) source slot, while the deferred Construct column is
+/// re-appended under the original slot and the alias reads NULL.
+static bool forwardsWholeEntity(const binder::BoundExpression& expr) {
+    if (const auto* vr = std::get_if<binder::BoundVariableRef>(&expr))
+        return vr->type.kind == binder::BoundTypeKind::VERTEX || vr->type.kind == binder::BoundTypeKind::EDGE;
+    if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr))
+        return cr->type.kind == binder::BoundTypeKind::VERTEX || cr->type.kind == binder::BoundTypeKind::EDGE;
+    return false;
+}
+
+/// PE columns a Filter does not read and no operator below it reads.
+///
+/// A Filter never increases the row count and never rewrites the passthrough
+/// (VertexRef / EdgeKey) columns a PE plan sources from, so loading these
+/// columns after the Filter is semantics-preserving. This is what turns
+/// "expand 89k rows, materialize every pattern output, keep 262" into
+/// "expand 89k rows, keep 262, materialize 262" -- or, for a sort key that the
+/// Filter does not read, "read it for 7.7k instead of 53k rows".
+///
+/// The materialization point is installed by the caller *before* the parent
+/// operator is planned, so the parent compiles against the appended layout.
+/// (The 2026-10-25 filter-boundary attempt deferred the sort key but left the
+/// Sort compiled against a layout without it, which sorted placeholders.)
+static std::unordered_set<binder::SlotId> computeFilterDeferredSlots(const PlanContext& ctx,
+                                                                     const binder::BoundFilterOp& filter) {
+    std::unordered_set<binder::SlotId> candidates;
+    auto add = [&](binder::SlotId s) {
+        if (s != binder::INVALID_SLOT_ID)
+            candidates.insert(s);
+    };
+    for (const auto& [canon, pi] : ctx.extraction_info) {
+        (void)canon;
+        add(pi.object_slot_id);
+        add(pi.labels_slot_id);
+        add(pi.type_slot_id);
+        for (binder::SlotId s : pi.prop_slot_ids)
+            add(s);
+        for (binder::SlotId s : pi.edge_prop_slot_ids)
+            add(s);
+        for (const auto& [name, co] : pi.coalesce_vertices) {
+            (void)name;
+            add(co.slot_id);
+        }
+    }
+    if (candidates.empty() || ctx.suppress_filter_defer)
+        return {};
+    // PC pipelines carry representation demands that are not visible as slot
+    // references. The statement-level flag disables the boundary for the whole
+    // statement; the depth check also covers filters inside a PC's right
+    // sub-plan (e.g. its __edge_unique filter) when the flag was not set.
+    if (ctx.defer_disabled_by_pc || ctx.correlated_subplan_depth > 0)
+        return {};
+
+    std::unordered_set<binder::SlotId> predicate_slots;
+    collectExprSlots(filter.predicate, predicate_slots);
+    std::unordered_set<binder::SlotId> used_below;
+    bool has_write = false;
+    collectOpSlots(filter.child, used_below, has_write);
+    if (has_write)
+        return {};
+
+    for (auto it = candidates.begin(); it != candidates.end();) {
+        bool keep = true;
+        for (binder::SlotId s : predicate_slots) {
+            if (sameBinding(ctx, *it, s)) {
+                keep = false;
+                break;
+            }
+        }
+        if (keep) {
+            for (binder::SlotId s : used_below) {
+                if (sameBinding(ctx, *it, s)) {
+                    keep = false;
+                    break;
+                }
+            }
+        }
+        // An outer boundary already deferred it: keep it deferred instead of
+        // materializing it here (the outer materialization point is higher up).
+        if (keep && ctx.deferred_slots) {
+            for (binder::SlotId s : *ctx.deferred_slots) {
+                if (sameBinding(ctx, *it, s)) {
+                    keep = false;
+                    break;
+                }
+            }
+        }
+        if (keep)
+            ++it;
+        else
+            it = candidates.erase(it);
+    }
+    return candidates;
+}
+
 /// Slots referenced by the RETURN Project but not by the Sort/Filter side
 /// below it. These are exactly the output-only columns whose materialization
 /// can move above LIMIT.
@@ -678,9 +886,21 @@ static std::unordered_set<binder::SlotId> computeDeferredSlots(const PlanContext
     return deferred;
 }
 
+/// True when a slot is deferred either by raw id or through its alias chain.
+/// PE plans may keep the original coalesce/prop slot while the Project carries
+/// its canonical slot (or vice versa); a raw set lookup alone silently keeps
+/// materializing the column at the wrong boundary.
+static bool isSlotInDeferredSet(const PlanContext& ctx, const std::unordered_set<binder::SlotId>& deferred,
+                                binder::SlotId slot) {
+    if (deferred.contains(slot))
+        return true;
+    const auto canonical = optimizer::getCanonicalSlot(ctx.alias_map, slot);
+    return canonical != binder::INVALID_SLOT_ID && deferred.contains(canonical);
+}
+
 /// Copy the extraction plans but keep only the deferred output slots, so a
 /// second dispatchProjectionExtract pass emits exactly those columns.
-static optimizer::PEPlans buildDeferredPlans(const optimizer::PEPlans& info,
+static optimizer::PEPlans buildDeferredPlans(const PlanContext& ctx, const optimizer::PEPlans& info,
                                              const std::unordered_set<binder::SlotId>& deferred) {
     optimizer::PEPlans subset;
     for (const auto& [canon, pi] : info) {
@@ -688,7 +908,7 @@ static optimizer::PEPlans buildDeferredPlans(const optimizer::PEPlans& info,
         cp.prop_order.clear();
         cp.prop_slot_ids.clear();
         for (size_t i = 0; i < pi.prop_slot_ids.size(); ++i) {
-            if (!deferred.contains(pi.prop_slot_ids[i]))
+            if (!isSlotInDeferredSet(ctx, deferred, pi.prop_slot_ids[i]))
                 continue;
             cp.prop_order.push_back(pi.prop_order[i]);
             cp.prop_slot_ids.push_back(pi.prop_slot_ids[i]);
@@ -696,22 +916,22 @@ static optimizer::PEPlans buildDeferredPlans(const optimizer::PEPlans& info,
         cp.edge_prop_order.clear();
         cp.edge_prop_slot_ids.clear();
         for (size_t i = 0; i < pi.edge_prop_slot_ids.size(); ++i) {
-            if (!deferred.contains(pi.edge_prop_slot_ids[i]))
+            if (!isSlotInDeferredSet(ctx, deferred, pi.edge_prop_slot_ids[i]))
                 continue;
             cp.edge_prop_order.push_back(pi.edge_prop_order[i]);
             cp.edge_prop_slot_ids.push_back(pi.edge_prop_slot_ids[i]);
         }
         for (auto it = cp.coalesce_vertices.begin(); it != cp.coalesce_vertices.end();) {
-            if (deferred.contains(it->second.slot_id))
+            if (isSlotInDeferredSet(ctx, deferred, it->second.slot_id))
                 ++it;
             else
                 it = cp.coalesce_vertices.erase(it);
         }
-        if (!deferred.contains(cp.object_slot_id))
+        if (!isSlotInDeferredSet(ctx, deferred, cp.object_slot_id))
             cp.object_slot_id = binder::INVALID_SLOT_ID;
-        if (!deferred.contains(cp.labels_slot_id))
+        if (!isSlotInDeferredSet(ctx, deferred, cp.labels_slot_id))
             cp.labels_slot_id = binder::INVALID_SLOT_ID;
-        if (!deferred.contains(cp.type_slot_id))
+        if (!isSlotInDeferredSet(ctx, deferred, cp.type_slot_id))
             cp.type_slot_id = binder::INVALID_SLOT_ID;
         if (cp.prop_slot_ids.empty() && cp.edge_prop_slot_ids.empty() && cp.coalesce_vertices.empty() &&
             cp.object_slot_id == binder::INVALID_SLOT_ID && cp.labels_slot_id == binder::INVALID_SLOT_ID &&
@@ -722,18 +942,24 @@ static optimizer::PEPlans buildDeferredPlans(const optimizer::PEPlans& info,
     return subset;
 }
 
-static PlanOperatorResult materializeDeferredAfterLimit(PlanOperatorResult&& limit_result, PlanContext& ctx,
-                                                        const std::unordered_set<binder::SlotId>& deferred,
-                                                        IAsyncGraphDataStore& store) {
-    auto subset = buildDeferredPlans(ctx.extraction_info, deferred);
+static PlanOperatorResult materializeDeferred(PlanOperatorResult&& input, PlanContext& ctx,
+                                              const std::unordered_set<binder::SlotId>& deferred,
+                                              IAsyncGraphDataStore& store, bool as_late_materialize) {
+    auto subset = buildDeferredPlans(ctx, ctx.extraction_info, deferred);
     auto saved_info = std::move(ctx.extraction_info);
     auto saved_deferred = std::move(ctx.deferred_slots);
     ctx.extraction_info = std::move(subset);
     ctx.deferred_slots.reset();
-    auto result = dispatchProjectionExtract(std::move(limit_result), store, ctx, /*as_late_materialize=*/true);
+    auto result = dispatchProjectionExtract(std::move(input), store, ctx, as_late_materialize);
     ctx.extraction_info = std::move(saved_info);
     ctx.deferred_slots = std::move(saved_deferred);
     return result;
+}
+
+static PlanOperatorResult materializeDeferredAfterLimit(PlanOperatorResult&& limit_result, PlanContext& ctx,
+                                                        const std::unordered_set<binder::SlotId>& deferred,
+                                                        IAsyncGraphDataStore& store) {
+    return materializeDeferred(std::move(limit_result), ctx, deferred, store, /*as_late_materialize=*/true);
 }
 
 /// Shared Project materialization used both by the ordinary BoundProjectOp
@@ -1660,6 +1886,16 @@ static std::unique_ptr<PhysicalOperator> finalizePlanResult(PlanOperatorResult&&
     return std::move(result.op);
 }
 
+/// Operators that append columns without publishing a layout (Expand,
+/// VarLenExpand, ...) return an empty TupleSlotLayout and get one from
+/// deriveOutputLayout only at the end of planning. A join planned above them
+/// needs the slots earlier -- and a filter-boundary deferral can remove the PE
+/// that used to supply the layout -- so derive it from the schema when missing.
+static void ensureSlotLayout(PlanOperatorResult& result, PlanContext& ctx) {
+    if (result.slot_layout.size() != result.output_schema.size())
+        result.slot_layout = makeSlotLayout(result.output_schema, ctx);
+}
+
 } // namespace
 
 std::optional<PlanOperatorResult>
@@ -1805,6 +2041,7 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
     if (std::holds_alternative<std::string>(left_result))
         return std::nullopt;
     auto lr = extractChildResult(std::move(left_result));
+    ensureSlotLayout(lr, ctx);
 
     // Prefer the name carried by the bound column; fall back to slot layout.
     int list_col = -1;
@@ -2290,7 +2527,12 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // slot map (alias_slot → canonical_slot) by scanning Project items of the
     // form `BoundVariableRef(X) AS Y`.
     optimizer::allocateAllSlots(bound_plan.root, ctx.var_slots, ctx.slot_allocator);
+    // Relationship uniqueness only needs edge ids: keep it on the source
+    // EDGE_KEY column so PE does not construct EdgeValues for every row.
+    optimizer::rewriteInternalEdgeUniqueness(bound_plan.root, ctx.var_slots);
+    optimizer::rewriteRefCompatiblePredicates(bound_plan.root, ctx.var_slots);
     ctx.alias_map = optimizer::collectAliasSlotMap(bound_plan.root, ctx.var_slots);
+    ctx.defer_disabled_by_pc = subtreeHasTrait(bound_plan.root, SubtreeTrait::PatternComprehension);
 
     // Collect fresh Expand bindings (dst/edge_slot_id == INVALID) so
     // requirements and source-type collection can add PEPlans for names
@@ -2580,7 +2822,10 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
+    optimizer::rewriteInternalEdgeUniqueness(materialized, ctx.var_slots);
+    optimizer::rewriteRefCompatiblePredicates(materialized, ctx.var_slots);
     ctx.alias_map = optimizer::collectAliasSlotMap(materialized, ctx.var_slots);
+    ctx.defer_disabled_by_pc = subtreeHasTrait(materialized, SubtreeTrait::PatternComprehension);
     ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver(), nullptr, &ctx.label_defs);
     auto source_types = optimizer::collectSourceTypes(materialized, ctx.resolver());
     ctx.extraction_info =
@@ -2962,7 +3207,22 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         if (!var.empty())
                             ctx.anchor_edge_var = std::move(var);
                     }
+
+                    // Filter boundary: keep output-only PE columns out of the
+                    // rows the Filter rejects. The child is planned with them
+                    // deferred; they are appended again right after the Filter,
+                    // before the parent operator is planned (so the parent
+                    // compiles against the layout that contains them).
+                    auto deferred = computeFilterDeferredSlots(ctx, v);
+                    auto saved_deferred = ctx.deferred_slots;
+                    if (!deferred.empty()) {
+                        std::unordered_set<binder::SlotId> combined = deferred;
+                        if (saved_deferred)
+                            combined.insert(saved_deferred->begin(), saved_deferred->end());
+                        ctx.deferred_slots = std::move(combined);
+                    }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    ctx.deferred_slots = std::move(saved_deferred);
                     ctx.anchor_edge_var = std::move(saved_anchor_edge);
                     ctx.static_prune_hints = std::move(saved_prune_hints);
                     if (std::holds_alternative<std::string>(child_result))
@@ -2980,10 +3240,21 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result =
                         std::make_unique<FilterPhysicalOp>(std::move(v.predicate), cr.output_schema, std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
-                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types), std::move(cr.slot_layout)};
+                    PlanOperatorResult filter_result{std::move(result), std::move(cr.output_schema),
+                                                     std::move(cr.output_types), std::move(cr.slot_layout)};
+                    if (!deferred.empty())
+                        filter_result = materializeDeferred(std::move(filter_result), ctx, deferred, store,
+                                                            /*as_late_materialize=*/false);
+                    return filter_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundProjectOp>) {
+                    bool saved_suppress = ctx.suppress_filter_defer;
+                    bool forwards = false;
+                    for (const auto& item : v.items)
+                        forwards = forwards || forwardsWholeEntity(item.expr);
+                    ctx.suppress_filter_defer =
+                        forwards && std::holds_alternative<std::unique_ptr<binder::BoundFilterOp>>(v.child);
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    ctx.suppress_filter_defer = saved_suppress;
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     // Note: we deliberately do NOT run dispatchProjectionExtract
@@ -2995,7 +3266,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // and produce duplicate output columns.
                     return planProjectOperator(v, extractChildResult(std::move(child_result)), ctx);
                 } else if constexpr (std::is_same_v<Elem, binder::BoundAggregateOp>) {
+                    bool saved_suppress = ctx.suppress_filter_defer;
+                    bool forwards = false;
+                    for (const auto& key : v.group_keys)
+                        forwards = forwards || forwardsWholeEntity(key);
+                    ctx.suppress_filter_defer =
+                        forwards && std::holds_alternative<std::unique_ptr<binder::BoundFilterOp>>(v.child);
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    ctx.suppress_filter_defer = saved_suppress;
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
@@ -3472,6 +3750,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(left_result))
                         return std::get<std::string>(left_result);
                     auto lr = extractChildResult(std::move(left_result));
+                    ensureSlotLayout(lr, ctx);
 
                     Schema right_input_schema;
                     std::vector<binder::BoundType> right_input_types;
@@ -3590,11 +3869,21 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(left_result))
                         return std::get<std::string>(left_result);
                     auto lr = extractChildResult(std::move(left_result));
+                    ensureSlotLayout(lr, ctx);
 
                     Schema right_input_schema;
                     std::vector<binder::BoundType> right_input_types;
+                    // Correlated sub-plans have their own demand model: an
+                    // outer filter-boundary decision ("this column is only
+                    // needed above the filter") does not hold inside the
+                    // sub-plan, which may need the materialized representation
+                    // for its pattern. Keep the outer set for the left/outer
+                    // stream, but plan the correlated side without it.
+                    auto saved_deferred = std::move(ctx.deferred_slots);
+                    ctx.deferred_slots.reset();
                     auto right_result =
                         planBoundOperator(v.right, store, meta, ctx, right_input_schema, right_input_types);
+                    ctx.deferred_slots = std::move(saved_deferred);
                     if (std::holds_alternative<std::string>(right_result))
                         return std::get<std::string>(right_result);
                     auto rr = extractChildResult(std::move(right_result));
@@ -3662,11 +3951,21 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(left_result))
                         return std::get<std::string>(left_result);
                     auto lr = extractChildResult(std::move(left_result));
+                    ensureSlotLayout(lr, ctx);
 
                     Schema right_input_schema;
                     std::vector<binder::BoundType> right_input_types;
+                    // Correlated sub-plans have their own demand model: an
+                    // outer filter-boundary decision ("this column is only
+                    // needed above the filter") does not hold inside the
+                    // sub-plan, which may need the materialized representation
+                    // for its pattern. Keep the outer set for the left/outer
+                    // stream, but plan the correlated side without it.
+                    auto saved_deferred = std::move(ctx.deferred_slots);
+                    ctx.deferred_slots.reset();
                     auto right_result =
                         planBoundOperator(v.right, store, meta, ctx, right_input_schema, right_input_types);
+                    ctx.deferred_slots = std::move(saved_deferred);
                     if (std::holds_alternative<std::string>(right_result))
                         return std::get<std::string>(right_result);
                     auto rr = extractChildResult(std::move(right_result));
@@ -3741,11 +4040,23 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(left_result))
                         return std::get<std::string>(left_result);
                     auto lr = extractChildResult(std::move(left_result));
+                    ensureSlotLayout(lr, ctx);
 
                     Schema right_input_schema;
                     std::vector<binder::BoundType> right_input_types;
+                    // Correlated sub-plans have their own demand model: an
+                    // outer filter-boundary decision ("this column is only
+                    // needed above the filter") does not hold inside the
+                    // sub-plan, which may need the materialized representation
+                    // for its pattern. Keep the outer set for the left/outer
+                    // stream, but plan the correlated side without it.
+                    auto saved_deferred = std::move(ctx.deferred_slots);
+                    ctx.deferred_slots.reset();
+                    ++ctx.correlated_subplan_depth;
                     auto right_result =
                         planBoundOperator(v.right, store, meta, ctx, right_input_schema, right_input_types);
+                    --ctx.correlated_subplan_depth;
+                    ctx.deferred_slots = std::move(saved_deferred);
                     if (std::holds_alternative<std::string>(right_result))
                         return std::get<std::string>(right_result);
                     auto rr = extractChildResult(std::move(right_result));
@@ -3788,7 +4099,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         }
                         left_corr_cols.push_back(static_cast<uint32_t>(pos));
                     }
-
                     // Output schema: left columns + one LIST column per output.
                     std::vector<binder::BoundType> list_elem_types;
                     list_elem_types.reserve(v.outputs.size());

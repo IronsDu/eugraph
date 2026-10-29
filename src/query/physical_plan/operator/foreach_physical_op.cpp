@@ -58,7 +58,7 @@ folly::coro::Task<void> ForeachPhysicalOp::runBodyOnce(const DataChunk& chunk, s
 
     // The body is a chain of updating operators: pulling it is what applies the
     // writes, so it must be drained even though nothing of it is emitted.
-    auto body_gen = cancellable(body_->executeChunk());
+    auto body_gen = cancellable(body_->executeChunkTraced());
     while (auto body_chunk = co_await body_gen.next()) {
         if (cancelled())
             co_return;
@@ -92,7 +92,7 @@ void ForeachPhysicalOp::refreshOuterEntities(DataChunk& chunk, size_t row, const
 }
 
 folly::coro::AsyncGenerator<DataChunk> ForeachPhysicalOp::executeChunk() {
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
 
     while (auto chunk = co_await child_gen.next()) {
         if (cancelled())

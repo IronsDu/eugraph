@@ -27,7 +27,7 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
         (limit_hint_.has_value() && *limit_hint_ > 0) ? limit_hint_ : std::optional<size_t>{};
 
     size_t num_cols = 0;
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     ExpressionEvaluator evaluator(eval_ctx_);
 
     std::vector<Row> all_rows;

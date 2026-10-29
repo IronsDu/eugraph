@@ -48,7 +48,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgeLabelPhysicalOp::executeChunk()
         defs_[id] = std::move(def);
     }
 
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     while (auto chunk = co_await child_gen.next()) {
         co_yield std::move(*chunk);
     }

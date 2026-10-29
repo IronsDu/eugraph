@@ -18,7 +18,7 @@ std::vector<const PhysicalOperator*> UnionPhysicalOp::children() const {
 
 folly::coro::AsyncGenerator<DataChunk> UnionPhysicalOp::executeChunk() {
     // Execute left child
-    auto left_gen = cancellable(left_->executeChunk());
+    auto left_gen = cancellable(left_->executeChunkTraced());
     while (true) {
         auto chunk = co_await left_gen.next();
         if (!chunk.has_value())
@@ -27,7 +27,7 @@ folly::coro::AsyncGenerator<DataChunk> UnionPhysicalOp::executeChunk() {
     }
 
     // Execute right child
-    auto right_gen = cancellable(right_->executeChunk());
+    auto right_gen = cancellable(right_->executeChunkTraced());
     while (true) {
         auto chunk = co_await right_gen.next();
         if (!chunk.has_value())
