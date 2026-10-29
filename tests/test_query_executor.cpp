@@ -1772,6 +1772,35 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+/// update-7 的 `Message.id = $a + $b + 1`：参数在 Binder 里已是 literal，
+/// 再把 literal 算术折叠成单个 literal 后，索引选择才能看到常量并走 IndexScan。
+TEST_F(QueryExecutorTest, ParameterArithmeticFoldsIntoIndexSeek) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {id: 42, name: 'folded'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_fold FOR (n:Person) ON (n.id)").error.empty());
+
+    const std::string query = "MATCH (n:Person {id: $a + $b + 1}) RETURN n.name AS name";
+    const std::unordered_map<std::string, Value> params{
+        {"a", Value(static_cast<int64_t>(20))},
+        {"b", Value(static_cast<int64_t>(21))},
+    };
+
+    auto explained = execSyncParams(*executor_, "EXPLAIN " + query, params);
+    ASSERT_TRUE(explained.error.empty()) << explained.error;
+    std::string plan_text;
+    for (const auto& row : explained.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_text += std::get<std::string>(row[0]) + "\n";
+    }
+    EXPECT_NE(plan_text.find("IndexScan"), std::string::npos)
+        << "parameter arithmetic was not folded into an index seek:\n"
+        << plan_text;
+
+    auto result = execSyncParams(*executor_, query, params);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "folded");
+}
+
 TEST_F(QueryExecutorTest, MatchMultiplePatternReusedStartAvoidsCrossProduct) {
     insertMultiHopEdges();
     addReverseLivesInEdge();

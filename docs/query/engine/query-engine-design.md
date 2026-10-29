@@ -560,6 +560,10 @@ class PhysicalOperator {
 **索引扫描优化**（已接入 planBound 管线）：
 - `Filter(LabelScan)` + 可索引谓词 → `tryBoundIndexScan()` → `IndexScanPhysicalOp`
 - `Filter(Expand)` + 可索引谓词 → `tryBoundEdgeIndexScan()` → `EdgeIndexScanPhysicalOp`
+- 可索引谓词的值可以是 literal，也可以是**只含 literal 的数值表达式**：参数在 Binder 里已经
+  变成 `BoundLiteral`，`bind_expression` 对 `+` / `-` / `*` 的 int64/double 字面量做常量折叠
+  （溢出、除零、字符串拼接不折叠，保持运行时语义）。这让 update-7 的
+  `Message.id = $replyToPostId + $replyToCommentId + 1` 走 `IndexScan`，而不是 286k 全扫描。
 
 可索引谓词提取通过 `collectBoundConditions()` / `tryExtractBoundCondition()`，支持等值和范围条件。
 

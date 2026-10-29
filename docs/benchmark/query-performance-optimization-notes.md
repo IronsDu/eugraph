@@ -516,3 +516,28 @@ base 逐条一致，c5/c9/c14 与 neo4j 逐行一致（id 的 int/string 表示�
 - 按开发者要求未跑全量 TCK；本地 ctest 去掉 `tck_tests` 后全部通过
   （`bolt_python_driver_integration_tests` 首次因本机基准 server 占用 19090 失败，
   释放端口后单测通过，不是代码问题）。
+
+### 8.13 update-7：参数常量折叠走索引（2026-10-29）
+
+**根因**：Binder 在绑定时已把 `$param` 替换成 `BoundLiteral`，但
+`$replyToPostId + $replyToCommentId + 1` 仍是一个 `BoundBinaryOp`。索引选择
+（`tryExtractBoundCondition`）只接受右侧是单个 literal，于是退化为
+`Filter + LabelScan(Message)` 的 286k 全扫描；neo4j 先算表达式再走 `Message(id)` 索引。
+
+**修复**：`bind_expression.cpp` 对两个 literal 的 `+` / `-` / `*` 做常量折叠
+（int64 用 `__int128` 检查溢出，double 直接算；除零、字符串拼接、溢出保持原表达式，
+不改变运行时语义）。折叠后谓词变成 `id = <literal>`，`tryBoundIndexScan` 选中
+`Message.id` 索引。
+
+**结果（LDBC sf0.1，同一 CsvComposite 副本）**：
+
+| | eugraph | neo4j | 比值 |
+|---|---:|---:|---:|
+| update-7（add comment） | 332.5 → **28.6 ms** | 21.1 ms | 18.7× → **1.4×** |
+
+`EXPLAIN` 从 `Filter → ProjectionExtract → LabelScan(Message)` 变为
+`ProjectionExtract → IndexScan(label=Message)`。
+
+**验证**：新增 `QueryExecutorTest.ParameterArithmeticFoldsIntoIndexSeek`
+（断言 EXPLAIN 含 `IndexScan` 且结果正确）；Release `query_executor_tests`
+596/596；全量 TCK 3905/3957 scenarios，0 failed。

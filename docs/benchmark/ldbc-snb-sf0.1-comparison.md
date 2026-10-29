@@ -103,13 +103,14 @@ person/target；每条语句执行 3 次取 min，eugraph/neo4j 按 E→N→N→
 | update-2（like post） | 7.15 | 7.78 | 🟢 快 1.1× |
 | update-4（add forum） | 22.91 | 17.37 | 🟡 慢 1.3× |
 | update-6（add post） | 23.92 | 18.02 | 🟡 慢 1.3× |
+| update-7（add comment） | **28.60** | 21.12 | 🟡 慢 1.4× |
 | update-1（add person） | 45.69 | 31.70 | 🟡 慢 1.4× |
-| update-7（add comment） | **332.52** | 17.75 | 🔴🔴 慢 18.7× |
 
 > update-7 的 `MATCH (message:Message {id: $replyToPostId + $replyToCommentId + 1})`
-> 右值是**参数表达式**，eugraph 的索引选择只认常量/参数本身，退化为 286k Message 全扫描；
-> neo4j 先算表达式再走 `Message(id)` 索引。这是当前 update 侧最大的单点差距，可在 planner
-> 做参数常量折叠后走 `IndexScan`。
+> 右值原先是一个参数表达式，eugraph 的索引选择只认常量，退化为 286k Message 全扫描
+> （332 ms）。现在 Binder 对参数（已是 literal）的 `+`/`-`/`*` 做常量折叠，谓词变成
+> `id = <literal>`，走 `Message(id)` IndexScan：**28.6 ms vs neo4j 21.1 ms（1.4×）**。
+> 溢出/除零/字符串拼接不折叠，保持运行时语义。
 >
 > 早前本地 neo4j 是字符串 id 时，该表达式会做字符串拼接并 MATCH 0 行（no-op），
 > 现已把本地库转成 INTEGER，表里的 neo4j 时间是真实插入。脚本对每条语句都做了效果校验
