@@ -26,6 +26,25 @@ std::string joinLines(const std::vector<std::string>& lines) {
     return out;
 }
 
+/// 去掉 ANSI 转义：内容断言必须在"可见文本"上做 —— 进度条的 `==` 与 `>` 是两段不同颜色，
+/// 原始串里并不存在连续的 "==>"（这条曾让用例只在彩色终端/CI 上失败）。
+std::string stripAnsi(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size();) {
+        if (text[i] == '\x1b' && i + 1 < text.size() && text[i + 1] == '[') {
+            i += 2;
+            while (i < text.size() && !(text[i] >= 0x40 && text[i] <= 0x7e))
+                ++i;
+            if (i < text.size())
+                ++i;
+            continue;
+        }
+        out.push_back(text[i++]);
+    }
+    return out;
+}
+
 } // namespace
 
 namespace {
@@ -204,10 +223,11 @@ TEST(ProgressInteractiveTest, BlockShowsOverallBarFileBarAndCounts) {
     for (const auto& line : splitLines(text))
         EXPECT_LE(visibleWidth(line), 118) << "行超宽会导致终端自动换行、原地重绘错位:\n" << line;
 
-    // 这些断言正是「只看到百分比、看不到进度条」那个问题的守卫
-    EXPECT_NE(text.find("==>"), std::string::npos) << "进度条箭头缺失\n" << text;
-    EXPECT_NE(text.find("25%"), std::string::npos) << "百分比与 50/200 不一致\n" << text;
-    EXPECT_NE(text.find("50/200"), std::string::npos) << "已处理/总数缺失\n" << text;
+    // 内容断言在剥掉 ANSI 之后做：`==` 与 `>` 是两段不同颜色，原始串里没有连续的 "==>"
+    const std::string plain = stripAnsi(text);
+    EXPECT_NE(plain.find("==>"), std::string::npos) << "进度条箭头缺失\n" << plain;
+    EXPECT_NE(plain.find("25%"), std::string::npos) << "百分比与 50/200 不一致\n" << plain;
+    EXPECT_NE(plain.find("50/200"), std::string::npos) << "已处理/总数缺失\n" << plain;
     EXPECT_NE(text.find("?25l"), std::string::npos) << "没有隐藏光标";
     EXPECT_NE(text.find("?25h"), std::string::npos) << "析构没有恢复光标";
 }
@@ -228,8 +248,9 @@ TEST(ProgressInteractiveTest, LongFileNamesKeepBarCountsAndWidth) {
     EXPECT_TRUE(ansiWellFormed(text));
     for (const auto& line : splitLines(text))
         EXPECT_LE(visibleWidth(line), 118) << line;
-    EXPECT_NE(text.find("500/1,000"), std::string::npos) << "长文件名把行尾计数挤掉了\n" << text;
-    EXPECT_NE(text.find("50%"), std::string::npos) << text;
+    const std::string plain = stripAnsi(text);
+    EXPECT_NE(plain.find("500/1,000"), std::string::npos) << "长文件名把行尾计数挤掉了\n" << plain;
+    EXPECT_NE(plain.find("50%"), std::string::npos) << plain;
 }
 
 TEST(ProgressInteractiveTest, CompletedPhaseShowsFullBarAndHundredPercent) {
@@ -244,6 +265,7 @@ TEST(ProgressInteractiveTest, CompletedPhaseShowsFullBarAndHundredPercent) {
     }
     const std::string text = out.str();
     EXPECT_TRUE(ansiWellFormed(text));
-    EXPECT_NE(text.find("100%"), std::string::npos) << text;
-    EXPECT_NE(text.find("======"), std::string::npos) << "完成时进度条应被填满\n" << text;
+    const std::string plain = stripAnsi(text);
+    EXPECT_NE(plain.find("100%"), std::string::npos) << plain;
+    EXPECT_NE(plain.find("======"), std::string::npos) << "完成时进度条应被填满\n" << plain;
 }
