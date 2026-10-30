@@ -96,6 +96,56 @@ function canvasCaption(caption: string): string {
   return caption.length <= 8 ? caption : `${caption.slice(0, 7)}…`;
 }
 
+const CENTER_NODE_COLOR = '#a78bfa';
+
+/** Highlight the highest-degree node in each non-trivial connected component. */
+function highlightComponentCenters(graph: MultiDirectedGraph): void {
+  const parent = new Map<string, string>();
+  const find = (node: string): string => {
+    let root = node;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    while (parent.get(node) !== root) {
+      const next = parent.get(node)!;
+      parent.set(node, root);
+      node = next;
+    }
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  };
+
+  for (const node of graph.nodes()) parent.set(node, node);
+  graph.forEachEdge((_edge, _attrs, source, target) => union(source, target));
+
+  const groups = new Map<string, string[]>();
+  for (const node of graph.nodes()) {
+    const root = find(node);
+    const group = groups.get(root);
+    if (group) group.push(node);
+    else groups.set(root, [node]);
+  }
+
+  for (const group of groups.values()) {
+    if (group.length < 3) continue;
+    let center: string | null = null;
+    let bestDegree = -1;
+    for (const node of group) {
+      const degree = graph.degree(node);
+      if (degree > bestDegree) {
+        bestDegree = degree;
+        center = node;
+      }
+    }
+    if (center && bestDegree > 1) {
+      graph.setNodeAttribute(center, 'color', CENTER_NODE_COLOR);
+      graph.setNodeAttribute(center, 'hub', true);
+    }
+  }
+}
+
 /** Extract graph elements from query records. Deduplicates by element id and caps
  * the result so a wide query cannot freeze the browser. */
 export function extractGraph(records: any[]): GraphResult {
@@ -176,7 +226,7 @@ export function extractGraph(records: any[]): GraphResult {
     graph.addEdgeWithKey(id, source, target, {
       label: value.type ?? '',
       color: '#9aa4b8',
-      size: 2.2,
+      size: 3.2,
       labelSize: 9,
       type: value.type ?? '',
       properties: value.properties ?? {},
@@ -216,5 +266,6 @@ export function extractGraph(records: any[]): GraphResult {
     for (const key of record.keys) visit(record.get(key));
   }
 
+  highlightComponentCenters(graph);
   return { graph, truncated };
 }

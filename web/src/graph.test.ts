@@ -98,3 +98,24 @@ describe('generic node captions', () => {
     expect(result.graph.getNodeAttribute('n2', 'caption')).toBe('X-1');
   });
 });
+
+describe('component center highlighting', () => {
+  it('highlights the highest-degree node in a component', () => {
+    const center = node('n1', 'Person', { name: 'Center' });
+    const a = node('n2', 'Person', { name: 'A' });
+    const b = node('n3', 'Person', { name: 'B' });
+    const c = node('n4', 'Person', { name: 'C' });
+    const result = extractGraph([
+      record({
+        a: center,
+        r1: relationship('r1', 'KNOWS', 'n1', 'n2'),
+        r2: relationship('r2', 'KNOWS', 'n1', 'n3'),
+        r3: relationship('r3', 'KNOWS', 'n1', 'n4'),
+      }),
+    ]);
+    expect(result.graph.getNodeAttribute('n1', 'hub')).toBe(true);
+    expect(result.graph.getNodeAttribute('n1', 'color')).not.toBe(
+      result.graph.getNodeAttribute('n2', 'color')
+    );
+  });
+});

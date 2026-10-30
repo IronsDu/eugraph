@@ -84,7 +84,7 @@ export class GraphView {
     });
     if (order > 300) {
       result.graph.forEachEdge((edge, attributes) => {
-        result.graph.setEdgeAttribute(edge, 'size', ((attributes.size as number) ?? 2.2) * 0.75);
+        result.graph.setEdgeAttribute(edge, 'size', ((attributes.size as number) ?? 3.2) * 0.75);
         result.graph.setEdgeAttribute(edge, 'color', '#6b7280');
       });
     }
@@ -102,14 +102,15 @@ export class GraphView {
           edges: {
             ...DEFAULT_PRIMITIVES.edges,
             paths: [pathLine(), pathCurved({ curvature: 0.22 })],
-            extremities: [extremityArrow({ lengthRatio: 8, widthRatio: 6 })],
+            extremities: [extremityArrow({ lengthRatio: 10, widthRatio: 8 })],
           },
         },
         settings: {
-          renderEdgeLabels: result.graph.size <= 400,
+          renderEdgeLabels: result.graph.size <= 1000,
           labelRenderedSizeThreshold: 0,
           enableEdgeEvents: true,
-          edgePickingPadding: 30,
+          edgeLabelAnchors: 'allNodes',
+          edgePickingPadding: 34,
           nodePickingPadding: 6,
           itemSizesReference: 'positions',
           autoRescale: order > 3,
@@ -128,8 +129,9 @@ export class GraphView {
               ...DEFAULT_STYLES.edges,
               path: 'curved',
               head: 'arrow',
-              labelColor: '#c8d2e6',
+              labelColor: '#9ca3af',
               labelSize: { attribute: 'labelSize' },
+              labelVisibility: result.graph.size <= 400 ? 'visible' : 'auto',
             },
           ],
         },
