@@ -444,12 +444,12 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       const item = h(
         'button',
         {
-          class: `database-item${entry.current || entry.name === state.database ? ' current' : ''}`,
+          class: `database-item${entry.name === state.database ? ' current' : ''}`,
           type: 'button',
           role: 'option',
-          'aria-selected': entry.current || entry.name === state.database ? 'true' : 'false',
+          'aria-selected': entry.name === state.database ? 'true' : 'false',
         },
-        h('span', { class: 'database-item-check' }, entry.current || entry.name === state.database ? '✓' : ''),
+        h('span', { class: 'database-item-check' }, entry.name === state.database ? '✓' : ''),
         h('span', { class: 'database-item-name' }, entry.name),
         h('span', { class: 'database-item-status' }, entry.status || '')
       ) as HTMLButtonElement;
@@ -508,6 +508,12 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     sidebarRelationships.replaceChildren();
   }
 
+  function cypherIdentifier(name: string): string {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+      ? name
+      : `\`${name.replaceAll('`', '``')}\``;
+  }
+
   function renderSidebarList(
     container: HTMLElement,
     items: string[],
@@ -521,11 +527,11 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     for (const item of items) {
       const button = h('button', { class: 'sidebar-item', type: 'button', title: item }, item);
       button.addEventListener('click', () => {
-        const escaped = item.replaceAll('`', '``');
+        const identifier = cypherIdentifier(item);
         editor.value =
           kind === 'label'
-            ? `MATCH (n:\`${escaped}\`) RETURN n LIMIT 100`
-            : `MATCH (a)-[r:\`${escaped}\`]->(b) RETURN a, r, b LIMIT 100`;
+            ? `MATCH (n:${identifier}) RETURN n LIMIT 100`
+            : `MATCH (a)-[r:${identifier}]->(b) RETURN a, r, b LIMIT 100`;
         editor.focus();
         editor.setSelectionRange(0, editor.value.length);
       });
