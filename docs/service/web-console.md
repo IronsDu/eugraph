@@ -62,7 +62,8 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
   用 Canvas `measureText` 精确裁切，超出圆直径的部分加省略号，绝不会溢出圆圈。
   默认上限 2000 节点 / 5000 边，超限显示截断提示。
 - 命令：`:help`、`:clear`、`:history`、`:use`、`:dbs`、`:param`、`:params`、
-  `:params clear`、`:params {json}`、`:explain`、`:schema`。
+  `:params clear`、`:params {json}`、`:explain`、`:schema`。`:help` 显示在独立的信息 frame 中，
+  内容区可滚动，不再挤在编辑器下方的 message 里。
 - 导出：CSV（当前结果集）、图截图（后续里程碑）。
 - Stop：通过 `session.close()` 发送 RESET。服务端在解码到 RESET 时**立即**置取消位，
   正在流式产出的算子在下一个检查点停止并回滚；单条阻断型算子（如超大 `UNWIND` 聚合）

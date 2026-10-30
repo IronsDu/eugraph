@@ -1310,3 +1310,16 @@ html[data-theme='light'] .graph-notice {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Scrollable informational result frame (e.g. :help) */
+.frame-info {
+  max-height: var(--frame-body-height, 510px);
+  overflow: auto;
+  padding: 14px 16px;
+  color: var(--text-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

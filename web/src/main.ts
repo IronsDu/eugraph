@@ -1115,6 +1115,30 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     registerFrame(createResultFrame(query, columns, records, resultSummary));
   }
 
+  function addInfoFrame(query: string, summaryText: string, text: string): void {
+    const { header, edit, close } = frameHeader(query, summaryText);
+    edit.remove();
+    let destroyed = false;
+    const root = h(
+      'article',
+      { class: 'result-frame info-frame' },
+      header,
+      h('div', { class: 'frame-info' }, text)
+    );
+    const handle: FrameHandle = {
+      root,
+      query,
+      summaryText,
+      destroy: () => {
+        if (destroyed) return;
+        destroyed = true;
+        unregisterFrame(handle);
+      },
+    };
+    close.addEventListener('click', handle.destroy);
+    registerFrame(handle);
+  }
+
   function addErrorFrame(query: string, text: string): void {
     const summaryText = '执行失败';
     const { header, edit, close, queryElement, summaryElement } = frameHeader(query, summaryText);
@@ -1186,7 +1210,8 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
   async function handleMeta(command: string, args: string, token: number): Promise<void> {
     switch (command) {
       case 'help':
-        setMessage(HELP, 'info');
+        clearMessage();
+        addInfoFrame(':help', '帮助', HELP);
         return;
       case 'clear':
         clearFrames();
