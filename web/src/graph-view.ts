@@ -101,7 +101,7 @@ export class GraphView {
           enableEdgeEvents: true,
           itemSizesReference: 'positions',
           autoRescale: order > 3,
-          minCameraRatio: 0.2,
+          minCameraRatio: 0.005,
           maxCameraRatio: 8,
         },
         styles: {
@@ -186,7 +186,7 @@ export class GraphView {
     if (!this.sigma || this.fitPixelsPerUnit === null) return;
     const pixelsPerUnit = this.sigma.scaleSize(1);
     if (!Number.isFinite(pixelsPerUnit) || pixelsPerUnit <= 0) return;
-    const zoom = Math.max(0.05, Math.min(2.0, pixelsPerUnit / this.fitPixelsPerUnit));
+    const zoom = Math.max(0.05, Math.min(12.0, pixelsPerUnit / this.fitPixelsPerUnit));
     this.pendingZoom = zoom;
     if (Math.abs(zoom - this.currentZoom) < 0.01) return;
     if (this.scaleFrame !== null) return;
@@ -203,23 +203,25 @@ export class GraphView {
     if (!force && Math.abs(zoom - this.currentZoom) < 0.02) return;
     this.currentZoom = zoom;
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
-    const labelSize = Math.max(1, (this.denseGraph ? 6.5 : 8) * zoom);
+    const baseLabelSize = Math.max(1, (this.denseGraph ? 6.5 : 8) * zoom);
     const context = this.measureContext;
-    if (context) context.font = `${labelSize}px sans-serif`;
-    const measure = (text: string): number =>
-      context ? context.measureText(text).width : text.length * labelSize * 0.62;
     graph.forEachNode((node, attributes) => {
       const caption: string = attributes.caption ?? attributes.label ?? `#${node}`;
-      // Sigma node `size` is a radius; cap the caption to the visible circle
-      // diameter (with a small inset) at the current camera scale.
+      // Sigma node `size` is a radius. At high camera zoom a globally scaled
+      // label can become wider than the node itself (and even the ellipsis
+      // cannot fit), so cap the font size against this node's screen diameter.
       const screenRadius = this.sigma.scaleSize((attributes.size as number) ?? 10);
-      const maxWidth = Math.max(0, screenRadius * 2 * 0.9);
+      const maxWidth = Math.max(0, screenRadius * 2 * 0.88);
+      const labelSize = Math.max(6, Math.min(baseLabelSize, maxWidth * 0.25));
+      if (context) context.font = `${labelSize}px sans-serif`;
+      const measure = (text: string): number =>
+        context ? context.measureText(text).width : text.length * labelSize * 0.62;
       const label = truncateCaptionToWidth(caption, maxWidth, measure);
       graph.setNodeAttribute(node, 'labelSize', labelSize);
       graph.setNodeAttribute(node, 'label', label);
     });
     graph.forEachEdge((edge) => {
-      graph.setEdgeAttribute(edge, 'labelSize', labelSize);
+      graph.setEdgeAttribute(edge, 'labelSize', Math.min(baseLabelSize, 24));
     });
     this.sigma.refresh();
   }
