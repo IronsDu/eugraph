@@ -23,8 +23,9 @@ export class GraphView {
   private readonly inspectorBody: HTMLElement;
   private readonly notice: HTMLElement;
   private readonly labelLayer: HTMLElement;
-  private readonly selectionRing: HTMLElement;
   private selectedNode: string | null = null;
+  private selectedOriginalColor: unknown = undefined;
+  private selectedOriginalSize: number | null = null;
   private sigma: any | null = null;
   private readonly cameraHandler = (): void => this.onCameraUpdated();
   private fitPixelsPerUnit: number | null = null;
@@ -65,16 +66,13 @@ export class GraphView {
     this.labelLayer = document.createElement('div');
     this.labelLayer.className = 'graph-label-layer';
 
-    this.selectionRing = document.createElement('div');
-    this.selectionRing.className = 'graph-selection-ring hidden';
-
-    container.append(this.selectionRing, this.labelLayer, this.inspector, this.notice);
+    container.append(this.labelLayer, this.inspector, this.notice);
   }
 
   render(result: GraphResult): boolean {
     this.destroy();
     if (result.graph.order === 0) {
-      this.container.append(this.selectionRing, this.labelLayer, this.inspector);
+      this.container.append(this.labelLayer, this.inspector);
       return false;
     }
 
@@ -161,18 +159,15 @@ export class GraphView {
 
     this.sigma.on('afterRender', () => this.scheduleLabelLayer());
     this.sigma.on('clickNode', (payload: any) => {
-      this.selectedNode = payload.node;
-      this.scheduleLabelLayer();
+      this.selectNode(payload.node);
       this.showNode(payload.node);
     });
     this.sigma.on('clickEdge', (payload: any) => {
-      this.selectedNode = null;
-      this.selectionRing.classList.add('hidden');
+      this.clearNodeSelection();
       this.showEdge(payload.edge);
     });
     this.sigma.on('clickStage', () => {
-      this.selectedNode = null;
-      this.selectionRing.classList.add('hidden');
+      this.clearNodeSelection();
       this.hideInspector();
     });
     this.fitPixelsPerUnit = null;
@@ -215,8 +210,9 @@ export class GraphView {
     }
     this.fitPixelsPerUnit = null;
     this.selectedNode = null;
-    this.selectionRing.classList.add('hidden');
-    this.container.replaceChildren(this.selectionRing, this.labelLayer, this.inspector, this.notice);
+    this.selectedOriginalColor = undefined;
+    this.selectedOriginalSize = null;
+    this.container.replaceChildren(this.labelLayer, this.inspector, this.notice);
     this.notice.classList.add('hidden');
     this.hideInspector();
   }
@@ -251,41 +247,41 @@ export class GraphView {
     this.sigma.refresh();
   }
 
-  private renderSelectionRing(): void {
+  private clearNodeSelection(): void {
     if (!this.sigma || !this.selectedNode) {
-      this.selectionRing.classList.add('hidden');
+      this.selectedNode = null;
+      this.selectedOriginalColor = undefined;
+      this.selectedOriginalSize = null;
       return;
     }
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
-    if (!graph.hasNode(this.selectedNode)) {
-      this.selectedNode = null;
-      this.selectionRing.classList.add('hidden');
-      return;
+    if (graph.hasNode(this.selectedNode)) {
+      if (this.selectedOriginalColor !== undefined) {
+        graph.setNodeAttribute(this.selectedNode, 'color', this.selectedOriginalColor as string);
+      }
+      if (this.selectedOriginalSize !== null) {
+        graph.setNodeAttribute(this.selectedNode, 'size', this.selectedOriginalSize);
+      }
     }
-    const attributes = graph.getNodeAttributes(this.selectedNode);
-    const x = Number(attributes.x);
-    const y = Number(attributes.y);
-    const point = this.sigma.graphToViewport({ x, y });
-    const radius = this.sigma.scaleSize((attributes.size as number) ?? 10);
-    const dimensions = this.sigma.getDimensions();
-    if (
-      !Number.isFinite(point.x) ||
-      !Number.isFinite(point.y) ||
-      !Number.isFinite(radius) ||
-      point.x < -radius ||
-      point.y < -radius ||
-      point.x > dimensions.width + radius ||
-      point.y > dimensions.height + radius
-    ) {
-      this.selectionRing.classList.add('hidden');
-      return;
-    }
-    const diameter = Math.max(10, radius * 2 + 6);
-    this.selectionRing.style.left = `${point.x}px`;
-    this.selectionRing.style.top = `${point.y}px`;
-    this.selectionRing.style.width = `${diameter}px`;
-    this.selectionRing.style.height = `${diameter}px`;
-    this.selectionRing.classList.remove('hidden');
+    this.selectedNode = null;
+    this.selectedOriginalColor = undefined;
+    this.selectedOriginalSize = null;
+    this.sigma.refresh();
+  }
+
+  private selectNode(node: string): void {
+    if (!this.sigma) return;
+    this.clearNodeSelection();
+    const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    if (!graph.hasNode(node)) return;
+    const attributes = graph.getNodeAttributes(node);
+    this.selectedNode = node;
+    this.selectedOriginalColor = attributes.color;
+    this.selectedOriginalSize = (attributes.size as number) ?? 10;
+    graph.setNodeAttribute(node, 'color', '#5b9dff');
+    graph.setNodeAttribute(node, 'size', ((attributes.size as number) ?? 10) * 1.18);
+    this.sigma.refresh();
+    this.scheduleLabelLayer();
   }
 
   private scheduleLabelLayer(): void {
@@ -299,7 +295,6 @@ export class GraphView {
   /** HTML labels give us the multi-line, circle-fitted captions that Sigma's
    * WebGL label program cannot render. Only visible labels are materialized. */
   private renderLabelLayer(): void {
-    this.renderSelectionRing();
     if (!this.sigma) {
       this.labelLayer.replaceChildren();
       return;
