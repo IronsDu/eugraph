@@ -96,7 +96,7 @@ function connectedComponents(graph: MultiDirectedGraph): { components: string[][
 function componentSubgraph(graph: MultiDirectedGraph, nodes: string[]): MultiDirectedGraph {
   const sub = new MultiDirectedGraph();
   const member = new Set(nodes);
-  const radius = Math.max(10, (nodes.length * 45) / (2 * Math.PI));
+  const radius = Math.max(10, Math.sqrt(nodes.length) * 40);
   nodes.forEach((node, index) => {
     const angle = (2 * Math.PI * index) / nodes.length - Math.PI / 2;
     sub.addNode(node, {
@@ -113,6 +113,124 @@ function componentSubgraph(graph: MultiDirectedGraph, nodes: string[]): MultiDir
   return sub;
 }
 
+function layoutComponentForce(
+  graph: MultiDirectedGraph,
+  nodes: string[],
+  sub: MultiDirectedGraph
+): Positioned {
+  const index = new Map<string, number>();
+  const x = new Float64Array(nodes.length);
+  const y = new Float64Array(nodes.length);
+  const vx = new Float64Array(nodes.length);
+  const vy = new Float64Array(nodes.length);
+  const radii = new Float64Array(nodes.length);
+  let maxNodeRadius = 0;
+  nodes.forEach((node, i) => {
+    index.set(node, i);
+    x[i] = (sub.getNodeAttribute(node, 'x') as number) ?? 0;
+    y[i] = (sub.getNodeAttribute(node, 'y') as number) ?? 0;
+    radii[i] = (graph.getNodeAttribute(node, 'size') as number) ?? 10;
+    maxNodeRadius = Math.max(maxNodeRadius, radii[i]);
+  });
+
+  const links: Array<{ source: number; target: number }> = [];
+  const degree = new Int32Array(nodes.length);
+  sub.forEachEdge((_edge, _attrs, source, target) => {
+    const a = index.get(source);
+    const b = index.get(target);
+    if (a === undefined || b === undefined || a === b) return;
+    links.push({ source: a, target: b });
+    degree[a] += 1;
+    degree[b] += 1;
+  });
+
+  let alpha = 1;
+  let tick = 0;
+  while (alpha > 0.05 && tick < 300) {
+    tick += 1;
+    alpha *= 0.985;
+
+    // Charge and collision, Neo4j forceManyBody(-400) / forceCollide(r+25).
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        let dx = x[j] - x[i];
+        let dy = y[j] - y[i];
+        let distance = Math.hypot(dx, dy);
+        if (distance < 0.001) {
+          dx = 0.5;
+          dy = 0.5;
+          distance = Math.hypot(dx, dy);
+        }
+        const charge = Math.min(2, (400 * alpha) / Math.max(1, distance * distance));
+        vx[i] -= (dx / distance) * charge;
+        vy[i] -= (dy / distance) * charge;
+        vx[j] += (dx / distance) * charge;
+        vy[j] += (dy / distance) * charge;
+
+        const minimum = radii[i] + radii[j] + 25;
+        if (distance < minimum) {
+          const push = Math.min(30, (minimum - distance) * 0.5) / distance;
+          const px = dx * push;
+          const py = dy * push;
+          x[i] -= px;
+          y[i] -= py;
+          x[j] += px;
+          y[j] += py;
+        }
+      }
+    }
+
+    // Links, target distance r1 + r2 + 90.
+    for (const link of links) {
+      const a = link.source;
+      const b = link.target;
+      const dx = x[b] - x[a];
+      const dy = y[b] - y[a];
+      const distance = Math.hypot(dx, dy) || 0.001;
+      const target = radii[a] + radii[b] + 90;
+      const strength = 1 / Math.max(1, Math.min(degree[a], degree[b]));
+      const force = Math.max(
+        -1.5,
+        Math.min(1.5, ((distance - target) / distance) * strength * alpha)
+      );
+      vx[a] += (dx / distance) * force;
+      vy[a] += (dy / distance) * force;
+      vx[b] -= (dx / distance) * force;
+      vy[b] -= (dy / distance) * force;
+    }
+
+    // Center force (0.03) and velocity integration.
+    for (let i = 0; i < nodes.length; i += 1) {
+      vx[i] += -x[i] * 0.03 * alpha;
+      vy[i] += -y[i] * 0.03 * alpha;
+      vx[i] = Math.max(-20, Math.min(20, vx[i]));
+      vy[i] = Math.max(-20, Math.min(20, vy[i]));
+      vx[i] *= 0.6;
+      vy[i] *= 0.6;
+      x[i] = Math.max(-1e5, Math.min(1e5, x[i] + vx[i]));
+      y[i] = Math.max(-1e5, Math.min(1e5, y[i] + vy[i]));
+    }
+  }
+
+  let sumX = 0;
+  let sumY = 0;
+  for (let i = 0; i < nodes.length; i += 1) {
+    sumX += x[i];
+    sumY += y[i];
+  }
+  const centerX = sumX / nodes.length;
+  const centerY = sumY / nodes.length;
+  let radius = 0;
+  nodes.forEach((node, i) => {
+    const px = x[i] - centerX;
+    const py = y[i] - centerY;
+    graph.setNodeAttribute(node, 'x', px);
+    graph.setNodeAttribute(node, 'y', py);
+    radius = Math.max(radius, Math.hypot(px, py));
+  });
+  return { nodes, radius: Math.max(NODE_MARGIN, radius + maxNodeRadius + NODE_MARGIN) };
+}
+
 function layoutComponent(graph: MultiDirectedGraph, nodes: string[]): Positioned {
   if (nodes.length === 1) {
     graph.setNodeAttribute(nodes[0], 'x', 0);
@@ -121,6 +239,9 @@ function layoutComponent(graph: MultiDirectedGraph, nodes: string[]): Positioned
   }
 
   const sub = componentSubgraph(graph, nodes);
+  if (nodes.length <= 600) {
+    return layoutComponentForce(graph, nodes, sub);
+  }
   const iterations = nodes.length <= 80 ? 220 : nodes.length <= 400 ? 160 : 110;
   try {
     forceAtlas2.assign(sub, {
