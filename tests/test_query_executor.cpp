@@ -1772,6 +1772,33 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+/// `UNWIND list AS key MATCH (v:Label {prop: key})` 不能退化成
+/// CrossProduct + LabelScan（LDBC update 的 Tag 循环会为每个 tag 扫 16k 行），
+/// 应改写成 Apply + IndexScanValues 的逐行索引探测。
+TEST_F(QueryExecutorTest, UnwindMatchPlansCorrelatedIndexProbe) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {id: 7}), (b:Person {id: 8})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_probe FOR (n:Person) ON (n.id)").error.empty());
+
+    const std::string query = "UNWIND [7, 8] AS pid MATCH (p:Person {id: pid}) RETURN p.id AS id ORDER BY id";
+    const std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty());
+    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
+    EXPECT_NE(plan_text.find("Apply"), std::string::npos) << plan_text;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 7);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 8);
+
+    // IndexScanValues concatenates per-value matches: duplicate keys must not
+    // be deduplicated (CrossProduct + Filter preserves the same multiplicity).
+    auto duplicated = execSync(*executor_, "UNWIND [7, 7] AS pid MATCH (p:Person {id: pid}) RETURN count(*) AS n");
+    ASSERT_TRUE(duplicated.error.empty()) << duplicated.error;
+    ASSERT_EQ(duplicated.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(duplicated.rows[0][0]), 2);
+}
+
 /// update-7 的 `Message.id = $a + $b + 1`：参数在 Binder 里已是 literal，
 /// 再把 literal 算术折叠成单个 literal 后，索引选择才能看到常量并走 IndexScan。
 TEST_F(QueryExecutorTest, ParameterArithmeticFoldsIntoIndexSeek) {
@@ -1799,6 +1826,118 @@ TEST_F(QueryExecutorTest, ParameterArithmeticFoldsIntoIndexSeek) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "folded");
+}
+
+/// 常量折叠不只覆盖 `+`：嵌套的 `-` / `*` 也要在绑定期折叠，索引才能命中。
+TEST_F(QueryExecutorTest, ParameterArithmeticFoldsNestedSubtractionAndMultiplication) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {id: 42, name: 'nested'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_nested FOR (n:Person) ON (n.id)").error.empty());
+
+    const std::string query = "MATCH (n:Person {id: ($a - $b) * $c}) RETURN n.name AS name";
+    const std::unordered_map<std::string, Value> params{
+        {"a", Value(static_cast<int64_t>(50))},
+        {"b", Value(static_cast<int64_t>(8))},
+        {"c", Value(static_cast<int64_t>(1))},
+    };
+
+    auto explained = execSyncParams(*executor_, "EXPLAIN " + query, params);
+    ASSERT_TRUE(explained.error.empty()) << explained.error;
+    std::string plan_text;
+    for (const auto& row : explained.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_text += std::get<std::string>(row[0]) + "\n";
+    }
+    EXPECT_NE(plan_text.find("IndexScan"), std::string::npos) << plan_text;
+
+    auto result = execSyncParams(*executor_, query, params);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "nested");
+}
+
+/// 折叠只处理数值；字符串拼接、double 运算必须保持原有运行时语义。
+TEST_F(QueryExecutorTest, ParameterArithmeticFoldPreservesStringAndDoubleSemantics) {
+    auto concat = execSyncParams(*executor_, "RETURN $a + $b AS v",
+                                 {{"a", Value(std::string("ab"))}, {"b", Value(std::string("cd"))}});
+    ASSERT_TRUE(concat.error.empty()) << concat.error;
+    ASSERT_EQ(concat.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(concat.rows[0][0]), "abcd");
+
+    auto product =
+        execSyncParams(*executor_, "RETURN $a * $b AS v", {{"a", Value(1.5)}, {"b", Value(static_cast<int64_t>(4))}});
+    ASSERT_TRUE(product.error.empty()) << product.error;
+    ASSERT_EQ(product.rows.size(), 1u);
+    EXPECT_DOUBLE_EQ(std::get<double>(product.rows[0][0]), 6.0);
+
+    auto subtraction = execSyncParams(*executor_, "RETURN $a - $b AS v",
+                                      {{"a", Value(static_cast<int64_t>(10))}, {"b", Value(static_cast<int64_t>(3))}});
+    ASSERT_TRUE(subtraction.error.empty()) << subtraction.error;
+    ASSERT_EQ(subtraction.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(subtraction.rows[0][0]), 7);
+}
+
+/// 逐行索引探测要支持字符串 key，并且保留 Unwind 的左侧列（返回值里同时有 key 和 p）。
+TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeSupportsStringKeysAndLeftColumns) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {id: 7, name: 'Alice'}), "
+                                     "(b:Person {id: 8, name: 'Bob'})")
+                    .error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_name_probe FOR (n:Person) ON (n.name)").error.empty());
+
+    const std::string query = "UNWIND ['Alice', 'Bob'] AS nm "
+                              "MATCH (p:Person {name: nm}) "
+                              "RETURN nm AS key, p.id AS id ORDER BY key";
+    const std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty());
+    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
+    EXPECT_NE(plan_text.find("Apply"), std::string::npos) << plan_text;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 7);
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "Bob");
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][1]), 8);
+}
+
+/// 参数列表（不是字面量）也要逐行探测；NULL key 不匹配；没有索引时保持 LabelScan 回退。
+TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeHandlesParamsNullAndFallback) {
+    ASSERT_TRUE(
+        execSync(*executor_, "CREATE (a:Person {id: 7, name: 'x'}), (b:Person {id: 8, name: 'y'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_param_probe FOR (n:Person) ON (n.id)").error.empty());
+
+    const auto ids = mk<ListValue>(std::vector<ValueStorage>{
+        ValueStorage{Value(static_cast<int64_t>(7))},
+        ValueStorage{Value(static_cast<int64_t>(8))},
+    });
+    const std::unordered_map<std::string, Value> params{{"ids", Value(ids)}};
+    const std::string param_query = "UNWIND $ids AS pid MATCH (p:Person {id: pid}) RETURN p.id AS id ORDER BY id";
+    auto explained = execSyncParams(*executor_, "EXPLAIN " + param_query, params);
+    ASSERT_TRUE(explained.error.empty()) << explained.error;
+    std::string plan_text;
+    for (const auto& row : explained.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_text += std::get<std::string>(row[0]) + "\n";
+    }
+    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
+
+    auto result = execSyncParams(*executor_, param_query, params);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 7);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 8);
+
+    auto null_key = execSync(*executor_, "UNWIND [null, 7] AS pid MATCH (p:Person {id: pid}) "
+                                         "RETURN count(*) AS n");
+    ASSERT_TRUE(null_key.error.empty()) << null_key.error;
+    ASSERT_EQ(null_key.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(null_key.rows[0][0]), 1);
+
+    const std::string no_index = "UNWIND ['x', 'y'] AS nm MATCH (p:Person {name: nm}) RETURN count(*) AS n";
+    const std::string fallback_plan = getExplainPlanText(*executor_, no_index);
+    ASSERT_FALSE(fallback_plan.empty());
+    EXPECT_NE(fallback_plan.find("LabelScan"), std::string::npos) << fallback_plan;
+    EXPECT_EQ(fallback_plan.find("IndexScanValues"), std::string::npos) << fallback_plan;
 }
 
 TEST_F(QueryExecutorTest, MatchMultiplePatternReusedStartAvoidsCrossProduct) {

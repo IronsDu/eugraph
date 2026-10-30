@@ -1898,6 +1898,138 @@ static void ensureSlotLayout(PlanOperatorResult& result, PlanContext& ctx) {
 
 } // namespace
 
+/// `UNWIND list AS key MATCH (v:Label {prop: key})` currently becomes
+/// CrossProduct(Unwind, LabelScan) + Filter(prop = key), i.e. every unwind row
+/// scans the whole label (Tag has 16k rows in LDBC sf0.1). Turn the equality
+/// into a per-left-row index probe: Apply(left=Unwind, right=IndexScanValues),
+/// feeding one key at a time. Duplicate keys are preserved by IndexScanValues
+/// (it concatenates per-value matches), and rows without a match are dropped
+/// by Apply -- both match CrossProduct+Filter semantics.
+std::optional<PlanOperatorResult>
+PhysicalPlanner::tryPlanCorrelatedIndexProbe(const binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
+                                             IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
+                                             Schema input_schema, const std::vector<binder::BoundType>& input_types) {
+    const auto* unwind_ptr = std::get_if<std::unique_ptr<binder::BoundUnwindOp>>(&join.left);
+    if (!unwind_ptr || !*unwind_ptr)
+        return std::nullopt;
+    const auto* scan_ptr = std::get_if<binder::BoundLabelScanOp>(&join.right);
+    if (!scan_ptr || scan_ptr->variable.empty() || scan_ptr->label_ids.size() != 1 || scan_ptr->index_scan_values)
+        return std::nullopt;
+    const std::string right_var = scan_ptr->variable;
+    const LabelId right_label = scan_ptr->label_ids[0];
+
+    const auto* eq_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
+    if (!eq_ptr || !*eq_ptr || (*eq_ptr)->op != cypher::BinaryOperator::EQ)
+        return std::nullopt;
+    auto& eq = **eq_ptr;
+
+    std::string prop_name;
+    std::string left_var;
+
+    auto property_var = [](const binder::BoundExpression& expr) -> std::string {
+        if (const auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
+            if (pr && *pr) {
+                if (const auto* obj = std::get_if<binder::BoundColumnRef>(&(*pr)->object))
+                    return obj->name;
+            }
+        }
+        return {};
+    };
+    auto extract_prop = [&](const binder::BoundExpression& expr) -> bool {
+        if (const auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
+            if (!pr || !*pr || (*pr)->candidates.empty() || (*pr)->property_name.empty() ||
+                property_var(expr) != right_var)
+                return false;
+            prop_name = (*pr)->property_name;
+            return true;
+        }
+        if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr)) {
+            if (cr->name != right_var)
+                return false;
+            auto resolved = resolveColumnProperty(ctx, *cr);
+            if (!resolved)
+                return false;
+            prop_name = resolved->first;
+            return true;
+        }
+        return false;
+    };
+    auto extract_left_col = [&](const binder::BoundExpression& expr) -> bool {
+        const auto* cr = std::get_if<binder::BoundColumnRef>(&expr);
+        if (!cr || cr->name == right_var)
+            return false;
+        left_var = cr->name;
+        return true;
+    };
+
+    if (!((extract_prop(eq.left) && extract_left_col(eq.right)) ||
+          (extract_prop(eq.right) && extract_left_col(eq.left))))
+        return std::nullopt;
+    // `t.id` on an unlabeled scan is a coalesce across labels; candidates[0]
+    // need not be the scanned label. The index lookup is keyed by the scanned
+    // label + property name, so only that pair must be valid.
+    if (left_var.empty() || prop_name.empty())
+        return std::nullopt;
+
+    const auto label_it = ctx.label_defs.find(right_label);
+    if (label_it == ctx.label_defs.end())
+        return std::nullopt;
+    uint32_t index_id = 0;
+    for (const auto& idx : label_it->second.indexes) {
+        if (idx.state != IndexState::PUBLIC || idx.index_id == 0 || idx.accessors.size() != 1)
+            continue;
+        if (idx.accessors[0].property_name == prop_name) {
+            index_id = idx.index_id;
+            break;
+        }
+    }
+    if (index_id == 0)
+        return std::nullopt;
+
+    auto left_result = planBoundOperator(join.left, store, meta, ctx, input_schema, input_types);
+    if (std::holds_alternative<std::string>(left_result))
+        return std::nullopt;
+    auto lr = extractChildResult(std::move(left_result));
+    ensureSlotLayout(lr, ctx);
+
+    int key_col = findColumn(lr.output_schema, left_var);
+    if (key_col < 0) {
+        auto slot_it = ctx.var_slots.find(left_var);
+        if (slot_it != ctx.var_slots.end())
+            key_col = lr.slot_layout.getColumnIndex(slot_it->second);
+    }
+    if (key_col < 0 || static_cast<size_t>(key_col) >= lr.output_types.size())
+        return std::nullopt;
+    const auto key_kind = lr.output_types[static_cast<size_t>(key_col)].kind;
+    // Parameter lists (`UNWIND $tagIds`) bind their element type as ANY; the
+    // runtime scalar path accepts int64/string and yields no rows otherwise.
+    if (key_kind != binder::BoundTypeKind::INT64 && key_kind != binder::BoundTypeKind::STRING &&
+        key_kind != binder::BoundTypeKind::ANY)
+        return std::nullopt;
+
+    Schema right_schema;
+    right_schema.push_back(right_var);
+    std::vector<binder::BoundType> right_types{binder::BoundType::VertexRef()};
+    auto index_scan =
+        std::make_unique<IndexScanValuesPhysicalOp>(right_var, index_id, store, right_types, right_schema);
+    IndexScanValuesPhysicalOp* value_sink = index_scan.get();
+    TupleSlotLayout right_layout = makeSlotLayout(right_schema, ctx);
+
+    Schema output_schema = lr.output_schema;
+    output_schema.insert(output_schema.end(), right_schema.begin(), right_schema.end());
+    auto output_types = lr.output_types;
+    output_types.insert(output_types.end(), right_types.begin(), right_types.end());
+    TupleSlotLayout layout = lr.slot_layout;
+    layout.merge(right_layout);
+
+    auto apply = std::make_unique<ApplyPhysicalOp>(std::move(lr.op), std::move(index_scan), nullptr,
+                                                   std::vector<uint32_t>{static_cast<uint32_t>(key_col)}, right_types);
+    apply->setValueSink(value_sink, /*scalar_correlation=*/true);
+    apply->setEvalContext(ctx.eval_ctx);
+    PlanOperatorResult result{std::move(apply), std::move(output_schema), std::move(output_types), std::move(layout)};
+    return dispatchProjectionExtract(std::move(result), store, ctx);
+}
+
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
                                       IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
@@ -3149,6 +3281,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // ── List index join: Filter(CrossProduct) with x.prop IN left.list ──
                     if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
                         if (join_op && *join_op) {
+                            if (auto probe = tryPlanCorrelatedIndexProbe(v, **join_op, store, meta, ctx, input_schema,
+                                                                         input_types))
+                                return std::move(*probe);
                             auto list_join =
                                 tryPlanListIndexJoin(v, **join_op, store, meta, ctx, input_schema, input_types);
                             if (list_join.has_value())

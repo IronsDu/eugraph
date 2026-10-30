@@ -173,6 +173,13 @@ private:
                                                             EdgeLabelId label_id, const EdgeLabelDef& edge_label_def,
                                                             IAsyncGraphDataStore& store, PlanContext& ctx);
 
+    /// Plan Unwind + Filter(CrossProduct) + LabelScan equality as a per-row
+    /// index probe: Apply(left=Unwind, right=IndexScanValues).
+    std::optional<PlanOperatorResult>
+    tryPlanCorrelatedIndexProbe(const binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
+                                IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
+                                Schema input_schema, const std::vector<binder::BoundType>& input_types);
+
     /// Plan Filter(CrossProduct(left,right)) with `right.x.prop IN left.list`
     /// as a ListIndexJoin: the left list is injected into right's final
     /// Expand so it probes the destination index instead of scanning edges.

@@ -31,13 +31,25 @@ folly::coro::AsyncGenerator<DataChunk> ApplyPhysicalOp::executeChunk() {
             if (correlated_source_)
                 correlated_source_->setValues(std::move(corr_values));
 
-            if (value_sink_ && !corr_values.empty() && std::holds_alternative<ListValuePtr>(corr_values[0])) {
+            if (value_sink_) {
                 auto allowed = std::make_shared<std::vector<PropertyValue>>();
-                for (const auto& elem : (*std::get<ListValuePtr>(corr_values[0])).elements) {
-                    if (std::holds_alternative<int64_t>(elem.value))
-                        allowed->push_back(int64_t{std::get<int64_t>(elem.value)});
-                    else if (std::holds_alternative<std::string>(elem.value))
-                        allowed->push_back(std::get<std::string>(elem.value));
+                if (scalar_correlation_) {
+                    // One index probe per left row: the correlation column is
+                    // the scalar key, not a list.
+                    if (!corr_values.empty()) {
+                        const Value& v = corr_values[0];
+                        if (const auto* i = std::get_if<int64_t>(&v))
+                            allowed->push_back(*i);
+                        else if (const auto* s = std::get_if<std::string>(&v))
+                            allowed->push_back(*s);
+                    }
+                } else if (!corr_values.empty() && std::holds_alternative<ListValuePtr>(corr_values[0])) {
+                    for (const auto& elem : (*std::get<ListValuePtr>(corr_values[0])).elements) {
+                        if (std::holds_alternative<int64_t>(elem.value))
+                            allowed->push_back(int64_t{std::get<int64_t>(elem.value)});
+                        else if (std::holds_alternative<std::string>(elem.value))
+                            allowed->push_back(std::get<std::string>(elem.value));
+                    }
                 }
                 value_sink_->setValues(std::move(allowed));
             }
