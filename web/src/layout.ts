@@ -220,10 +220,24 @@ function layoutComponentForce(
   }
   const centerX = sumX / nodes.length;
   const centerY = sumY / nodes.length;
+  let sumNodeRadius = 0;
+  for (let i = 0; i < nodes.length; i += 1) sumNodeRadius += radii[i];
+  const averageNodeRadius = sumNodeRadius / nodes.length;
+  const packing =
+    nodes.length <= 20 ? 0.85 : nodes.length <= 100 ? 0.75 : nodes.length <= 300 ? 0.95 : 1.0;
+  const targetRadius = Math.max(
+    80,
+    Math.sqrt(nodes.length) * (2 * averageNodeRadius + NODE_GAP) * packing
+  );
+  let maxDistance = 0;
+  for (let i = 0; i < nodes.length; i += 1) {
+    maxDistance = Math.max(maxDistance, Math.hypot(x[i] - centerX, y[i] - centerY));
+  }
+  const scale = targetRadius / Math.max(1, maxDistance);
   let radius = 0;
   nodes.forEach((node, i) => {
-    const px = x[i] - centerX;
-    const py = y[i] - centerY;
+    const px = (x[i] - centerX) * scale;
+    const py = (y[i] - centerY) * scale;
     graph.setNodeAttribute(node, 'x', px);
     graph.setNodeAttribute(node, 'y', py);
     radius = Math.max(radius, Math.hypot(px, py));
@@ -462,6 +476,16 @@ export function layoutGraph(graph: MultiDirectedGraph): void {
       graph.setNodeAttribute(node, 'x', position.x);
       graph.setNodeAttribute(node, 'y', position.y);
     }
+    return;
+  }
+
+  // Neo4j runs one force simulation over the whole result. Keeping all
+  // components together avoids pushing small disconnected groups far away and
+  // shrinking the main component when a query returns many tiny components.
+  if (graph.order <= 600) {
+    const allNodes = graph.nodes();
+    const sub = componentSubgraph(graph, allNodes);
+    layoutComponentForce(graph, allNodes, sub);
     return;
   }
 

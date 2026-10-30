@@ -15,6 +15,8 @@ export class GraphView {
   private readonly inspectorBody: HTMLElement;
   private readonly notice: HTMLElement;
   private readonly labelLayer: HTMLElement;
+  private readonly selectionRing: HTMLElement;
+  private selectedNode: string | null = null;
   private sigma: any | null = null;
   private readonly cameraHandler = (): void => this.onCameraUpdated();
   private fitPixelsPerUnit: number | null = null;
@@ -54,13 +56,17 @@ export class GraphView {
 
     this.labelLayer = document.createElement('div');
     this.labelLayer.className = 'graph-label-layer';
-    container.append(this.labelLayer, this.inspector, this.notice);
+
+    this.selectionRing = document.createElement('div');
+    this.selectionRing.className = 'graph-selection-ring hidden';
+
+    container.append(this.selectionRing, this.labelLayer, this.inspector, this.notice);
   }
 
   render(result: GraphResult): boolean {
     this.destroy();
     if (result.graph.order === 0) {
-      this.container.append(this.labelLayer, this.inspector);
+      this.container.append(this.selectionRing, this.labelLayer, this.inspector);
       return false;
     }
 
@@ -73,7 +79,7 @@ export class GraphView {
 
     // Keep layout spacing but draw denser graphs with smaller marks.
     this.denseGraph = order > 300;
-    this.nodeVisualScale = order <= 3 ? 1.8 : order > 300 ? 0.85 : 0.65;
+    this.nodeVisualScale = order <= 3 ? 1.8 : order <= 20 ? 0.65 : 0.85;
     result.graph.forEachNode((node, attributes) => {
       result.graph.setNodeAttribute(
         node,
@@ -95,13 +101,15 @@ export class GraphView {
           edges: {
             ...DEFAULT_PRIMITIVES.edges,
             paths: [pathLine(), pathCurved({ curvature: 0.22 })],
-            extremities: [extremityArrow({ lengthRatio: 2.5, widthRatio: 2.0 })],
+            extremities: [extremityArrow({ lengthRatio: 6, widthRatio: 4.5 })],
           },
         },
         settings: {
           renderEdgeLabels: result.graph.size <= 400,
           labelRenderedSizeThreshold: 0,
           enableEdgeEvents: true,
+          edgePickingPadding: 14,
+          nodePickingPadding: 4,
           itemSizesReference: 'positions',
           autoRescale: order > 3,
           minCameraRatio: 0.005,
@@ -141,9 +149,21 @@ export class GraphView {
     }
 
     this.sigma.on('afterRender', () => this.scheduleLabelLayer());
-    this.sigma.on('clickNode', (payload: any) => this.showNode(payload.node));
-    this.sigma.on('clickEdge', (payload: any) => this.showEdge(payload.edge));
-    this.sigma.on('clickStage', () => this.hideInspector());
+    this.sigma.on('clickNode', (payload: any) => {
+      this.selectedNode = payload.node;
+      this.scheduleLabelLayer();
+      this.showNode(payload.node);
+    });
+    this.sigma.on('clickEdge', (payload: any) => {
+      this.selectedNode = null;
+      this.selectionRing.classList.add('hidden');
+      this.showEdge(payload.edge);
+    });
+    this.sigma.on('clickStage', () => {
+      this.selectedNode = null;
+      this.selectionRing.classList.add('hidden');
+      this.hideInspector();
+    });
     this.fitPixelsPerUnit = null;
     this.currentZoom = 1;
     this.sigma.getCamera().on('updated', this.cameraHandler);
@@ -183,7 +203,9 @@ export class GraphView {
       this.sigma = null;
     }
     this.fitPixelsPerUnit = null;
-    this.container.replaceChildren(this.labelLayer, this.inspector, this.notice);
+    this.selectedNode = null;
+    this.selectionRing.classList.add('hidden');
+    this.container.replaceChildren(this.selectionRing, this.labelLayer, this.inspector, this.notice);
     this.notice.classList.add('hidden');
     this.hideInspector();
   }
@@ -216,6 +238,43 @@ export class GraphView {
     this.sigma.refresh();
   }
 
+  private renderSelectionRing(): void {
+    if (!this.sigma || !this.selectedNode) {
+      this.selectionRing.classList.add('hidden');
+      return;
+    }
+    const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    if (!graph.hasNode(this.selectedNode)) {
+      this.selectedNode = null;
+      this.selectionRing.classList.add('hidden');
+      return;
+    }
+    const attributes = graph.getNodeAttributes(this.selectedNode);
+    const x = Number(attributes.x);
+    const y = Number(attributes.y);
+    const point = this.sigma.graphToViewport({ x, y });
+    const radius = this.sigma.scaleSize((attributes.size as number) ?? 10);
+    const dimensions = this.sigma.getDimensions();
+    if (
+      !Number.isFinite(point.x) ||
+      !Number.isFinite(point.y) ||
+      !Number.isFinite(radius) ||
+      point.x < -radius ||
+      point.y < -radius ||
+      point.x > dimensions.width + radius ||
+      point.y > dimensions.height + radius
+    ) {
+      this.selectionRing.classList.add('hidden');
+      return;
+    }
+    const diameter = Math.max(10, radius * 2 + 6);
+    this.selectionRing.style.left = `${point.x}px`;
+    this.selectionRing.style.top = `${point.y}px`;
+    this.selectionRing.style.width = `${diameter}px`;
+    this.selectionRing.style.height = `${diameter}px`;
+    this.selectionRing.classList.remove('hidden');
+  }
+
   private scheduleLabelLayer(): void {
     if (this.labelFrame !== null || !this.sigma) return;
     this.labelFrame = requestAnimationFrame(() => {
@@ -227,6 +286,7 @@ export class GraphView {
   /** HTML labels give us the multi-line, circle-fitted captions that Sigma's
    * WebGL label program cannot render. Only visible labels are materialized. */
   private renderLabelLayer(): void {
+    this.renderSelectionRing();
     if (!this.sigma) {
       this.labelLayer.replaceChildren();
       return;
