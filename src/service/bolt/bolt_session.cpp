@@ -463,7 +463,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
             }
             txn_session = std::ref(*explicit_txn_->session);
         }
-        auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name, connection_closed_, txn_session);
+        auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name, query_cancel_, txn_session);
 
         // Handle USE <graph> — update session database context
         if (!exec_ctx.switched_database.empty())
@@ -842,9 +842,14 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRoute(const RouteMess
 }
 
 folly::coro::Task<std::vector<uint8_t>> BoltSession::handleReset() {
+    spdlog::info("[bolt] RESET handled; cancel flag re-armed");
     // RESET is valid in any state, and aborts everything: the parked explicit
     // transaction and any stream still holding one.
     abandonStream(true);
+    // Re-arm cancellation for the next statement. handleReset runs only after
+    // the aborted PULL coroutine has finished (messages are serialized), so
+    // clearing the same flag cannot revive a still-running operator tree.
+    query_cancel_->store(false, std::memory_order_relaxed);
     in_transaction_ = false;
     state_ = SessionState::READY;
     std::unordered_map<std::string, packstream::Value> meta;

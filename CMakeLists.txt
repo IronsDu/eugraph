@@ -14,6 +14,9 @@ option(EUGRAPH_ENABLE_BENCHMARK "Build benchmark targets" OFF)
 option(EUGRAPH_ENABLE_CCACHE "Enable ccache for faster rebuilds" OFF)
 option(EUGRAPH_UNITY_BUILD "Enable unity builds to reduce compilation time" OFF)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+option(EUGRAPH_ENABLE_WEB_CONSOLE "Embed the EuGraph web console" ON)
+set(EUGRAPH_WEB_DIST "${PROJECT_SOURCE_DIR}/web/dist" CACHE PATH
+    "Directory containing the built web console assets (committed to the repository)")
 
 if(ENABLE_COVERAGE)
     add_compile_options(--coverage)
@@ -54,6 +57,11 @@ find_package(args CONFIG REQUIRED)
 find_package(folly CONFIG REQUIRED)
 find_package(FBThrift CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+
+if(EUGRAPH_ENABLE_WEB_CONSOLE)
+    find_package(Drogon CONFIG REQUIRED)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+endif()
 
 # WiredTiger: build as independent CMake project via ExternalProject.
 # This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
@@ -338,6 +346,7 @@ add_library(eugraph_bolt STATIC
     src/service/bolt/bolt_value_mapping.cpp
     src/service/bolt/bolt_server.cpp
     src/service/bolt/websocket.cpp
+    src/service/bolt/ws_origin.cpp
 )
 
 target_include_directories(eugraph_bolt PUBLIC
@@ -351,6 +360,57 @@ target_link_libraries(eugraph_bolt PUBLIC
     Folly::folly_deps
     spdlog::spdlog
 )
+
+# ==================== Web Console (embedded HTTP assets) ====================
+
+if(EUGRAPH_ENABLE_WEB_CONSOLE)
+    if(NOT EXISTS "${EUGRAPH_WEB_DIST}/index.html")
+        message(FATAL_ERROR
+            "web/dist/index.html is missing. Run ./scripts/build-web.sh and commit web/dist, "
+            "or configure with -DEUGRAPH_ENABLE_WEB_CONSOLE=OFF.")
+    endif()
+
+    # Vite emits content-hashed filenames, so the set of files changes whenever
+    # the frontend changes. CONFIGURE_DEPENDS re-globs at build time and
+    # add_custom_command's DEPENDS catches content changes of existing files.
+    file(GLOB_RECURSE EUGRAPH_WEB_DIST_FILES CONFIGURE_DEPENDS "${EUGRAPH_WEB_DIST}/*")
+    list(LENGTH EUGRAPH_WEB_DIST_FILES EUGRAPH_WEB_DIST_FILE_COUNT)
+    if(EUGRAPH_WEB_DIST_FILE_COUNT EQUAL 0)
+        message(FATAL_ERROR "web/dist contains no files; run ./scripts/build-web.sh")
+    endif()
+
+    find_package(Threads REQUIRED)
+    set(EUGRAPH_WEB_ASSETS_CPP "${CMAKE_CURRENT_BINARY_DIR}/web_generated/web_assets.generated.cpp")
+    add_custom_command(
+        OUTPUT "${EUGRAPH_WEB_ASSETS_CPP}"
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/gen_web_assets.py"
+                --input "${EUGRAPH_WEB_DIST}" --output "${EUGRAPH_WEB_ASSETS_CPP}"
+        DEPENDS ${EUGRAPH_WEB_DIST_FILES} "${PROJECT_SOURCE_DIR}/scripts/gen_web_assets.py"
+        COMMENT "Embedding ${EUGRAPH_WEB_DIST_FILE_COUNT} web assets"
+        VERBATIM)
+    set_source_files_properties("${EUGRAPH_WEB_ASSETS_CPP}" PROPERTIES GENERATED TRUE)
+
+    add_library(eugraph_web STATIC
+        src/service/web/web_asset.cpp
+        src/service/web/web_router.cpp
+        src/service/web/web_console.cpp
+        "${EUGRAPH_WEB_ASSETS_CPP}"
+    )
+
+    target_include_directories(eugraph_web PUBLIC
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(eugraph_web PUBLIC
+        Drogon::Drogon
+        nlohmann_json::nlohmann_json
+        ZLIB::ZLIB
+        Threads::Threads
+        spdlog::spdlog
+    )
+
+    message(STATUS "Web console: embedding ${EUGRAPH_WEB_DIST_FILE_COUNT} assets from ${EUGRAPH_WEB_DIST}")
+endif()
 
 # ==================== Thrift formatting (shared by shell & TCK) ====================
 
@@ -415,6 +475,11 @@ target_link_libraries(eugraph-server PRIVATE
     spdlog::spdlog
     dl
 )
+
+if(EUGRAPH_ENABLE_WEB_CONSOLE)
+    target_link_libraries(eugraph-server PRIVATE eugraph_web)
+    target_compile_definitions(eugraph-server PRIVATE EUGRAPH_ENABLE_WEB_CONSOLE=1)
+endif()
 
 add_dependencies(eugraph-server wiredtiger_ext)
 
@@ -1006,6 +1071,43 @@ if(EUGRAPH_BUILD_TESTS)
 
     gtest_add_tests(TARGET bolt_values_tests)
 
+    # Web console routing (pure logic; the Drogon adapter is covered by the
+    # integration test below).
+    if(EUGRAPH_ENABLE_WEB_CONSOLE)
+        add_executable(web_router_tests
+            tests/test_web_router.cpp
+        )
+
+        target_include_directories(web_router_tests PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+        )
+
+        target_link_libraries(web_router_tests PRIVATE
+            eugraph_web
+            GTest::gtest
+            GTest::gtest_main
+        )
+
+        gtest_add_tests(TARGET web_router_tests)
+    endif()
+
+    # WebSocket Origin / handshake parsing.
+    add_executable(ws_origin_tests
+        tests/test_ws_origin.cpp
+    )
+
+    target_include_directories(ws_origin_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(ws_origin_tests PRIVATE
+        eugraph_bolt
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    gtest_add_tests(TARGET ws_origin_tests)
+
     # TCK tests (Cucumber BDD for openCypher TCK) — requires eugraph-server built
     if(NOT DEFINED SKIP_TCK_TESTS)
         add_subdirectory(tests/tck)
@@ -1103,6 +1205,27 @@ if(EUGRAPH_BUILD_TESTS)
         else()
             message(STATUS "pytest not found — skipping Bolt integration tests")
         endif()
+    endif()
+endif()
+
+if(EUGRAPH_BUILD_TESTS AND EUGRAPH_ENABLE_WEB_CONSOLE AND NOT DEFINED SKIP_WEB_CONSOLE_TESTS)
+    find_program(PYTEST_EXECUTABLE_WEB pytest)
+    if(PYTEST_EXECUTABLE_WEB)
+        add_test(NAME web_console_integration_tests
+            COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-web-console-tests.sh"
+                "$<TARGET_FILE:eugraph-server>"
+                "${PYTEST_EXECUTABLE_WEB}"
+                "${PROJECT_SOURCE_DIR}/tests/web/test_web_console.py"
+            WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+        )
+        set_tests_properties(web_console_integration_tests PROPERTIES
+            RESOURCE_LOCK "web_console_port"
+            TIMEOUT 300
+            LABELS "web;integration"
+            ENVIRONMENT "WEB_PORT=17474;BOLT_PORT=17694;THRIFT_PORT=19094"
+        )
+    else()
+        message(STATUS "pytest not found — skipping web console integration test")
     endif()
 endif()
 

@@ -1,0 +1,27 @@
+EuGraph Web Console - third-party notices
+
+This file covers the frontend bundle embedded in eugraph-server. C++ dependencies
+(Drogon, trantor, jsoncpp, brotli, c-ares, OpenSSL) are covered by the project's
+build documentation and their own license files.
+
+Runtime libraries
+-----------------
+neo4j-driver 6.2.0        Apache-2.0   https://github.com/neo4j/neo4j-javascript-driver
+  Copyright (c) Neo4j, Inc.
+  Licensed under the Apache License, Version 2.0.
+
+sigma 4.0.4               MIT          https://github.com/jacomyal/sigma.js
+  Copyright (c) 2013-2026 Alexis Jacomy and contributors.
+
+graphology 0.26.0         MIT          https://github.com/graphology/graphology
+  Copyright (c) 2017-2026 Guillaume Plique and contributors.
+
+graphology-layout-forceatlas2 0.10.1  MIT  https://github.com/graphology/graphology
+  Copyright (c) 2017-2026 Guillaume Plique and contributors.
+
+Build-time tools
+----------------
+Vite 8, TypeScript 5.9, Vitest 5 (MIT). These are not shipped in the bundle.
+
+The full text of the MIT and Apache-2.0 licenses is available at
+https://opensource.org/licenses/MIT and https://www.apache.org/licenses/LICENSE-2.0.

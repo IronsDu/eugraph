@@ -192,56 +192,105 @@ size_t findHeaderEnd(const uint8_t* data, size_t len) {
     return 0;
 }
 
-std::string parseHandshakeKey(const uint8_t* data, size_t len) {
-    std::string request(reinterpret_cast<const char*>(data), len);
+namespace {
 
-    // Must be GET with Upgrade: websocket
-    if (request.find("GET ") != 0)
-        return {};
+char asciiLower(char c) {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
 
-    // HTTP header names and values are case-insensitive. Browser WebSocket
-    // implementations (including Node's built-in WebSocket) may send headers
-    // in lowercase, so do a case-insensitive scan instead of exact matching.
-    auto containsCI = [](const std::string& haystack, const std::string& needle) {
-        if (needle.empty())
-            return haystack.find(needle);
-        for (size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
-            bool match = true;
-            for (size_t j = 0; j < needle.size(); ++j) {
-                char a = haystack[i + j];
-                char b = needle[j];
-                if (a >= 'A' && a <= 'Z')
-                    a = static_cast<char>(a - 'A' + 'a');
-                if (b >= 'A' && b <= 'Z')
-                    b = static_cast<char>(b - 'A' + 'a');
-                if (a != b) {
-                    match = false;
-                    break;
-                }
+bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) {
+    if (lhs.size() != rhs.size())
+        return false;
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        if (asciiLower(lhs[i]) != asciiLower(rhs[i]))
+            return false;
+    }
+    return true;
+}
+
+bool containsIgnoreCase(std::string_view haystack, std::string_view needle) {
+    if (needle.empty())
+        return true;
+    if (needle.size() > haystack.size())
+        return false;
+    for (size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+        bool match = true;
+        for (size_t j = 0; j < needle.size(); ++j) {
+            if (asciiLower(haystack[i + j]) != asciiLower(needle[j])) {
+                match = false;
+                break;
             }
-            if (match)
-                return i;
         }
-        return std::string::npos;
-    };
+        if (match)
+            return true;
+    }
+    return false;
+}
 
-    if (containsCI(request, "upgrade: websocket") == std::string::npos)
-        return {};
+std::string_view trimWhitespace(std::string_view value) {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+        value.remove_prefix(1);
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
+        value.remove_suffix(1);
+    return value;
+}
 
-    // Extract Sec-WebSocket-Key
-    const std::string key_hdr = "sec-websocket-key:";
-    size_t pos = containsCI(request, key_hdr);
-    if (pos == std::string::npos)
-        return {};
+} // namespace
 
-    pos += key_hdr.size();
-    // Skip whitespace
-    while (pos < request.size() && (request[pos] == ' ' || request[pos] == '\t'))
-        ++pos;
-    size_t end = request.find('\r', pos);
-    if (end == std::string::npos)
+bool parseHandshakeRequest(const uint8_t* data, size_t len, HandshakeRequest& request) {
+    request = HandshakeRequest{};
+    std::string_view raw(reinterpret_cast<const char*>(data), len);
+
+    const size_t request_line_end = raw.find("\r\n");
+    if (request_line_end == std::string_view::npos)
+        return false;
+
+    const std::string_view request_line = raw.substr(0, request_line_end);
+    if (request_line.rfind("GET ", 0) != 0)
+        return false;
+
+    const size_t target_start = 4;
+    const size_t target_end = request_line.find(' ', target_start);
+    if (target_end == std::string_view::npos)
+        return false;
+    request.path = std::string(request_line.substr(target_start, target_end - target_start));
+
+    bool has_upgrade = false;
+    size_t position = request_line_end + 2;
+    while (position < raw.size()) {
+        size_t line_end = raw.find("\r\n", position);
+        if (line_end == std::string_view::npos)
+            line_end = raw.size();
+        const std::string_view line = raw.substr(position, line_end - position);
+        position = line_end + 2;
+        if (line.empty())
+            break;
+
+        const size_t colon = line.find(':');
+        if (colon == std::string_view::npos)
+            continue;
+        const std::string_view name = trimWhitespace(line.substr(0, colon));
+        const std::string_view value = trimWhitespace(line.substr(colon + 1));
+
+        if (equalsIgnoreCase(name, "upgrade")) {
+            if (containsIgnoreCase(value, "websocket"))
+                has_upgrade = true;
+        } else if (equalsIgnoreCase(name, "sec-websocket-key")) {
+            request.key = std::string(value);
+        } else if (equalsIgnoreCase(name, "origin")) {
+            request.origin = std::string(value);
+            request.has_origin = true;
+        }
+    }
+
+    return has_upgrade && !request.key.empty();
+}
+
+std::string parseHandshakeKey(const uint8_t* data, size_t len) {
+    HandshakeRequest request;
+    if (!parseHandshakeRequest(data, len, request))
         return {};
-    return request.substr(pos, end - pos);
+    return request.key;
 }
 
 std::string buildHandshakeResponse(const std::string& ws_key) {
@@ -256,6 +305,13 @@ std::string buildHandshakeResponse(const std::string& ws_key) {
         << "Sec-WebSocket-Accept: " << accept_key << "\r\n"
         << "\r\n";
     return oss.str();
+}
+
+std::string buildForbiddenResponse() {
+    return "HTTP/1.1 403 Forbidden\r\n"
+           "Content-Length: 0\r\n"
+           "Connection: close\r\n"
+           "\r\n";
 }
 
 // ==================== Frame building ====================

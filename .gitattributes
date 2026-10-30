@@ -1,0 +1,3 @@
+# Vite assets are content-hashed. Never let git normalize their line endings:
+# the embedded bytes (and therefore the ETag) must match the build output.
+web/dist/** -text linguist-generated=true

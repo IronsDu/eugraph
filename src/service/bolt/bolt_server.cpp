@@ -148,6 +148,10 @@ void BoltConnection::readErr(const folly::AsyncSocketException& ex) noexcept {
 
 void BoltConnection::writeSuccess() noexcept {
     writing_ = false;
+    if (close_after_write_) {
+        closeConnection();
+        return;
+    }
     // If there's more data to write, write it
     // For now, done.
 }
@@ -214,10 +218,21 @@ void BoltConnection::processMessage() {
             // EventBase; other Bolt connections share this thread.
             std::vector<uint8_t> message = std::move(message_accumulator_);
             message_accumulator_.clear();
-            if (message_processing_)
+            if (message_processing_) {
+                // A RESET must abort the statement that is currently running,
+                // but the statement occupies this connection's single message
+                // slot. Arm the session's cancel flag before queueing the RESET,
+                // otherwise it would only be handled after the query finished.
+                // Bolt messages are a tiny struct marker (0xB0-0xBF) followed
+                // by the message tag; RESET is B0 0F.
+                if (message.size() >= 2 && (message[0] & 0xF0) == 0xB0 && message[1] == tags::RESET) {
+                    spdlog::info("[bolt] RESET arrived while a statement is in flight; arming cancel");
+                    session_.requestCancel();
+                }
                 pending_messages_.push_back(std::move(message));
-            else
+            } else {
                 dispatchMessage(std::move(message));
+            }
             // Continue loop for pipelined messages
         } else {
             // Data chunk
@@ -392,6 +407,7 @@ void BoltConnection::closeConnection() {
     if (closed_) {
         closed_->store(true, std::memory_order_relaxed);
     }
+    session_.requestCancel();
     // If no message is in flight the stream is suspended and can be dropped right
     // here (rollback included); otherwise finishMessage() does it once the in-flight
     // task completes. Both run on this EventBase thread, so this is not a race.
@@ -451,14 +467,23 @@ void BoltConnection::processWsHandshake() {
         return; // Need more data
     }
 
-    std::string ws_key = websocket::parseHandshakeKey(data, header_end);
-    if (ws_key.empty()) {
-        spdlog::error("[bolt] WebSocket handshake: missing or invalid Sec-WebSocket-Key");
+    websocket::HandshakeRequest request;
+    if (!websocket::parseHandshakeRequest(data, header_end, request)) {
+        spdlog::error("[bolt] WebSocket handshake: missing or invalid Sec-WebSocket-Key/Upgrade");
         closeConnection();
         return;
     }
 
-    std::string response = websocket::buildHandshakeResponse(ws_key);
+    if (request.has_origin && server_ != nullptr && !server_->originAllowed(request.origin)) {
+        spdlog::warn("[bolt] rejecting WebSocket Origin '{}'", request.origin.substr(0, 200));
+        std::string forbidden = websocket::buildForbiddenResponse();
+        auto buf = folly::IOBuf::copyBuffer(forbidden.data(), forbidden.size());
+        close_after_write_ = true;
+        socket_->writeChain(this, std::move(buf));
+        return;
+    }
+
+    std::string response = websocket::buildHandshakeResponse(request.key);
     auto buf = folly::IOBuf::copyBuffer(response.data(), response.size());
     socket_->writeChain(this, std::move(buf));
 
@@ -552,6 +577,7 @@ void BoltConnection::processWsFrame() {
             // Ignore unsolicited pongs
             break;
         case websocket::Opcode::CLOSE: {
+            session_.requestCancel();
             auto close_frame = websocket::buildCloseFrame();
             auto close_buf = folly::IOBuf::copyBuffer(close_frame.data(), close_frame.size());
             socket_->writeChain(this, std::move(close_buf));
@@ -608,6 +634,22 @@ void BoltServer::stop() {
     if (!running_.exchange(false))
         return;
 
+    // Tear down the acceptor while its EventBase is still running. Destroying
+    // the AsyncServerSocket after the loop has stopped makes folly's
+    // RemoteAcceptor::stop run on a dead loop (observed as a segfault on the
+    // early-exit path).
+    for (auto& state : listeners_) {
+        if (!state->evb || !state->socket)
+            continue;
+        state->evb->runInEventBaseThreadAndWait([&state]() { state->socket->stopAccepting(); });
+        // RemoteAcceptor::stop queues callback->acceptStopped() + delete this.
+        // Let that callback run before destroying the callback/socket, otherwise
+        // it dereferences freed memory.
+        state->evb->runInEventBaseThreadAndWait([&state]() {
+            state->socket.reset();
+            state->accept_callback.reset();
+        });
+    }
     for (auto& state : listeners_) {
         if (state->evb)
             state->evb->terminateLoopSoon();

@@ -24,7 +24,7 @@ sleep 2
 rm -rf "$WORK"; mkdir -p "$REPORT_DIR"
 
 TSAN_OPTIONS="halt_on_error=0:log_path=$REPORT_DIR/report:suppressions=$(pwd)/tests/tsan/tsan.supp" \
-    nohup "$BIN" --thrift-port 9091 --bolt-port 7689 --data-dir "$DATA" \
+    nohup "$BIN" --thrift-port 9091 --bolt-port 7689 --web-port 0 --data-dir "$DATA" \
     --compute-threads "$THREADS" --storage-io-threads 4 > "$WORK/server.log" 2>&1 &
 SERVER_PID=$!
 

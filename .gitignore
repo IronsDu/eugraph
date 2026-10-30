@@ -24,3 +24,8 @@ social_network-*/**
 
 # 本地草稿（文件头通常写明不入库）：*.local.md 一律不提交
 *.local.md
+
+# Web console frontend (dist is intentionally committed; see docs/service/web-console.md)
+web/node_modules/
+web/.vite/
+web/coverage/

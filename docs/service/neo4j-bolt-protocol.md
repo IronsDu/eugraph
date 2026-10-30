@@ -310,6 +310,7 @@ RUN 只负责把查询编译成算子流水线并返回 `fields`；真正的结�
 - **谁来置位**：Bolt 会话把自己的连接存活标志（`BoltConnection::closed_`）作为取消标志传给 `executeCypher()`。socket 断开后，正在执行的查询在下一次检查点就会自行收敛。Thrift 路径目前传 `nullptr`（永不取消）。
 - **检查点全在算子侧，且只有一个原语**：`PhysicalOperator::cancellable(gen)`（`physical_operator_base.hpp`），凡是"按 chunk 消费上游"的地方包一层——存储来源（`store_.scanXxx()`，34 处）与算子来源（`child_->executeChunk()`，38 处）都要包；后者是必需的，因为**阻断型算子**（`Sort` / `Aggregate`，以及"先物化再吐 chunk"的存储包装）在物化期间不会回到上游，必须由消费它的上游算子（如 `CreateNodePhysicalOp`）在拿到 chunk 时检查并停止拉取。`expand` / `varlen_expand` 这类单行就能炸开整棵遍历的重算子再额外按输入行检查。精度是"最多多做一个 batch"；唯一例外是顶点索引扫描——存储层的 `scanVerticesByIndex*` / `scanVerticesByIndexId*` 在第一次 `next()` 内就把该索引值的匹配集收集完（同步索引 API 无可续游标），那期间取消要等收集结束。扫描算子已经不是例外：`AllNodeScanPhysicalOp` 与 `IndexScanValuesPhysicalOp` 现为流式（全图扫描走 `createAllVertexScanCursor`，多标签做 vid 归并去重，内存 O(label 数 × 批)），`scanAllVertices()` 也已换成游标式分批。
 - **收敛方式**：被取消的算子直接 `co_return`，生成器提前结束，父算子自然展开退出——不需要向上传播异常。
+- **RESET 的即时取消**：RESET 在 Bolt 状态机里本来只能排队，而连接同一时刻只跑一个消息，阻塞型 PULL 会让 RESET 等到查询结束。现在 `BoltConnection::processMessage()` 在解码出 `B0 0F` 时、**入队之前**就调用 `BoltSession::requestCancel()`；算子持有的 `QueryContext` 观察同一个标志，在下一个检查点停止，`handlePull` 随后回滚并返回 FAILURE，排队的 RESET 再被处理并重新武装标志。这样官方驱动的 `session.close()`（发送 RESET）即可停止流式查询；单条阻断型算子（例如对超大 `UNWIND` 做聚合）仍可能观察不到检查点，客户端侧需要超时兜底。
 - **实测收敛延迟**（2026-09-26）：持续负载下服务端累计烧 7.75 s CPU 时 `kill -9` 客户端，
   断开后**只再多算 0.28 s** 即停；随后 45 s 内累计仅 +0.09 s。即取消以**一个迭代为粒度**生效
   （最坏约 0.44 s，见上文精度说明）。测量方式：`/proc/<pid>/stat` 的 utime+stime 增量采样
@@ -343,6 +344,20 @@ RUN 只负责把查询编译成算子流水线并返回 `fields`；真正的结�
 回归测试见 `tests/bolt/test_python_driver_integration.py::TestConnectionLifetime`
 （用一个约 1 KiB 的、不依赖数据集的查询连跑 300 次）。
 
+### 12. WebSocket Origin 校验
+
+浏览器版驱动用 WebSocket 连接 Bolt 端口。Bolt 的 WebSocket 升级请求如果带 `Origin`，
+服务端会在完成握手前校验：
+
+- **无 Origin**：官方驱动（Node/Python/Java 等，走原始 TCP 或非浏览器 WS）放行，保持兼容；
+- **回环 Origin**：`http(s)://localhost[:port]`、`http(s)://127.0.0.1[:port]`、
+  `http(s)://[::1][:port]` 放行（控制台和 Vite dev server 使用不同端口，因此端口不参与判断）；
+- **其他 Origin**：返回 `403 Forbidden` 并关闭；远程部署通过
+  `--web-allowed-origin <origin>`（可重复）显式加白。
+
+策略实现在 `src/service/bolt/ws_origin.*`，由 `eugraph-server` 装配；`BoltServer` 本身默认
+仍接受全部 Origin，避免影响把 `BoltServer` 当库使用的其他程序。
+
 ## 文件清单
 
 ```
@@ -354,6 +369,7 @@ src/service/bolt/bolt_messages.hpp                      # Bolt 消息结构与�
 src/service/bolt/bolt_session.hpp/.cpp                  # 会话状态机与消息处理
 src/service/bolt/bolt_value_mapping.hpp/.cpp            # Value ↔ Bolt 类型映射
 src/service/bolt/bolt_server.hpp/.cpp                   # TCP 服务端（folly::AsyncServerSocket）
+src/service/bolt/ws_origin.hpp/.cpp                     # WebSocket Origin 策略（回环 + 显式白名单）
 src/query/planner/logical_plan/operator/bound_call_op.hpp   # CALL 子句逻辑算子
 src/query/planner/binder/bind_call.cpp                      # CALL 子句绑定
 src/query/physical_plan/operator/call_physical_op.hpp/.cpp  # CALL 物理执行算子
@@ -361,6 +377,7 @@ src/query/physical_plan/query_context.hpp                   # 每语句执行上
 src/query/parser/database_ddl_parser.hpp/.cpp               # 数据库 DDL 解析器
 tests/test_packstream.cpp                       # PackStream 单元测试
 tests/test_bolt_values.cpp                      # Bolt 类型映射测试
+tests/test_ws_origin.cpp                        # WS 握手 + Origin 策略测试
 tests/bolt/test_python_driver_integration.py    # Python 驱动集成测试
 tests/bolt/test_js_ws_driver.cjs                # JS 驱动 WebSocket 集成测试
 ```
