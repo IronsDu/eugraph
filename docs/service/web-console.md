@@ -35,6 +35,7 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
 - 启动时显示独立连接页（默认 `neo4j` / `eugraph`，凭据只保存在页面会话内）；连接成功后
   进入主界面。顶栏显示当前 Bolt 地址和 graph 名；地址下拉内提供“断开连接”，断开后回到
   登录页。数据库切换可用顶栏下拉或 `:use`。
+- 结果包含节点/关系时默认打开 Graph（与 Neo4j Browser 一致），仍可切回 Table/RAW。
 - Cypher 编辑器：`Ctrl/Cmd+Enter` 执行，`;` 分隔多语句，顺序执行；返回行数与
   `resultAvailableAfter` / `resultConsumedAfter` 显示在输入框下方。
 - 结果：每次执行追加一个独立结果 frame，旧结果保留在下方，不再覆盖；每个 frame 分别拥有

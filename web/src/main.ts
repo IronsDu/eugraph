@@ -803,6 +803,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     let tablePage = 0;
     let graphView: GraphView | null = null;
     let destroyed = false;
+    let resultVersion = 0;
 
     const tablePanel = h('div', { class: 'view-panel' });
     const graphPanel = h('div', { class: 'view-panel graph-panel' });
@@ -1011,6 +1012,16 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       renderRaw();
       activate('table');
       if (state.frames[0] === handle) summary.textContent = summaryText;
+
+      // Neo4j Browser opens Graph by default for graph-shaped results. Do it
+      // after the frame is mounted so Sigma sees a non-zero container size.
+      const version = ++resultVersion;
+      if (hasGraph) {
+        requestAnimationFrame(() => {
+          if (destroyed || version !== resultVersion || !root.isConnected) return;
+          activate('graph');
+        });
+      }
     }
 
     function beginEdit(): void {
