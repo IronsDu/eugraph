@@ -1323,3 +1323,37 @@ html[data-theme='light'] .graph-notice {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* HTML node captions (multi-line, fitted inside the node circle) */
+.graph-label-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.graph-label {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #f7f9ff;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  font-weight: 600;
+  line-height: 1.05;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -50%);
+}
+
+.graph-label > span {
+  display: -webkit-box;
+  width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+}

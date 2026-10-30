@@ -1,8 +1,7 @@
 import { MultiDirectedGraph } from 'graphology';
 import Sigma, { DEFAULT_STYLES } from 'sigma';
 import { DEFAULT_PRIMITIVES } from 'sigma/primitives';
-import { extremityArrow } from 'sigma/rendering';
-import { truncateCaptionToWidth } from './caption';
+import { extremityArrow, pathCurved, pathLine } from 'sigma/rendering';
 import { formatValue, orderedPropertyEntries } from './format';
 import type { GraphResult } from './graph-data';
 import { layoutGraph } from './layout';
@@ -15,7 +14,7 @@ export class GraphView {
   private readonly inspectorTitle: HTMLElement;
   private readonly inspectorBody: HTMLElement;
   private readonly notice: HTMLElement;
-  private readonly measureContext: CanvasRenderingContext2D | null;
+  private readonly labelLayer: HTMLElement;
   private sigma: any | null = null;
   private readonly cameraHandler = (): void => this.onCameraUpdated();
   private fitPixelsPerUnit: number | null = null;
@@ -24,10 +23,10 @@ export class GraphView {
   private currentZoom = 1;
   private pendingZoom = 1;
   private scaleFrame: number | null = null;
+  private labelFrame: number | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.measureContext = document.createElement('canvas').getContext('2d');
 
     this.inspectorTitle = document.createElement('div');
     this.inspectorTitle.className = 'graph-inspector-title';
@@ -52,13 +51,16 @@ export class GraphView {
 
     this.notice = document.createElement('div');
     this.notice.className = 'graph-notice hidden';
-    container.append(this.inspector, this.notice);
+
+    this.labelLayer = document.createElement('div');
+    this.labelLayer.className = 'graph-label-layer';
+    container.append(this.labelLayer, this.inspector, this.notice);
   }
 
   render(result: GraphResult): boolean {
     this.destroy();
     if (result.graph.order === 0) {
-      this.container.append(this.inspector);
+      this.container.append(this.labelLayer, this.inspector);
       return false;
     }
 
@@ -92,6 +94,7 @@ export class GraphView {
           ...DEFAULT_PRIMITIVES,
           edges: {
             ...DEFAULT_PRIMITIVES.edges,
+            paths: [pathLine(), pathCurved({ curvature: 0.22 })],
             extremities: [extremityArrow({ lengthRatio: 2.5, widthRatio: 2.0 })],
           },
         },
@@ -108,16 +111,13 @@ export class GraphView {
           nodes: [
             {
               ...DEFAULT_STYLES.nodes,
-              labelColor: '#f7f9ff',
-              labelSize: { attribute: 'labelSize' },
-              labelPosition: 'over',
-              labelDepth: 'topNodes',
-              labelVisibility: order <= 200 ? 'visible' : 'auto',
+              labelVisibility: 'hidden',
             },
           ],
           edges: [
             {
               ...DEFAULT_STYLES.edges,
+              path: 'curved',
               head: 'arrow',
               labelColor: '#c8d2e6',
               labelSize: { attribute: 'labelSize' },
@@ -140,6 +140,7 @@ export class GraphView {
       this.notice.classList.add('hidden');
     }
 
+    this.sigma.on('afterRender', () => this.scheduleLabelLayer());
     this.sigma.on('clickNode', (payload: any) => this.showNode(payload.node));
     this.sigma.on('clickEdge', (payload: any) => this.showEdge(payload.edge));
     this.sigma.on('clickStage', () => this.hideInspector());
@@ -171,13 +172,18 @@ export class GraphView {
       cancelAnimationFrame(this.scaleFrame);
       this.scaleFrame = null;
     }
+    if (this.labelFrame !== null) {
+      cancelAnimationFrame(this.labelFrame);
+      this.labelFrame = null;
+    }
+    this.labelLayer.replaceChildren();
     if (this.sigma) {
       this.sigma.getCamera().removeListener('updated', this.cameraHandler);
       this.sigma.kill();
       this.sigma = null;
     }
     this.fitPixelsPerUnit = null;
-    this.container.replaceChildren(this.inspector, this.notice);
+    this.container.replaceChildren(this.labelLayer, this.inspector, this.notice);
     this.notice.classList.add('hidden');
     this.hideInspector();
   }
@@ -204,26 +210,72 @@ export class GraphView {
     this.currentZoom = zoom;
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
     const baseLabelSize = Math.max(1, (this.denseGraph ? 6.5 : 8) * zoom);
-    const context = this.measureContext;
-    graph.forEachNode((node, attributes) => {
-      const caption: string = attributes.caption ?? attributes.label ?? `#${node}`;
-      // Sigma node `size` is a radius. At high camera zoom a globally scaled
-      // label can become wider than the node itself (and even the ellipsis
-      // cannot fit), so cap the font size against this node's screen diameter.
-      const screenRadius = this.sigma.scaleSize((attributes.size as number) ?? 10);
-      const maxWidth = Math.max(0, screenRadius * 2 * 0.88);
-      const labelSize = Math.max(6, Math.min(baseLabelSize, maxWidth * 0.25));
-      if (context) context.font = `${labelSize}px sans-serif`;
-      const measure = (text: string): number =>
-        context ? context.measureText(text).width : text.length * labelSize * 0.62;
-      const label = truncateCaptionToWidth(caption, maxWidth, measure);
-      graph.setNodeAttribute(node, 'labelSize', labelSize);
-      graph.setNodeAttribute(node, 'label', label);
-    });
     graph.forEachEdge((edge) => {
       graph.setEdgeAttribute(edge, 'labelSize', Math.min(baseLabelSize, 24));
     });
     this.sigma.refresh();
+  }
+
+  private scheduleLabelLayer(): void {
+    if (this.labelFrame !== null || !this.sigma) return;
+    this.labelFrame = requestAnimationFrame(() => {
+      this.labelFrame = null;
+      this.renderLabelLayer();
+    });
+  }
+
+  /** HTML labels give us the multi-line, circle-fitted captions that Sigma's
+   * WebGL label program cannot render. Only visible labels are materialized. */
+  private renderLabelLayer(): void {
+    if (!this.sigma) {
+      this.labelLayer.replaceChildren();
+      return;
+    }
+    const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    const order = graph.order;
+    const showLabels = order <= 200 || this.currentZoom >= 2.5;
+    if (!showLabels) {
+      this.labelLayer.replaceChildren();
+      return;
+    }
+
+    const dimensions = this.sigma.getDimensions();
+    const fragment = document.createDocumentFragment();
+    let labelCount = 0;
+    graph.forEachNode((node, attributes) => {
+      if (labelCount >= 300) return;
+      const x = Number(attributes.x);
+      const y = Number(attributes.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const point = this.sigma.graphToViewport({ x, y });
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+      const radius = this.sigma.scaleSize((attributes.size as number) ?? 10);
+      if (!Number.isFinite(radius) || radius < 4) return;
+      if (point.x < -radius || point.x > dimensions.width + radius) return;
+      if (point.y < -radius || point.y > dimensions.height + radius) return;
+
+      const caption = String(attributes.caption ?? attributes.label ?? `#${node}`);
+      if (!caption) return;
+      const fontSize = Math.max(6, Math.min(14, radius * 0.55));
+      const diameter = radius * 2 * 0.9;
+      if (diameter < 12) return;
+      const maxLines = Math.max(1, Math.floor(diameter / (fontSize * 1.1)));
+
+      const label = document.createElement('div');
+      label.className = 'graph-label';
+      label.style.left = `${point.x}px`;
+      label.style.top = `${point.y}px`;
+      label.style.width = `${diameter}px`;
+      label.style.height = `${diameter}px`;
+      label.style.fontSize = `${fontSize}px`;
+      const text = document.createElement('span');
+      text.textContent = caption;
+      text.style.setProperty('-webkit-line-clamp', String(maxLines));
+      label.append(text);
+      fragment.append(label);
+      labelCount += 1;
+    });
+    this.labelLayer.replaceChildren(fragment);
   }
 
   private endpointText(graph: MultiDirectedGraph, id: string): string {
