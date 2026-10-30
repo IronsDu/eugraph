@@ -176,7 +176,7 @@ export function extractGraph(records: any[]): GraphResult {
     graph.addEdgeWithKey(id, source, target, {
       label: value.type ?? '',
       color: '#9aa4b8',
-      size: 1.2,
+      size: 2.2,
       labelSize: 9,
       type: value.type ?? '',
       properties: value.properties ?? {},
