@@ -255,6 +255,7 @@ export class GraphView {
 
   private onCameraUpdated(): void {
     if (!this.sigma || this.fitPixelsPerUnit === null) return;
+    this.scheduleLabelLayer();
     const pixelsPerUnit = this.sigma.scaleSize(1);
     if (!Number.isFinite(pixelsPerUnit) || pixelsPerUnit <= 0) return;
     const zoom = Math.max(0.05, Math.min(12.0, pixelsPerUnit / this.fitPixelsPerUnit));
@@ -458,6 +459,19 @@ export class GraphView {
     });
   }
 
+  private currentViewportPoint(x: number, y: number): { x: number; y: number } {
+    const sigma = this.sigma;
+    return sigma.graphToViewport(
+      { x, y },
+      {
+        cameraState: sigma.getCamera().getState(),
+        viewportDimensions: sigma.getDimensions(),
+        graphDimensions: sigma.getGraphDimensions(),
+        padding: sigma.getStagePadding(),
+      }
+    );
+  }
+
   /** HTML labels give us the multi-line, circle-fitted captions that Sigma's
    * WebGL label program cannot render. Only visible labels are materialized. */
   private renderLabelLayer(): void {
@@ -482,7 +496,7 @@ export class GraphView {
       const x = Number(attributes.x);
       const y = Number(attributes.y);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-      const point = this.sigma.graphToViewport({ x, y });
+      const point = this.currentViewportPoint(x, y);
       if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
       const radius = this.sigma.scaleSize((attributes.size as number) ?? 10);
       if (!Number.isFinite(radius) || radius < 3) return;
@@ -491,13 +505,14 @@ export class GraphView {
 
       const caption = String(attributes.caption ?? attributes.label ?? `#${node}`);
       if (!caption) return;
-      const fontSize = Math.max(6, Math.min(14, radius * 0.55));
+      const fontSize = Math.max(6, Math.min(24, radius * 0.55));
       const diameter = radius * 2 * 0.9;
       if (diameter < 10) return;
       const maxLines = Math.max(1, Math.floor(diameter / (fontSize * 1.1)));
 
       const label = document.createElement('div');
       label.className = 'graph-label';
+      label.dataset.node = node;
       label.style.left = `${point.x}px`;
       label.style.top = `${point.y}px`;
       label.style.width = `${diameter}px`;
