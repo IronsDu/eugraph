@@ -6,6 +6,7 @@ import {
   forceSimulation,
   forceX,
   forceY,
+  type Simulation,
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from 'd3-force';
@@ -16,6 +17,13 @@ type LayoutNode = SimulationNodeDatum & {
 };
 
 type LayoutLink = SimulationLinkDatum<LayoutNode>;
+
+export type LiveGraphLayout = {
+  simulation: Simulation<LayoutNode, undefined>;
+  nodes: Map<string, LayoutNode>;
+  syncGraph: () => void;
+  stop: () => void;
+};
 
 const NODE_GAP = 18;
 const LINK_GAP = 45;
@@ -77,11 +85,19 @@ function layoutRing(graph: MultiDirectedGraph, nodes: string[]): void {
  * collide r+25, velocityDecay 0.4), precomputed for up to 300 ticks.
  */
 export function layoutGraph(graph: MultiDirectedGraph): void {
+  prepareGraphLayout(graph)?.stop();
+}
+
+/**
+ * Same layout as layoutGraph, but returns the stopped d3 simulation so the
+ * caller can pin a node while dragging and restart it to let the graph react.
+ */
+export function prepareGraphLayout(graph: MultiDirectedGraph): LiveGraphLayout | null {
   const nodes = graph.nodes();
-  if (nodes.length === 0) return;
+  if (nodes.length === 0) return null;
   if (graph.size === 0) {
     layoutRing(graph, nodes);
-    return;
+    return null;
   }
 
   const initialRadius = (nodes.length * LINK_GAP) / (Math.PI * 2);
@@ -112,7 +128,7 @@ export function layoutGraph(graph: MultiDirectedGraph): void {
   if (simulationNodes.length === 1) {
     graph.setNodeAttribute(nodes[0], 'x', 0);
     graph.setNodeAttribute(nodes[0], 'y', 0);
-    return;
+    return null;
   }
 
   const linkForce = forceLink<LayoutNode, LayoutLink>(links)
@@ -135,8 +151,19 @@ export function layoutGraph(graph: MultiDirectedGraph): void {
 
   simulation.tick(PRECOMPUTE_TICKS);
 
-  for (const node of simulationNodes) {
-    graph.setNodeAttribute(node.id, 'x', node.x ?? 0);
-    graph.setNodeAttribute(node.id, 'y', node.y ?? 0);
-  }
+  const nodesById = new Map(simulationNodes.map((node) => [node.id, node]));
+  const syncGraph = (): void => {
+    for (const node of simulationNodes) {
+      graph.setNodeAttribute(node.id, 'x', node.x ?? 0);
+      graph.setNodeAttribute(node.id, 'y', node.y ?? 0);
+    }
+  };
+  syncGraph();
+
+  return {
+    simulation,
+    nodes: nodesById,
+    syncGraph,
+    stop: () => simulation.stop(),
+  };
 }

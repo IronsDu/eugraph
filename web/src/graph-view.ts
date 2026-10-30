@@ -4,7 +4,7 @@ import { DEFAULT_PRIMITIVES } from 'sigma/primitives';
 import { extremityArrow, pathCurved, pathLine } from 'sigma/rendering';
 import { formatValue, orderedPropertyEntries } from './format';
 import type { GraphResult } from './graph-data';
-import { layoutGraph } from './layout';
+import { prepareGraphLayout, type LiveGraphLayout } from './layout';
 
 type PropertyRow = [string, unknown];
 
@@ -44,6 +44,8 @@ export class GraphView {
   private scaleFrame: number | null = null;
   private labelFrame: number | null = null;
   private readonly baseEdgeSizes = new Map<string, number>();
+  private liveLayout: LiveGraphLayout | null = null;
+  private readonly liveTickHandler = (): void => this.onLiveTick();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -110,7 +112,7 @@ export class GraphView {
     });
 
     try {
-      layoutGraph(result.graph);
+      this.liveLayout = prepareGraphLayout(result.graph);
     } catch (error) {
       console.warn('Graph layout failed', error);
     }
@@ -129,6 +131,7 @@ export class GraphView {
           renderEdgeLabels: result.graph.size <= 1000,
           labelRenderedSizeThreshold: 0,
           enableEdgeEvents: true,
+          enableNodeDrag: true,
           edgeLabelAnchors: 'allNodes',
           edgePickingPadding: 34,
           nodePickingPadding: 6,
@@ -173,6 +176,10 @@ export class GraphView {
       this.notice.classList.add('hidden');
     }
 
+    this.liveLayout?.simulation.on('tick', this.liveTickHandler);
+    this.sigma.on('nodeDragStart', (payload: any) => this.onNodeDragStart(payload));
+    this.sigma.on('nodeDrag', (payload: any) => this.onNodeDrag(payload));
+    this.sigma.on('nodeDragEnd', (payload: any) => this.onNodeDragEnd(payload));
     this.sigma.on('afterRender', () => this.scheduleLabelLayer());
     this.sigma.on('clickNode', (payload: any) => {
       if (payload.node === SELECTION_HALO_NODE) {
@@ -226,6 +233,8 @@ export class GraphView {
     }
     this.labelLayer.replaceChildren();
     this.baseEdgeSizes.clear();
+    this.liveLayout?.stop();
+    this.liveLayout = null;
     if (this.sigma) {
       this.sigma.getCamera().removeListener('updated', this.cameraHandler);
       this.sigma.kill();
@@ -279,6 +288,68 @@ export class GraphView {
       graph.setEdgeAttribute(edge, 'labelSize', Math.min(baseLabelSize, 24));
     });
     this.sigma.refresh();
+  }
+
+  private onLiveTick(): void {
+    if (!this.sigma || !this.liveLayout) return;
+    this.liveLayout.syncGraph();
+    this.syncSelectionHalo();
+    this.sigma.refresh();
+    this.scheduleLabelLayer();
+  }
+
+  private syncSelectionHalo(): void {
+    if (!this.sigma || !this.selectedNode) return;
+    const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    if (!graph.hasNode(SELECTION_HALO_NODE) || !graph.hasNode(this.selectedNode)) return;
+    const selected = graph.getNodeAttributes(this.selectedNode);
+    const baseSize = Number(selected.size) || 10;
+    graph.setNodeAttribute(SELECTION_HALO_NODE, 'x', selected.x);
+    graph.setNodeAttribute(SELECTION_HALO_NODE, 'y', selected.y);
+    graph.setNodeAttribute(SELECTION_HALO_NODE, 'size', baseSize + Math.max(2, baseSize * 0.06));
+  }
+
+  private onNodeDragStart(payload: any): void {
+    if (!this.sigma || payload.node === SELECTION_HALO_NODE) return;
+    const layout = this.liveLayout;
+    this.selectNode(payload.node);
+    this.hideInspector();
+    if (!layout) return;
+    const simulationNode = layout.nodes.get(payload.node);
+    if (!simulationNode) return;
+    const attributes = (this.sigma.getGraph() as MultiDirectedGraph).getNodeAttributes(payload.node);
+    simulationNode.x = Number(attributes.x);
+    simulationNode.y = Number(attributes.y);
+    simulationNode.fx = Number(attributes.x);
+    simulationNode.fy = Number(attributes.y);
+    layout.simulation.alpha(0.8).restart();
+  }
+
+  private onNodeDrag(payload: any): void {
+    if (!this.sigma || payload.node === SELECTION_HALO_NODE) return;
+    const simulationNode = this.liveLayout?.nodes.get(payload.node);
+    if (simulationNode) {
+      const attributes = (this.sigma.getGraph() as MultiDirectedGraph).getNodeAttributes(payload.node);
+      simulationNode.x = Number(attributes.x);
+      simulationNode.y = Number(attributes.y);
+      simulationNode.fx = Number(attributes.x);
+      simulationNode.fy = Number(attributes.y);
+    }
+    this.syncSelectionHalo();
+    this.sigma.refresh();
+    this.scheduleLabelLayer();
+  }
+
+  private onNodeDragEnd(payload: any): void {
+    if (!this.sigma || payload.node === SELECTION_HALO_NODE) return;
+    const simulationNode = this.liveLayout?.nodes.get(payload.node);
+    if (simulationNode) {
+      simulationNode.fx = null;
+      simulationNode.fy = null;
+      this.liveLayout?.simulation.alpha(0.35).restart();
+    }
+    this.syncSelectionHalo();
+    this.showNode(payload.node);
   }
 
   private clearNodeSelection(): void {

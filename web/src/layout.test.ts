@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MultiDirectedGraph } from 'graphology';
-import { layoutGraph } from './layout';
+import { layoutGraph, prepareGraphLayout } from './layout';
 
 function addNode(graph: MultiDirectedGraph, id: string) {
   graph.addNode(id, { size: 12, label: id });
@@ -37,6 +37,23 @@ describe('layoutGraph', () => {
     const b = graph.getNodeAttribute('b1', 'x') + graph.getNodeAttribute('b2', 'x');
     expect(Math.abs(a / 2 - b / 2)).toBeGreaterThan(20);
     expect(distance(graph, 'a1', 'b1')).toBeGreaterThan(20);
+  });
+
+  it('exposes a live simulation that can pin a dragged node', () => {
+    const graph = new MultiDirectedGraph();
+    for (const id of ['a', 'b', 'c', 'd']) addNode(graph, id);
+    graph.addEdge('a', 'b');
+    graph.addEdge('b', 'c');
+    graph.addEdge('c', 'd');
+    const live = prepareGraphLayout(graph);
+    expect(live).not.toBeNull();
+    const pinned = live!.nodes.get('a')!;
+    pinned.fx = 200;
+    pinned.fy = 120;
+    live!.simulation.tick(20);
+    live!.syncGraph();
+    expect(graph.getNodeAttribute('a', 'x')).toBeCloseTo(200, 5);
+    expect(graph.getNodeAttribute('a', 'y')).toBeCloseTo(120, 5);
   });
 
   it('keeps a single connected component finite and non-degenerate', () => {
