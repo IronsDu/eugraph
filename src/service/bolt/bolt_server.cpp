@@ -87,6 +87,12 @@ void BoltConnection::getReadBuffer(void** buf, size_t* len) {
 }
 
 void BoltConnection::readDataAvailable(size_t len) noexcept {
+    // IO callbacks are invoked on a raw `this`. closeConnection() removes the
+    // connection from BoltServer's active set; without a strong reference for
+    // the whole callback, the last owner can be released inside a nested
+    // closeConnection() and the remainder of this callback would use freed
+    // memory (observed under ASan for a rejected WebSocket Origin).
+    auto self = shared_from_this();
     try {
         if (!read_buf_)
             return;
@@ -137,16 +143,19 @@ void BoltConnection::readDataAvailable(size_t len) noexcept {
 }
 
 void BoltConnection::readEOF() noexcept {
+    auto self = shared_from_this();
     spdlog::debug("[bolt] connection EOF");
     closeConnection();
 }
 
 void BoltConnection::readErr(const folly::AsyncSocketException& ex) noexcept {
+    auto self = shared_from_this();
     spdlog::error("[bolt] read error: {}", ex.what());
     closeConnection();
 }
 
 void BoltConnection::writeSuccess() noexcept {
+    auto self = shared_from_this();
     writing_ = false;
     if (close_after_write_) {
         closeConnection();
@@ -157,6 +166,7 @@ void BoltConnection::writeSuccess() noexcept {
 }
 
 void BoltConnection::writeErr(size_t /*bytesWritten*/, const folly::AsyncSocketException& ex) noexcept {
+    auto self = shared_from_this();
     spdlog::error("[bolt] write error: {}", ex.what());
     closeConnection();
 }
