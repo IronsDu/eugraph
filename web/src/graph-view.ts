@@ -8,7 +8,7 @@ import { layoutGraph } from './layout';
 
 type PropertyRow = [string, unknown];
 
-const ARROW_LARGE = extremityArrow({ lengthRatio: 10, widthRatio: 8 });
+const ARROW_LARGE = extremityArrow({ lengthRatio: 3.2, widthRatio: 2.5 });
 const ARROW_SMALL_BASE = extremityArrow({ lengthRatio: 2.2, widthRatio: 1.8 });
 const ARROW_SMALL = {
   ...ARROW_SMALL_BASE,
