@@ -8,6 +8,10 @@ import { layoutGraph } from './layout';
 
 type PropertyRow = [string, unknown];
 
+const SELECTION_HALO_NODE = '__eugraph_selection_halo__';
+const SELECTED_NODE_COLOR = '#8ec5ff';
+const SELECTION_HALO_COLOR = '#2563eb';
+
 const ARROW_LARGE = extremityArrow({ lengthRatio: 3.2, widthRatio: 2.5 });
 const ARROW_SMALL_BASE = extremityArrow({ lengthRatio: 2.2, widthRatio: 1.8 });
 const ARROW_SMALL = {
@@ -23,10 +27,10 @@ export class GraphView {
   private readonly inspectorBody: HTMLElement;
   private readonly notice: HTMLElement;
   private readonly labelLayer: HTMLElement;
-  private readonly selectionRing: HTMLElement;
   private selectedNode: string | null = null;
   private selectedOriginalColor: unknown = undefined;
   private selectedOriginalSize: number | null = null;
+  private selectedOriginalZIndex: unknown = undefined;
   private selectedEdge: string | null = null;
   private selectedEdgeOriginalColor: unknown = undefined;
   private selectedEdgeOriginalSize: number | null = null;
@@ -71,16 +75,13 @@ export class GraphView {
     this.labelLayer = document.createElement('div');
     this.labelLayer.className = 'graph-label-layer';
 
-    this.selectionRing = document.createElement('div');
-    this.selectionRing.className = 'graph-selection-ring hidden';
-
-    container.append(this.selectionRing, this.labelLayer, this.inspector, this.notice);
+    container.append(this.labelLayer, this.inspector, this.notice);
   }
 
   render(result: GraphResult): boolean {
     this.destroy();
     if (result.graph.order === 0) {
-      this.container.append(this.selectionRing, this.labelLayer, this.inspector);
+      this.container.append(this.labelLayer, this.inspector);
       return false;
     }
 
@@ -140,6 +141,7 @@ export class GraphView {
           nodes: [
             {
               ...DEFAULT_STYLES.nodes,
+              zIndex: { attribute: 'zIndex' },
               labelVisibility: 'hidden',
             },
           ],
@@ -173,6 +175,10 @@ export class GraphView {
 
     this.sigma.on('afterRender', () => this.scheduleLabelLayer());
     this.sigma.on('clickNode', (payload: any) => {
+      if (payload.node === SELECTION_HALO_NODE) {
+        if (this.selectedNode) this.showNode(this.selectedNode);
+        return;
+      }
       this.selectNode(payload.node);
       this.showNode(payload.node);
     });
@@ -232,8 +238,8 @@ export class GraphView {
     this.selectedEdge = null;
     this.selectedEdgeOriginalColor = undefined;
     this.selectedEdgeOriginalSize = null;
-    this.selectionRing.classList.add('hidden');
-    this.container.replaceChildren(this.selectionRing, this.labelLayer, this.inspector, this.notice);
+    this.selectedOriginalZIndex = undefined;
+    this.container.replaceChildren(this.labelLayer, this.inspector, this.notice);
     this.notice.classList.add('hidden');
     this.hideInspector();
   }
@@ -280,9 +286,11 @@ export class GraphView {
       this.selectedNode = null;
       this.selectedOriginalColor = undefined;
       this.selectedOriginalSize = null;
+      this.selectedOriginalZIndex = undefined;
       return;
     }
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    if (graph.hasNode(SELECTION_HALO_NODE)) graph.dropNode(SELECTION_HALO_NODE);
     if (graph.hasNode(this.selectedNode)) {
       if (this.selectedOriginalColor !== undefined) {
         graph.setNodeAttribute(this.selectedNode, 'color', this.selectedOriginalColor as string);
@@ -290,11 +298,14 @@ export class GraphView {
       if (this.selectedOriginalSize !== null) {
         graph.setNodeAttribute(this.selectedNode, 'size', this.selectedOriginalSize);
       }
+      if (this.selectedOriginalZIndex !== undefined) {
+        graph.setNodeAttribute(this.selectedNode, 'zIndex', this.selectedOriginalZIndex);
+      }
     }
     this.selectedNode = null;
     this.selectedOriginalColor = undefined;
     this.selectedOriginalSize = null;
-    this.selectionRing.classList.add('hidden');
+    this.selectedOriginalZIndex = undefined;
     this.sigma.refresh();
   }
 
@@ -305,11 +316,29 @@ export class GraphView {
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
     if (!graph.hasNode(node)) return;
     const attributes = graph.getNodeAttributes(node);
+    const baseSize = (attributes.size as number) ?? 10;
+    const selectedSize = baseSize * 1.18;
     this.selectedNode = node;
     this.selectedOriginalColor = attributes.color;
-    this.selectedOriginalSize = (attributes.size as number) ?? 10;
-    graph.setNodeAttribute(node, 'color', '#5b9dff');
-    graph.setNodeAttribute(node, 'size', ((attributes.size as number) ?? 10) * 1.18);
+    this.selectedOriginalSize = baseSize;
+    this.selectedOriginalZIndex = attributes.zIndex;
+    graph.setNodeAttribute(node, 'color', SELECTED_NODE_COLOR);
+    graph.setNodeAttribute(node, 'size', selectedSize);
+    graph.setNodeAttribute(node, 'zIndex', 1);
+
+    // Draw the halo in Sigma itself, behind the selected node. Sharing the
+    // WebGL node pass guarantees the same center under every camera zoom.
+    const haloGap = Math.max(2, selectedSize * 0.06);
+    graph.addNode(SELECTION_HALO_NODE, {
+      x: attributes.x,
+      y: attributes.y,
+      size: selectedSize + haloGap,
+      color: SELECTION_HALO_COLOR,
+      label: '',
+      caption: '',
+      zIndex: -1,
+      halo: true,
+    });
     this.sigma.refresh();
     this.scheduleLabelLayer();
   }
@@ -350,55 +379,6 @@ export class GraphView {
     this.sigma.refresh();
   }
 
-  private currentViewportPoint(x: number, y: number): { x: number; y: number } {
-    const sigma = this.sigma;
-    return sigma.graphToViewport(
-      { x, y },
-      {
-        cameraState: sigma.getCamera().getState(),
-        viewportDimensions: sigma.getDimensions(),
-        graphDimensions: sigma.getGraphDimensions(),
-        padding: sigma.getStagePadding(),
-      }
-    );
-  }
-
-  private renderSelectionRing(): void {
-    if (!this.sigma || !this.selectedNode) {
-      this.selectionRing.classList.add('hidden');
-      return;
-    }
-    const graph = this.sigma.getGraph() as MultiDirectedGraph;
-    if (!graph.hasNode(this.selectedNode)) {
-      this.selectedNode = null;
-      this.selectionRing.classList.add('hidden');
-      return;
-    }
-    const attributes = graph.getNodeAttributes(this.selectedNode);
-    const display = this.sigma.getNodeDisplayData(this.selectedNode) as { size?: number } | undefined;
-    const radius = this.sigma.scaleSize(display?.size ?? (attributes.size as number) ?? 10);
-    const point = this.currentViewportPoint(Number(attributes.x), Number(attributes.y));
-    const dimensions = this.sigma.getDimensions();
-    if (
-      !Number.isFinite(point.x) ||
-      !Number.isFinite(point.y) ||
-      !Number.isFinite(radius) ||
-      point.x < -radius ||
-      point.y < -radius ||
-      point.x > dimensions.width + radius ||
-      point.y > dimensions.height + radius
-    ) {
-      this.selectionRing.classList.add('hidden');
-      return;
-    }
-    const diameter = radius * 2 + 6;
-    this.selectionRing.style.left = `${point.x}px`;
-    this.selectionRing.style.top = `${point.y}px`;
-    this.selectionRing.style.width = `${diameter}px`;
-    this.selectionRing.style.height = `${diameter}px`;
-    this.selectionRing.classList.remove('hidden');
-  }
-
   private scheduleLabelLayer(): void {
     if (this.labelFrame !== null || !this.sigma) return;
     this.labelFrame = requestAnimationFrame(() => {
@@ -410,13 +390,12 @@ export class GraphView {
   /** HTML labels give us the multi-line, circle-fitted captions that Sigma's
    * WebGL label program cannot render. Only visible labels are materialized. */
   private renderLabelLayer(): void {
-    this.renderSelectionRing();
     if (!this.sigma) {
       this.labelLayer.replaceChildren();
       return;
     }
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
-    const order = graph.order;
+    const order = graph.order - (graph.hasNode(SELECTION_HALO_NODE) ? 1 : 0);
     const showLabels = order <= 200 || this.currentZoom >= 2.5;
     if (!showLabels) {
       this.labelLayer.replaceChildren();
@@ -427,6 +406,7 @@ export class GraphView {
     const fragment = document.createDocumentFragment();
     let labelCount = 0;
     graph.forEachNode((node, attributes) => {
+      if (node === SELECTION_HALO_NODE) return;
       if (labelCount >= 300) return;
       const x = Number(attributes.x);
       const y = Number(attributes.y);
