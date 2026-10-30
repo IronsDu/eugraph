@@ -277,6 +277,47 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
   );
   const mainLayout = h('main', { class: 'layout' }, editorPanel, resultPanel);
 
+  const sidebarGraph = h('div', { class: 'sidebar-db' }, 'graph: default');
+  const sidebarStatus = h('div', { class: 'sidebar-status' }, '连接后加载');
+  const sidebarLabels = h('div', { class: 'sidebar-list' });
+  const sidebarRelationships = h('div', { class: 'sidebar-list' });
+  const sidebarRefresh = h('button', { class: 'button small', type: 'button' }, '刷新');
+  const sidebarToggleButton = h(
+    'button',
+    { class: 'sidebar-toggle', type: 'button', title: '收起侧栏', 'aria-label': '收起侧栏' },
+    '◀'
+  ) as HTMLButtonElement;
+  const sidebar = h(
+    'aside',
+    { class: 'sidebar' },
+    h(
+      'div',
+      { class: 'sidebar-tabs' },
+      h('button', { class: 'sidebar-tab active', type: 'button' }, 'Database'),
+      h('span', { class: 'spacer' }),
+      sidebarRefresh
+    ),
+    h(
+      'div',
+      { class: 'sidebar-body' },
+      sidebarGraph,
+      sidebarStatus,
+      h(
+        'div',
+        { class: 'sidebar-section' },
+        h('div', { class: 'sidebar-section-title' }, 'Labels'),
+        sidebarLabels
+      ),
+      h(
+        'div',
+        { class: 'sidebar-section' },
+        h('div', { class: 'sidebar-section-title' }, 'Relationship types'),
+        sidebarRelationships
+      )
+    )
+  );
+  const appBody = h('div', { class: 'app-body' }, sidebar, mainLayout);
+
   const endpointLabel = h('span', { class: 'connection-endpoint' }, 'bolt://—');
   const connectionMenuEndpoint = h('code', { class: 'connection-menu-endpoint' }, 'bolt://—');
   const disconnectButton = h('button', { class: 'connection-disconnect', type: 'button' }, '断开连接') as HTMLButtonElement;
@@ -301,10 +342,10 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
   const header = h(
     'header',
     { class: 'topbar' },
-    h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, 'E'), ' EuGraph Console'),
+    h('div', { class: 'brand' }, sidebarToggleButton, h('span', { class: 'brand-mark' }, 'E'), ' EuGraph Console'),
     h('div', { class: 'topbar-meta' }, themeButton, databaseWrap, connectionWrap)
   );
-  const appView = h('div', { class: 'app-view hidden' }, header, mainLayout);
+  const appView = h('div', { class: 'app-view hidden' }, header, appBody);
 
   const inspectorTitle = h('h3', { class: 'modal-title' });
   const inspectorPre = h('pre', { class: 'modal-json' });
@@ -374,6 +415,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     databaseLabel.textContent = `graph: ${name}`;
     if (announce) setMessage(`已切换到 graph '${name}'`, 'info');
     closeDatabaseMenu();
+    void refreshSidebar();
   }
 
   function renderDatabaseMenu(
@@ -447,6 +489,83 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     databaseMenu.classList.remove('hidden');
     databaseButton.setAttribute('aria-expanded', 'true');
     void refreshDatabaseList();
+  }
+
+  let sidebarFetchToken = 0;
+
+  function setSidebarOpen(open: boolean): void {
+    appBody.classList.toggle('sidebar-collapsed', !open);
+    sidebarToggleButton.textContent = open ? '◀' : '▶';
+    sidebarToggleButton.title = open ? '收起侧栏' : '展开侧栏';
+    sidebarToggleButton.setAttribute('aria-label', sidebarToggleButton.title);
+  }
+
+  function clearSidebar(message: string): void {
+    sidebarFetchToken += 1;
+    sidebarGraph.textContent = `graph: ${state.database}`;
+    sidebarStatus.textContent = message;
+    sidebarLabels.replaceChildren();
+    sidebarRelationships.replaceChildren();
+  }
+
+  function renderSidebarList(
+    container: HTMLElement,
+    items: string[],
+    kind: 'label' | 'relationship'
+  ): void {
+    container.replaceChildren();
+    if (items.length === 0) {
+      container.append(h('div', { class: 'sidebar-empty' }, '无'));
+      return;
+    }
+    for (const item of items) {
+      const button = h('button', { class: 'sidebar-item', type: 'button', title: item }, item);
+      button.addEventListener('click', () => {
+        const escaped = item.replaceAll('`', '``');
+        editor.value =
+          kind === 'label'
+            ? `MATCH (n:\`${escaped}\`) RETURN n LIMIT 100`
+            : `MATCH (a)-[r:\`${escaped}\`]->(b) RETURN a, r, b LIMIT 100`;
+        editor.focus();
+        editor.setSelectionRange(0, editor.value.length);
+      });
+      container.append(button);
+    }
+  }
+
+  async function refreshSidebar(): Promise<void> {
+    const token = ++sidebarFetchToken;
+    sidebarGraph.textContent = `graph: ${state.database}`;
+    if (!state.driver) {
+      clearSidebar('未连接');
+      return;
+    }
+    sidebarStatus.textContent = '读取 schema…';
+    try {
+      const [labelsResult, relationshipsResult] = await Promise.all([
+        state.driver.executeQuery(
+          'CALL db.labels() YIELD label RETURN label ORDER BY label',
+          {},
+          { database: state.database }
+        ),
+        state.driver.executeQuery(
+          'CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType',
+          {},
+          { database: state.database }
+        ),
+      ]);
+      if (token !== sidebarFetchToken) return;
+      const labels = labelsResult.records.map((record: any) => String(record.get('label')));
+      const relationships = relationshipsResult.records.map((record: any) =>
+        String(record.get('relationshipType'))
+      );
+      renderSidebarList(sidebarLabels, labels, 'label');
+      renderSidebarList(sidebarRelationships, relationships, 'relationship');
+      sidebarStatus.textContent = `${labels.length} labels · ${relationships.length} relationship types`;
+    } catch (error) {
+      if (token !== sidebarFetchToken) return;
+      sidebarStatus.textContent = `读取失败：${describeError(error)}`;
+    }
   }
 
   function showInspector(column: string, value: unknown): void {
@@ -583,7 +702,8 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       showToast(`已连接到 EuGraph · Bolt ${state.info.bolt.port}`, 'success');
     } catch (error) {
       state.driver = null;
-      setConnected(false);
+      setSidebarOpen(true);
+  setConnected(false);
       setStatus('连接失败', 'error');
       setLoginMessage(describeError(error), 'error');
       password.focus();
@@ -597,10 +717,12 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     state.driver = null;
     state.auth = null;
     clearFrames();
-    setConnected(false);
+    setSidebarOpen(true);
+  setConnected(false);
     setStatus('未连接', 'idle');
     serverLabel.textContent = '';
     setLoginMessage('已断开连接', 'info');
+    clearSidebar('未连接');
     if (driver) await driver.close().catch(() => undefined);
     username.focus();
   }
@@ -1360,6 +1482,10 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
   clearFramesButton.addEventListener('click', clearFrames);
   closeResultsButton.addEventListener('click', () => setResultsVisible(false));
   toggleResultsButton.addEventListener('click', () => setResultsVisible(!state.resultsVisible));
+  sidebarToggleButton.addEventListener('click', () => {
+    setSidebarOpen(appBody.classList.contains('sidebar-collapsed'));
+  });
+  sidebarRefresh.addEventListener('click', () => void refreshSidebar());
   themeButton.addEventListener('click', () => applyTheme(theme === 'dark' ? 'light' : 'dark', true));
   loginThemeButton.addEventListener('click', () => applyTheme(theme === 'dark' ? 'light' : 'dark', true));
   connectionButton.addEventListener('click', (event) => {
@@ -1398,6 +1524,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     }
   });
 
+  setSidebarOpen(true);
   setConnected(false);
 
   return {

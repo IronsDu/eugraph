@@ -32,6 +32,8 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
 - 顶栏可在深色/浅色主题间切换，选择保存在浏览器 localStorage；默认深色。
 - 顶栏 Graph/Database 下拉每次展开都会重新执行 `SHOW DATABASES` 获取最新列表（含 online
   状态，当前项高亮）；选择后只切换后续 session 使用的数据库，已有结果 frame 保留。
+- 主界面左侧是可折叠 Sidebar；Database 概览 tab 显示当前 graph 的 labels 和 relationship
+  types，切换 database 或点刷新时重新读取；点击列表项会把对应的 MATCH 查询写入编辑器。
 - 启动时显示独立连接页（默认 `neo4j` / `eugraph`，凭据只保存在页面会话内）；连接成功后
   进入主界面。顶栏显示当前 Bolt 地址和 graph 名；地址下拉内提供“断开连接”，断开后回到
   登录页。数据库切换可用顶栏下拉或 `:use`。
