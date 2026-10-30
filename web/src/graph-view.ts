@@ -38,6 +38,7 @@ export class GraphView {
   private pendingZoom = 1;
   private scaleFrame: number | null = null;
   private labelFrame: number | null = null;
+  private readonly baseEdgeSizes = new Map<string, number>();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -98,6 +99,11 @@ export class GraphView {
       });
     }
 
+    this.baseEdgeSizes.clear();
+    result.graph.forEachEdge((edge, attributes) => {
+      this.baseEdgeSizes.set(edge, (attributes.size as number) ?? 3.2);
+    });
+
     try {
       layoutGraph(result.graph);
     } catch (error) {
@@ -141,6 +147,7 @@ export class GraphView {
               labelColor: '#9ca3af',
               labelSize: { attribute: 'labelSize' },
               labelVisibility: result.graph.size <= 400 ? 'visible' : 'auto',
+              labelPosition: 'above',
             },
           ],
         },
@@ -208,6 +215,7 @@ export class GraphView {
       this.labelFrame = null;
     }
     this.labelLayer.replaceChildren();
+    this.baseEdgeSizes.clear();
     if (this.sigma) {
       this.sigma.getCamera().removeListener('updated', this.cameraHandler);
       this.sigma.kill();
@@ -248,7 +256,14 @@ export class GraphView {
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
     const baseLabelSize = Math.max(1, (this.denseGraph ? 6.5 : 8) * zoom);
     const head = this.currentZoom < 1.6 ? 'arrowSmall' : 'arrow';
-    graph.forEachEdge((edge) => {
+    const pixelsPerUnit = this.sigma.scaleSize(1);
+    const maxEdgeScreenWidth = 8;
+    graph.forEachEdge((edge, attributes) => {
+      const baseSize = this.baseEdgeSizes.get(edge) ?? (attributes.size as number) ?? 3.2;
+      const screenWidth = baseSize * pixelsPerUnit;
+      const widthScale = screenWidth > maxEdgeScreenWidth ? maxEdgeScreenWidth / screenWidth : 1;
+      const selectedScale = edge === this.selectedEdge ? 1.8 : 1;
+      graph.setEdgeAttribute(edge, 'size', baseSize * widthScale * selectedScale);
       graph.setEdgeAttribute(edge, 'head', head);
       graph.setEdgeAttribute(edge, 'labelSize', Math.min(baseLabelSize, 24));
     });
