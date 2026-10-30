@@ -26,6 +26,9 @@ export class GraphView {
   private selectedNode: string | null = null;
   private selectedOriginalColor: unknown = undefined;
   private selectedOriginalSize: number | null = null;
+  private selectedEdge: string | null = null;
+  private selectedEdgeOriginalColor: unknown = undefined;
+  private selectedEdgeOriginalSize: number | null = null;
   private sigma: any | null = null;
   private readonly cameraHandler = (): void => this.onCameraUpdated();
   private fitPixelsPerUnit: number | null = null;
@@ -164,10 +167,12 @@ export class GraphView {
     });
     this.sigma.on('clickEdge', (payload: any) => {
       this.clearNodeSelection();
+      this.selectEdge(payload.edge);
       this.showEdge(payload.edge);
     });
     this.sigma.on('clickStage', () => {
       this.clearNodeSelection();
+      this.clearEdgeSelection();
       this.hideInspector();
     });
     this.fitPixelsPerUnit = null;
@@ -212,6 +217,9 @@ export class GraphView {
     this.selectedNode = null;
     this.selectedOriginalColor = undefined;
     this.selectedOriginalSize = null;
+    this.selectedEdge = null;
+    this.selectedEdgeOriginalColor = undefined;
+    this.selectedEdgeOriginalSize = null;
     this.container.replaceChildren(this.labelLayer, this.inspector, this.notice);
     this.notice.classList.add('hidden');
     this.hideInspector();
@@ -271,6 +279,7 @@ export class GraphView {
 
   private selectNode(node: string): void {
     if (!this.sigma) return;
+    this.clearEdgeSelection();
     this.clearNodeSelection();
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
     if (!graph.hasNode(node)) return;
@@ -282,6 +291,42 @@ export class GraphView {
     graph.setNodeAttribute(node, 'size', ((attributes.size as number) ?? 10) * 1.18);
     this.sigma.refresh();
     this.scheduleLabelLayer();
+  }
+
+  private clearEdgeSelection(): void {
+    if (!this.sigma || !this.selectedEdge) {
+      this.selectedEdge = null;
+      this.selectedEdgeOriginalColor = undefined;
+      this.selectedEdgeOriginalSize = null;
+      return;
+    }
+    const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    if (graph.hasEdge(this.selectedEdge)) {
+      if (this.selectedEdgeOriginalColor !== undefined) {
+        graph.setEdgeAttribute(this.selectedEdge, 'color', this.selectedEdgeOriginalColor as string);
+      }
+      if (this.selectedEdgeOriginalSize !== null) {
+        graph.setEdgeAttribute(this.selectedEdge, 'size', this.selectedEdgeOriginalSize);
+      }
+    }
+    this.selectedEdge = null;
+    this.selectedEdgeOriginalColor = undefined;
+    this.selectedEdgeOriginalSize = null;
+    this.sigma.refresh();
+  }
+
+  private selectEdge(edge: string): void {
+    if (!this.sigma) return;
+    this.clearEdgeSelection();
+    const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    if (!graph.hasEdge(edge)) return;
+    const attributes = graph.getEdgeAttributes(edge);
+    this.selectedEdge = edge;
+    this.selectedEdgeOriginalColor = attributes.color;
+    this.selectedEdgeOriginalSize = (attributes.size as number) ?? 3.2;
+    graph.setEdgeAttribute(edge, 'color', '#5b9dff');
+    graph.setEdgeAttribute(edge, 'size', ((attributes.size as number) ?? 3.2) * 1.8);
+    this.sigma.refresh();
   }
 
   private scheduleLabelLayer(): void {
