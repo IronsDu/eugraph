@@ -58,10 +58,9 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
   属性 → `description` → 第一个标量属性；不写死数据集字段）；点击节点在右上角属性面板显示标签、
   elementId 与全部属性；点击边线显示关系类型、from/to（节点标签 + caption + id）与边属性
   （无属性时显示「无属性」）。布局采用 Neo4j 风格的圆形初始位置：结果只有节点时按同心环
-  绕中心规则排布；有边且不超过 600 节点时，整张图跑一次 Neo4j 风格力模型
-  （charge、link 目标距离 `r1+r2+90`、center、collide `r1+r2+25`），不按分量打包，
-  避免小分量把主图挤小；节点会形成内部网络而不是停留在外圈。更大图回退到 ForceAtlas2
-  分量布局。
+  绕中心规则排布；有边时整张图跑一次与 Neo4j Browser 相同的 `d3-force` 布局：
+  charge `-400`、center `0.03`、link 目标距离 `r1+r2+90`、collide `r1+r2+25`、
+  velocityDecay `0.4`，初始圆半径为 `n*45/(2π)`，预计算 300 tick。不按分量打包。
   节点圈、边线、节点文字与边标签都按相机缩放比例同步缩放；HTML caption 受节点圆的宽高和
   最大行数约束，超出部分在圆内裁切。大图在 fit 视图隐藏节点文字，放大后只为视口内节点生成标签。
   默认上限 2000 节点 / 5000 边，超限显示截断提示。
@@ -195,5 +194,6 @@ node --test tests/bolt/test_js_ws_driver.cjs
 - C++：Drogon 1.9.11（MIT）→ trantor 1.5.24（BSD-2）、jsoncpp（MIT）、brotli（MIT）、
   c-ares/openssl（传递依赖，均为宽松许可）。
 - 前端：`neo4j-driver` 6.2.0（Apache-2.0）、Sigma 4.0.4 / graphology（MIT）、
-  Vite/TypeScript/Vitest（开发期，MIT）。CodeMirror 自动补全为后续里程碑。
+  `d3-force` 3.0.0（ISC，与 Neo4j Browser 相同）、Vite/TypeScript/Vitest（开发期，MIT）。
+  CodeMirror 自动补全为后续里程碑。
 - 第三方声明随资产提供：`/licenses.txt`。

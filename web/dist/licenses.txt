@@ -16,8 +16,9 @@ sigma 4.0.4               MIT          https://github.com/jacomyal/sigma.js
 graphology 0.26.0         MIT          https://github.com/graphology/graphology
   Copyright (c) 2017-2026 Guillaume Plique and contributors.
 
-graphology-layout-forceatlas2 0.10.1  MIT  https://github.com/graphology/graphology
-  Copyright (c) 2017-2026 Guillaume Plique and contributors.
+d3-force 3.0.0            ISC          https://github.com/d3/d3-force
+  Copyright (c) 2010-2023 Mike Bostock.
+  Includes d3-dispatch, d3-quadtree, d3-timer (ISC).
 
 Build-time tools
 ----------------

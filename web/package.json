@@ -10,12 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "d3-force": "^3.0.0",
     "graphology": "0.26.0",
-    "graphology-layout-forceatlas2": "0.10.1",
     "neo4j-driver": "6.2.0",
     "sigma": "4.0.4"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.10",
     "@types/node": "26.6.6",
     "typescript": "5.9.3",
     "vite": "8.3.5",

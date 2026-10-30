@@ -71,15 +71,10 @@ export class GraphView {
     }
 
     const order = result.graph.order;
-    try {
-      layoutGraph(result.graph);
-    } catch (error) {
-      console.warn('Graph layout failed', error);
-    }
-
-    // Keep layout spacing but draw denser graphs with smaller marks.
+    // Apply the visual sizes before layout: d3-force's link and collision
+    // distances are derived from node radii, matching Neo4j's NodeModel.radius.
     this.denseGraph = order > 300;
-    this.nodeVisualScale = order <= 3 ? 1.8 : order <= 20 ? 0.65 : 0.85;
+    this.nodeVisualScale = order <= 3 ? 1.8 : order <= 20 ? 0.65 : 1.25;
     result.graph.forEachNode((node, attributes) => {
       result.graph.setNodeAttribute(
         node,
@@ -92,6 +87,12 @@ export class GraphView {
         result.graph.setEdgeAttribute(edge, 'size', ((attributes.size as number) ?? 2.2) * 0.75);
         result.graph.setEdgeAttribute(edge, 'color', '#6b7280');
       });
+    }
+
+    try {
+      layoutGraph(result.graph);
+    } catch (error) {
+      console.warn('Graph layout failed', error);
     }
 
     try {
@@ -310,7 +311,7 @@ export class GraphView {
       const point = this.sigma.graphToViewport({ x, y });
       if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
       const radius = this.sigma.scaleSize((attributes.size as number) ?? 10);
-      if (!Number.isFinite(radius) || radius < 4) return;
+      if (!Number.isFinite(radius) || radius < 3) return;
       if (point.x < -radius || point.x > dimensions.width + radius) return;
       if (point.y < -radius || point.y > dimensions.height + radius) return;
 
@@ -318,7 +319,7 @@ export class GraphView {
       if (!caption) return;
       const fontSize = Math.max(6, Math.min(14, radius * 0.55));
       const diameter = radius * 2 * 0.9;
-      if (diameter < 12) return;
+      if (diameter < 10) return;
       const maxLines = Math.max(1, Math.floor(diameter / (fontSize * 1.1)));
 
       const label = document.createElement('div');
