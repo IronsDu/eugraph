@@ -1065,3 +1065,24 @@ TEST_F(CypherParserTest, ForeachStaysUsableAsAnIdentifier) {
     EXPECT_EQ(query.first.clauses.size(), 2u);
     EXPECT_NE(std::get_if<std::unique_ptr<MatchClause>>(&query.first.clauses[0]), nullptr);
 }
+
+TEST_F(CypherParserTest, QuotedNodeLabelIsNormalized) {
+    auto stmt = parseSuccess("MATCH (n:`Person`) RETURN n");
+    auto& query = getRegularQuery(stmt);
+    auto& match = std::get<std::unique_ptr<MatchClause>>(query.first.clauses[0]);
+    ASSERT_EQ(match->patterns.size(), 1);
+    auto& node = match->patterns[0].element.node;
+    ASSERT_EQ(node.labels.size(), 1);
+    EXPECT_EQ(node.labels[0], "Person");
+}
+
+TEST_F(CypherParserTest, QuotedRelationshipTypeIsNormalized) {
+    auto stmt = parseSuccess("MATCH (a)-[r:`CONTAINER_OF`]->(b) RETURN a, r, b");
+    auto& query = getRegularQuery(stmt);
+    auto& match = std::get<std::unique_ptr<MatchClause>>(query.first.clauses[0]);
+    ASSERT_EQ(match->patterns.size(), 1);
+    ASSERT_EQ(match->patterns[0].element.chain.size(), 1);
+    auto& rel = match->patterns[0].element.chain[0].first;
+    ASSERT_EQ(rel.rel_types.size(), 1);
+    EXPECT_EQ(rel.rel_types[0], "CONTAINER_OF");
+}
