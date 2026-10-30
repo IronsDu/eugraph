@@ -1489,3 +1489,18 @@ html[data-theme='light'] .graph-notice {
   color: var(--muted-faint);
   font-size: 11.5px;
 }
+
+/* Selected node halo; radius follows Sigma's current node display size. */
+.graph-selection-ring {
+  position: absolute;
+  z-index: 3;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.graph-selection-ring.hidden {
+  display: none;
+}

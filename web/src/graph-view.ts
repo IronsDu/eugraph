@@ -23,6 +23,7 @@ export class GraphView {
   private readonly inspectorBody: HTMLElement;
   private readonly notice: HTMLElement;
   private readonly labelLayer: HTMLElement;
+  private readonly selectionRing: HTMLElement;
   private selectedNode: string | null = null;
   private selectedOriginalColor: unknown = undefined;
   private selectedOriginalSize: number | null = null;
@@ -70,13 +71,16 @@ export class GraphView {
     this.labelLayer = document.createElement('div');
     this.labelLayer.className = 'graph-label-layer';
 
-    container.append(this.labelLayer, this.inspector, this.notice);
+    this.selectionRing = document.createElement('div');
+    this.selectionRing.className = 'graph-selection-ring hidden';
+
+    container.append(this.selectionRing, this.labelLayer, this.inspector, this.notice);
   }
 
   render(result: GraphResult): boolean {
     this.destroy();
     if (result.graph.order === 0) {
-      this.container.append(this.labelLayer, this.inspector);
+      this.container.append(this.selectionRing, this.labelLayer, this.inspector);
       return false;
     }
 
@@ -228,7 +232,8 @@ export class GraphView {
     this.selectedEdge = null;
     this.selectedEdgeOriginalColor = undefined;
     this.selectedEdgeOriginalSize = null;
-    this.container.replaceChildren(this.labelLayer, this.inspector, this.notice);
+    this.selectionRing.classList.add('hidden');
+    this.container.replaceChildren(this.selectionRing, this.labelLayer, this.inspector, this.notice);
     this.notice.classList.add('hidden');
     this.hideInspector();
   }
@@ -289,6 +294,7 @@ export class GraphView {
     this.selectedNode = null;
     this.selectedOriginalColor = undefined;
     this.selectedOriginalSize = null;
+    this.selectionRing.classList.add('hidden');
     this.sigma.refresh();
   }
 
@@ -344,6 +350,55 @@ export class GraphView {
     this.sigma.refresh();
   }
 
+  private currentViewportPoint(x: number, y: number): { x: number; y: number } {
+    const sigma = this.sigma;
+    return sigma.graphToViewport(
+      { x, y },
+      {
+        cameraState: sigma.getCamera().getState(),
+        viewportDimensions: sigma.getDimensions(),
+        graphDimensions: sigma.getGraphDimensions(),
+        padding: sigma.getStagePadding(),
+      }
+    );
+  }
+
+  private renderSelectionRing(): void {
+    if (!this.sigma || !this.selectedNode) {
+      this.selectionRing.classList.add('hidden');
+      return;
+    }
+    const graph = this.sigma.getGraph() as MultiDirectedGraph;
+    if (!graph.hasNode(this.selectedNode)) {
+      this.selectedNode = null;
+      this.selectionRing.classList.add('hidden');
+      return;
+    }
+    const attributes = graph.getNodeAttributes(this.selectedNode);
+    const display = this.sigma.getNodeDisplayData(this.selectedNode) as { size?: number } | undefined;
+    const radius = this.sigma.scaleSize(display?.size ?? (attributes.size as number) ?? 10);
+    const point = this.currentViewportPoint(Number(attributes.x), Number(attributes.y));
+    const dimensions = this.sigma.getDimensions();
+    if (
+      !Number.isFinite(point.x) ||
+      !Number.isFinite(point.y) ||
+      !Number.isFinite(radius) ||
+      point.x < -radius ||
+      point.y < -radius ||
+      point.x > dimensions.width + radius ||
+      point.y > dimensions.height + radius
+    ) {
+      this.selectionRing.classList.add('hidden');
+      return;
+    }
+    const diameter = radius * 2 + 6;
+    this.selectionRing.style.left = `${point.x}px`;
+    this.selectionRing.style.top = `${point.y}px`;
+    this.selectionRing.style.width = `${diameter}px`;
+    this.selectionRing.style.height = `${diameter}px`;
+    this.selectionRing.classList.remove('hidden');
+  }
+
   private scheduleLabelLayer(): void {
     if (this.labelFrame !== null || !this.sigma) return;
     this.labelFrame = requestAnimationFrame(() => {
@@ -355,6 +410,7 @@ export class GraphView {
   /** HTML labels give us the multi-line, circle-fitted captions that Sigma's
    * WebGL label program cannot render. Only visible labels are materialized. */
   private renderLabelLayer(): void {
+    this.renderSelectionRing();
     if (!this.sigma) {
       this.labelLayer.replaceChildren();
       return;
