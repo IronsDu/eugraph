@@ -8,6 +8,14 @@ import { layoutGraph } from './layout';
 
 type PropertyRow = [string, unknown];
 
+const ARROW_LARGE = extremityArrow({ lengthRatio: 10, widthRatio: 8 });
+const ARROW_SMALL_BASE = extremityArrow({ lengthRatio: 5, widthRatio: 4 });
+const ARROW_SMALL = {
+  ...ARROW_SMALL_BASE,
+  name: 'arrowSmall',
+  glsl: ARROW_SMALL_BASE.glsl.replaceAll('extremity_arrow', 'extremity_arrowSmall'),
+};
+
 export class GraphView {
   private readonly container: HTMLElement;
   private readonly inspector: HTMLElement;
@@ -102,7 +110,7 @@ export class GraphView {
           edges: {
             ...DEFAULT_PRIMITIVES.edges,
             paths: [pathLine(), pathCurved({ curvature: 0.22 })],
-            extremities: [extremityArrow({ lengthRatio: 10, widthRatio: 8 })],
+            extremities: [ARROW_LARGE, ARROW_SMALL],
           },
         },
         settings: {
@@ -128,7 +136,7 @@ export class GraphView {
             {
               ...DEFAULT_STYLES.edges,
               path: 'curved',
-              head: 'arrow',
+              head: { attribute: 'head' },
               labelColor: '#9ca3af',
               labelSize: { attribute: 'labelSize' },
               labelVisibility: result.graph.size <= 400 ? 'visible' : 'auto',
@@ -235,7 +243,9 @@ export class GraphView {
     this.currentZoom = zoom;
     const graph = this.sigma.getGraph() as MultiDirectedGraph;
     const baseLabelSize = Math.max(1, (this.denseGraph ? 6.5 : 8) * zoom);
+    const head = this.currentZoom < 1.6 ? 'arrowSmall' : 'arrow';
     graph.forEachEdge((edge) => {
+      graph.setEdgeAttribute(edge, 'head', head);
       graph.setEdgeAttribute(edge, 'labelSize', Math.min(baseLabelSize, 24));
     });
     this.sigma.refresh();
