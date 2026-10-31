@@ -1,8 +1,13 @@
 #include "graph/graph_manager.hpp"
 #include "service/bolt/bolt_server.hpp"
+#include "service/bolt/ws_origin.hpp"
 #include "service/graph_service.hpp"
 #include "service/thrift/eugraph_handler.hpp"
 #include "service/thrift/gen-cpp2/EuGraphService.h"
+
+#ifdef EUGRAPH_ENABLE_WEB_CONSOLE
+#include "service/web/web_console.hpp"
+#endif
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 
@@ -19,6 +24,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace eugraph;
 using namespace eugraph::compute;
@@ -34,6 +40,13 @@ struct ServerConfig {
     int wt_cache_size_mb = 256;
     int wt_evict_threads_max = 4;
     std::string wt_txn_sync = "fsync";
+#ifdef EUGRAPH_ENABLE_WEB_CONSOLE
+    int web_port = 7475;
+#else
+    int web_port = 0;
+#endif
+    std::string web_bind = "127.0.0.1";
+    std::vector<std::string> web_allowed_origins;
 };
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
@@ -59,6 +72,12 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
                                               config.wt_evict_threads_max);
     args::ValueFlag<std::string> wt_txn_sync(parser, "mode", "WiredTiger commit sync: fsync|none", {"wt-txn-sync"},
                                              config.wt_txn_sync);
+    args::ValueFlag<int> web_port(parser, "port", "Web console HTTP port (default 7475); 0 disables", {"web-port"},
+                                  config.web_port);
+    args::ValueFlag<std::string> web_bind(parser, "addr", "Web console bind address (IPv4)", {"web-bind"},
+                                          config.web_bind);
+    args::ValueFlagList<std::string> web_allowed_origin(
+        parser, "origin", "Additional allowed WebSocket Origin (repeatable)", {"web-allowed-origin"});
 
     try {
         parser.ParseCLI(argc, argv);
@@ -85,6 +104,9 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
     config.wt_cache_size_mb = args::get(wt_cache_size_mb);
     config.wt_evict_threads_max = args::get(wt_evict_threads_max);
     config.wt_txn_sync = args::get(wt_txn_sync);
+    config.web_port = args::get(web_port);
+    config.web_bind = args::get(web_bind);
+    config.web_allowed_origins = args::get(web_allowed_origin);
     return config;
 }
 
@@ -104,6 +126,23 @@ int main(int argc, char* argv[]) {
         spdlog::error("--wt-cache-size-mb and --wt-evict-threads-max must be positive");
         return 1;
     }
+    if (config.web_port < 0 || config.web_port > 65535) {
+        spdlog::error("--web-port must be between 0 and 65535");
+        return 1;
+    }
+    if (config.web_port > 0 && config.bolt_port <= 0) {
+        // The console talks to Bolt; a Thrift-only deployment (notably the TCK)
+        // must keep working without an explicit --web-port 0.
+        spdlog::warn("Bolt is disabled (--bolt-port 0); web console is disabled as well");
+        config.web_port = 0;
+    }
+#ifndef EUGRAPH_ENABLE_WEB_CONSOLE
+    if (config.web_port > 0) {
+        spdlog::error("this eugraph-server was built without the web console; reconfigure with "
+                      "-DEUGRAPH_ENABLE_WEB_CONSOLE=ON or pass --web-port 0");
+        return 1;
+    }
+#endif
 
     std::string txn_sync_cfg;
     if (config.wt_txn_sync == "none") {
@@ -131,8 +170,50 @@ int main(int argc, char* argv[]) {
     }
 
     auto graph_service = std::make_shared<service::GraphService>(*graph_manager);
-    auto handler = std::make_shared<service::thrift::EuGraphHandler>(*graph_service);
 
+    // Browser WebSocket origins are restricted to loopback plus explicit
+    // allow-list entries. Non-browser drivers do not send Origin at all and are
+    // unaffected by this policy.
+    auto origin_policy = std::make_shared<service::bolt::OriginPolicy>(config.web_allowed_origins);
+
+    // Start Bolt and the (optional) web console before building the Thrift
+    // server. If either sidecar fails to start we can tear everything down
+    // cleanly; a ThriftServer that never reached serve() cannot be destroyed
+    // safely (its thread manager keeps the IO pool alive).
+    std::unique_ptr<service::bolt::BoltServer> bolt_server;
+    if (config.bolt_port > 0) {
+        bolt_server = std::make_unique<service::bolt::BoltServer>(
+            *graph_service, static_cast<uint16_t>(config.bolt_port), static_cast<size_t>(config.bolt_io_threads));
+        bolt_server->setOriginValidator(
+            [origin_policy](std::string_view origin) { return origin_policy->allows(origin); });
+        bolt_server->start();
+        spdlog::info("Bolt server listening on port {}...", config.bolt_port);
+    }
+
+#ifdef EUGRAPH_ENABLE_WEB_CONSOLE
+    std::unique_ptr<service::web::WebConsoleServer> web_console;
+    if (config.web_port > 0) {
+        service::web::WebConsoleConfig web_config;
+        web_config.port = static_cast<uint16_t>(config.web_port);
+        web_config.bind_address = config.web_bind;
+        web_config.bolt_port = static_cast<uint16_t>(config.bolt_port);
+        web_console = std::make_unique<service::web::WebConsoleServer>(web_config);
+        std::string error;
+        if (!web_console->start(&error)) {
+            spdlog::error("Failed to start web console: {}", error);
+            web_console.reset();
+            if (bolt_server) {
+                bolt_server->stop();
+                bolt_server.reset();
+            }
+            graph_manager->shutdown();
+            return 1;
+        }
+        spdlog::info("Web console listening on http://{}:{}", config.web_bind, config.web_port);
+    }
+#endif
+
+    auto handler = std::make_shared<service::thrift::EuGraphHandler>(*graph_service);
     auto server = std::make_shared<apache::thrift::ThriftServer>();
     server->setPort(config.thrift_port);
     server->setAllowPlaintextOnLoopback(true);
@@ -150,18 +231,14 @@ int main(int argc, char* argv[]) {
     spdlog::info("EuGraph server initialized successfully");
     spdlog::info("Listening on Thrift RPC port {}...", config.thrift_port);
 
-    // Start Bolt protocol server (if enabled)
-    std::unique_ptr<service::bolt::BoltServer> bolt_server;
-    if (config.bolt_port > 0) {
-        bolt_server = std::make_unique<service::bolt::BoltServer>(
-            *graph_service, static_cast<uint16_t>(config.bolt_port), static_cast<size_t>(config.bolt_io_threads));
-        bolt_server->start();
-        spdlog::info("Bolt server listening on port {}...", config.bolt_port);
-    }
-
     server->serve();
 
     spdlog::info("Shutting down...");
+#ifdef EUGRAPH_ENABLE_WEB_CONSOLE
+    if (web_console) {
+        web_console->stop();
+    }
+#endif
     if (bolt_server) {
         bolt_server->stop();
     }

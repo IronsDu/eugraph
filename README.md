@@ -37,6 +37,14 @@ openCypher TCK 覆盖情况：全部已执行场景通过；目前未实现的�
 
 实测通过的客户端：Python `neo4j` 5.28.x / 5.0.0 / 4.4.0 驱动、`cypher-shell` 5.26.x。详见 [docs/service/neo4j-bolt-protocol.md](docs/service/neo4j-bolt-protocol.md)。
 
+### 内嵌 Web Console
+
+`eugraph-server` 默认在 `http://127.0.0.1:7475` 提供 Web Console（`--web-port 0` 可关闭）：前端资产编译进二进制，
+通过 Bolt-over-WebSocket 执行 Cypher；启动时先登录，连接后进入主界面，结果以可堆叠的
+frame 保留，可切换表格 / 图视图 / RAW，支持参数、历史、CSV 导出、深色/浅色主题与
+best-effort Stop；不需要额外的 Web 容器或静态文件目录。
+设计与打包流程见 [docs/service/web-console.md](docs/service/web-console.md)。
+
 ## 技术栈
 
 | 组件 | 选择 |

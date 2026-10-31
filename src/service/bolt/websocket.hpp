@@ -40,13 +40,26 @@ void unmaskPayload(uint8_t* data, size_t len, const uint8_t mask_key[4]);
 
 // ---- Handshake ----
 
-/// Parse the WebSocket upgrade HTTP request, extracting Sec-WebSocket-Key.
-/// Returns empty string if the request is not a valid upgrade.
-/// Returns the key on success.
+/// Parsed fields of a WebSocket upgrade request that the server cares about.
+struct HandshakeRequest {
+    std::string path;   ///< Request target, e.g. "/".
+    std::string key;    ///< Sec-WebSocket-Key.
+    std::string origin; ///< Origin header; empty when absent.
+    bool has_origin = false;
+};
+
+/// Parse the WebSocket upgrade HTTP request.
+/// Returns false if the request is not a valid upgrade (missing key/upgrade).
+bool parseHandshakeRequest(const uint8_t* data, size_t len, HandshakeRequest& request);
+
+/// Backwards-compatible helper: returns the Sec-WebSocket-Key or an empty string.
 std::string parseHandshakeKey(const uint8_t* data, size_t len);
 
 /// Build the 101 Switching Protocols handshake response.
 std::string buildHandshakeResponse(const std::string& ws_key);
+
+/// Build a 403 response for a rejected Origin. The caller closes after writing.
+std::string buildForbiddenResponse();
 
 /// Locate the end of HTTP headers (\r\n\r\n). Returns 0 if incomplete.
 size_t findHeaderEnd(const uint8_t* data, size_t len);

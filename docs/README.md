@@ -52,6 +52,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 数据容器 | 列存数据块、运行时值类型 | `DataChunk`, `Column`, `Value` | `src/query/dataset/` | [query/engine/query-engine-design.md] |
 | 查询执行器 | 协程管道执行，事务管理 | `QueryExecutor` | `src/query/executor/` | [query/engine/query-engine-design.md], [query/engine/execution-model.md] |
 | RPC 服务 | fbthrift 服务端，DDL 协调，流式 DML，图管理 | `EuGraphHandler` | `src/program/server/` | [service/rpc-service.md] |
+| Web Console | 内嵌 HTTP 资产、`/api/info`、Bolt-over-WS 控制台 | `WebConsoleServer`, `WebRouter` | `src/service/web/` | [service/web-console.md](service/web-console.md) |
 | Shell | 交互式 REPL（RPC 连接 server，图切换） | `ShellRepl`, `EuGraphRpcClient` | `src/program/shell/` | [program/design/server-shell-design.md] |
 | Catalog | 全局图目录（WT 独立数据库） | `CatalogStore` | `src/storage/catalog/` | [storage/multi-graph.md] |
 | 图管理器 | 多图生命周期、连接管理 | `GraphManager` | `src/graph/graph_manager.hpp` | [storage/multi-graph.md] |
@@ -76,6 +77,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 修改类型系统 | [architecture/type-definitions.md], [storage/kv-encoding.md] | `src/common/types/` |
 | 添加/修改 RPC 接口 | [service/rpc-service.md] | `proto/eugraph.thrift`, `src/program/server/` |
 | Neo4j Bolt 协议支持 | [service/neo4j-bolt-protocol.md] | `src/service/bolt/`, `src/service/graph_service.*` |
+| 修改 Web Console / 前端资产 | [service/web-console.md](service/web-console.md) | `src/service/web/`, `web/`, `scripts/build-web.sh` |
 | 修改 Shell 交互 | [program/design/server-shell-design.md] | `src/program/shell/` |
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
 | 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |

@@ -14,6 +14,27 @@
 namespace eugraph {
 namespace cypher {
 
+namespace {
+/// ANTLR's name token text keeps the backtick delimiters. Schema names and
+/// property accesses need the semantic identifier instead: `Foo` (with
+/// escaped backticks as `` inside) must become Foo.
+std::string normalizeIdentifier(const std::string& raw) {
+    if (raw.size() < 2 || raw.front() != '`' || raw.back() != '`')
+        return raw;
+    std::string result;
+    result.reserve(raw.size() - 2);
+    for (size_t i = 1; i + 1 < raw.size(); ++i) {
+        if (raw[i] == '`' && i + 2 < raw.size() && raw[i + 1] == '`') {
+            result.push_back('`');
+            ++i;
+        } else {
+            result.push_back(raw[i]);
+        }
+    }
+    return result;
+}
+} // namespace
+
 using AP = ::CypherParser;
 
 // ==================== Error Listener ====================
@@ -426,7 +447,7 @@ private:
                     RemoveItem label_ri;
                     label_ri.kind = RemoveItem::Kind::LABEL;
                     label_ri.target = makeVariable(item->symbol()->getText());
-                    label_ri.name = n->getText();
+                    label_ri.name = normalizeIdentifier(n->getText());
                     r->items.push_back(std::move(label_ri));
                 }
                 continue;
@@ -714,9 +735,10 @@ private:
                 return makeBinaryOp(BinaryOperator::IN, makeLiteral(std::string(label)),
                                     makeFunctionCall("labels", std::move(args)));
             };
-            Expression result = makeLabelCheck(names[0]->getText());
+            Expression result = makeLabelCheck(normalizeIdentifier(names[0]->getText()));
             for (size_t i = 1; i < names.size(); ++i)
-                result = makeBinaryOp(BinaryOperator::AND, std::move(result), makeLabelCheck(names[i]->getText()));
+                result = makeBinaryOp(BinaryOperator::AND, std::move(result),
+                                      makeLabelCheck(normalizeIdentifier(names[i]->getText())));
             return result;
         }
         return expr;
@@ -728,10 +750,7 @@ private:
         // Process DOT name chains before ::
         auto names = ctx->name();
         for (auto* n : names) {
-            std::string name_text = n->getText();
-            // Strip backtick delimiters from ESC_LITERAL tokens
-            if (name_text.size() >= 2 && name_text.front() == '`' && name_text.back() == '`')
-                name_text = name_text.substr(1, name_text.size() - 2);
+            std::string name_text = normalizeIdentifier(n->getText());
             r = makePropertyAccess(std::move(r), name_text);
         }
         // Process COLONCOLON labelCast if present
@@ -739,7 +758,7 @@ private:
             auto* lc = ctx->labelCast();
             auto lc_names = lc->name();
             // First name after :: is the label
-            r = makeLabelCast(std::move(r), lc_names[0]->getText());
+            r = makeLabelCast(std::move(r), normalizeIdentifier(lc_names[0]->getText()));
             // Remaining names are property accesses
             for (size_t i = 1; i < lc_names.size(); i++) {
                 std::string name_text = lc_names[i]->getText();
@@ -1058,7 +1077,7 @@ private:
             np.variable = ctx->symbol()->getText();
         if (ctx->nodeLabels())
             for (auto* n : ctx->nodeLabels()->name())
-                np.labels.push_back(n->getText());
+                np.labels.push_back(normalizeIdentifier(n->getText()));
         if (ctx->properties())
             np.properties = buildProperties(ctx->properties());
         return np;
@@ -1081,7 +1100,7 @@ private:
                 rp.variable = d->symbol()->getText();
             if (d->relationshipTypes())
                 for (auto* n : d->relationshipTypes()->name())
-                    rp.rel_types.push_back(n->getText());
+                    rp.rel_types.push_back(normalizeIdentifier(n->getText()));
             if (d->rangeLit()) {
                 auto* rl = d->rangeLit();
                 // Collect bound values from both numLit children and ID terminals,
@@ -1261,7 +1280,7 @@ private:
                     SetItem item;
                     item.kind = SetItemKind::SET_LABELS;
                     item.target = makeVariable(sym);
-                    item.label = n->getText();
+                    item.label = normalizeIdentifier(n->getText());
                     items.push_back(std::move(item));
                 }
                 continue;

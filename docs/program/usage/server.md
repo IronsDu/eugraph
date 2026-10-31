@@ -14,6 +14,9 @@ eugraph-server --thrift-port 9090 --data-dir ./eugraph-data --compute-threads 4
 |------|--------|------|
 | `--thrift-port` | 9090 | Thrift RPC 监听端口（`eugraph-shell` / `eugraph-loader` 连接此端口） |
 | `--bolt-port` | 7687 | Neo4j Bolt 协议端口；`0` 表示禁用 |
+| `--web-port` | 7475 | 内嵌 Web Console 端口；`0` 表示禁用；Bolt 禁用时自动关闭 |
+| `--web-bind` | 127.0.0.1 | Web Console 绑定地址（当前仅 IPv4） |
+| `--web-allowed-origin` | （空） | 额外允许的浏览器 WebSocket Origin，可重复 |
 | `--data-dir, -d` | `./eugraph-data` | 数据存储目录 |
 | `--compute-threads` | 4 | 查询计算线程数（`QueryExecutor` 的 CPU 线程池）；仅 Bolt 模式承载查询执行，Thrift 模式下不使用 |
 | `--storage-io-threads` | 4 | 存储 IO 线程数（`IoScheduler` 的 IO 线程池） |
@@ -44,6 +47,18 @@ eugraph-loader --schema ./docs/program/design/ldbc-sf01-composite.schema.json \
 # 3. 连接 shell
 eugraph-shell --host 127.0.0.1 --port 9090
 ```
+
+## Web Console
+
+```bash
+eugraph-server -d ./eugraph-data
+# 浏览器打开 http://127.0.0.1:7475（默认端口；--web-port 0 可关闭）
+```
+
+Web Console 默认开启，端口 7475（避开 Neo4j Browser 常用的 7474）。它与 Bolt 服务同进程：
+静态资产编译进二进制，查询通过 Bolt-over-WebSocket 执行，不经过额外 HTTP 查询层。默认只监听回环；
+非回环部署需同时配置 `--web-bind` 与 `--web-allowed-origin`。设计与打包流程见
+[service/web-console.md](../../service/web-console.md)。
 
 loader 会**先连服务器并做一次真实 RPC 握手**，再解析 schema；端口写错会立刻报错。
 

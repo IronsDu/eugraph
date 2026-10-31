@@ -10,10 +10,13 @@
 
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 
 namespace eugraph {
 namespace service {
@@ -87,6 +90,7 @@ private:
     std::unique_ptr<folly::IOBuf> read_buf_;
     std::unique_ptr<folly::IOBuf> write_buf_;
     bool writing_ = false;
+    bool close_after_write_ = false;
     std::vector<uint8_t> message_accumulator_;
 
     // Messages are decoded on the socket EventBase. Query processing is
@@ -122,6 +126,17 @@ public:
         return bookmark_counter_.fetch_add(1) + 1;
     }
 
+    /// Validator for browser WebSocket Origins. An empty validator accepts all
+    /// origins (the historical behaviour); eugraph-server installs a loopback +
+    /// explicit allow-list policy.
+    using OriginValidator = std::function<bool(std::string_view)>;
+    void setOriginValidator(OriginValidator validator) {
+        origin_validator_ = std::move(validator);
+    }
+    bool originAllowed(std::string_view origin) const {
+        return !origin_validator_ || origin_validator_(origin);
+    }
+
 private:
     friend class ListenerAcceptCallback;
 
@@ -135,6 +150,7 @@ private:
     std::vector<std::unique_ptr<ListenerState>> listeners_;
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> bookmark_counter_{0};
+    OriginValidator origin_validator_;
 
     std::mutex connections_mu_;
     std::unordered_set<std::shared_ptr<BoltConnection>> active_connections_;

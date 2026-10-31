@@ -13,6 +13,7 @@
     "zstd",
     "folly",
     "fbthrift",
+    "drogon",
     "nlohmann-json",
     "benchmark"
   ],

@@ -47,6 +47,16 @@ public:
         connection_closed_ = std::move(flag);
     }
 
+    /// Ask the statement currently streaming to stop at its next checkpoint.
+    ///
+    /// The connection calls this as soon as a RESET frame is decoded, even while
+    /// the PULL coroutine is still running. Without it RESET would sit in the
+    /// message FIFO behind the very statement it is supposed to abort.
+    void requestCancel() {
+        if (query_cancel_)
+            query_cancel_->store(true, std::memory_order_relaxed);
+    }
+
     /// Ends the current stream, dropping any partially consumed chunk with it.
     /// Every path that ends a stream goes through here so that stale rows can
     /// never be served to a later query.
@@ -96,6 +106,8 @@ public:
     /// instead of commit.
     bool streamCancelled() const {
         if (connection_closed_ && connection_closed_->load(std::memory_order_relaxed))
+            return true;
+        if (query_cancel_ && query_cancel_->load(std::memory_order_relaxed))
             return true;
         return stream_ctx_ && stream_ctx_->query_context && stream_ctx_->query_context->cancelled();
     }
@@ -160,6 +172,9 @@ private:
     size_t pending_row_ = 0;
     /// Shared with the owning connection; true once the socket is gone.
     std::shared_ptr<const std::atomic<bool>> connection_closed_;
+    /// Re-armed after RESET; shared with the running statement so an out-of-band
+    /// RESET can cancel it before the queued RESET message is handled.
+    std::shared_ptr<std::atomic<bool>> query_cancel_{std::make_shared<std::atomic<bool>>(false)};
     std::unordered_map<LabelId, LabelDef> label_defs_;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_;
 
