@@ -77,6 +77,8 @@ def main() -> int:
     ap.add_argument("--neo-db", default="neo4j")
     ap.add_argument("--neo-user", default="neo4j")
     ap.add_argument("--neo-password", default="eugraph")
+    ap.add_argument("--neo4j-id-type", choices=["int", "string"], default="int",
+                    help="neo4j id parameter type (clean sf0.1 import uses INTEGER; legacy uses string)")
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--only", default=None)
     ap.add_argument("--skip", default=DEFAULT_SKIP)
@@ -120,7 +122,10 @@ def main() -> int:
         neo_body = body.replace("like.creationDate AS likeTime", "toInteger(like.creationDate) AS likeTime")
         neo_body = neo_body.replace("workAt.workFrom", "toInteger(workAt.workFrom)")
         eg_params = dict(params)
-        neo_params = {k: (str(v) if k in ID_PARAMS else v) for k, v in params.items()}
+        if args.neo4j_id_type == "string":
+            neo_params = {k: (str(v) if k in ID_PARAMS else v) for k, v in params.items()}
+        else:
+            neo_params = dict(params)
 
         eg_rows = neo_rows = None
         eg_ms = neo_ms = float("nan")
@@ -152,8 +157,11 @@ def main() -> int:
             if sorted(eg_rows) != sorted(neo_rows):
                 note = "DIFF"
             elif eg_rows != neo_rows and "ORDER BY" in body.upper():
-                note = "ORDER-DIFF"
-        if note != "MATCH":
+                # Same multiset, order differs. Only c14 is known to have a
+                # legal tie (two paths with pathWeight 17.0); keep every other
+                # ORDER BY mismatch visible.
+                note = "ORDER-TIE" if f.stem == "interactive-complex-14" else "ORDER-DIFF"
+        if note not in ("MATCH", "ORDER-TIE"):
             mismatches += 1
         print(f"{f.stem.replace('interactive-', ''):22} "
               f"{(len(eg_rows) if eg_rows is not None else -1):>8} "
@@ -168,7 +176,8 @@ def main() -> int:
     eg.close()
     neo.close()
     print("-" * 74)
-    print(f"比对 {len(files)} 条查询，差异/错误 {mismatches} 条")
+    print(f"比对 {len(files)} 条查询：语义一致 {len(files) - mismatches} 条"
+          f"（ORDER-TIE 按同多重集计），差异/错误 {mismatches} 条")
     return 1 if mismatches else 0
 
 

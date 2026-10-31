@@ -11,10 +11,9 @@ this script before measuring): derived ``:Message`` label, and ``creationDate`` 
 ``joinDate`` / ``birthday`` converted from STRING to INTEGER. Without those, complex-5/6/9
 match nothing on neo4j and their timings are meaningless.
 
-Id types: the local eugraph and neo4j sf0.1 copies both store ``id`` as INTEGER (the
-neo4j side was migrated in place; see docs/benchmark/ldbc-snb-sf0.1-comparison.md).
-``--neo4j-id-type string`` keeps the upstream/legacy behaviour for a neo4j instance
-whose ids are still strings.
+Id types: the local eugraph and clean neo4j sf0.1 imports both store ``id`` as INTEGER
+(see docs/benchmark/ldbc-snb-sf0.1-comparison.md). ``--neo4j-id-type string`` keeps the
+upstream/legacy behaviour for a neo4j instance whose ids are still strings.
 """
 
 from __future__ import annotations
