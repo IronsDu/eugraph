@@ -156,6 +156,10 @@ MATCH (n:Person) RETURN n::Employee.salary
 MATCH (n) RETURN n::Employee
 ```
 
+> **Loader 行级标签注意**：`City` 这类行级标签只增加标签可见性，属性数据仍存放在 schema 主标签
+> `Place` 下。`n::City` 会得到空 map、`n::City.name` 为 null；请使用 `n::Place.name` 或弱类型
+> `n.name`。`DESCRIBE LABEL City` 显示的是主标签复制过来的字段声明，不是 City 下的实际数据。
+
 ### WITH — 中间投影
 
 WITH 子句用于在查询中间进行投影、聚合、排序和过滤，类似于 RETURN 但会重置作用域（只有 WITH 列出的变量在后续子句中可见）。

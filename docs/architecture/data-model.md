@@ -45,6 +45,10 @@
   label 的 `vertex_data` 属性记录（`CREATE (p:Post:Message {id: ...})` 两边都有 `id`）。读取 `n.prop` 时
   `LoadVertexPropCoalesce` 对**相同值去重**，所以仍返回标量；不同值才按多标签语义返回 list。
   `n::Label.prop` 仍读该 label 自己的值。
+- **Loader 行级标签是例外**：行级标签（如 `City`）只是追加可见性，属性始终写在 schema 主标签
+  （如 `Place`）下。因此 `n::Place.name` 有值，而 `n::City.name` 为 null；`n.name` 因跨标签
+  便捷查找仍有值。行级标签的 `DESCRIBE LABEL` 会显示主标签同一份字段声明，但不代表 City 下
+  已经写入了数据。
 
 ---
 
