@@ -73,6 +73,14 @@ public:
               int checkpoint_interval_sec = kDefaultCheckpointIntervalSec, const std::string& data_wt_config = "");
     void shutdown();
 
+    /// Shared query-compute pool (one for the whole process): Bolt session
+    /// handling, and Thrift query planning / operator execution. The Thrift
+    /// handler and stream loop stay on the network IO pool (fbthrift
+    /// WriteBatcher constraint, see docs/query/engine/execution-model.md §3).
+    folly::Executor* computeExecutor() const {
+        return compute_pool_.get();
+    }
+
     GraphEntry createGraph(const std::string& name);
     bool dropGraph(const std::string& name);
     std::vector<GraphEntry> listGraphs();
@@ -96,6 +104,7 @@ private:
     int checkpoint_interval_sec_ = kDefaultCheckpointIntervalSec;
     std::string data_wt_config_;
     std::shared_ptr<IoScheduler> io_scheduler_;
+    std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
 
     CatalogStore catalog_;
 

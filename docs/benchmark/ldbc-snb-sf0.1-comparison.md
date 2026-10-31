@@ -3,6 +3,61 @@
 > 只保留当前结论：可运行性、最近一次有效耗时，以及剩余性能缺口的原因/思路。
 > 历史轮次的过程数据已删除；需要复现时以本文的查询参数和测量口径为准。
 
+## 0. 2026-10-31 重新导入基线（row-level labels 变更后）
+
+> 背景：loader 的行级标签写入行为变更后，旧数据目录不再可用。本轮用
+> `build/release`（当前源码，含 IoScheduler/Thrift/求值 prefetch 修复）重新导入，
+> 与 neo4j 做同机 A/B。
+
+- **导入**：`build/release/eugraph-loader`，schema `docs/program/design/ldbc-sf01-composite.schema.json`，
+  CSV 目录 `social_network-sf0.1-CsvComposite-LongDateFormatter`；
+  Release server：compute=8 / storage-io=4 / thrift-io=4 / WT cache=1024MB / txn-sync=none。
+  结果：**327,588 顶点 / 1,477,965 边，49.9 s**；Person 1,528、Message 286,744、
+  Post 135,701、Comment 151,043、Tag 16,080，与数据源一致。
+- **测量**：`scripts/bench_ldbc_ab.py --rounds 15 --warmup 3`（本轮修正了脚本对 neo4j
+  id 参数的字符串化：本地 neo4j 的 id 已迁移为 INTEGER，字符串参数会匹配 0 行；
+  新增 `--neo4j-id-type int|string`，默认 int）。参数沿用 `personId=933`、
+  `messageId=3`、`person1Id=933, person2Id=1129`。
+- **结果**（`neo/eg < 1` 表示 neo4j 更快；min 为 15 轮最小值）：
+
+| 查询 | eg rows | neo rows | eg min (ms) | eg p50 | neo min | neo p50 | neo/eg |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| complex-1 | 15 | 16 | 21.60 | 23.41 | 3.94 | 4.37 | 0.18x |
+| complex-2 | 20 | 20 | 6.95 | 7.48 | 3.44 | 3.78 | 0.50x |
+| complex-3 | 0 | 0 | 109.25 | 112.19 | 35.61 | 36.69 | 0.33x |
+| complex-4 | 0 | 0 | 8.43 | 9.60 | 3.17 | 3.61 | 0.38x |
+| complex-5 | 20 | 20 | 183.65 | 189.67 | 107.15 | 115.69 | 0.58x |
+| complex-6 | 3 | 3 | 85.80 | 89.90 | 34.90 | 36.84 | 0.41x |
+| complex-7 | 7 | 19 | 6.41 | 6.78 | 2.83 | 3.41 | 0.44x |
+| complex-8 | 20 | 20 | 3.10 | 3.35 | 1.74 | 2.10 | 0.56x |
+| complex-9 | 20 | 20 | 133.45 | 135.96 | 37.55 | 38.97 | 0.28x |
+| complex-10 | 10 | 10 | 50.00 | 54.57 | 12.72 | 15.16 | 0.25x |
+| complex-11 | 4 | 4 | 7.65 | 8.37 | 2.61 | 3.03 | 0.34x |
+| complex-12 | 3 | 8 | 714.13 | 736.09 | 92.99 | 98.51 | 0.13x |
+| complex-13 | 1 | 1 | 1.10 | 1.33 | 1.09 | 1.54 | 0.99x |
+| complex-14 | 4 | 1 | 148.56 | 156.96 | 2.85 | 3.09 | 0.02x |
+| short-1 | 1 | 1 | 1.03 | 1.10 | 0.76 | 0.83 | 0.73x |
+| short-2 | 10 | 10 | 4.64 | 4.98 | 1.87 | 2.21 | 0.40x |
+| short-3 | 3 | 15 | 1.03 | 1.23 | 1.05 | 1.25 | 1.02x |
+| short-4 | 1 | 1 | 0.70 | 0.80 | 0.59 | 0.65 | 0.85x |
+| short-5 | 1 | 1 | 0.72 | 0.82 | 0.65 | 0.78 | 0.90x |
+| short-6 | 1 | 1 | 1.04 | 1.14 | 0.65 | 0.74 | 0.62x |
+| short-7 | 0 | 0 | 1.09 | 1.43 | 0.56 | 0.93 | 0.51x |
+
+- **行数不一致的 5 条**（c1/c7/c12/c14/short-3）来自数据差异，不是引擎语义：
+  本地 neo4j 仍带历史 update 测试边（KNOWS 14,085 vs eugraph/source 14,073；Person 933
+  的 KNOWS 度 15 vs 3），与本文 §1 已记录的“neo4j 存在历史测试标签/边”一致。
+  这些查询的耗时不能当作严格同数据对照。
+- **complex-12 的回归归因**：`EUGRAPH_IO_TRACE=1` 显示该查询 **48,577 次
+  `io_dispatches`**（VLE `HAS_TYPE|IS_SUBCLASS_OF*0..` 的 65,380 行 / 64 批，逐跳
+  scan+游标流）。按真实跨线程 dispatch ~10 µs 估算约 **0.49 s**，占 0.71–0.79 s 的
+  大部分；修复前 inline dispatch 约 0.4 µs/次，这部分几乎免费。这正是“分离后必须
+  批量化 VLE/游标 scan”的量化证据。
+- 绝对值与旧表不可直接比较：本轮两引擎都比旧记录慢（CPU 频率/负载），应看同轮
+  neo/eg 比值；旧表保留作历史参考。
+
+---
+
 ## 1. 口径
 
 - 数据：LDBC SNB Interactive **sf0.1**。本轮的计时与结果复验都使用 **CsvComposite 副本**

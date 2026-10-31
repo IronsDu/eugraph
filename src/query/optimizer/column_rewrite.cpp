@@ -7,6 +7,7 @@
 
 #include "query/planner/bound_expression/bound_binary_op.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
+#include "query/planner/bound_expression/bound_expression_walk.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
 #include "query/planner/bound_expression/bound_map.hpp"
 #include "query/planner/bound_expression/bound_property_ref.hpp"
@@ -32,6 +33,8 @@ namespace eugraph {
 namespace optimizer {
 
 namespace {
+
+using binder::forEachSubExpr;
 
 /// Extract the source variable name when a Project item's expression is a
 /// bare forward (`WITH n` or `WITH n AS m`). Returns empty string for
@@ -148,101 +151,6 @@ template <typename OpRef, typename Visit> void forEachChild(OpRef&& op, Visit&& 
             // BoundCorrelatedSourceOp / BoundCallOp — no children.
         },
         std::forward<OpRef>(op));
-}
-
-/// Visit each direct sub-expression of `expr` in source order. The visitor
-/// is called once per child with a `BoundExpression&` (or `const
-/// BoundExpression&` if `expr` is const). Leaves (BoundLiteral /
-/// BoundColumnRef / BoundVariableRef / BoundParameter) and the
-/// property-reference family (BoundPropertyRef / BoundDynamicPropertyRef)
-/// have NO children visited here — property refs carry per-visitor
-/// semantics around their `object` child (e.g. collectExprReqs must NOT
-/// recurse into a PropertyRef's object, since the leaf already collected
-/// the prop requirement), so each visitor handles those explicitly.
-///
-/// Used by the three expression visitors (ensureSlotsInExpr /
-/// collectExprReqs / rewriteExpr) so that "which children does variant X
-/// have" lives in one place rather than three. New expression variants
-/// with uniform child-recursion semantics must be added here. Scope-
-/// changing variants (BoundListComprehension / All / Any / None / Single)
-/// ARE visited here — visitors that need to thread per-scope context
-/// (collectExprReqs's loop_var_skip) capture the context by reference and
-/// update it before invoking this helper.
-template <typename ExprRef, typename Visit> void forEachSubExpr(ExprRef&& expr, Visit&& visit) {
-    std::visit(
-        [&](auto& val) {
-            using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
-                if (val) {
-                    visit(val->left);
-                    visit(val->right);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
-                if (val)
-                    visit(val->operand);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
-                if (val)
-                    for (auto& a : val->args)
-                        visit(a);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
-                if (val)
-                    for (auto& e : val->elements)
-                        visit(e);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
-                if (val)
-                    for (auto& [k, v] : val->entries)
-                        visit(v);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
-                if (val) {
-                    if (val->subject)
-                        visit(*val->subject);
-                    for (auto& [w, t] : val->when_thens) {
-                        visit(w);
-                        visit(t);
-                    }
-                    if (val->else_expr)
-                        visit(*val->else_expr);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
-                if (val)
-                    visit(val->object);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
-                if (val) {
-                    visit(val->list);
-                    visit(val->index);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
-                if (val) {
-                    visit(val->list);
-                    if (val->from)
-                        visit(*val->from);
-                    if (val->to)
-                        visit(*val->to);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundReduceExpr>>) {
-                if (val) {
-                    visit(val->init);
-                    visit(val->list_expr);
-                    visit(val->expr);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
-                if (val) {
-                    visit(val->list_expr);
-                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>)
-                        visit(val->projection);
-                    if (val->where_pred)
-                        visit(*val->where_pred);
-                }
-            }
-            // Out of scope: BoundPropertyRef / BoundDynamicPropertyRef — visitors handle their `object`
-            // explicitly (per-visitor semantics around the inner reference differ).
-            // Leaves: BoundLiteral / BoundColumnRef / BoundVariableRef / BoundParameter — no children.
-        },
-        std::forward<ExprRef>(expr));
 }
 
 /// Walk a BoundExpression and ensure every variable name referenced in it

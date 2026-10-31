@@ -226,7 +226,8 @@ int main(int argc, char* argv[]) {
         config.thrift_io_threads, std::make_shared<folly::NamedThreadFactory>("ThriftIO"));
     server->setIOThreadPool(ioPool);
     server->setThreadManagerFromExecutor(ioPool.get());
-    spdlog::info("  Using IO thread pool ({} threads) as handler executor", config.thrift_io_threads);
+    spdlog::info("  Thrift handler/stream on IO pool ({} threads); query execution on compute pool ({} threads)",
+                 config.thrift_io_threads, config.compute_threads);
 
     spdlog::info("EuGraph server initialized successfully");
     spdlog::info("Listening on Thrift RPC port {}...", config.thrift_port);

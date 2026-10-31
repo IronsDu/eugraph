@@ -203,6 +203,18 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
             }
         }
 
+        std::vector<const binder::BoundExpression*> prefetch_exprs;
+        prefetch_exprs.reserve(prop_exprs_.size() + resolved_pending.size());
+        for (const auto& [pid, expr] : prop_exprs_) {
+            (void)pid;
+            prefetch_exprs.push_back(&expr);
+        }
+        for (const auto& [pid, expr] : resolved_pending) {
+            (void)pid;
+            prefetch_exprs.push_back(&expr);
+        }
+        co_await evaluator.prefetch(prefetch_exprs, *chunk);
+
         for (size_t row = 0; row < chunk->count; ++row) {
             VertexId src = extractVidFromColumn(chunk->columns[src_col_idx_], row);
             VertexId dst = extractVidFromColumn(chunk->columns[dst_col_idx_], row);

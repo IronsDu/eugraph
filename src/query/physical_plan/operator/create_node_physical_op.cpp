@@ -259,8 +259,22 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
 
     // Phase 2: per-row creation
     if (child_) {
+        std::vector<const binder::BoundExpression*> prefetch_exprs;
+        for (const auto& [lid, exprs] : label_prop_exprs_) {
+            (void)lid;
+            for (const auto& [pid, expr] : exprs) {
+                (void)pid;
+                prefetch_exprs.push_back(&expr);
+            }
+        }
+        for (const auto& [lid, pid, expr] : resolved_pending_) {
+            (void)lid;
+            (void)pid;
+            prefetch_exprs.push_back(&expr);
+        }
         auto child_gen = cancellable(child_->executeChunkTraced());
         while (auto chunk = co_await child_gen.next()) {
+            co_await evaluator.prefetch(prefetch_exprs, *chunk);
             // Buffer all created rows for this input chunk and yield only
             // after the whole chunk is processed. Downstream operators may
             // restart right-side scans per output chunk (CrossProduct), so

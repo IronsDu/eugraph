@@ -29,11 +29,21 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
     auto child_gen = cancellable(child_->executeChunkTraced());
     ExpressionEvaluator evaluator(eval_ctx_);
 
+    std::vector<const binder::BoundExpression*> prefetch_exprs;
+    prefetch_exprs.reserve(group_keys_.size());
+    for (const auto& key : group_keys_)
+        prefetch_exprs.push_back(&key.expr);
+    for (const auto& agg : aggregates_) {
+        for (const auto& arg : agg.arguments)
+            prefetch_exprs.push_back(&arg);
+    }
+
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
         if (n == 0)
             continue;
 
+        co_await evaluator.prefetch(prefetch_exprs, *chunk);
         // Evaluate group key expressions vectorized.
         std::vector<std::vector<Value>> chunk_gk_vals(group_keys_.size());
         for (size_t k = 0; k < group_keys_.size(); ++k) {

@@ -101,15 +101,24 @@ struct StreamContext {
     }
 
     /// 提交本语句的事务（无会话/显式事务 ⇒ 幂等成功 ✓）；必须检查返回值 ✓
-    bool commit() {
+    ///
+    /// commit 是可能 fsync 的 WT 调用，必须经 Storage IO 池执行：Thrift 流结束时
+    /// 当前线程是网络 IO 线程，Bolt 是 Compute 线程，直接提交都会阻塞错误的对象。
+    folly::coro::Task<bool> commitAsync() {
         if (!session || !should_commit)
-            return true;
-        const bool ok = (*session)->commit().committed();
-        if (!ok)
-            spdlog::error("[StreamContext] commit failed: {}", (*session)->error().outcome().message);
-        return ok;
+            co_return true;
+        if (!query_store) {
+            // 理论不可达（有 session 的语句一定构造了 query_store）；保留兜底。
+            co_return (*session)->commit().committed();
+        }
+        auto outcome = co_await query_store->commitSession();
+        if (!outcome.committed()) {
+            spdlog::error("[StreamContext] commit failed: {}", outcome.message);
+            co_return false;
+        }
+        co_return true;
     }
-    /// 回滚本语句的事务（幂等 ✓）
+    /// 回滚本语句的事务（幂等 ✓）。析构路径不能 await；rollback 不 fsync，保留同步。
     void rollback() noexcept {
         if (session)
             (*session)->rollback();
@@ -123,6 +132,11 @@ class QueryExecutor {
 public:
     struct Config {
         size_t compute_threads = 4;
+        /// Shared, process-wide compute pool. When set, compute_threads is
+        /// ignored; GraphManager owns one pool for every graph. Thrift query
+        /// planning/operator execution also runs on it. Null keeps the legacy
+        /// per-executor pool for tests that construct a QueryExecutor directly.
+        std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool;
         Config() = default;
     };
 

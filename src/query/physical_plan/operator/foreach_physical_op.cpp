@@ -106,6 +106,8 @@ folly::coro::AsyncGenerator<DataChunk> ForeachPhysicalOp::executeChunk() {
         Column list_column(binder::BoundTypeKind::ANY);
         list_column.reserve(chunk->count);
         ExpressionEvaluator eval(eval_ctx_);
+        std::vector<const binder::BoundExpression*> prefetch_exprs{&list_expr_};
+        co_await eval.prefetch(prefetch_exprs, *chunk);
         eval.evaluate(list_expr_, *chunk, list_column);
 
         const size_t rows = chunk->numRows();

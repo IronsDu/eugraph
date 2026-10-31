@@ -219,6 +219,7 @@ add_library(eugraph_query_engine STATIC
     src/query/evaluator/expr/eval_label_cast.cpp
     src/query/evaluator/expr/eval_binary_op.cpp
     src/query/evaluator/expr/eval_property.cpp
+    src/query/evaluator/expr/eval_prefetch.cpp
     src/query/evaluator/expr/eval_function_call.cpp
     src/query/evaluator/expr/eval_quantifier.cpp
     src/query/evaluator/expr/eval_case.cpp
@@ -603,6 +604,24 @@ if(EUGRAPH_BUILD_TESTS)
     add_executable(numa_topology_tests tests/common/numa_topology_test.cpp)
     target_include_directories(numa_topology_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME numa_topology_tests COMMAND numa_topology_tests)
+
+    # IoScheduler: storage calls must actually run on the IO executor and the
+    # caller coroutine must resume on its own executor (compute/IO separation).
+    add_executable(io_scheduler_tests tests/test_io_scheduler.cpp)
+    target_include_directories(io_scheduler_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(io_scheduler_tests PRIVATE
+        eugraph_lib Folly::folly Folly::folly_deps
+        GTest::gtest GTest::gtest_main pthread)
+    gtest_add_tests(TARGET io_scheduler_tests)
+
+    # Thrift stream hop: operator generator runs on compute, consumer stays on
+    # the network IO executor (fbthrift handler/stream thread).
+    add_executable(query_stream_hop_tests tests/test_query_stream_hop.cpp)
+    target_include_directories(query_stream_hop_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(query_stream_hop_tests PRIVATE
+        eugraph_query_engine Folly::folly Folly::folly_deps
+        GTest::gtest GTest::gtest_main pthread)
+    gtest_add_tests(TARGET query_stream_hop_tests)
 
 
     # WiredTiger raw API tests

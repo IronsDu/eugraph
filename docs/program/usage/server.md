@@ -18,7 +18,7 @@ eugraph-server --thrift-port 9090 --data-dir ./eugraph-data --compute-threads 4
 | `--web-bind` | 127.0.0.1 | Web Console 绑定地址（当前仅 IPv4） |
 | `--web-allowed-origin` | （空） | 额外允许的浏览器 WebSocket Origin，可重复 |
 | `--data-dir, -d` | `./eugraph-data` | 数据存储目录 |
-| `--compute-threads` | 4 | 查询计算线程数（`QueryExecutor` 的 CPU 线程池）；仅 Bolt 模式承载查询执行，Thrift 模式下不使用 |
+| `--compute-threads` | 4 | 查询计算线程数（进程共享 `CPUThreadPoolExecutor`）；Bolt session 与 Thrift 查询的解析/计划/算子执行都在此池 |
 | `--storage-io-threads` | 4 | 存储 IO 线程数（`IoScheduler` 的 IO 线程池） |
 | `--thrift-io-threads` | 4 | Thrift IO 线程数；该池同时被用作 handler 执行池 |
 | `--bolt-io-threads` | 1 | Bolt EventBase 线程数 |
@@ -28,7 +28,7 @@ eugraph-server --thrift-port 9090 --data-dir ./eugraph-data --compute-threads 4
 
 `--compute-threads` 控制查询计算线程池；`--storage-io-threads` 与 `--thrift-io-threads` 分别控制存储 IO 池和 Thrift IO/handler 池（均默认 4）。数据文件分别在 `{data_dir}/data` 和 `{data_dir}/meta`。
 
-线程归属：Thrift IO 池与存储 IO 池是**两个独立线程池**。Thrift / RPC 模式下 handler 与查询执行都跑在 `--thrift-io-threads` 池上，每次存储调用跳转到 `--storage-io-threads` 池，`--compute-threads` 不参与；Bolt 模式下 session 处理被调度到 `--compute-threads` 池，再从那里跳转到存储 IO 池。详见 [运行时执行模型](../../query/engine/execution-model.md)。
+线程归属：Thrift IO、Storage IO、Compute 是**三个独立线程池**。Thrift / RPC 模式下网络 IO、fbthrift 流循环与序列化在 `--thrift-io-threads` 池；全部 RPC handler body 经 `async_tm_*` 调度到 `--compute-threads` 池，完成回调显式投回连接 EventBase（否则请求-响应 RPC 会因 fbthrift WriteBatcher 停顿 5–7s）。每次存储调用跳到 `--storage-io-threads` 池并回到 Compute 池。Bolt 模式下 session 处理也被调度到 Compute 池。详见 [运行时执行模型](../../query/engine/execution-model.md)。
 
 > `--wt-txn-sync none` 会关闭 WiredTiger commit 级 fsync，写入更快，但崩溃时可能丢失最近一段事务。
 > 适合纯导入场景；正式在线服务建议保持默认 `fsync`。

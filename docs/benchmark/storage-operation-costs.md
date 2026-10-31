@@ -48,8 +48,9 @@ cmake --build build-bench --target storage_op_bench -j2
 
 - `SearchExact`：100k 行 `edge_index` 形状的 key，warm cache，单 cursor 复用，精确 `search`；
 - `SearchNearPrefix`：同一张表，8B 前缀 `search_near`；
-- `InlineDispatchVoid`：当前生产 `IoScheduler::dispatchVoid` 路径；
-- `CrossThreadDispatchVoid`：独立地按“compute → IO → compute”实现的一次真实跨线程往返，
+- `ProductionDispatchVoid`：当前生产 `IoScheduler::dispatchVoid` 路径（2026-10-31 起真正跨线程）；
+- `LegacyInlineDispatchVoid`：修复前的 `co_viaIfAsync` 内联路径，保留作同二进制 A/B；
+- `CrossThreadCoroutineDispatch`：独立地按“compute → IO → compute”实现的一次真实跨线程往返，
   同时输出 `cross_thread`（lambda 是否在 IO 线程）和 `return_thread`（返回后是否仍在 IO 线程）。
   后者必须为 0。
 
@@ -59,15 +60,16 @@ cmake --build build-bench --target storage_op_bench -j2
 |---|---:|
 | WT `search` 精确命中 | **567 ns** |
 | WT `search_near` 前缀命中 | **411 ns** |
-| `InlineDispatchVoid`（当前生产路径） | **约 0.3–0.5 µs/次** |
-| `CrossThreadDispatchVoid`（真实跨线程） | **约 10.0 µs/次**（641 µs / 64 次） |
+| `LegacyInlineDispatchVoid`（修复前生产路径） | **约 0.3–0.5 µs/次** |
+| `ProductionDispatchVoid`（2026-10-31 后生产路径） | **约 10 µs/次** |
+| `CrossThreadCoroutineDispatch`（参考实现） | **约 10.1 µs/次** |
 
-`CrossThreadDispatchVoid` 的 `cross_thread` 覆盖全部 640k 次操作，`return_thread=0`：
+`CrossThreadCoroutineDispatch` 的 `cross_thread` 覆盖全部 640k 次操作，`return_thread=0`：
 确实到了 IO 线程，并且完成后回到 compute 线程。
 
 ## 3. 重要发现与当前取舍
 
-### 3.1 旧 IoScheduler 是 inline
+### 3.1 旧 IoScheduler 是 inline（已修复）
 
 旧实现：
 
@@ -76,20 +78,23 @@ auto ioTask = co_invoke([f]() -> Task<R> { co_return f(); });
 co_await co_viaIfAsync(io_ka_, std::move(ioTask));
 ```
 
-`co_invoke` 返回 eager Task，`f()` 在 `co_viaIfAsync` 之前就在调用线程执行。因此
-`io_dispatches` 统计的是调用次数，旧路径并不是线程切换；`InlineDispatchVoid` 的
-`cross_thread=0` 验证了这一点。
+`co_viaIfAsync(executor, Task)` 只给子 Task 绑定 executor，随后返回普通 `Task::Awaiter`；
+该 Awaiter 内联 resume，`f()` 仍在调用线程执行。旧 benchmark 的 `cross_thread=0` 与
+`work_tid == caller_tid` 验证了这一点。
 
-### 3.2 真正跨线程会破坏写入路径
+### 3.2 真正跨线程（2026-10-31 修复）
 
-临时改成 `co_withExecutor(io_ka_, ...)`（不再手动 `co_viaIfAsync` 回 caller executor；
-`co_withExecutor` 的 await 会恢复到原执行流）后，`CrossThreadDispatchVoid` 全部跨线程、
-`return_thread=0`；c14 的 per-endpoint 读取也从 1.4 s 降到 154 ms。但全量 TCK 在
-`CREATE` 场景（MatchWhere1）挂起：
-WT session/cursor 绑定在 compute 线程，直接拿到 IO 线程使用会超时/死锁。
+改成 `co_withExecutor(io_ka_, ...)` 后：
 
-因此当前生产 `IoScheduler` **仍保持 inline**；真正的跨线程修复需要先把 WT session
-按 IO 线程绑定（或写入路径不跨线程），这属于独立改造。
+- `ProductionDispatchVoid` 的 `cross_thread` 全部命中、`return_thread=0`；
+- 单次空 dispatch 约 **10 µs**（与参考实现一致）；
+- `tests/test_io_scheduler.cpp` 6/6、`metadata_tests` 20/20、
+  `query_executor_tests` 603/603 在真实跨线程下通过（含 Create/Set/Delete 写入路径）；
+- WT session/cursor 的串行换线程由 [session-cursor-pool-design.md](../storage/session-cursor-pool-design.md)
+  的会话/游标所有权规则保证；全量 TCK 需在每次改动后复验。
+
+注意：跨线程修复让“每次存储调用”多出约 10 µs 往返，因此**高频小 dispatch 必须批量化**；
+这不是把 inline 换成跨线程就能自动获得性能收益。
 
 ### 3.3 先做批量读取：c14 已从 291 ms 降到 119.5 ms
 
@@ -109,7 +114,8 @@ c14 批量前是 163,703 次 search_near、91,672 次 dispatch、wall ~291 ms；
 
 - **WT seek 很快**：精确 search 567 ns、前缀 search_near 411 ns；
 - 真实跨线程 dispatch 约 **10 µs**，比 seek 贵一个数量级；
-- 当前生产仍是 inline，所以 `io_dispatches` 不能直接乘 10 µs；
+- 2026-10-31 起生产 `IoScheduler` 是真正跨线程，`io_dispatches × ~10 µs` 可作为
+  dispatch 成本的上界估算（c14 批量后 696 次 ≈ 7 ms）；
 - c5/c9 的 seek 约占 23–26%，c14 批量后约 23%；剩余主要在执行计划/算子；
 - c14 的 91k per-endpoint 读取是真正的大头，批量后已消除，**不需要先修调度器**；
 - 下一步：
@@ -119,7 +125,7 @@ c14 批量前是 163,703 次 search_near、91,672 次 dispatch、wall ~291 ms；
 ## 5. 口径限制
 
 - seek 计数是逻辑调用次数，不区分缓存命中/缺页；基准是 warm cache；
-- 跨线程 benchmark 是独立实现，不代表当前生产 inline 路径；
+- `LegacyInlineDispatchVoid` 仅用于同二进制 A/B，不代表当前生产路径；
 - 语句 trace 本身有计数/日志开销，wall time 取自同分支独立 A/B 的近似值。
 
 ## 6. Google Benchmark 汇总（2026-10-28）
@@ -146,8 +152,9 @@ cmake --build build-bench --target storage_op_bench -j2
 | `KeyDecode_EdgeType` | 24B etype key | 18.6 ns |
 | `KeyDecode_EProp` | 10B `{edge}{prop}` | 7.8 ns |
 | `KeyDecode_IndexSuffix` | index key 末尾 entity id | 14.1 ns |
-| `DispatchBench/InlineDispatchVoid` | 当前 inline dispatch | 0.3–0.5 µs |
-| `DispatchBench/CrossThreadCoroutineDispatch` | 真实 compute→IO→compute | **10.1 µs** |
+| `DispatchBench/LegacyInlineDispatchVoid` | 修复前 inline dispatch（A/B） | 0.3–0.5 µs |
+| `DispatchBench/ProductionDispatchVoid` | 当前生产 dispatch | **~10 µs** |
+| `DispatchBench/CrossThreadCoroutineDispatch` | 参考 compute→IO→compute | **10.1 µs** |
 
 结论：**key decode 本身是 7–19 ns 量级，远低于一次 WT seek（400–600 ns），更远低于一次真实跨线程 dispatch（~10 µs）**。
 后续优化不应再以“key 解码”为主要方向；瓶颈在搜索次数、dispatch 次数、计划/算子。

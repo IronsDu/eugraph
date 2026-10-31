@@ -5,45 +5,8 @@
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
-#include <folly/coro/BlockingWait.h>
-
 namespace eugraph {
 namespace compute {
-
-namespace {
-
-using VertexDataCache = std::unordered_map<VertexId, ISyncGraphDataStore::VertexDataBatchEntry>;
-
-/// Prefetch labels+properties for all bare VertexValues in one column in a
-/// single storage call. The per-row property resolver used to issue one
-/// getVertexLabels + one getVertexProperties per label; c14's path filter did
-/// ~90k such calls.
-VertexDataCache prefetchVertexData(const function::EvalContext& ctx, const Column& obj_col, size_t count) {
-    VertexDataCache cache;
-    if (!ctx.store)
-        return cache;
-    std::vector<VertexId> ids;
-    std::unordered_set<VertexId> seen;
-    for (size_t i = 0; i < count; ++i) {
-        Value v = obj_col.getValue(i);
-        if (!std::holds_alternative<VertexValuePtr>(v))
-            continue;
-        const auto& vv = std::get<VertexValuePtr>(v);
-        if (!vv || vv->deleted || !vv->properties.empty())
-            continue;
-        if (seen.insert(vv->id).second)
-            ids.push_back(vv->id);
-    }
-    if (ids.empty())
-        return cache;
-    auto batch = folly::coro::blockingWait(ctx.store->batchGetVertexData(ids));
-    cache.reserve(ids.size());
-    for (size_t i = 0; i < ids.size() && i < batch.size(); ++i)
-        cache.emplace(ids[i], std::move(batch[i]));
-    return cache;
-}
-
-} // namespace
 
 void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result,
                                           size_t count) {
@@ -107,7 +70,6 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
         return Value{};
     };
 
-    const auto prefetched = prefetchVertexData(eval_ctx_, *obj.column, count);
     for (size_t i = 0; i < count; ++i) {
         Value ov = obj.column->getValue(i);
         Value r;
@@ -115,67 +77,39 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             const auto& held = std::get<VertexValuePtr>(ov);
             if (!held)
                 continue;
-            auto& vertex = *held;
+            const auto& vertex = *held;
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
-            // Bare path vertices (shortest-path BFS) only carry the internal
-            // id; load the concrete labels/properties before resolving n.id.
+            // Topology-form vertices (shortest-path BFS, startNode/endNode of
+            // a path) only carry the internal id. The data was loaded by
+            // prefetch(); evaluation must never touch storage itself.
+            const std::unordered_map<LabelId, Properties>* props = &vertex.properties;
             if (vertex.properties.empty() && eval_ctx_.store) {
-                auto pit = prefetched.find(vertex.id);
-                if (pit != prefetched.end()) {
-                    if (!vertex.labels.has_value())
-                        vertex.labels = pit->second.labels;
-                    vertex.properties = pit->second.properties;
-                }
-                if (vertex.properties.empty()) {
-                    auto labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
-                    if (!labels.empty()) {
-                        vertex.labels = labels;
-                        for (auto lid : labels) {
-                            auto props =
-                                folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
-                            if (props)
-                                vertex.properties[lid] = std::move(*props);
-                        }
-                    }
+                auto pit = prefetched_vertex_data_.find(vertex.id);
+                if (pit != prefetched_vertex_data_.end()) {
+                    props = &pit->second.properties;
+                } else if (prefetching_) {
+                    prefetch_pending_ids_.push_back(vertex.id);
+                } else {
+                    missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
                 }
             }
             std::vector<Value> found;
             for (const auto& candidate : ref.candidates) {
-                auto lit = vertex.properties.find(candidate.label_id);
-                if (lit != vertex.properties.end()) {
-                    const auto& props = lit->second;
-                    if (candidate.prop_id < props.size() && props[candidate.prop_id].has_value()) {
-                        found.push_back(pvToValue(*props[candidate.prop_id]));
+                auto lit = props->find(candidate.label_id);
+                if (lit != props->end()) {
+                    const auto& candidate_props = lit->second;
+                    if (candidate.prop_id < candidate_props.size() && candidate_props[candidate.prop_id].has_value()) {
+                        found.push_back(pvToValue(*candidate_props[candidate.prop_id]));
                     }
                 }
             }
             // Fallback: a property may be registered on __anon__ in the
             // catalog but physically stored under the vertex's concrete
-            // label.  Search all loaded labels by name.
+            // label. Search all loaded labels by name.
             if (found.empty() && !ref.property_name.empty()) {
-                for (const auto& [lid, props_vec] : vertex.properties) {
-                    const LabelDef* ldef = nullptr;
-                    if (eval_ctx_.label_defs) {
-                        auto it = eval_ctx_.label_defs->find(lid);
-                        if (it != eval_ctx_.label_defs->end())
-                            ldef = &it->second;
-                    }
-                    if (!ldef && eval_ctx_.catalog)
-                        ldef = eval_ctx_.catalog->lookupLabel(lid);
-                    // Labels created dynamically during the session (e.g.
-                    // __anon__ for pending CREATE properties) may only exist
-                    // in the meta store, not in the snapshot loaded at query
-                    // start.  Fall back to the meta store so evalPropertyRef
-                    // can resolve property names stored under those labels.
-                    if (!ldef && eval_ctx_.meta) {
-                        auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(lid));
-                        if (loaded) {
-                            auto& inserted =
-                                label_def_cache_.emplace_back(std::make_unique<LabelDef>(std::move(*loaded)));
-                            ldef = inserted.get();
-                        }
-                    }
+                for (const auto& [lid, props_vec] : *props) {
+                    const LabelDef* ldef = findLabelDef(lid);
                     if (!ldef)
                         continue;
                     for (const auto& pd : ldef->properties) {
@@ -236,17 +170,7 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             if (ref.candidates.empty() && !ref.property_name.empty()) {
                 bool resolved = false;
                 if (edge.properties.has_value()) {
-                    const EdgeLabelDef* eldef = nullptr;
-                    if (eval_ctx_.catalog)
-                        eldef = eval_ctx_.catalog->lookupEdgeLabel(edge.label_id);
-                    if (!eldef && eval_ctx_.meta) {
-                        auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getEdgeLabelDefById(edge.label_id));
-                        if (loaded) {
-                            auto& inserted =
-                                edge_label_def_cache_.emplace_back(std::make_unique<EdgeLabelDef>(std::move(*loaded)));
-                            eldef = inserted.get();
-                        }
-                    }
+                    const EdgeLabelDef* eldef = findEdgeLabelDef(edge.label_id);
                     if (eldef) {
                         for (const auto& pd : eldef->properties) {
                             if (pd.name == ref.property_name && pd.id < edge.properties->size()) {
@@ -376,21 +300,17 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
             return kMissingProp;
         }
 
-        if (eval_ctx_.meta) {
-            auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
-            if (loaded) {
-                for (const auto& pd : loaded->properties) {
-                    if (pd.name == ref.property) {
-                        index.emplace(ref.property, pd.id);
-                        return pd.id;
-                    }
+        if (const auto* loaded = findLabelDef(label_id)) {
+            for (const auto& pd : loaded->properties) {
+                if (pd.name == ref.property) {
+                    index.emplace(ref.property, pd.id);
+                    return pd.id;
                 }
             }
         }
         return kMissingProp;
     };
 
-    const auto prefetched = prefetchVertexData(eval_ctx_, *obj.column, count);
     for (size_t i = 0; i < count; ++i) {
         Value ov;
         // The fast path reads the column's handle directly, so it has to check both
@@ -412,45 +332,31 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
             VertexValue& vertex = *working;
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
-            // Lazy-load labels and properties for bare VertexValues (e.g. from
-            // startNode/endNode which only set the internal id).
+            // Topology-form vertices only carry the id; prefetch() filled the
+            // cache. Enrich the private copy, never the shared handle.
             if (vertex.properties.empty() && eval_ctx_.store) {
-                auto pit = prefetched.find(vertex.id);
-                if (pit != prefetched.end()) {
+                auto pit = prefetched_vertex_data_.find(vertex.id);
+                if (pit != prefetched_vertex_data_.end()) {
                     if (!vertex.labels.has_value())
                         vertex.labels = pit->second.labels;
                     vertex.properties = pit->second.properties;
+                } else if (prefetching_) {
+                    prefetch_pending_ids_.push_back(vertex.id);
+                } else {
+                    missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
                 }
-                if (vertex.properties.empty()) {
-                    if (!vertex.labels.has_value())
-                        vertex.labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
-                    if (vertex.labels.has_value()) {
-                        for (auto lid : *vertex.labels) {
-                            auto props =
-                                folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
-                            if (props)
-                                vertex.properties[lid] = std::move(*props);
-                        }
-                    }
-                    // 总是补查 __anon__：REMOVE LABEL 把属性迁移到 __anon__ 后，
-                    // vertex 可能 (a) 已无任何用户标签，或 (b) 还有其它标签但属性
-                    // 副本在 __anon__。两种情况都需要 __anon__ 旁路才能读到属性。
-                    if (eval_ctx_.meta && !vertex.properties.count(anon_label_id_cached_)) {
-                        LabelId anon_lid = anon_label_id_cached_;
-                        if (anon_lid == INVALID_LABEL_ID) {
-                            auto anon_def =
-                                folly::coro::blockingWait(eval_ctx_.meta->getLabelDef(std::string(kAnonLabelName)));
-                            if (anon_def) {
-                                anon_lid = anon_def->id;
-                                anon_label_id_cached_ = anon_lid;
-                            }
-                        }
-                        if (anon_lid != INVALID_LABEL_ID) {
-                            auto props =
-                                folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, anon_lid));
-                            if (props)
-                                vertex.properties[anon_lid] = std::move(*props);
-                        }
+            }
+            // 总是补查 __anon__：REMOVE LABEL 把属性迁移到 __anon__ 后，
+            // vertex 可能 (a) 已无任何用户标签，或 (b) 还有其它标签但属性
+            // 副本在 __anon__。anon_label_id_cached_ 由 prefetch() 异步解析。
+            if (eval_ctx_.meta && !vertex.properties.count(anon_label_id_cached_)) {
+                LabelId anon_lid = anon_label_id_cached_;
+                if (anon_lid != INVALID_LABEL_ID) {
+                    auto pit = prefetched_vertex_data_.find(vertex.id);
+                    if (pit != prefetched_vertex_data_.end()) {
+                        auto anon_it = pit->second.properties.find(anon_lid);
+                        if (anon_it != pit->second.properties.end())
+                            vertex.properties[anon_lid] = anon_it->second;
                     }
                 }
             }
@@ -469,7 +375,7 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 for (const auto& [label_id, props_vec] : vertex.properties) {
                     if (props_vec.empty())
                         continue;
-                    auto fresh_ldef = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
+                    const auto* fresh_ldef = findLabelDef(label_id);
                     if (fresh_ldef) {
                         for (const auto& pd : fresh_ldef->properties) {
                             if (pd.name == ref.property && pd.id < props_vec.size() && props_vec[pd.id].has_value()) {

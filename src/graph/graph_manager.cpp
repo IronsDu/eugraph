@@ -1,6 +1,7 @@
 #include "graph/graph_manager.hpp"
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/executors/thread_factory/NamedThreadFactory.h>
 #include <spdlog/spdlog.h>
 
 #include <chrono>
@@ -40,6 +41,8 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     }
 
     io_scheduler_ = std::make_shared<IoScheduler>(io_threads_);
+    compute_pool_ = std::make_shared<folly::CPUThreadPoolExecutor>(
+        static_cast<size_t>(compute_threads_), std::make_shared<folly::NamedThreadFactory>("eugraph-compute"));
 
     auto entries = catalog_.listGraphs();
     spdlog::info("Found {} graph(s) in catalog, opening...", entries.size());
@@ -324,6 +327,7 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
 
     compute::QueryExecutor::Config executor_config;
     executor_config.compute_threads = compute_threads_;
+    executor_config.compute_pool = compute_pool_;
     instance->executor = std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta,
                                                                   *instance->session_pool, executor_config);
 

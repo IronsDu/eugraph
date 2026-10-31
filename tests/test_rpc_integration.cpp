@@ -15,6 +15,7 @@
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <folly/SocketAddress.h>
@@ -76,14 +77,19 @@ protected:
         graph_service_ = std::make_shared<service::GraphService>(*graph_manager_);
         handler_ = std::make_shared<service::thrift::EuGraphHandler>(*graph_service_);
 
-        // Start real fbthrift server via ScopedServerInterfaceThread
-        // Use a config callback to set the IO thread pool as handler executor
-        // to avoid the PriorityThreadManager's ReplyQueue notification delay.
+        // Start a real fbthrift server via ScopedServerInterfaceThread.
+        // The IO pool is the network IO / stream-loop executor; handler bodies
+        // run on the shared compute pool and complete their callback on the
+        // connection EventBase (see src/service/thrift/eugraph_handler.cpp).
         auto ts = std::make_shared<apache::thrift::ThriftServer>();
         ts->setAddress(folly::SocketAddress("::1", 0));
         ts->setAllowPlaintextOnLoopback(true);
         ts->setInterface(handler_);
-        ts->setNumIOWorkerThreads(1);
+        // 4 network IO workers: the reply must still complete on the
+        // connection's own EventBase (async_tm_executeCypher posts it there);
+        // with handler execution offloaded to compute, a pool-wide hop would
+        // otherwise land the reply on a different worker and stall 5-7 s.
+        ts->setNumIOWorkerThreads(4);
         ts->setNumCPUWorkerThreads(1);
         ts->setThreadManagerType(apache::thrift::ThriftServer::ThreadManagerType::SIMPLE);
         ts->setMaxFinishedDebugPayloadsPerWorker(0);
@@ -675,6 +681,45 @@ TEST_F(RpcIntegrationTest, ParsePropertyTypeCoversArraysAndScalars) {
     // Case-insensitive, and unknown input still falls back to STRING.
     EXPECT_EQ(parsePropertyType("string_array"), PropertyType::STRING_ARRAY);
     EXPECT_EQ(parsePropertyType("who_knows"), PropertyType::STRING);
+}
+
+// ==================== thread model / latency regressions ====================
+
+/// Request/response RPCs must not pay the fbthrift WriteBatcher stall. The
+/// production server keeps the handler executor on the network IO pool; if
+/// that changes (e.g. moving the handler to the compute pool), each of these
+/// calls would jump from ~1ms to 5-7s.
+TEST_F(RpcIntegrationTest, RequestResponseRpcHasNoMultiSecondStall) {
+    // Warm up the connection/thread manager.
+    for (int i = 0; i < 2; ++i)
+        (void)client_->listLabels("default");
+
+    std::vector<double> ms;
+    ms.reserve(20);
+    for (int i = 0; i < 20; ++i) {
+        const auto t0 = Clock::now();
+        (void)client_->listLabels("default");
+        ms.push_back(std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+    }
+    std::sort(ms.begin(), ms.end());
+    const double p50 = ms[ms.size() / 2];
+    const double p100 = ms.back();
+    EXPECT_LT(p50, 1000.0) << "median request/response latency regressed to " << p50 << "ms";
+    EXPECT_LT(p100, 2000.0) << "request/response latency outlier: " << p100 << "ms";
+}
+
+/// The query path offloads planning + operator execution to the compute pool
+/// and hops only the batches back to the stream loop. It must keep producing
+/// rows without a multi-second stall. (Thread attribution of the operator
+/// generator is covered by tests/test_query_stream_hop.cpp.)
+TEST_F(RpcIntegrationTest, StreamingQueryCompletesWithoutStall) {
+    const auto t0 = Clock::now();
+    auto result = execCypher("UNWIND range(1, 3000) AS x RETURN x");
+    const auto elapsed_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3000u);
+    EXPECT_LT(elapsed_ms, 5000.0) << "streaming query took " << elapsed_ms << "ms";
 }
 
 } // anonymous namespace

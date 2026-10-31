@@ -142,46 +142,71 @@ fbthrift RPC 服务 + 交互式 Shell。
 
 ## 线程模型
 
-Thrift IO 池与 Storage IO 池（`IoScheduler` 内部持有）是**两个独立的 `IOThreadPoolExecutor`**，默认规模相同但互不共享。
+进程内有三个互不共享的查询相关 executor：
+
+- **Thrift IO**（`IOThreadPoolExecutor "ThriftIO"`）：网络 IO、fbthrift 流循环与结果
+  序列化；handler 本体经 `async_tm_*` 调度到 Compute 池；
+- **Storage IO**（`IoScheduler` 内部 `IOThreadPoolExecutor "eugraph-io"`）：所有
+  WiredTiger 调用；
+- **Compute**（`CPUThreadPoolExecutor "eugraph-compute"`，`GraphManager` 进程级持有）：
+  Bolt session、Thrift 查询的解析/计划/算子执行/批次生成。
 
 **Thrift / RPC 模式**：
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Thrift IO 池 (IOThreadPoolExecutor, "ThriftIO")      │
-│  同时作为 handler 执行池（setThreadManagerFromExecutor）│
-│  ├─ 接收请求、执行 handler                             │
-│  ├─ 解析/计划/算子执行直接在本池线程上跑（不经 Compute） │
-│  └─ 每次存储调用 co_await IoScheduler::dispatch 挂起    │
-└──────────────────────┬───────────────────────────────┘
-                       │ co_viaIfAsync：跨池，不内联
-                       ▼
-┌──────────────────────────────────────────────────────┐
-│  Storage IO 池 (IOThreadPoolExecutor, IoScheduler)    │
-│  ├─ WiredTiger 读写操作 / Cursor 操作                  │
-│  ├─ 事务 begin/commit/rollback 由会话持有线程直接执行    │
-│  └─ 完成后恢复挂起的协程（执行线程回到 Thrift IO 池）    │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Thrift IO 池 ("ThriftIO") = 网络 IO + fbthrift 流循环 + 序列化 │
+│  ├─ 接收请求；async_tm_* 在连接 EventBase 线程上被调用         │
+│  ├─ 起一个 Task 到 Compute 池；完成时把 callback->complete()  │
+│  │  投回该连接 EventBase（否则 WriteBatcher 停顿 5–7 s）       │
+│  └─ 流式结果的 batch 生产走 hopGeneratorTo，序列化仍在 IO      │
+└───────────────┬───────────────────────────────────────────────┘
+                │ handler body / 每批 inner.next()
+                ▼
+┌──────────────────────────────┐
+│ Compute 池 ("eugraph-compute")│
+│  全部 RPC handler body：       │
+│  parse/bind/plan/算子执行      │
+└───────────────┬──────────────┘
+                │ IoScheduler::dispatch（co_withExecutor）
+                ▼
+┌──────────────────────────────────────────────┐
+│ Storage IO 池 ("eugraph-io")                  │
+│  WT 读写；完成后 continuation 回 Compute 池    │
+└──────────────────────────────────────────────┘
 ```
 
-该模式下 Compute 池不被使用。
+- 全部 handler（DDL、graph 管理、batch import、executeCypher）都经
+  `async_tm_*` → Compute；网络 IO、fbthrift 流循环与序列化留在 Thrift IO。
+- **回包必须在连接 EventBase 线程产生**：fbthrift 5.05.19 的
+  `RocketServerConnection::WriteBatcher` 对“非连接 EventBase 线程产生的请求-响应回包”
+  要等 EventBase 下一次唤醒才 flush；空闲连接下一次唤醒是 5 s task-expire timer ⇒
+  请求-响应 RPC 停顿 5–7 s（流式查询因 payload 持续唤醒 EventBase 而看不出来）。
+  `runOnComputeAndComplete()` 显式把完成回调投回 EB；不能只依赖 handler 协程在池里的
+  某个 worker 上恢复。
+- 存储调用完成后，`Task::await_transform` 把算子协程恢复到 Compute 池（算子自己的
+  executor），不会留在 Storage IO 线程。
+- `async_tm_*` 覆盖绕过 fbthrift service interceptors（当前服务端未安装）。
 
 **Bolt 模式**：
 
 ```
 Bolt EventBase ──scheduleOn(computeExecutor())──▶ Compute 池 (CPUThreadPoolExecutor)
   （socket 网络 IO）                                 │ session 处理 + 解析/计划/算子执行
-                                                    │ co_viaIfAsync：跨池，不内联
+                                                    │ IoScheduler::dispatch (co_withExecutor)
                                                     ▼
-                                              Storage IO 池 (IoScheduler)
+                                              Storage IO 池 ("eugraph-io")
                                                 WiredTiger 读写
+                                                    │ continuation 回 Compute 池
+                                                    ▼
 ```
 
 Bolt 连接把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接。
 
-**注意（分批读取的流）**：上图的"Storage IO 池"对**单次**存储调用成立；对**跨多批的扫描流**，
-第一批所在的 IO 线程会被记住，后续每批都回到**同一个线程**（而非重新任选）——原因与规则见下节
-「Session / Cursor 的归属与并发规则」。
+**注意（分批读取的流）**：一次存储调用可能落在任意一个 Storage IO 线程；跨多批的扫描流
+每一批也可能由不同 Storage IO 线程执行。WT session/cursor 允许**串行**换线程，但同一租约
+同一时刻只能属于一个执行流——规则见下节及
+[session-cursor-pool-design.md](../storage/session-cursor-pool-design.md)。
 
 ### Session / Cursor 的归属与并发规则
 

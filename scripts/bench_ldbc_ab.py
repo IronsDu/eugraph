@@ -11,8 +11,10 @@ this script before measuring): derived ``:Message`` label, and ``creationDate`` 
 ``joinDate`` / ``birthday`` converted from STRING to INTEGER. Without those, complex-5/6/9
 match nothing on neo4j and their timings are meaningless.
 
-Id types differ by engine: eugraph stores ``id`` as INTEGER, neo4j as STRING. Id-valued
-parameters are cast per engine; nothing else is rewritten.
+Id types: the local eugraph and neo4j sf0.1 copies both store ``id`` as INTEGER (the
+neo4j side was migrated in place; see docs/benchmark/ldbc-snb-sf0.1-comparison.md).
+``--neo4j-id-type string`` keeps the upstream/legacy behaviour for a neo4j instance
+whose ids are still strings.
 """
 
 from __future__ import annotations
@@ -80,6 +82,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--skip", default=None)
     ap.add_argument("--only", default=None)
+    ap.add_argument("--neo4j-id-type", choices=["int", "string"], default="int",
+                    help="neo4j id parameter type (local sf0.1 is INTEGER; legacy upstream is string)")
     ap.add_argument("--neo4j-fix-types", action="store_true",
                     help="对 neo4j 侧做类型归一化：旧转换把 LIKES.creationDate 存成 STRING，"
                          "而 eugraph 是 INTEGER，complex-7 的日期相减因此在 neo4j 上报 TypeError。"
@@ -137,7 +141,10 @@ def main() -> int:
             neo_body = neo_body.replace("like.creationDate AS likeTime", "toInteger(like.creationDate) AS likeTime")
             neo_body = neo_body.replace("workAt.workFrom", "toInteger(workAt.workFrom)")
         eg_params = dict(params)
-        neo_params = {k: (str(v) if k in ID_PARAMS else v) for k, v in params.items()}
+        if args.neo4j_id_type == "string":
+            neo_params = {k: (str(v) if k in ID_PARAMS else v) for k, v in params.items()}
+        else:
+            neo_params = dict(params)
 
         eg_times: list[float] = []
         neo_times: list[float] = []

@@ -5,9 +5,13 @@
 #include "query/function/function_def.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 
+#include <folly/coro/Task.h>
+
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace eugraph {
@@ -47,6 +51,21 @@ public:
     /// nodes whose func_def matches a key are replaced with the pre-computed Value.
     const std::unordered_map<const function::FunctionDef*, Value>* aggregate_substitutions = nullptr;
 
+    /// Load the lazy graph data (labels/properties of topology-form vertices,
+    /// runtime label defs) needed by `exprs` on this chunk, *before* the
+    /// synchronous evaluate()/evaluatePredicate(). This is the only place in
+    /// the evaluator allowed to touch storage: evaluation itself must be pure
+    /// so it never blocks a compute thread on IO.
+    ///
+    /// No-op when none of the expressions contains a property reference.
+    folly::coro::Task<void> prefetch(const std::vector<const binder::BoundExpression*>& exprs, const DataChunk& input);
+
+    /// Diagnostics: property accesses that hit a bare vertex absent from the
+    /// prefetch cache. Must stay 0 in tests/TCK; a non-zero value means an
+    /// operator forgot to prefetch (the access then yields NULL, never IO).
+    static uint64_t missingPrefetchCount() noexcept;
+    static void resetMissingPrefetchCount() noexcept;
+
 private:
     // Temporary storage for recursive sub-expression evaluation.
     std::deque<Column> temp_columns_;
@@ -56,6 +75,26 @@ private:
     mutable std::vector<std::unique_ptr<LabelDef>> label_def_cache_;
     mutable std::vector<std::unique_ptr<EdgeLabelDef>> edge_label_def_cache_;
     mutable LabelId anon_label_id_cached_ = INVALID_LABEL_ID;
+    mutable bool anon_label_resolved_ = false;
+
+    /// Per-chunk lazy data, filled by prefetch() and read-only during eval.
+    struct PrefetchedVertexData {
+        LabelIdSet labels;
+        std::unordered_map<LabelId, Properties> properties;
+    };
+    std::unordered_map<VertexId, PrefetchedVertexData> prefetched_vertex_data_;
+    /// Dry-pass state: while prefetching, a bare vertex missing from the cache
+    /// is recorded (never loaded inline) so prefetch() can batch it.
+    mutable bool prefetching_ = false;
+    mutable std::vector<VertexId> prefetch_pending_ids_;
+
+    const LabelDef* findLabelDef(LabelId label_id) const;
+    const EdgeLabelDef* findEdgeLabelDef(EdgeLabelId label_id) const;
+    folly::coro::Task<void> ensureLabelDefs(const std::unordered_set<LabelId>& label_ids,
+                                            const std::unordered_set<EdgeLabelId>& edge_label_ids);
+    static bool expressionNeedsPrefetch(const binder::BoundExpression& expr);
+    static bool expressionMaySynthesizeEntity(const binder::BoundExpression& expr);
+    folly::coro::Task<void> loadVertexDataAndDefs(const std::vector<VertexId>& ids);
 
     /// Evaluate an expression and return a reference to the result column.
     struct EvalResult {
@@ -114,6 +153,8 @@ private:
     void evalListComprehension(const binder::BoundListComprehension& lc, const DataChunk& input, Column& result,
                                size_t count);
     void evalReduce(const binder::BoundReduceExpr& reduce, const DataChunk& input, Column& result, size_t count);
+
+    inline static std::atomic<uint64_t> missing_prefetch_count_{0};
 };
 
 } // namespace compute

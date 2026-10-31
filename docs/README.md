@@ -78,12 +78,14 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加/修改 RPC 接口 | [service/rpc-service.md] | `proto/eugraph.thrift`, `src/program/server/` |
 | Neo4j Bolt 协议支持 | [service/neo4j-bolt-protocol.md] | `src/service/bolt/`, `src/service/graph_service.*` |
 | 修改 Web Console / 前端资产 | [service/web-console.md](service/web-console.md) | `src/service/web/`, `web/`, `scripts/build-web.sh` |
+| Thrift/RPC 线程归属 | [service/thrift-thread-model.md](service/thrift-thread-model.md) | `src/service/thrift/eugraph_handler.*`, `src/service/query_stream_hop.hpp` |
 | 修改 Shell 交互 | [program/design/server-shell-design.md] | `src/program/shell/` |
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
 | 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |
 | 主键/外部键引用（loader 主键化） | [program/design/loader-design.md] | `src/program/loader/`, `proto/eugraph.thrift`, `src/storage/data/` |
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md], [storage/session-cursor-pool-design.md] | `src/storage/` |
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
+| 表达式求值/懒加载属性 | [query/engine/evaluator-prefetch-design.md](query/engine/evaluator-prefetch-design.md) | `src/query/evaluator/`, `src/query/physical_plan/operator/` |
 | 性能剖析 / 指标与 trace | [debugging/metrics-and-tracing.md] | `src/query/physical_plan/`, `src/query/executor/`, `src/storage/data/async_graph_data_store.hpp` |
 | 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/common/schema/graph_schema.hpp` |
 | 表达式求值相关 | [query/syntax/cypher-syntax.md], [query/engine/query-engine-design.md] | `executor/vectorized_evaluator.cpp`, `binder/` |
@@ -152,6 +154,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [查询引擎](query/engine/query-engine-design.md) | 逻辑计划、物理计划、Catalog、FunctionRegistry、BoundExpression、DataChunk、向量化求值 |
 | [表达式求值 Benchmarks](query/engine/evaluator-benchmarks.md) | google benchmark 基线、优化前后对比与运行方法 |
 | [执行模型](query/engine/execution-model.md) | Pull-based 火山模型、协程调度、IO/Compute 分离、流式执行、关键不变量 |
+| [表达式求值 Prefetch 设计](query/engine/evaluator-prefetch-design.md) | 求值器不再做 IO：算子边界 prefetch、裸顶点批量加载、startNode/endNode dry pass、missingPrefetchCount |
 | [事务模型](query/engine/transaction-model.md) | 事务生命周期、snapshot isolation、流式事务、批量操作事务 |
 | [时间语义（对齐 neo4j）](query/engine/temporal-semantics.md) | 月末夹取、duration.between 的月/天拆分、时区比较、epoch 基准、date - date 扩展与验证方式 |
 | [查询错误模型](query/engine/error-model.md) | 错误分类 → Neo4j 状态码、消息契约、整数溢出/除零与 map 参数校验、与 neo4j 的差异清单 |
@@ -175,6 +178,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [RPC 服务层](service/rpc-service.md) | fbthrift Handler、流式执行协议、Value/Thrift 转换、RPC 客户端 |
+| [Thrift 线程模型](service/thrift-thread-model.md) | 网络 IO / 计算 / 存储 IO 三池分离；async_tm 全量覆盖、回包投回连接 EB、fbthrift WriteBatcher 停顿与测试 |
 | [Neo4j Bolt 协议](service/neo4j-bolt-protocol.md) | Bolt v5.1 协议支持、PackStream 编解码、Neo4j 驱动兼容 |
 
 ## 可执行程序

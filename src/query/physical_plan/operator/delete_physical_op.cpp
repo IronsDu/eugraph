@@ -103,8 +103,15 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
     auto child_gen = cancellable(child_->executeChunkTraced());
     ExpressionEvaluator evaluator(eval_ctx_);
 
+    std::vector<const binder::BoundExpression*> prefetch_exprs;
+    for (const auto& target : targets_) {
+        if (target.expr)
+            prefetch_exprs.push_back(&*target.expr);
+    }
+
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
+        co_await evaluator.prefetch(prefetch_exprs, *chunk);
         std::unordered_set<VertexId> checked_vertices;
         std::unordered_set<EdgeId> deleted_edges;
 

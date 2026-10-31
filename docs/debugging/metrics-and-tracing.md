@@ -105,13 +105,15 @@ grep '\[io-trace\]' /tmp/server.log | tail -1
 计数是**语句级**的：`AsyncGraphDataStore::for_session` 为每条语句构造实例，语句结束
 输出一次；IO 线程上的计数通过原子变量汇总。只有各项都为 0 时不输出。
 
-### 3.3 重要口径：当前 IoScheduler 是 inline
+### 3.3 重要口径：IoScheduler 自 2026-10-31 起真正跨线程
 
-当前生产的 `IoScheduler` 仍是 inline（eager Task + `co_viaIfAsync`），dispatch 在
-调用线程执行，**`io_dispatches` 不是线程切换次数**，也不应乘 10 µs。
-真实跨线程 dispatch 的成本由 `storage_op_bench` 的 `CrossThreadDispatchVoid` 单独测量
-（约 10 µs/次）；写入路径的 WT session 尚未做 IO 线程绑定，不能直接把调度器改成跨线程。
-详见 [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
+`IoScheduler` 已从 `co_viaIfAsync` 改为 `co_withExecutor`：存储调用在 Storage IO 池执行，
+完成后协程恢复到调用方 executor。因此 `io_dispatches` 现在是**真实跨线程 dispatch 次数**，
+可按约 10 µs/次作为上界估算（`storage_op_bench` 的 `ProductionDispatchVoid`）；修复前的
+inline 路径保留为 `LegacyInlineDispatchVoid` 仅用于同二进制 A/B。`io_dispatches` 高说明
+需要批量化，而不是 seek 慢。详见
+[storage-operation-costs.md](../benchmark/storage-operation-costs.md) 与
+[execution-model.md](../query/engine/execution-model.md) §三。
 
 ### 3.4 用计数估算 seek 成本
 

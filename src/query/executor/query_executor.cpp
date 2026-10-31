@@ -21,7 +21,8 @@ namespace compute {
 QueryExecutor::QueryExecutor(AsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta,
                              SessionPool& session_pool, Config config)
     : async_data_(async_data), async_meta_(async_meta), config_(config),
-      compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)),
+      compute_pool_(config.compute_pool ? std::move(config.compute_pool)
+                                        : std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)),
       session_pool_(session_pool) {}
 
 QueryExecutor::~QueryExecutor() = default;
@@ -132,6 +133,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // 会话驱动（§2/§4）：取租约 → begin → 执行 → 由语句边界 commit/rollback ✓。
     // 显式事务（Bolt BEGIN…COMMIT）由调用方传入已开启的会话 ⇒ 本语句不 begin/commit ✓。
     SessionRef active_session = existing_session;
+    const bool write = binder.ctx().has_mutation;
     if (!active_session) {
         auto lease = session_pool_.acquire();
         if (!lease) {
@@ -140,15 +142,17 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
             co_return ctx;
         }
         GraphSession& session = **lease;
-        const bool write = binder.ctx().has_mutation;
-        const bool begun = write ? session.begin_write() : session.begin_read();
+        active_session = std::ref(session);
+        ctx->session = std::move(*lease); // 租约随 ctx 存活；析构 ⇒ 池 put（未提交自动回滚 ✓）
+        // Construct the facade before begin so transaction control can be
+        // dispatched to Storage IO too (begin is a WT call on the session).
+        ctx->query_store.emplace(async_data_.for_session(session));
+        const bool begun = co_await ctx->query_store->beginSession(write);
         if (!begun) {
             ctx->error = "Failed to begin transaction";
             spdlog::error("[QueryExecutor] begin_transaction failed; refusing to run '{}'", cypher_query);
             co_return ctx;
         }
-        active_session = std::ref(session);
-        ctx->session = std::move(*lease); // 租约随 ctx 存活；析构 ⇒ 池 put（未提交自动回滚 ✓）
     } else if (!active_session->get().active()) {
         ctx->error = "Explicit transaction session is not active";
         co_return ctx;
@@ -162,8 +166,9 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // the operator side, where upstream chunks are consumed.
     auto query_ctx = std::make_shared<QueryContext>(std::move(cancel));
     ctx->query_context = query_ctx;
-    // 构造一个绑定 THIS statement session 的轻量异步门面：并发语句不会共享会话 ✓。
-    ctx->query_store.emplace(async_data_.for_session(active_session->get()));
+    // 显式事务分支：会话已由 BEGIN 开启，这里只构造绑定门面；自动提交分支已在上面构造。
+    if (!ctx->query_store)
+        ctx->query_store.emplace(async_data_.for_session(active_session->get()));
     IAsyncGraphDataStore& query_data = *ctx->query_store;
 
     // Store label/edge_label defs + name→id maps in StreamContext so physical operator
@@ -446,12 +451,12 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 co_return;
             }
             GraphSession& session = **lease;
-            if (!session.begin_write()) {
+            auto bound_store = async_data_.for_session(session);
+            if (!co_await bound_store.beginSession(true)) {
                 ok = false;
                 result.error = "Failed to begin index backfill transaction";
                 co_return;
             }
-            auto bound_store = async_data_.for_session(session);
             IAsyncGraphDataStore& ds = bound_store;
 
             {
@@ -539,8 +544,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
             // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
             // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = session.commit().committed();
-            if (!committed) {
+            const auto outcome = co_await bound_store.commitSession();
+            if (!outcome.committed()) {
                 ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
                 result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
                                "see the server log for the WiredTiger error";
@@ -614,12 +619,12 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 co_return;
             }
             GraphSession& session = **lease;
-            if (!session.begin_write()) {
+            auto bound_store = async_data_.for_session(session);
+            if (!co_await bound_store.beginSession(true)) {
                 ok = false;
                 result.error = "Failed to begin index backfill transaction";
                 co_return;
             }
-            auto bound_store = async_data_.for_session(session);
             IAsyncGraphDataStore& ds = bound_store;
 
             {
@@ -667,8 +672,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
             // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
             // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-            const bool committed = session.commit().committed();
-            if (!committed) {
+            const auto outcome = co_await bound_store.commitSession();
+            if (!outcome.committed()) {
                 ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
                 result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
                                "see the server log for the WiredTiger error";

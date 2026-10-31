@@ -60,6 +60,8 @@ folly::coro::AsyncGenerator<DataChunk> UnwindPhysicalOp::executeChunk() {
 
             Column list_col(binder::BoundTypeKind::LIST);
             list_col.reserve(chunk->count);
+            std::vector<const binder::BoundExpression*> prefetch_exprs{&list_expr_};
+            co_await eval.prefetch(prefetch_exprs, *chunk);
             eval.evaluate(list_expr_, *chunk, list_col);
 
             for (size_t r = 0; r < chunk->count; ++r) {
@@ -123,6 +125,8 @@ folly::coro::AsyncGenerator<DataChunk> UnwindPhysicalOp::executeChunk() {
         // Evaluate the list expression for all rows in this chunk
         Column list_col(binder::BoundTypeKind::LIST);
         list_col.reserve(chunk->count);
+        std::vector<const binder::BoundExpression*> prefetch_exprs{&list_expr_};
+        co_await eval.prefetch(prefetch_exprs, *chunk);
         eval.evaluate(list_expr_, *chunk, list_col);
 
         // Scratch for the invariant per-row column values. Declared once and reused

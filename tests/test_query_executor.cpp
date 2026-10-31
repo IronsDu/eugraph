@@ -5,6 +5,7 @@
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row_identity.hpp"
 
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/executor/query_executor.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/physical_plan/query_context.hpp"
@@ -199,7 +200,7 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
                 }
             }
             if (ctx->should_commit) {
-                ctx->commit();
+                co_await ctx->commitAsync();
             }
         } catch (const std::exception& e) {
             result.error = e.what();
@@ -227,7 +228,7 @@ ExecutionResult execSyncParams(QueryExecutor& executor, const std::string& query
                 }
             }
             if (ctx->should_commit) {
-                ctx->commit();
+                co_await ctx->commitAsync();
             }
         } catch (const std::exception& e) {
             result.error = e.what();
@@ -2841,7 +2842,7 @@ TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime
         while (auto chunk = co_await ctx->gen.next()) {
             count += chunk->numRows();
         }
-        ctx->commit();
+        co_await ctx->commitAsync();
         co_return count;
     };
     size_t row_count = blockingWait(consumeStream());
@@ -7781,7 +7782,7 @@ TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
                 result.rows.push_back(std::move(row));
         }
         if (ctx->should_commit)
-            ctx->commit();
+            co_await ctx->commitAsync();
     }));
 
     ASSERT_EQ(result.rows.size(), 2u) << "expected 2 rows, got " << result.rows.size();
@@ -10096,6 +10097,7 @@ TEST_F(QueryExecutorTest, ShortestPathEndpointPropertiesTriggerPrefetch) {
                                      "(b:Person {name: 'sp2'})-[:KNOWS]->(c:Person {name: 'sp3'})")
                     .error.empty());
 
+    ExpressionEvaluator::resetMissingPrefetchCount();
     auto result = execSync(*executor_, "MATCH p = shortestPath((a:Person {name: 'sp1'})-[:KNOWS*1..3]-"
                                        "(c:Person {name: 'sp3'})) "
                                        "WITH p, relationships(p) AS rels "
@@ -10105,6 +10107,25 @@ TEST_F(QueryExecutorTest, ShortestPathEndpointPropertiesTriggerPrefetch) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "sp1");
     EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "sp3");
+    EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u)
+        << "property evaluation hit a bare vertex outside the prefetch cache (would have blocked on IO)";
+}
+
+TEST_F(QueryExecutorTest, StartNodePropertyWithoutEndpointColumnPrefetches) {
+    ASSERT_TRUE(
+        execSync(*executor_, "CREATE (a:Person {name: 'sn1'})-[:KNOWS]->(b:Person {name: 'sn2'})").error.empty());
+
+    ExpressionEvaluator::resetMissingPrefetchCount();
+    // The anonymous endpoints are not columns in the output; startNode/endNode
+    // synthesize a bare VertexValue inside the expression evaluator. The
+    // prefetch dry pass must discover and load it without any blocking IO.
+    auto result = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN startNode(r).name AS s, endNode(r).name AS e");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "sn1");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "sn2");
+    EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u)
+        << "startNode/endNode property access was not covered by the prefetch dry pass";
 }
 
 TEST_F(QueryExecutorTest, ShortestPathEndpointDynamicPropertyTriggersPrefetch) {
@@ -10112,6 +10133,7 @@ TEST_F(QueryExecutorTest, ShortestPathEndpointDynamicPropertyTriggersPrefetch) {
                                      "(b:Person {name: 'dp2'})-[:KNOWS]->(c:Person {name: 'dp3'})")
                     .error.empty());
 
+    ExpressionEvaluator::resetMissingPrefetchCount();
     auto result = execSyncParams(*executor_,
                                  "MATCH p = shortestPath((a:Person {name: 'dp1'})-[:KNOWS*1..3]-"
                                  "(c:Person {name: 'dp3'})) "
@@ -10123,6 +10145,8 @@ TEST_F(QueryExecutorTest, ShortestPathEndpointDynamicPropertyTriggersPrefetch) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "dp1");
     EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "dp3");
+    EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u)
+        << "dynamic property evaluation hit a bare vertex outside the prefetch cache (would have blocked on IO)";
 }
 
 // ==================== operator-level trace attribution ====================
