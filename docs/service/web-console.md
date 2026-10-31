@@ -38,9 +38,12 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
   MATCH 查询写入编辑器。
 - 图节点可直接拖动；拖动时被拖节点固定在 d3-force 上（`fx/fy`），其他节点实时避让，
   松开后继续收敛；拖动中的节点保持选中 halo。
-- Cypher 编辑器支持上下文补全：普通前缀提示关键字/函数，`:` 后提示 labels，`[r:` 后提示
-  relationship types，`.` 后提示 property keys；支持方向键选择、Enter/Tab 插入、Esc 关闭、
-  Ctrl+Space 强制打开。主编辑器和结果 frame 内的编辑框共用同一套补全逻辑。
+- Cypher 编辑器支持上下文补全：普通前缀提示关键字/函数，`:` / `::` 后提示 labels，
+  `[r:` 后提示 relationship types，`.` 后提示 property keys；支持 EuGraph 扩展语法的
+  `::Label.property`（按标签提示字段及类型）、`DESCRIBE LABEL/RELATIONSHIP`、`SHOW`、
+  `CALL db.*` 过程，以及从 `(n:Label)`、`[r:TYPE]`、`n::Label` 推断变量并对 `.` 属性做过滤。
+  支持方向键选择、Enter/Tab 插入、Esc 关闭、Ctrl+Space 强制打开。主编辑器和结果 frame
+  内的编辑框共用同一套补全逻辑，类型信息来自 `db.schema.*`。
 - 启动时显示独立连接页（默认 `neo4j` / `eugraph`，凭据只保存在页面会话内）；连接成功后
   进入主界面。顶栏显示当前 Bolt 地址和 graph 名；地址下拉内提供“断开连接”，断开后回到
   登录页。数据库切换可用顶栏下拉或 `:use`。
@@ -170,8 +173,8 @@ eugraph-server --data-dir ./eugraph-data --bolt-port 7687 --web-port 0
 
 - **Stop 是 best-effort**：流式查询可在检查点停止；单条阻断型算子可能跑完（见上）。
 - 图布局在主线程同步执行（未使用 Worker）；更大规模请先用 `LIMIT`/标签过滤。
-- 自动补全目前是基于文本前缀和 schema 的轻量补全，不是完整语言服务器；不提示变量作用域、
-  参数名或上下文相关函数签名。
+- 自动补全目前是文本前缀 + schema 的轻量补全，不是完整语言服务器；变量类型只做词法级
+  `(n:Label)` / `[r:TYPE]` / `n::Label` 推断，不实现完整作用域/别名/参数名/函数签名检查。
 - 无 Plan 专用视图、PNG 导出（后续里程碑）。
 - 前端 bundle 约 1.10 MB raw / 256 KB gzip（含 neo4j-driver + Sigma）。
 - Drogon 是进程级单例：一个进程只能启动一次 Web Console，且 stop 后不能重启；

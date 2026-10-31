@@ -75,6 +75,8 @@ function kindLabel(item: CompletionItem): string {
       return 'rel';
     case 'property':
       return 'prop';
+    case 'procedure':
+      return 'proc';
   }
 }
 

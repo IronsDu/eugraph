@@ -1574,3 +1574,7 @@ html[data-theme='light'] .graph-notice {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.cypher-completion-kind.kind-procedure {
+  color: #fca5a5;
+}

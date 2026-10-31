@@ -5,6 +5,18 @@ const schema: CompletionSchema = {
   labels: ['Person', 'City'],
   relationships: ['KNOWS', 'CONTAINER_OF'],
   properties: ['name', 'firstName', 'birthday'],
+  labelProperties: {
+    Person: [
+      { name: 'name', type: 'STRING' },
+      { name: 'firstName', type: 'STRING' },
+      { name: 'birthday', type: 'INTEGER' },
+    ],
+    City: [{ name: 'name', type: 'STRING' }],
+  },
+  relationshipProperties: {
+    KNOWS: [{ name: 'creationDate', type: 'INTEGER' }],
+  },
+  procedures: [{ name: 'db.labels', detail: 'db.labels() :: (label :: STRING)' }],
 };
 
 describe('Cypher completions', () => {
@@ -47,5 +59,53 @@ describe('Cypher completions', () => {
     expect(count).toBeDefined();
     expect(count?.insert).toBe('count()');
     expect(count?.caretInside).toBe(6);
+  });
+});
+
+
+describe('EuGraph-specific completions', () => {
+  it('suggests labels after ::', () => {
+    const query = 'RETURN n::Per';
+    const result = completionsFor(query, query.length, schema);
+    expect(result.context).toBe('label');
+    expect(result.items.map((item) => item.text)).toContain('Person');
+  });
+
+  it('suggests typed properties after ::Label.', () => {
+    const query = 'RETURN n::Person.';
+    const result = completionsFor(query, query.length, schema);
+    expect(result.context).toBe('property');
+    expect(result.items.map((item) => item.text)).toContain('birthday');
+    expect(result.items.find((item) => item.text === 'birthday')?.detail).toBe('INTEGER');
+  });
+
+  it('infers the label of a node variable for property completion', () => {
+    const query = 'MATCH (n:Person) RETURN n.na';
+    const result = completionsFor(query, query.length, schema);
+    expect(result.context).toBe('property');
+    expect(result.items.map((item) => item.text)).toContain('name');
+    expect(result.items.some((item) => item.text === 'firstName')).toBe(true);
+  });
+
+  it('completes DESCRIBE LABEL and DESCRIBE RELATIONSHIP targets', () => {
+    const labels = 'DESCRIBE LABEL Per';
+    const labelResult = completionsFor(labels, labels.length, schema);
+    expect(labelResult.items.map((item) => item.text)).toContain('Person');
+
+    const relationships = 'DESCRIBE RELATIONSHIP KN';
+    const relationshipResult = completionsFor(relationships, relationships.length, schema);
+    expect(relationshipResult.items.map((item) => item.text)).toContain('KNOWS');
+  });
+
+  it('completes CALL procedures and SHOW keywords', () => {
+    const call = 'CALL db.la';
+    const callResult = completionsFor(call, call.length, schema);
+    expect(callResult.context).toBe('procedure');
+    expect(callResult.items[0]?.text).toBe('db.labels');
+    expect(callResult.items[0]?.insert).toBe('db.labels()');
+
+    const show = 'SHOW I';
+    const showResult = completionsFor(show, show.length, schema);
+    expect(showResult.items.map((item) => item.text)).toContain('INDEXES');
   });
 });

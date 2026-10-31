@@ -13,6 +13,7 @@ import type { GraphResult } from './graph-data';
 import { GraphView } from './graph-view';
 import { parseInput } from './meta';
 import { attachCypherAutocomplete } from './autocomplete-ui';
+import type { SchemaProperty } from './autocomplete';
 import './style.css';
 
 type Info = {
@@ -233,10 +234,16 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
   let completionLabels: string[] = [];
   let completionRelationships: string[] = [];
   let completionProperties: string[] = [];
+  let completionLabelProperties: Record<string, SchemaProperty[]> = {};
+  let completionRelationshipProperties: Record<string, SchemaProperty[]> = {};
+  let completionProcedures: Array<{ name: string; detail: string }> = [];
   const completionSchema = () => ({
     labels: completionLabels,
     relationships: completionRelationships,
     properties: completionProperties,
+    labelProperties: completionLabelProperties,
+    relationshipProperties: completionRelationshipProperties,
+    procedures: completionProcedures,
   });
   attachCypherAutocomplete(editor, completionSchema);
 
@@ -520,6 +527,9 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     completionLabels = [];
     completionRelationships = [];
     completionProperties = [];
+    completionLabelProperties = {};
+    completionRelationshipProperties = {};
+    completionProcedures = [];
   }
 
   function cypherIdentifier(name: string): string {
@@ -562,7 +572,14 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     }
     sidebarStatus.textContent = '读取 schema…';
     try {
-      const [labelsResult, relationshipsResult, propertiesResult] = await Promise.all([
+      const [
+        labelsResult,
+        relationshipsResult,
+        propertiesResult,
+        nodeTypesResult,
+        relTypesResult,
+        proceduresResult,
+      ] = await Promise.all([
         state.driver.executeQuery(
           'CALL db.labels() YIELD label RETURN label ORDER BY label',
           {},
@@ -578,6 +595,21 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
           {},
           { database: state.database }
         ),
+        state.driver.executeQuery(
+          'CALL db.schema.nodeTypeProperties() YIELD nodeLabels, propertyName, propertyTypes RETURN nodeLabels, propertyName, propertyTypes',
+          {},
+          { database: state.database }
+        ),
+        state.driver.executeQuery(
+          'CALL db.schema.relTypeProperties() YIELD relType, propertyName, propertyTypes RETURN relType, propertyName, propertyTypes',
+          {},
+          { database: state.database }
+        ),
+        state.driver.executeQuery(
+          'CALL dbms.procedures() YIELD name, signature, description RETURN name, signature, description',
+          {},
+          { database: state.database }
+        ),
       ]);
       if (token !== sidebarFetchToken) return;
       const labels = labelsResult.records.map((record: any) => String(record.get('label')));
@@ -589,6 +621,35 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       completionProperties = propertiesResult.records.map((record: any) =>
         String(record.get('propertyKey'))
       );
+      completionLabelProperties = {};
+      for (const record of nodeTypesResult.records) {
+        const labelValues = record.get('nodeLabels');
+        const labelsForRecord = Array.isArray(labelValues) ? labelValues : [labelValues];
+        const typeValues = record.get('propertyTypes');
+        const propertyType = Array.isArray(typeValues)
+          ? String(typeValues[0] ?? 'ANY')
+          : String(typeValues ?? 'ANY');
+        for (const rawLabel of labelsForRecord) {
+          const label = String(rawLabel);
+          (completionLabelProperties[label] ??= []).push({
+            name: String(record.get('propertyName')),
+            type: propertyType,
+          });
+        }
+      }
+      completionRelationshipProperties = {};
+      for (const record of relTypesResult.records) {
+        const relationship = String(record.get('relType'));
+        const typeValues = record.get('propertyTypes');
+        (completionRelationshipProperties[relationship] ??= []).push({
+          name: String(record.get('propertyName')),
+          type: Array.isArray(typeValues) ? String(typeValues[0] ?? 'ANY') : String(typeValues ?? 'ANY'),
+        });
+      }
+      completionProcedures = proceduresResult.records.map((record: any) => ({
+        name: String(record.get('name')),
+        detail: String(record.get('signature') ?? record.get('description') ?? 'procedure'),
+      }));
       renderSidebarList(sidebarLabels, labels, 'label');
       renderSidebarList(sidebarRelationships, relationships, 'relationship');
       sidebarStatus.textContent = `${labels.length} labels · ${relationships.length} relationship types`;
