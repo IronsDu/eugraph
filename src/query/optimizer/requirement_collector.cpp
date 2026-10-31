@@ -48,10 +48,18 @@ namespace optimizer {
 namespace {
 
 // Resolve the variable name from a property-access object expression.
-// Returns empty string if the object is not a simple variable reference.
+// The object can be a plain variable/column or a label-cast wrapper around one
+// (`n::Label.prop`). Requirement collection must descend through the cast or
+// the property will never be loaded from storage even though binding succeeded.
 std::string variableNameOf(const binder::BoundExpression& object) {
     if (auto v = std::get_if<binder::BoundVariableRef>(&object))
         return v->name;
+    if (auto c = std::get_if<binder::BoundColumnRef>(&object))
+        return c->name;
+    if (auto lc = std::get_if<std::unique_ptr<binder::BoundLabelCast>>(&object)) {
+        if (*lc)
+            return variableNameOf((*lc)->object);
+    }
     return {};
 }
 
