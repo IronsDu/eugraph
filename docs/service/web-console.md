@@ -35,8 +35,9 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
   状态，当前项高亮）；选择后只切换后续 session 使用的数据库，已有结果 frame 保留。
 - 主界面左侧是可折叠 Sidebar，含 Database / Cypher / History 三个子页：
   Database 显示当前 graph 的 labels、relationship types 和 property keys，切换 database、
-  连接或点刷新时重新读取；Cypher 是可搜索的 EuGraph/Cypher 语法与示例清单，点击示例写入
-  编辑器；History 显示最近执行过的查询，点击回填、可清空。
+  连接或点刷新时重新读取；Cypher 是可搜索的 EuGraph/Cypher 语法与示例清单（读取/写入/聚合/
+  `::` 强类型/DESCRIBE/SHOW/CALL），点击示例写入编辑器；History 显示最近执行过的查询，
+  持久化在 localStorage（保留最近 200 条），点击回填、可清空。
 - 图节点可直接拖动；拖动时被拖节点固定在 d3-force 上（`fx/fy`），其他节点实时避让，
   松开后继续收敛；拖动中的节点保持选中 halo。
 - Cypher 编辑器支持上下文补全：普通前缀提示关键字/函数，`:` / `::` 后提示 labels，
