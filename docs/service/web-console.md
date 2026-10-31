@@ -1,8 +1,9 @@
 # 内嵌 Web Console
 
 > 当前实现状态：内嵌 HTTP 资产 + Bolt-over-WebSocket 控制台。
-> 已具备连接、Cypher 执行、Table/Graph/RAW 三视图、`:` 命令、参数、CSV 导出与
-> best-effort Stop；Schema 侧栏、自动补全、图布局 Worker 等仍在后续里程碑。
+> 已具备连接、Cypher 执行、Table/Graph/RAW 三视图、`:` 命令、参数、CSV 导出、
+> best-effort Stop、可折叠 Database Sidebar、上下文补全、节点拖拽/实时力布局与选中 halo；
+> 图布局 Worker、Plan 视图、PNG 导出等仍在后续里程碑。
 
 ## 1. 目标与边界
 
@@ -32,11 +33,14 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
 - 顶栏可在深色/浅色主题间切换，选择保存在浏览器 localStorage；默认深色。
 - 顶栏 Graph/Database 下拉每次展开都会重新执行 `SHOW DATABASES` 获取最新列表（含 online
   状态，当前项高亮）；选择后只切换后续 session 使用的数据库，已有结果 frame 保留。
-- 主界面左侧是可折叠 Sidebar；Database 概览 tab 显示当前 graph 的 labels 和 relationship
-  types，切换 database 或点刷新时重新读取；点击列表项会把对应的 MATCH 查询写入编辑器。
-- 图节点可直接拖动；拖动时被拖节点固定在 d3-force 上，其他节点实时避让，松开后继续收敛。
-- Cypher 编辑器支持上下文补全：关键字/函数、`:` 后的 labels、`[r:` 后的 relationship
-  types、`.` 后的 property keys；支持方向键选择、Enter/Tab 插入、Esc 关闭、Ctrl+Space 强制打开。
+- 主界面左侧是可折叠 Sidebar；Database 概览 tab 显示当前 graph 的 labels、relationship
+  types 和 property keys，切换 database、连接或点刷新时重新读取；点击 label/类型会把对应的
+  MATCH 查询写入编辑器。
+- 图节点可直接拖动；拖动时被拖节点固定在 d3-force 上（`fx/fy`），其他节点实时避让，
+  松开后继续收敛；拖动中的节点保持选中 halo。
+- Cypher 编辑器支持上下文补全：普通前缀提示关键字/函数，`:` 后提示 labels，`[r:` 后提示
+  relationship types，`.` 后提示 property keys；支持方向键选择、Enter/Tab 插入、Esc 关闭、
+  Ctrl+Space 强制打开。主编辑器和结果 frame 内的编辑框共用同一套补全逻辑。
 - 启动时显示独立连接页（默认 `neo4j` / `eugraph`，凭据只保存在页面会话内）；连接成功后
   进入主界面。顶栏显示当前 Bolt 地址和 graph 名；地址下拉内提供“断开连接”，断开后回到
   登录页。数据库切换可用顶栏下拉或 `:use`。
@@ -57,7 +61,8 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
   可在 `Compact / JSON` 间切换；点击对象单元格打开完整 JSON 详情（含复制）。
 - 图视图：节点/关系去重、多重边/自环、按标签着色；每个连通分量中度数最高的中心节点使用高亮色；
   选中节点时在 WebGL 节点层内放一个同坐标、更大的 halo 节点（zIndex 绑定），保证外圈与节点同心；
-  **有向边使用 curved path 并带箭头**，边上显示关系类型（1000 边以内启用，较大图按密度自动裁切）；
+  选中的关系边使用高亮色并加粗；**有向边使用 curved path 和两档箭头**（缩小时小箭头、放大后大箭头），
+  边上显示关系类型（1000 边以内启用，较大图按密度自动裁切，标签显示在边上方）；
   节点尺寸在图坐标中定义、随相机整体缩放；节点 caption 由 HTML 叠加层绘制在圆圈内，支持
   多行换行和圆内裁切（Neo4j 风格通用优先级：`name`/`title`/`label` → 任意以 `name` 结尾的
   属性 → `description` → 第一个标量属性；不写死数据集字段）；点击节点在右上角属性面板显示标签、
@@ -66,9 +71,11 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
   绕中心规则排布；有边时整张图跑一次与 Neo4j Browser 相同的 `d3-force` 布局：
   charge `-400`、center `0.03`、link 目标距离 `r1+r2+90`、collide `r1+r2+25`、
   velocityDecay `0.4`，初始圆半径为 `n*45/(2π)`，预计算 300 tick。不按分量打包。
-  节点圈、边线、节点文字与边标签都按相机缩放比例同步缩放；HTML caption 受节点圆的宽高和
-  最大行数约束，超出部分在圆内裁切。大图在 fit 视图隐藏节点文字，放大后只为视口内节点生成标签。
-  默认上限 2000 节点 / 5000 边，超限显示截断提示。
+  节点圈、节点文字与相机同步缩放；边线宽度有屏幕像素上限，避免最大倍率下盖住关系名；
+  HTML caption 受节点圆的宽高和最大行数约束，超出部分在圆内裁切，缩放时使用当前相机矩阵
+  重新投影以保持居中。大图在 fit 视图隐藏节点文字，放大后只为视口内节点生成标签。
+  默认上限 2000 节点 / 5000 边，超限显示截断提示。拖动节点会重启同一个 d3-force
+  simulation，使整图动态调整。
 - 命令：`:help`、`:clear`、`:history`、`:use`、`:dbs`、`:param`、`:params`、
   `:params clear`、`:params {json}`、`:explain`、`:schema`。`:help` 显示在独立的信息 frame 中，
   内容区可滚动，不再挤在编辑器下方的 message 里。
@@ -163,7 +170,9 @@ eugraph-server --data-dir ./eugraph-data --bolt-port 7687 --web-port 0
 
 - **Stop 是 best-effort**：流式查询可在检查点停止；单条阻断型算子可能跑完（见上）。
 - 图布局在主线程同步执行（未使用 Worker）；更大规模请先用 `LIMIT`/标签过滤。
-- 无 Schema 侧栏、自动补全、Plan 专用视图、PNG 导出（后续里程碑）。
+- 自动补全目前是基于文本前缀和 schema 的轻量补全，不是完整语言服务器；不提示变量作用域、
+  参数名或上下文相关函数签名。
+- 无 Plan 专用视图、PNG 导出（后续里程碑）。
 - 前端 bundle 约 1.10 MB raw / 256 KB gzip（含 neo4j-driver + Sigma）。
 - Drogon 是进程级单例：一个进程只能启动一次 Web Console，且 stop 后不能重启；
   集成测试通过独立进程启动。
@@ -181,7 +190,7 @@ eugraph-server --data-dir ./eugraph-data --bolt-port 7687 --web-port 0
 # WS 握手 + Origin 策略
 ./build/debug/ws_origin_tests
 
-# 前端纯逻辑（语句切分 / 格式化 / 图抽取）
+# 前端纯逻辑（语句切分 / 格式化 / 图抽取 / Cypher 补全）
 cd web && npm test
 
 # 真实 server：HTTP 资产/gzip/304/HEAD/404/405/穿越 + WS Origin
@@ -200,5 +209,6 @@ node --test tests/bolt/test_js_ws_driver.cjs
   c-ares/openssl（传递依赖，均为宽松许可）。
 - 前端：`neo4j-driver` 6.2.0（Apache-2.0）、Sigma 4.0.4 / graphology（MIT）、
   `d3-force` 3.0.0（ISC，与 Neo4j Browser 相同）、Vite/TypeScript/Vitest（开发期，MIT）。
-  CodeMirror 自动补全为后续里程碑。
+  自动补全为项目内轻量实现（`web/src/autocomplete.ts` + `autocomplete-ui.ts`），未引入
+  CodeMirror 等额外编辑器依赖。
 - 第三方声明随资产提供：`/licenses.txt`。
