@@ -12,6 +12,7 @@ import { colorForLabel, extractGraph } from './graph-data';
 import type { GraphResult } from './graph-data';
 import { GraphView } from './graph-view';
 import { parseInput } from './meta';
+import { attachCypherAutocomplete } from './autocomplete-ui';
 import './style.css';
 
 type Info = {
@@ -228,6 +229,16 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     placeholder: 'MATCH (n) RETURN n LIMIT 100',
   }) as HTMLTextAreaElement;
   editor.value = 'MATCH (n) RETURN n LIMIT 100';
+
+  let completionLabels: string[] = [];
+  let completionRelationships: string[] = [];
+  let completionProperties: string[] = [];
+  const completionSchema = () => ({
+    labels: completionLabels,
+    relationships: completionRelationships,
+    properties: completionProperties,
+  });
+  attachCypherAutocomplete(editor, completionSchema);
 
   const summary = h('span', { class: 'muted' }, '');
   const message = h('div', { class: 'message hidden' });
@@ -506,6 +517,9 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     sidebarStatus.textContent = message;
     sidebarLabels.replaceChildren();
     sidebarRelationships.replaceChildren();
+    completionLabels = [];
+    completionRelationships = [];
+    completionProperties = [];
   }
 
   function cypherIdentifier(name: string): string {
@@ -548,7 +562,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     }
     sidebarStatus.textContent = '读取 schema…';
     try {
-      const [labelsResult, relationshipsResult] = await Promise.all([
+      const [labelsResult, relationshipsResult, propertiesResult] = await Promise.all([
         state.driver.executeQuery(
           'CALL db.labels() YIELD label RETURN label ORDER BY label',
           {},
@@ -559,11 +573,21 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
           {},
           { database: state.database }
         ),
+        state.driver.executeQuery(
+          'CALL db.propertyKeys() YIELD propertyKey RETURN propertyKey ORDER BY propertyKey',
+          {},
+          { database: state.database }
+        ),
       ]);
       if (token !== sidebarFetchToken) return;
       const labels = labelsResult.records.map((record: any) => String(record.get('label')));
       const relationships = relationshipsResult.records.map((record: any) =>
         String(record.get('relationshipType'))
+      );
+      completionLabels = labels;
+      completionRelationships = relationships;
+      completionProperties = propertiesResult.records.map((record: any) =>
+        String(record.get('propertyKey'))
       );
       renderSidebarList(sidebarLabels, labels, 'label');
       renderSidebarList(sidebarRelationships, relationships, 'relationship');
@@ -973,6 +997,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       rows: '2',
       spellcheck: 'false',
     }) as HTMLTextAreaElement;
+    attachCypherAutocomplete(queryEditor, completionSchema);
     const executeEditButton = h('button', { class: 'button primary small frame-edit-action hidden' }, '执行') as HTMLButtonElement;
     const cancelEditButton = h('button', { class: 'button small frame-edit-action hidden' }, '取消') as HTMLButtonElement;
     const editError = h('div', { class: 'frame-edit-error hidden' });

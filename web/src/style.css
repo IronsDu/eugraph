@@ -1491,3 +1491,86 @@ html[data-theme='light'] .graph-notice {
 }
 
 
+
+/* Cypher autocomplete */
+.cypher-completion {
+  position: fixed;
+  z-index: 1000;
+  width: 300px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+}
+
+.cypher-completion.hidden {
+  display: none;
+}
+
+.cypher-completion-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cypher-completion-item:hover,
+.cypher-completion-item.selected {
+  background: var(--control-hover);
+}
+
+.cypher-completion-kind {
+  flex: 0 0 42px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.cypher-completion-kind.kind-keyword {
+  color: #7dd3fc;
+}
+
+.cypher-completion-kind.kind-function {
+  color: #c4b5fd;
+}
+
+.cypher-completion-kind.kind-label {
+  color: #fbbf24;
+}
+
+.cypher-completion-kind.kind-relationship {
+  color: #86efac;
+}
+
+.cypher-completion-kind.kind-property {
+  color: #f9a8d4;
+}
+
+.cypher-completion-text {
+  flex: 0 0 auto;
+  color: var(--text-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cypher-completion-detail {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

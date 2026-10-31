@@ -35,6 +35,8 @@ EuGraph 的 Web Console 是**编进 `eugraph-server` 的静态单页应用**：
 - 主界面左侧是可折叠 Sidebar；Database 概览 tab 显示当前 graph 的 labels 和 relationship
   types，切换 database 或点刷新时重新读取；点击列表项会把对应的 MATCH 查询写入编辑器。
 - 图节点可直接拖动；拖动时被拖节点固定在 d3-force 上，其他节点实时避让，松开后继续收敛。
+- Cypher 编辑器支持上下文补全：关键字/函数、`:` 后的 labels、`[r:` 后的 relationship
+  types、`.` 后的 property keys；支持方向键选择、Enter/Tab 插入、Esc 关闭、Ctrl+Space 强制打开。
 - 启动时显示独立连接页（默认 `neo4j` / `eugraph`，凭据只保存在页面会话内）；连接成功后
   进入主界面。顶栏显示当前 Bolt 地址和 graph 名；地址下拉内提供“断开连接”，断开后回到
   登录页。数据库切换可用顶栏下拉或 `:use`。
