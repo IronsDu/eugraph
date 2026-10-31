@@ -1342,8 +1342,9 @@ struct PkKey {
 };
 
 /// 行级标签在装载前必须先建好标签，否则批量写入时服务端会报 "Label not found"。
-/// 属性定义跟随主标签：这些标签下的顶点由同一批 CSV 列供给，属性与主标签一致
-/// （主标签负责索引，行级标签用于按名字查询）。
+/// 行级标签只是额外可见性 tag：属性定义和属性值都属于 schema 主标签，因此这里必须
+/// 创建无属性字段的标签。若行级标签同时也是另一个文件的主标签，createLabel 已存在时
+/// 保留其原有 schema，不在这里合并属性。
 void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config,
                      ProgressReporter* progress) {
     if (fs.row_labels.empty())
@@ -1354,8 +1355,6 @@ void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
         else
             spdlog::info("{}", message);
     };
-    const auto& merged = config.merged_properties.at(fs.element);
-
     // 按来源逐个取样：derived 直接建，列来源扫一遍取值（并集去重）
     std::vector<std::string> names;
     std::set<std::string> seen;
@@ -1385,17 +1384,15 @@ void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
         }
     }
     for (const auto& name : names) {
-        auto props = toThriftProps(merged);
-        log_info("[loader] Creating row label '" + name + "' (same properties as '" + fs.element + "')");
+        log_info("[loader] Creating row tag '" + name + "' (no property schema; primary is '" + fs.element + "')");
         try {
-            client.createLabel(name, props, config.graph, /*pk_props=*/{});
+            client.createLabel(name, {}, config.graph, /*pk_props=*/{});
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("already exists") == std::string::npos)
                 throw;
-            // 同一行级标签可能由多个主标签供给（Comment/Post → Message）：属性取并集
-            log_info("[loader] row label '" + name + "' exists; merging " + std::to_string(props.size()) +
-                     " properties");
-            client.createLabel(name, props, config.graph, /*pk_props=*/{}, props);
+            // 同名行级标签可能由多个主标签供给（Comment/Post → Message）；也
+            // 可能是已有主标签。保留已有 schema，不能把主标签字段复制过来。
+            log_info("[loader] row tag '" + name + "' already exists; keeping its schema");
         }
     }
 }

@@ -2586,18 +2586,56 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyAccess) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 10000);
 }
 
-TEST_F(QueryExecutorMultiLabelTest, LabelCastAllProperties) {
-    // RETURN n::Employee should return a scoped VertexValue with only Employee properties
+TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyRequirementsOnMultiLabelVertex) {
+    // n::Label.prop must descend through the LabelCast when collecting storage
+    // requirements; otherwise the value exists but is never loaded and reads null.
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
     auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
     ASSERT_TRUE(employee_def.has_value());
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
     uint16_t salary_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "salary");
+    ASSERT_NE(person_name_pid, UINT16_MAX);
     ASSERT_NE(salary_pid, UINT16_MAX);
+
+    Properties person_props;
+    person_props.resize(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
+    Properties employee_props;
+    employee_props.resize(salary_pid + 1);
+    employee_props[salary_pid] = PropertyValue(int64_t(10000));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    auto result =
+        execSync(*executor_, "MATCH (n:Employee) RETURN n::Person.name AS person_name, n::Employee.salary AS salary");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    ASSERT_EQ(result.rows[0].size(), 2);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 10000);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastAllProperties) {
+    // RETURN n::Employee must expose only Employee properties, even when the
+    // vertex also carries a Person label with its own properties.
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(employee_def.has_value());
+    ASSERT_TRUE(person_def.has_value());
+    uint16_t salary_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "salary");
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    ASSERT_NE(salary_pid, UINT16_MAX);
+    ASSERT_NE(person_name_pid, UINT16_MAX);
 
     Properties employee_props;
     employee_props.resize(salary_pid + 1);
     employee_props[salary_pid] = PropertyValue(int64_t(9999));
+    Properties person_props;
+    person_props.resize(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
 
-    insertMultiLabelVertex(1, {{EMPLOYEE_LABEL, std::move(employee_props)}});
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
 
     auto result = execSync(*executor_, "MATCH (n:Employee) RETURN n::Employee");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -2608,6 +2646,7 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastAllProperties) {
     auto& vv = (*std::get<VertexValuePtr>(result.rows[0][0]));
     EXPECT_EQ(vv.properties.size(), 1);
     EXPECT_NE(vv.properties.find(EMPLOYEE_LABEL), vv.properties.end());
+    EXPECT_EQ(vv.properties.find(PERSON_LABEL), vv.properties.end());
 }
 
 TEST_F(QueryExecutorMultiLabelTest, SetVertexLabel) {
