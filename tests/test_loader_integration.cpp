@@ -270,6 +270,36 @@ TEST_F(LoaderE2ETest, DeclaredTypesAreRespected) {
     EXPECT_NE(score->find("1.5"), std::string::npos) << *score;
 }
 
+// 判据：行级标签只是额外 tag，不应继承主标签的字段声明。修复前 City 会
+// 复制 Place 的 name 字段，DESCRIBE LABEL City 有行、n::City.name 返回 null。
+TEST_F(LoaderE2ETest, RowTagsHaveNoPropertySchema) {
+    writeFile("place.csv", "id|name|type\n1|Delhi|city\n");
+    writeSchema(R"({
+      "nodes": { "Place": [ { "file": "place.csv", "pk": "id",
+                               "columns": { "id": "INT64", "name": "STRING", "type": "STRING" },
+                               "label": [ { "header": "type", "case": "capitalize" } ] } ] },
+      "relationships": {}
+    })");
+    runLoad();
+
+    auto cityFields = queryAll("default", "DESCRIBE LABEL City");
+    EXPECT_TRUE(cityFields.empty()) << "City 是行级 tag，不应拥有字段声明";
+    auto placeFields = queryAll("default", "DESCRIBE LABEL Place");
+    EXPECT_FALSE(placeFields.empty()) << "主标签 Place 应保留字段声明";
+
+    auto weak = querySingle("MATCH (n:City) RETURN n.name");
+    ASSERT_TRUE(weak.has_value());
+    EXPECT_NE(weak->find("Delhi"), std::string::npos) << *weak;
+
+    auto placeStrong = querySingle("MATCH (n:City) RETURN n::Place.name");
+    ASSERT_TRUE(placeStrong.has_value());
+    EXPECT_NE(placeStrong->find("Delhi"), std::string::npos) << *placeStrong;
+
+    // City 没有 name 字段，强类型访问应在绑定期失败，而不是返回 null。
+    auto cityStrong = querySingle("MATCH (n:City) RETURN n::City.name");
+    EXPECT_FALSE(cityStrong.has_value()) << "City 无字段，n::City.name 应报错";
+}
+
 // ==================== 复合主键 ====================
 
 TEST_F(LoaderE2ETest, CompositePrimaryKeyResolvesEndpoints) {

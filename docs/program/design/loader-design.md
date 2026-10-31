@@ -732,11 +732,16 @@ CREATE UNIQUE INDEX idx_membership_tenantId_userId_unique FOR (n:membership) ON 
 | | 上一版 | 本轮 |
 |---|---|---|
 | 主标签 | 行级标签**优先成为主标签**，属性存在 `city` 下 | **主标签 = schema 的键**（`place`），属性永远存在它下面 |
-| 行级标签的角色 | 决定属性归属与索引归属 | 只**追加**一个额外标签（`[place, city]`），便于按 `City/Country/...` 查询 |
+| 行级标签的角色 | 决定属性归属与索引归属 | 只**追加**一个额外标签（`[place, city]`），不创建属性字段；便于按 `City/Country/...` 查询 |
 | 索引 | 建在文件级标签上，与属性归属错位 | 建在 schema 键上，与属性归属一致 |
 | `:LABEL` 空值 | 忽略该行级标签 | 同（忽略，只保留 schema 键） |
 
 这样就没有"属性在哪、索引在哪、查询写哪个名字"三者错位的问题：**属性、索引都属于 schema 键，行级标签只是额外可见性**。
+
+因此 `createRowLabels()` 必须用**空字段集**创建行级标签（不能把主标签的
+`merged_properties` 复制过去）。否则 `DESCRIBE LABEL City` 会虚构一整套字段声明，
+而实际数据仍在 `Place` 下；强类型 `n::City.name` 会在绑定期报
+`Label 'City' has no property 'name'`，弱类型 `n.name` 仍按跨标签规则读取 `Place.name`。
 
 > 与 neo4j 的差异：neo4j 那边 `sed` 把 `:LABEL` 值改成首字母大写、并把属性放在该标签下；我们用 `case: capitalize` 得到同样的标签名，但属性始终在 `place` 下。查询写 `MATCH (n:City)` 两边都通（顶点带该标签），但 `MATCH (n:City {name:...})` 的属性解析按各自引擎的规则走。
 
