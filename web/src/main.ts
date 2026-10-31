@@ -72,6 +72,59 @@ const HELP = `可用命令：
 :schema                  查看 schema 图（db.schema.visualization）
 查询支持用 ; 分隔多条语句；Ctrl/Cmd+Enter 执行。`;
 
+type ReferenceItem = { title: string; snippet: string };
+type ReferenceCategory = { title: string; items: ReferenceItem[] };
+
+const CYPHER_REFERENCE: ReferenceCategory[] = [
+  {
+    title: '读取与匹配',
+    items: [
+      { title: '按标签扫描', snippet: 'MATCH (n:Person) RETURN n LIMIT 100' },
+      { title: '按关系遍历', snippet: 'MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b LIMIT 100' },
+      { title: 'WHERE 过滤', snippet: 'MATCH (n:Person) WHERE n.age > 30 RETURN n LIMIT 100' },
+      { title: 'OPTIONAL MATCH', snippet: 'MATCH (n:Person) OPTIONAL MATCH (n)-[r:KNOWS]->(m) RETURN n, r, m LIMIT 100' },
+      { title: '变长路径', snippet: 'MATCH p = (a)-[:KNOWS*1..3]->(b) RETURN p LIMIT 10' },
+    ],
+  },
+  {
+    title: '写入与更新',
+    items: [
+      { title: 'CREATE 节点', snippet: "CREATE (n:Person {name: 'Alice'}) RETURN n" },
+      { title: 'MERGE 节点', snippet: "MERGE (n:Person {name: 'Alice'}) RETURN n" },
+      { title: 'SET 属性', snippet: "MATCH (n:Person {name: 'Alice'}) SET n.age = 30 RETURN n" },
+      { title: 'DETACH DELETE', snippet: "MATCH (n:Person {name: 'Alice'}) DETACH DELETE n" },
+    ],
+  },
+  {
+    title: '聚合与转换',
+    items: [
+      { title: 'COUNT 聚合', snippet: 'MATCH (n:Person) RETURN count(n)' },
+      { title: 'ORDER BY / LIMIT', snippet: 'MATCH (n:Person) RETURN n ORDER BY n.name LIMIT 20' },
+      { title: 'UNWIND 展开', snippet: 'UNWIND [1, 2, 3] AS x RETURN x' },
+      { title: 'WITH 传递', snippet: 'MATCH (n:Person) WITH n ORDER BY n.name LIMIT 10 RETURN n' },
+    ],
+  },
+  {
+    title: 'EuGraph 强类型',
+    items: [
+      { title: '返回指定标签的属性', snippet: 'MATCH (n) RETURN n::Employee.salary LIMIT 100' },
+      { title: '返回指定标签的节点', snippet: 'MATCH (n) RETURN n::Employee LIMIT 100' },
+      { title: '设置指定标签的属性', snippet: 'MATCH (n) SET n::Employee.salary = 10000 RETURN n LIMIT 10' },
+    ],
+  },
+  {
+    title: 'Schema 与元数据',
+    items: [
+      { title: '列出 labels', snippet: 'DESCRIBE LABELS' },
+      { title: '查看 label 字段', snippet: 'DESCRIBE LABEL Person' },
+      { title: '列出 relationship types', snippet: 'DESCRIBE RELATIONSHIPS' },
+      { title: '查看关系类型字段', snippet: 'DESCRIBE RELATIONSHIP KNOWS' },
+      { title: '查看索引', snippet: 'SHOW INDEXES' },
+      { title: 'CALL labels', snippet: 'CALL db.labels() RETURN label' },
+    ],
+  },
+];
+
 function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   attrs: Record<string, string> = {},
@@ -305,33 +358,101 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     { class: 'sidebar-toggle', type: 'button', title: '收起侧栏', 'aria-label': '收起侧栏' },
     '◀'
   ) as HTMLButtonElement;
+
+  const sidebarDatabasePage = h(
+    'div',
+    { class: 'sidebar-page', role: 'tabpanel' },
+    sidebarGraph,
+    sidebarStatus,
+    h(
+      'div',
+      { class: 'sidebar-section' },
+      h('div', { class: 'sidebar-section-title' }, 'Labels'),
+      sidebarLabels
+    ),
+    h(
+      'div',
+      { class: 'sidebar-section' },
+      h('div', { class: 'sidebar-section-title' }, 'Relationship types'),
+      sidebarRelationships
+    )
+  );
+
+  const sidebarReferenceSearch = h('input', {
+    class: 'sidebar-search',
+    type: 'search',
+    placeholder: '搜索语法或示例…',
+    'aria-label': '搜索 Cypher 语法',
+  }) as HTMLInputElement;
+  const sidebarReferenceContent = h('div', { class: 'sidebar-reference' });
+  const sidebarReferencePage = h(
+    'div',
+    { class: 'sidebar-page hidden', role: 'tabpanel' },
+    h('div', { class: 'sidebar-page-title' }, 'Cypher Reference'),
+    h('div', { class: 'sidebar-page-hint' }, '点击示例写入编辑器'),
+    sidebarReferenceSearch,
+    sidebarReferenceContent
+  );
+
+  const sidebarHistoryList = h('div', { class: 'sidebar-history-list' });
+  const sidebarHistoryStatus = h('div', { class: 'sidebar-status' }, '暂无历史');
+  const sidebarHistoryClear = h('button', { class: 'button small', type: 'button' }, '清空') as HTMLButtonElement;
+  const sidebarHistoryPage = h(
+    'div',
+    { class: 'sidebar-page hidden', role: 'tabpanel' },
+    h(
+      'div',
+      { class: 'sidebar-page-heading' },
+      h('span', { class: 'sidebar-page-title' }, 'History'),
+      h('span', { class: 'spacer' }),
+      sidebarHistoryClear
+    ),
+    h('div', { class: 'sidebar-page-hint' }, '点击历史记录写入编辑器'),
+    sidebarHistoryStatus,
+    sidebarHistoryList
+  );
+
+  const sidebarDatabaseTab = h('button', {
+    class: 'sidebar-tab active',
+    type: 'button',
+    role: 'tab',
+    'aria-selected': 'true',
+    title: 'Database',
+  }, 'Database') as HTMLButtonElement;
+  const sidebarReferenceTab = h('button', {
+    class: 'sidebar-tab',
+    type: 'button',
+    role: 'tab',
+    'aria-selected': 'false',
+    title: 'Cypher Reference',
+  }, 'Cypher') as HTMLButtonElement;
+  const sidebarHistoryTab = h('button', {
+    class: 'sidebar-tab',
+    type: 'button',
+    role: 'tab',
+    'aria-selected': 'false',
+    title: 'History',
+  }, 'History') as HTMLButtonElement;
+  let sidebarTab: 'database' | 'reference' | 'history' = 'database';
+
   const sidebar = h(
     'aside',
     { class: 'sidebar' },
     h(
       'div',
-      { class: 'sidebar-tabs' },
-      h('button', { class: 'sidebar-tab active', type: 'button' }, 'Database'),
+      { class: 'sidebar-tabs', role: 'tablist' },
+      sidebarDatabaseTab,
+      sidebarReferenceTab,
+      sidebarHistoryTab,
       h('span', { class: 'spacer' }),
       sidebarRefresh
     ),
     h(
       'div',
       { class: 'sidebar-body' },
-      sidebarGraph,
-      sidebarStatus,
-      h(
-        'div',
-        { class: 'sidebar-section' },
-        h('div', { class: 'sidebar-section-title' }, 'Labels'),
-        sidebarLabels
-      ),
-      h(
-        'div',
-        { class: 'sidebar-section' },
-        h('div', { class: 'sidebar-section-title' }, 'Relationship types'),
-        sidebarRelationships
-      )
+      sidebarDatabasePage,
+      sidebarReferencePage,
+      sidebarHistoryPage
     )
   );
   const appBody = h('div', { class: 'app-body' }, sidebar, mainLayout);
@@ -536,6 +657,95 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
       ? name
       : `\`${name.replaceAll('`', '``')}\``;
+  }
+
+  function insertIntoSidebarEditor(snippet: string): void {
+    editor.value = snippet;
+    editor.focus();
+    editor.setSelectionRange(0, editor.value.length);
+  }
+
+  function setSidebarTab(tab: 'database' | 'reference' | 'history'): void {
+    sidebarTab = tab;
+    const pages = {
+      database: sidebarDatabasePage,
+      reference: sidebarReferencePage,
+      history: sidebarHistoryPage,
+    };
+    const tabs = {
+      database: sidebarDatabaseTab,
+      reference: sidebarReferenceTab,
+      history: sidebarHistoryTab,
+    };
+    for (const [key, page] of Object.entries(pages)) {
+      page.classList.toggle('hidden', key !== tab);
+    }
+    for (const [key, button] of Object.entries(tabs)) {
+      button.classList.toggle('active', key === tab);
+      button.setAttribute('aria-selected', key === tab ? 'true' : 'false');
+    }
+    sidebarRefresh.style.display = tab === 'database' ? '' : 'none';
+    if (tab === 'history') renderHistory();
+  }
+
+  function renderReference(): void {
+    const query = sidebarReferenceSearch.value.trim().toLowerCase();
+    sidebarReferenceContent.replaceChildren();
+    let visible = 0;
+    CYPHER_REFERENCE.forEach((category, index) => {
+      const items = category.items.filter((item) => {
+        if (!query) return true;
+        return `${item.title} ${item.snippet}`.toLowerCase().includes(query);
+      });
+      if (items.length === 0) return;
+      visible += items.length;
+      const details = h('details', { class: 'sidebar-ref-group' });
+      if (index === 0 || query) details.open = true;
+      details.append(h('summary', { class: 'sidebar-ref-summary' }, category.title));
+      const list = h('div', { class: 'sidebar-ref-list' });
+      for (const item of items) {
+        const button = h(
+          'button',
+          { class: 'sidebar-ref-item', type: 'button', title: item.snippet },
+          h('span', { class: 'sidebar-ref-title' }, item.title),
+          h('code', { class: 'sidebar-ref-code' }, item.snippet)
+        );
+        button.addEventListener('click', () => insertIntoSidebarEditor(item.snippet));
+        list.append(button);
+      }
+      details.append(list);
+      sidebarReferenceContent.append(details);
+    });
+    if (visible === 0) {
+      sidebarReferenceContent.append(h('div', { class: 'sidebar-empty' }, '没有匹配的语法'));
+    }
+  }
+
+  function renderHistory(): void {
+    const history = state.history.slice().reverse();
+    sidebarHistoryStatus.textContent = history.length === 0 ? '暂无历史' : `${history.length} 条历史记录`;
+    sidebarHistoryClear.disabled = history.length === 0;
+    sidebarHistoryList.replaceChildren();
+    if (history.length === 0) {
+      sidebarHistoryList.append(h('div', { class: 'sidebar-empty' }, '执行查询后会出现在这里'));
+      return;
+    }
+    for (const entry of history) {
+      const preview = entry.replace(/\s+/g, ' ').trim();
+      const button = h(
+        'button',
+        { class: 'sidebar-history-item', type: 'button', title: entry },
+        h('code', { class: 'sidebar-history-query' }, preview)
+      );
+      button.addEventListener('click', () => insertIntoSidebarEditor(entry));
+      sidebarHistoryList.append(button);
+    }
+  }
+
+  function clearHistory(): void {
+    state.history = [];
+    saveHistory(state.history);
+    renderHistory();
   }
 
   function renderSidebarList(
@@ -1512,6 +1722,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     state.history.push(text.trim());
     if (state.history.length > MAX_HISTORY) state.history = state.history.slice(-MAX_HISTORY);
     saveHistory(state.history);
+    if (sidebarTab === 'history') renderHistory();
   }
 
   async function run(): Promise<void> {
@@ -1578,6 +1789,13 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     setSidebarOpen(appBody.classList.contains('sidebar-collapsed'));
   });
   sidebarRefresh.addEventListener('click', () => void refreshSidebar());
+  sidebarDatabaseTab.addEventListener('click', () => setSidebarTab('database'));
+  sidebarReferenceTab.addEventListener('click', () => setSidebarTab('reference'));
+  sidebarHistoryTab.addEventListener('click', () => setSidebarTab('history'));
+  sidebarReferenceSearch.addEventListener('input', renderReference);
+  sidebarHistoryClear.addEventListener('click', clearHistory);
+  renderReference();
+  renderHistory();
   themeButton.addEventListener('click', () => applyTheme(theme === 'dark' ? 'light' : 'dark', true));
   loginThemeButton.addEventListener('click', () => applyTheme(theme === 'dark' ? 'light' : 'dark', true));
   connectionButton.addEventListener('click', (event) => {
