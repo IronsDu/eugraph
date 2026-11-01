@@ -758,6 +758,7 @@ class TestProfile:
             root_eugraph = summary.profile["args"]["eugraph"]
             assert root_eugraph["totalIoDispatches"] > 0
             assert root_eugraph["totalWtSearch"] + root_eugraph["totalWtSearchNear"] > 0
+            assert root_eugraph["totalScanRows"] > 0
 
             def walk(node):
                 yield node

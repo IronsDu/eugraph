@@ -24,6 +24,7 @@ struct ProfileNode {
     uint64_t db_hits = 0;
     uint64_t wt_search = 0;
     uint64_t wt_search_near = 0;
+    uint64_t scan_rows = 0;
     uint64_t io_dispatches = 0;
     uint64_t prefetch_hits = 0;
     uint64_t prefetch_misses = 0;
@@ -47,6 +48,7 @@ struct QueryProfile {
     uint64_t db_hits = 0;
     uint64_t wt_search = 0;
     uint64_t wt_search_near = 0;
+    uint64_t scan_rows = 0;
     uint64_t io_dispatches = 0;
     uint64_t prefetch_hits = 0;
     uint64_t prefetch_misses = 0;

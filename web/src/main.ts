@@ -1386,6 +1386,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         ['dbHits', String(profileNumber(profile, 'totalDbHits'))],
         ['ioDispatches', String(profileNumber(profile, 'totalIoDispatches'))],
         ['WT search', String(profileNumber(profile, 'totalWtSearch') + profileNumber(profile, 'totalWtSearchNear'))],
+        ['scan rows', String(profileNumber(profile, 'totalScanRows'))],
         ['prefetch miss', String(profileNumber(profile, 'totalPrefetchMisses'))],
       ];
       for (const [label, value] of cards) {

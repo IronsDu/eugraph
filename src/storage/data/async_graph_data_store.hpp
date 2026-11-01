@@ -310,6 +310,7 @@ public:
                                           batch.push_back(BatchedEdge{vid, entry});
                                           return true;
                                       });
+                recordWtScanRows(batch.size());
             });
             offset += n;
             if (!batch.empty())
@@ -706,8 +707,11 @@ private:
         auto cursor = co_await dispatch([&]() {
             auto created = make_cursor();
             out.clear();
-            if (created)
+            if (created) {
                 fetch(*created, out);
+                if (!out.empty())
+                    recordWtScanRows(out.size());
+            }
             return created;
         });
         if (!cursor || out.empty())
@@ -720,6 +724,8 @@ private:
             const bool has_more = co_await dispatch([&]() {
                 out.clear();
                 fetch(*cursor, out);
+                if (!out.empty())
+                    recordWtScanRows(out.size());
                 return !out.empty();
             });
             if (!has_more)

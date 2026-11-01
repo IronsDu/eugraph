@@ -157,10 +157,11 @@ inline QueryProfile QueryContext::buildProfile(uint64_t planning_ns, uint64_t ex
         if (record->counters) {
             node->wt_search = record->counters->wt_search.load(std::memory_order_relaxed);
             node->wt_search_near = record->counters->wt_search_near.load(std::memory_order_relaxed);
+            node->scan_rows = record->counters->wt_scan_rows.load(std::memory_order_relaxed);
             node->io_dispatches = record->counters->io_dispatches.load(std::memory_order_relaxed);
             node->prefetch_hits = record->counters->prefetch_hits.load(std::memory_order_relaxed);
             node->prefetch_misses = record->counters->prefetch_misses.load(std::memory_order_relaxed);
-            node->db_hits = node->wt_search + node->wt_search_near;
+            node->db_hits = node->wt_search + node->wt_search_near + node->scan_rows;
         }
         nodes.emplace(record.get(), node);
         if (record->parent) {
@@ -194,9 +195,11 @@ inline QueryProfile QueryContext::buildProfile(uint64_t planning_ns, uint64_t ex
     }
     if (statement_counters_) {
         profile.db_hits = statement_counters_->wt_search.load(std::memory_order_relaxed) +
-                          statement_counters_->wt_search_near.load(std::memory_order_relaxed);
+                          statement_counters_->wt_search_near.load(std::memory_order_relaxed) +
+                          statement_counters_->wt_scan_rows.load(std::memory_order_relaxed);
         profile.wt_search = statement_counters_->wt_search.load(std::memory_order_relaxed);
         profile.wt_search_near = statement_counters_->wt_search_near.load(std::memory_order_relaxed);
+        profile.scan_rows = statement_counters_->wt_scan_rows.load(std::memory_order_relaxed);
         profile.io_dispatches = statement_counters_->io_dispatches.load(std::memory_order_relaxed);
         profile.prefetch_hits = statement_counters_->prefetch_hits.load(std::memory_order_relaxed);
         profile.prefetch_misses = statement_counters_->prefetch_misses.load(std::memory_order_relaxed);
@@ -205,12 +208,13 @@ inline QueryProfile QueryContext::buildProfile(uint64_t planning_ns, uint64_t ex
             if (record->counters) {
                 profile.wt_search += record->counters->wt_search.load(std::memory_order_relaxed);
                 profile.wt_search_near += record->counters->wt_search_near.load(std::memory_order_relaxed);
+                profile.scan_rows += record->counters->wt_scan_rows.load(std::memory_order_relaxed);
                 profile.io_dispatches += record->counters->io_dispatches.load(std::memory_order_relaxed);
                 profile.prefetch_hits += record->counters->prefetch_hits.load(std::memory_order_relaxed);
                 profile.prefetch_misses += record->counters->prefetch_misses.load(std::memory_order_relaxed);
             }
         }
-        profile.db_hits = profile.wt_search + profile.wt_search_near;
+        profile.db_hits = profile.wt_search + profile.wt_search_near + profile.scan_rows;
     }
     return profile;
 }

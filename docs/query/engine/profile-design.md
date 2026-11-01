@@ -77,8 +77,9 @@ ProfileNode
   ├─ details                // 现有 toString() 的参数部分
   ├─ identifiers[]          // 输出列名（现有 outputSchema）
   ├─ rows / chunks
-  ├─ db_hits                // WT cursor search + search_near
+  ├─ db_hits                // WT cursor search + search_near + scan rows
   ├─ wt_search / wt_search_near
+  ├─ scan_rows
   ├─ io_dispatches           // 该算子发起的 Storage IO dispatch 次数
   ├─ prefetch_hits / prefetch_misses
   ├─ self_time_ms / inclusive_time_ms
@@ -92,8 +93,9 @@ ProfileNode
 |---|---|---|
 | `rows` | `DataChunk::count` | 该算子输出行数，不含子算子 |
 | `chunks` | `AsyncGenerator::next()` 次数 | 输出批次数 |
-| `db_hits` | `recordWtSearch` + `recordWtSearchNear` | WT 游标 seek 次数；**不等价于 neo4j 的 page cache dbHits** |
+| `db_hits` | `recordWtSearch` + `recordWtSearchNear` + `recordWtScanRows` | 存储访问量：WT 游标 seek 次数 + 扫描游标读出的行数；**不等价于 neo4j 的 page cache dbHits** |
 | `wt_search` / `wt_search_near` | `StorageOpCounters` | 分开暴露，便于定位点查/范围查 |
+| `scan_rows` | `recordWtScanRows` | 扫描游标实际读出的行数（LabelScan/边扫描等）；计入 `db_hits` |
 | `io_dispatches` | `IoScheduler::dispatch` | 该算子发起的跨池调度次数，直接对应调度开销 |
 | `prefetch_hits` | evaluator prefetch 命中 | 求值时命中预取缓存、无需补 IO 的次数 |
 | `prefetch_misses` | `missingPrefetchCount` 的细化 | 预取未覆盖、求值读不到数据的次数（当前会产出 NULL） |

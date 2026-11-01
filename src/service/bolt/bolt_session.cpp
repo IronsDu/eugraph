@@ -45,6 +45,7 @@ PackList stringsToPackList(const std::vector<std::string>& values) {
 PackMap profileEugraphNode(const compute::ProfileNode& node) {
     PackMap map;
     map.emplace("chunks", ps(static_cast<int64_t>(node.chunks)));
+    map.emplace("scanRows", ps(static_cast<int64_t>(node.scan_rows)));
     map.emplace("selfTimeMs", ps(static_cast<double>(node.self_wall_ns) / 1e6));
     map.emplace("inclusiveTimeMs", ps(static_cast<double>(node.inclusive_wall_ns) / 1e6));
     map.emplace("selfCpuMs", ps(static_cast<double>(node.self_cpu_ns) / 1e6));
@@ -85,6 +86,7 @@ PackValue profileNodeToValue(const compute::ProfileNode& node, const compute::Qu
         eugraph.emplace("totalIoDispatches", ps(static_cast<int64_t>(summary->io_dispatches)));
         eugraph.emplace("totalWtSearch", ps(static_cast<int64_t>(summary->wt_search)));
         eugraph.emplace("totalWtSearchNear", ps(static_cast<int64_t>(summary->wt_search_near)));
+        eugraph.emplace("totalScanRows", ps(static_cast<int64_t>(summary->scan_rows)));
         eugraph.emplace("totalPrefetchHits", ps(static_cast<int64_t>(summary->prefetch_hits)));
         eugraph.emplace("totalPrefetchMisses", ps(static_cast<int64_t>(summary->prefetch_misses)));
     }

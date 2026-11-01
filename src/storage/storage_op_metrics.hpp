@@ -11,6 +11,7 @@ namespace eugraph {
 struct StorageOpCounters {
     std::atomic<uint64_t> wt_search{0};
     std::atomic<uint64_t> wt_search_near{0};
+    std::atomic<uint64_t> wt_scan_rows{0};
     std::atomic<uint64_t> io_dispatches{0};
     std::atomic<uint64_t> prefetch_hits{0};
     std::atomic<uint64_t> prefetch_misses{0};
@@ -51,6 +52,14 @@ inline void recordWtSearchNear() noexcept {
         counters->wt_search_near.fetch_add(1, std::memory_order_relaxed);
         if (counters->aggregate)
             counters->aggregate->wt_search_near.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+inline void recordWtScanRows(uint64_t rows) noexcept {
+    if (auto* counters = tls_storage_op_counters) {
+        counters->wt_scan_rows.fetch_add(rows, std::memory_order_relaxed);
+        if (counters->aggregate)
+            counters->aggregate->wt_scan_rows.fetch_add(rows, std::memory_order_relaxed);
     }
 }
 

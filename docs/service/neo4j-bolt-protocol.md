@@ -203,7 +203,8 @@ Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在
 - `profile`：与 neo4j driver 的 `ProfiledPlan` 兼容的树（`operatorType`、`args`、
   `identifiers`、`dbHits`、`rows`、`time`、`children`）；
 - `eugraph`：语句级摘要（planning/execution/commit、rows/chunks、dbHits、ioDispatches、
-  wtSearch/wtSearchNear、prefetchHits/prefetchMisses）。
+  wtSearch/wtSearchNear、scanRows、prefetchHits/prefetchMisses）。扫描算子（如
+  `LabelScan`）的 `dbHits` 包含扫描游标读出的行数，因此不再出现 0。
 
 EuGraph 专有指标同时写入每个节点的 `args.eugraph`（嵌套 map），因为官方 JS driver 的
 `ProfiledPlan` 只保留 `args` 和标准字段；Python driver 还能读到节点顶层 `eugraph` 子对象。
