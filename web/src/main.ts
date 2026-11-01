@@ -1410,7 +1410,8 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       const maxSelf = (() => {
         let best = 0;
         const walk = (node: any) => {
-          best = Math.max(best, Number(node?.time ?? 0));
+          const self = Number(node?.arguments?.['eugraph.selfTimeMs'] ?? node?.time ?? 0);
+          best = Math.max(best, self);
           for (const child of node?.children ?? []) walk(child);
         };
         walk(profile);
@@ -1418,7 +1419,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       })();
 
       const walk = (node: any, depth: number): void => {
-        const selfMs = Number(node?.time ?? profileNumber(node, 'selfTimeMs'));
+        const selfMs = Number(node?.arguments?.['eugraph.selfTimeMs'] ?? node?.time ?? 0);
         const row = h('div', {
           class: `profile-row${maxSelf > 0 && selfMs >= maxSelf * 0.9 ? ' profile-hot' : ''}`,
         });

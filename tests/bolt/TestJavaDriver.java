@@ -18,6 +18,8 @@ import org.neo4j.driver.types.IsoDuration;
 import org.neo4j.driver.types.Node;
 import org.neo4j.driver.types.Path;
 import org.neo4j.driver.types.Relationship;
+import org.neo4j.driver.summary.ProfiledPlan;
+import org.neo4j.driver.summary.ResultSummary;
 
 public class TestJavaDriver {
     private static void check(boolean condition, String message) {
@@ -166,6 +168,17 @@ public class TestJavaDriver {
         session.run("MATCH (n:JavaTx) DETACH DELETE n").consume();
     }
 
+    private static void testProfile(Session session) {
+        Result result = session.run("PROFILE RETURN 1 AS x");
+        check(result.single().get("x").asInt() == 1, "profile result failed");
+        ResultSummary summary = result.consume();
+        check(summary.hasProfile(), "PROFILE summary missing");
+        ProfiledPlan plan = summary.profile();
+        check(plan.time() >= 0, "profile time failed");
+        check(plan.operatorType().endsWith("@eugraph"), "profile operator type failed");
+        check(plan.records() == 1, "profile records failed");
+    }
+
     private static void testPartialPull25(Driver driver) throws Exception {
         org.neo4j.driver.SessionConfig config = org.neo4j.driver.SessionConfig.builder()
                 .withFetchSize(25)
@@ -228,6 +241,7 @@ public class TestJavaDriver {
             testParameters(session);
             testProcedures(session);
             testTransactions(session);
+            testProfile(session);
             testConcurrentQueries(driver);
             testPartialPull25(driver);
         }

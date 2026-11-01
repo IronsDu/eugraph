@@ -208,6 +208,10 @@ Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在
 EuGraph 专有指标同时写入每个节点的 `args`（键名 `eugraph.*`），因为官方 JS driver 的
 `ProfiledPlan` 只保留 `args` 和标准字段；Python driver 还能读到原始 `eugraph` 子对象。
 
+节点级 `time` 是**整数毫秒**（Java driver 的 `ProfiledPlan.time()` 是 `long`；发送 double 会报
+`Cannot coerce FLOAT to Java long without losing precision`）。更精确的 self/inclusive 时间在
+`eugraph.selfTimeMs` / `eugraph.inclusiveTimeMs`。
+
 `PULL` 未取完（`has_more=true`）时不带 profile；只有最后一次完整 `PULL` 才带摘要。
 `DISCARD`/取消不产生 profile。`EXPLAIN` 仍走普通结果行（Plan 文本），不使用该摘要。
 

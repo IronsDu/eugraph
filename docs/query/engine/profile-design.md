@@ -276,6 +276,8 @@ struct StorageOpCounters {
   Python driver 保留原始 metadata；JS driver 的 `ProfiledPlan` 只保留
   `args`/标准字段，因此 Web Console 从 `arguments['eugraph.*']` 读取；
 - 不伪造 `pageCacheHits/Misses`；若后续能从 WT 拿到，再按 neo4j 字段补；
+- `time` 使用整数毫秒（Java `ProfiledPlan.time()` 为 `long`）；精确时间在
+  `eugraph.selfTimeMs/inclusiveTimeMs`；
 - `PULL {n}` 未取完时 `has_more=true`，不带 profile；最后一次 `SUCCESS` 才带；
 - `PROFILE` 的 `RUN` 仍返回普通 `fields`/`t_first`，不提前给未完成的 profile。
 

@@ -95,7 +95,10 @@ PackValue profileNodeToValue(const compute::ProfileNode& node, const compute::Qu
     map.emplace("identifiers", psList(stringsToPackList(node.identifiers)));
     map.emplace("dbHits", ps(static_cast<int64_t>(node.db_hits)));
     map.emplace("rows", ps(static_cast<int64_t>(node.rows)));
-    map.emplace("time", ps(static_cast<double>(node.self_wall_ns) / 1e6));
+    // The Java driver's ProfiledPlan.time is a long (milliseconds); sending a
+    // double here fails with "Cannot coerce FLOAT to Java long without losing
+    // precision" in cypher-shell. Keep the precise value under eugraph.*.
+    map.emplace("time", ps(static_cast<int64_t>((node.self_wall_ns + 500000) / 1000000)));
 
     PackList children;
     children.reserve(node.children.size());
