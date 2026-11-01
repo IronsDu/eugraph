@@ -484,8 +484,11 @@ jobs:
           -DEUGRAPH_ENABLE_CCACHE=ON \
           -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
           -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-          -DCMAKE_CXX_FLAGS_DEBUG="-O0" \
-          -DCMAKE_C_FLAGS_DEBUG="-O0" \
+          # Keep ASan but optimize: -O0 made the TCK exceed the runner's
+          # lifetime limit (>30 min). -O1 preserves sanitizer coverage while
+          # making the full TCK fit the job budget.
+          -DCMAKE_CXX_FLAGS_DEBUG="-O1 -g" \
+          -DCMAKE_C_FLAGS_DEBUG="-O1 -g" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -s" \
           -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address"
 
