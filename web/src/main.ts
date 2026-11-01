@@ -1430,11 +1430,13 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         });
         row.style.paddingLeft = `${depth * 18}px`;
         const details = String(node?.arguments?.Details ?? '');
+        const identifiers = Array.isArray(node?.identifiers) ? node.identifiers.join(', ') : '';
+        const detailTitle = [details, identifiers ? `identifiers: ${identifiers}` : ''].filter(Boolean).join('\n');
         const opCell = h(
           'div',
           { class: 'profile-op-cell' },
           h('span', { class: 'profile-op' }, String(node?.operatorType ?? '?').replace(/@eugraph$/, '')),
-          details ? h('span', { class: 'profile-detail', title: details }, details) : h('span', { class: 'profile-detail' })
+          h('span', { class: 'profile-detail', title: detailTitle }, details || (identifiers ? `identifiers: ${identifiers}` : ''))
         );
         row.append(
           opCell,
