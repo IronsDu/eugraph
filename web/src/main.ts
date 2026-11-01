@@ -1383,11 +1383,13 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         ['planning', profileMs(profileNumber(profile, 'planningMs'))],
         ['execution', profileMs(profileNumber(profile, 'executionMs'))],
         ['commit', profileMs(profileNumber(profile, 'commitMs'))],
-        ['dbHits', String(profileNumber(profile, 'totalDbHits'))],
+        ['rows', String(profileNumber(profile, 'totalRows'))],
+        ['chunks', String(profileNumber(profile, 'totalChunks'))],
+        ['DB hits', String(profileNumber(profile, 'totalDbHits'))],
         ['ioDispatches', String(profileNumber(profile, 'totalIoDispatches'))],
-        ['WT search', String(profileNumber(profile, 'totalWtSearch') + profileNumber(profile, 'totalWtSearchNear'))],
+        ['WT search', `${profileNumber(profile, 'totalWtSearch')} / ${profileNumber(profile, 'totalWtSearchNear')}`],
         ['scan rows', String(profileNumber(profile, 'totalScanRows'))],
-        ['prefetch miss', String(profileNumber(profile, 'totalPrefetchMisses'))],
+        ['prefetch', `${profileNumber(profile, 'totalPrefetchHits')} / ${profileNumber(profile, 'totalPrefetchMisses')}`],
       ];
       for (const [label, value] of cards) {
         summary.append(h('div', { class: 'profile-card' }, h('span', {}, label), h('strong', {}, value)));
@@ -1397,14 +1399,17 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       const header = h(
         'div',
         { class: 'profile-row profile-head' },
-        h('span', { class: 'profile-op' }, 'Operator'),
+        h('span', { class: 'profile-op' }, 'Operator / Details'),
         h('span', {}, 'rows'),
-        h('span', {}, 'dbHits'),
+        h('span', {}, 'chunks'),
+        h('span', {}, 'DB hits'),
         h('span', {}, 'io'),
-        h('span', {}, 'WT'),
-        h('span', {}, 'self'),
-        h('span', {}, 'incl'),
-        h('span', {}, 'prefetch miss')
+        h('span', {}, 'WT s/n'),
+        h('span', {}, 'scan'),
+        h('span', {}, 'self ms'),
+        h('span', {}, 'incl ms'),
+        h('span', {}, 'CPU s/i'),
+        h('span', {}, 'prefetch h/m')
       );
       const tree = h('div', { class: 'profile-tree' }, header);
       const maxSelf = (() => {
@@ -1424,15 +1429,25 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
           class: `profile-row${maxSelf > 0 && selfMs >= maxSelf * 0.9 ? ' profile-hot' : ''}`,
         });
         row.style.paddingLeft = `${depth * 18}px`;
-        row.append(
+        const details = String(node?.arguments?.Details ?? '');
+        const opCell = h(
+          'div',
+          { class: 'profile-op-cell' },
           h('span', { class: 'profile-op' }, String(node?.operatorType ?? '?').replace(/@eugraph$/, '')),
+          details ? h('span', { class: 'profile-detail', title: details }, details) : h('span', { class: 'profile-detail' })
+        );
+        row.append(
+          opCell,
           h('span', {}, String(node?.rows ?? 0)),
+          h('span', {}, String(profileNumber(node, 'chunks'))),
           h('span', {}, String(node?.dbHits ?? 0)),
           h('span', {}, String(profileNumber(node, 'ioDispatches'))),
-          h('span', {}, String(profileNumber(node, 'wtSearch') + profileNumber(node, 'wtSearchNear'))),
+          h('span', {}, `${profileNumber(node, 'wtSearch')} / ${profileNumber(node, 'wtSearchNear')}`),
+          h('span', {}, String(profileNumber(node, 'scanRows'))),
           h('span', {}, profileMs(selfMs)),
           h('span', {}, profileMs(profileNumber(node, 'inclusiveTimeMs'))),
-          h('span', {}, String(profileNumber(node, 'prefetchMisses')))
+          h('span', {}, `${profileMs(profileNumber(node, 'selfCpuMs'))} / ${profileMs(profileNumber(node, 'inclusiveCpuMs'))}`),
+          h('span', {}, `${profileNumber(node, 'prefetchHits')} / ${profileNumber(node, 'prefetchMisses')}`)
         );
         tree.append(row);
         for (const child of node?.children ?? []) walk(child, depth + 1);

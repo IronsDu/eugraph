@@ -312,8 +312,15 @@ Profile: 1 row, 1 chunk
 ### 4.3 Web Console
 
 Web Console 直接用官方 neo4j driver，所以只要 Bolt 的 `profile` 摘要正确，
-前端可以通过 `summary.profile` 渲染；第一期可先不画图，只在结果摘要区展示
-profile JSON/tree，后续再做可视化。
+前端通过 `summary.profile` 渲染。Profile 页当前包含：
+
+- 汇总卡片：planning/execution/commit、rows/chunks、DB hits、ioDispatches、
+  WT search/search_near、scan rows、prefetch hits/misses；
+- 算子表：Operator + Details、rows、chunks、DB hits、io、WT s/n、scan、
+  self/incl ms、CPU s/i、prefetch h/m；
+- self time 最大的算子高亮。
+
+后续再做火焰图/可视化。
 
 ### 4.4 HTTP / 其他客户端
 

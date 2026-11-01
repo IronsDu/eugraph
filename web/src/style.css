@@ -1772,19 +1772,34 @@ html[data-theme='light'] .graph-notice {
 }
 
 .profile-tree {
-  min-width: 760px;
+  min-width: 1280px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
 }
 
 .profile-row {
   display: grid;
-  grid-template-columns: minmax(230px, 2fr) repeat(7, minmax(64px, 1fr));
+  grid-template-columns: minmax(260px, 2.2fr) repeat(10, minmax(58px, 1fr));
   gap: 8px;
   align-items: center;
   padding: 5px 8px;
   border-bottom: 1px solid var(--border);
   color: var(--code);
+}
+
+.profile-op-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.profile-detail {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-row span:nth-child(n + 2) {
