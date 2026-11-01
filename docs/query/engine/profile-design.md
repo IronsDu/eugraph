@@ -275,7 +275,9 @@ struct StorageOpCounters {
 - EuGraph 扩展同时写进每节点 `args.eugraph`（嵌套 map）与节点顶层 `eugraph` map：
   Python driver 保留原始 metadata；JS driver 的 `ProfiledPlan` 只保留
   `args`/标准字段，因此 Web Console 从 `arguments.eugraph.*` 读取；cypher-shell 的
-  `Other` 列也显示这个嵌套 map，便于阅读；
+  `Other` 列也显示这个嵌套 map，便于阅读。根节点的 `args.eugraph` 保留根算子指标，
+  并额外提供 `totalIoDispatches`/`totalWtSearch*`/`totalDbHits` 等语句级汇总，
+  Web 卡片使用 `total*`；
 - 不伪造 `pageCacheHits/Misses`；若后续能从 WT 拿到，再按 neo4j 字段补；
 - `time` 使用整数毫秒（Java `ProfiledPlan.time()` 为 `long`）；精确时间在
   `eugraph.selfTimeMs/inclusiveTimeMs`；

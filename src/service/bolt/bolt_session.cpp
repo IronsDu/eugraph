@@ -68,17 +68,21 @@ PackValue profileNodeToValue(const compute::ProfileNode& node, const compute::Qu
     // Keep the custom metrics as one nested map so that column stays readable.
     auto eugraph = profileEugraphNode(node);
     if (summary != nullptr && root) {
+        // The root node's own counters usually differ from the statement totals
+        // (planning/commit dispatches, child operators). Keep the root's node
+        // metrics and expose totals under explicit total* names so neither the
+        // Web cards nor cypher-shell's Other column silently show the root's 0.
         eugraph.emplace("planningMs", ps(static_cast<double>(summary->planning_ns) / 1e6));
         eugraph.emplace("executionMs", ps(static_cast<double>(summary->execution_ns) / 1e6));
         eugraph.emplace("commitMs", ps(static_cast<double>(summary->commit_ns) / 1e6));
-        eugraph.emplace("rows", ps(static_cast<int64_t>(summary->rows)));
-        eugraph.emplace("chunks", ps(static_cast<int64_t>(summary->chunks)));
-        eugraph.emplace("dbHits", ps(static_cast<int64_t>(summary->db_hits)));
-        eugraph.emplace("ioDispatches", ps(static_cast<int64_t>(summary->io_dispatches)));
-        eugraph.emplace("wtSearch", ps(static_cast<int64_t>(summary->wt_search)));
-        eugraph.emplace("wtSearchNear", ps(static_cast<int64_t>(summary->wt_search_near)));
-        eugraph.emplace("prefetchHits", ps(static_cast<int64_t>(summary->prefetch_hits)));
-        eugraph.emplace("prefetchMisses", ps(static_cast<int64_t>(summary->prefetch_misses)));
+        eugraph.emplace("totalRows", ps(static_cast<int64_t>(summary->rows)));
+        eugraph.emplace("totalChunks", ps(static_cast<int64_t>(summary->chunks)));
+        eugraph.emplace("totalDbHits", ps(static_cast<int64_t>(summary->db_hits)));
+        eugraph.emplace("totalIoDispatches", ps(static_cast<int64_t>(summary->io_dispatches)));
+        eugraph.emplace("totalWtSearch", ps(static_cast<int64_t>(summary->wt_search)));
+        eugraph.emplace("totalWtSearchNear", ps(static_cast<int64_t>(summary->wt_search_near)));
+        eugraph.emplace("totalPrefetchHits", ps(static_cast<int64_t>(summary->prefetch_hits)));
+        eugraph.emplace("totalPrefetchMisses", ps(static_cast<int64_t>(summary->prefetch_misses)));
     }
     args.emplace("eugraph", psMap(std::move(eugraph)));
     map.emplace("args", psMap(std::move(args)));

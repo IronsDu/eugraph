@@ -755,6 +755,9 @@ class TestProfile:
             assert summary.profile.get("rows") == 1
             assert "eugraph" in summary.metadata
             assert summary.metadata["eugraph"]["rows"] == 1
+            root_eugraph = summary.profile["args"]["eugraph"]
+            assert root_eugraph["totalIoDispatches"] > 0
+            assert root_eugraph["totalWtSearch"] + root_eugraph["totalWtSearchNear"] > 0
 
             def walk(node):
                 yield node

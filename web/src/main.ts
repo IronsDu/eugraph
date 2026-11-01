@@ -1383,10 +1383,10 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         ['planning', profileMs(profileNumber(profile, 'planningMs'))],
         ['execution', profileMs(profileNumber(profile, 'executionMs'))],
         ['commit', profileMs(profileNumber(profile, 'commitMs'))],
-        ['dbHits', String(profileNumber(profile, 'dbHits'))],
-        ['ioDispatches', String(profileNumber(profile, 'ioDispatches'))],
-        ['WT search', String(profileNumber(profile, 'wtSearch') + profileNumber(profile, 'wtSearchNear'))],
-        ['prefetch miss', String(profileNumber(profile, 'prefetchMisses'))],
+        ['dbHits', String(profileNumber(profile, 'totalDbHits'))],
+        ['ioDispatches', String(profileNumber(profile, 'totalIoDispatches'))],
+        ['WT search', String(profileNumber(profile, 'totalWtSearch') + profileNumber(profile, 'totalWtSearchNear'))],
+        ['prefetch miss', String(profileNumber(profile, 'totalPrefetchMisses'))],
       ];
       for (const [label, value] of cards) {
         summary.append(h('div', { class: 'profile-card' }, h('span', {}, label), h('strong', {}, value)));
