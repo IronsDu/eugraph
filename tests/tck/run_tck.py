@@ -506,6 +506,7 @@ def main():
 
     args = parser.parse_args()
     fail_on_regression = False
+    scenario_failures = 0
 
     # ---- Validate binaries ----
     if not os.path.isfile(args.server_bin):
@@ -575,6 +576,7 @@ def main():
         summary = parse_cucumber_summary(strip_ansi(tck_result.stdout or ''))
         skip_reasons = parse_skip_reasons(tck_result.stderr or '')
         if summary:
+            scenario_failures = int(summary["scenarios"].get("failed", 0))
             report = generate_report(summary, skip_reasons, tck_elapsed)
 
             # Append baseline diff if available
@@ -674,6 +676,11 @@ def main():
     # 只有显式要求（CI）且相对基线出现新增回归时才失败。
     if fail_on_regression:
         print("[run_tck] Failing due to TCK step regressions vs baseline", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    if scenario_failures > 0 and os.environ.get("TCK_FAIL_ON_SCENARIO_FAILURE", "") not in ("", "0"):
+        print(f"[run_tck] Failing due to {scenario_failures} failed TCK scenario(s)",
+              file=sys.stderr, flush=True)
         sys.exit(1)
 
     print(f"[run_tck] tck_tests exit code: {tck_result.returncode} (ignored)", flush=True)

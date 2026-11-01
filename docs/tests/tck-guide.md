@@ -104,6 +104,8 @@ python3 tests/tck/run_tck.py \
 | `TCK_STEP_RESULTS_PATH` | Step 结果 JSON 写入路径（tck_tests 读取） |
 | `TCK_BASELINE_REPORT_PATH` | 基线 Markdown 报告路径（run_tck.py 读取） |
 | `TCK_STEP_BASELINE_PATH` | 基线 Step 结果 JSON 路径（run_tck.py 读取） |
+| `TCK_FAIL_ON_REGRESSION` | 相对基线出现新增 Step 回归时以非零码退出 |
+| `TCK_FAIL_ON_SCENARIO_FAILURE` | 本次报告存在 failed/executed-failure 场景时以非零码退出；CI 必须开启 |
 
 `run_tck.py` 会自动将 `--step-results-file` 的值设为 `TCK_STEP_RESULTS_PATH` 传递给 `tck_tests`。
 

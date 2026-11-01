@@ -598,6 +598,7 @@ jobs:
         TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
         TCK_STEP_BASELINE_PATH: ${{ github.workspace }}/build/tck-step-baseline.json
         TCK_FAIL_ON_REGRESSION: 1
+        TCK_FAIL_ON_SCENARIO_FAILURE: 1
       run: |
         python3 tests/tck/run_tck.py \
           --server-bin "$PWD/build/eugraph-server" \
