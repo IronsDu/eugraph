@@ -272,9 +272,10 @@ struct StorageOpCounters {
 
 - 标准字段对齐 neo4j driver 的 `profile` 读取路径：
   `operatorType` / `args` / `identifiers` / `dbHits` / `rows` / `children` / `time`；
-- EuGraph 扩展同时写进每节点 `args`（键名前缀 `eugraph.`）与 `eugraph` map：
+- EuGraph 扩展同时写进每节点 `args.eugraph`（嵌套 map）与节点顶层 `eugraph` map：
   Python driver 保留原始 metadata；JS driver 的 `ProfiledPlan` 只保留
-  `args`/标准字段，因此 Web Console 从 `arguments['eugraph.*']` 读取；
+  `args`/标准字段，因此 Web Console 从 `arguments.eugraph.*` 读取；cypher-shell 的
+  `Other` 列也显示这个嵌套 map，便于阅读；
 - 不伪造 `pageCacheHits/Misses`；若后续能从 WT 拿到，再按 neo4j 字段补；
 - `time` 使用整数毫秒（Java `ProfiledPlan.time()` 为 `long`）；精确时间在
   `eugraph.selfTimeMs/inclusiveTimeMs`；
@@ -384,5 +385,5 @@ profile JSON/tree，后续再做可视化。
 2. Thrift `ResultRowBatch` 增加可选 profile 字段；旧客户端忽略该字段。
 3. `dbHits = WT search + search_near`（文档明确标注不可与 neo4j page-cache dbHits 横比）。
 4. `PROFILE` 写查询按 neo4j 语义真实执行并提交。
-5. 扩展字段同时放 `args`（`eugraph.*`）和 `eugraph` map：兼容 JS driver，也保留
+5. 扩展字段同时放 `args.eugraph`（嵌套 map）和节点顶层 `eugraph` map：兼容 JS driver，也保留
    Python 原始 metadata。

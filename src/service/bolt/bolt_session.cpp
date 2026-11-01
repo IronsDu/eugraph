@@ -63,34 +63,24 @@ PackValue profileNodeToValue(const compute::ProfileNode& node, const compute::Qu
     map.emplace("operatorType", ps(node.operator_type + "@eugraph"));
     PackMap args;
     args.emplace("Details", ps(node.details));
-    args.emplace("DbHits", ps(static_cast<int64_t>(node.db_hits)));
-    args.emplace("Rows", ps(static_cast<int64_t>(node.rows)));
-    // The JS driver exposes args as ProfiledPlan.arguments. Put the EuGraph
-    // metrics there too, otherwise a driver that only copies the standard
-    // ProfiledPlan fields would drop our custom "eugraph" object.
-    args.emplace("eugraph.chunks", ps(static_cast<int64_t>(node.chunks)));
-    args.emplace("eugraph.selfTimeMs", ps(static_cast<double>(node.self_wall_ns) / 1e6));
-    args.emplace("eugraph.inclusiveTimeMs", ps(static_cast<double>(node.inclusive_wall_ns) / 1e6));
-    args.emplace("eugraph.selfCpuMs", ps(static_cast<double>(node.self_cpu_ns) / 1e6));
-    args.emplace("eugraph.inclusiveCpuMs", ps(static_cast<double>(node.inclusive_cpu_ns) / 1e6));
-    args.emplace("eugraph.ioDispatches", ps(static_cast<int64_t>(node.io_dispatches)));
-    args.emplace("eugraph.wtSearch", ps(static_cast<int64_t>(node.wt_search)));
-    args.emplace("eugraph.wtSearchNear", ps(static_cast<int64_t>(node.wt_search_near)));
-    args.emplace("eugraph.prefetchHits", ps(static_cast<int64_t>(node.prefetch_hits)));
-    args.emplace("eugraph.prefetchMisses", ps(static_cast<int64_t>(node.prefetch_misses)));
+    // The JS driver exposes args as ProfiledPlan.arguments; the Java/cypher-shell
+    // renderer prints all argument *values* in its "Other" column without keys.
+    // Keep the custom metrics as one nested map so that column stays readable.
+    auto eugraph = profileEugraphNode(node);
     if (summary != nullptr && root) {
-        args.emplace("eugraph.planningMs", ps(static_cast<double>(summary->planning_ns) / 1e6));
-        args.emplace("eugraph.executionMs", ps(static_cast<double>(summary->execution_ns) / 1e6));
-        args.emplace("eugraph.commitMs", ps(static_cast<double>(summary->commit_ns) / 1e6));
-        args.emplace("eugraph.totalRows", ps(static_cast<int64_t>(summary->rows)));
-        args.emplace("eugraph.totalChunks", ps(static_cast<int64_t>(summary->chunks)));
-        args.emplace("eugraph.totalDbHits", ps(static_cast<int64_t>(summary->db_hits)));
-        args.emplace("eugraph.totalIoDispatches", ps(static_cast<int64_t>(summary->io_dispatches)));
-        args.emplace("eugraph.totalWtSearch", ps(static_cast<int64_t>(summary->wt_search)));
-        args.emplace("eugraph.totalWtSearchNear", ps(static_cast<int64_t>(summary->wt_search_near)));
-        args.emplace("eugraph.totalPrefetchHits", ps(static_cast<int64_t>(summary->prefetch_hits)));
-        args.emplace("eugraph.totalPrefetchMisses", ps(static_cast<int64_t>(summary->prefetch_misses)));
+        eugraph.emplace("planningMs", ps(static_cast<double>(summary->planning_ns) / 1e6));
+        eugraph.emplace("executionMs", ps(static_cast<double>(summary->execution_ns) / 1e6));
+        eugraph.emplace("commitMs", ps(static_cast<double>(summary->commit_ns) / 1e6));
+        eugraph.emplace("rows", ps(static_cast<int64_t>(summary->rows)));
+        eugraph.emplace("chunks", ps(static_cast<int64_t>(summary->chunks)));
+        eugraph.emplace("dbHits", ps(static_cast<int64_t>(summary->db_hits)));
+        eugraph.emplace("ioDispatches", ps(static_cast<int64_t>(summary->io_dispatches)));
+        eugraph.emplace("wtSearch", ps(static_cast<int64_t>(summary->wt_search)));
+        eugraph.emplace("wtSearchNear", ps(static_cast<int64_t>(summary->wt_search_near)));
+        eugraph.emplace("prefetchHits", ps(static_cast<int64_t>(summary->prefetch_hits)));
+        eugraph.emplace("prefetchMisses", ps(static_cast<int64_t>(summary->prefetch_misses)));
     }
+    args.emplace("eugraph", psMap(std::move(eugraph)));
     map.emplace("args", psMap(std::move(args)));
     map.emplace("identifiers", psList(stringsToPackList(node.identifiers)));
     map.emplace("dbHits", ps(static_cast<int64_t>(node.db_hits)));

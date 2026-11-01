@@ -1364,7 +1364,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
 
     function profileNumber(node: any, key: string): number {
       const args = node?.arguments ?? {};
-      const value = args[`eugraph.${key}`] ?? node?.eugraph?.[key];
+      const value = args?.eugraph?.[key] ?? args[`eugraph.${key}`] ?? node?.eugraph?.[key];
       return typeof value === 'number' ? value : Number(value ?? 0) || 0;
     }
 
@@ -1378,16 +1378,15 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         profilePanel.append(h('div', { class: 'empty' }, '这条语句没有 PROFILE 摘要（需要以 PROFILE 开头）'));
         return;
       }
-      const rootArgs = profile.arguments ?? {};
       const summary = h('div', { class: 'profile-summary' });
       const cards: Array<[string, string]> = [
-        ['planning', profileMs(Number(rootArgs['eugraph.planningMs'] ?? 0))],
-        ['execution', profileMs(Number(rootArgs['eugraph.executionMs'] ?? 0))],
-        ['commit', profileMs(Number(rootArgs['eugraph.commitMs'] ?? 0))],
-        ['dbHits', String(Number(rootArgs['eugraph.totalDbHits'] ?? 0))],
-        ['ioDispatches', String(Number(rootArgs['eugraph.totalIoDispatches'] ?? 0))],
-        ['WT search', String(Number(rootArgs['eugraph.totalWtSearch'] ?? 0))],
-        ['prefetch miss', String(Number(rootArgs['eugraph.totalPrefetchMisses'] ?? 0))],
+        ['planning', profileMs(profileNumber(profile, 'planningMs'))],
+        ['execution', profileMs(profileNumber(profile, 'executionMs'))],
+        ['commit', profileMs(profileNumber(profile, 'commitMs'))],
+        ['dbHits', String(profileNumber(profile, 'dbHits'))],
+        ['ioDispatches', String(profileNumber(profile, 'ioDispatches'))],
+        ['WT search', String(profileNumber(profile, 'wtSearch') + profileNumber(profile, 'wtSearchNear'))],
+        ['prefetch miss', String(profileNumber(profile, 'prefetchMisses'))],
       ];
       for (const [label, value] of cards) {
         summary.append(h('div', { class: 'profile-card' }, h('span', {}, label), h('strong', {}, value)));
@@ -1410,7 +1409,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       const maxSelf = (() => {
         let best = 0;
         const walk = (node: any) => {
-          const self = Number(node?.arguments?.['eugraph.selfTimeMs'] ?? node?.time ?? 0);
+          const self = profileNumber(node, 'selfTimeMs') || Number(node?.time ?? 0);
           best = Math.max(best, self);
           for (const child of node?.children ?? []) walk(child);
         };
@@ -1419,7 +1418,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       })();
 
       const walk = (node: any, depth: number): void => {
-        const selfMs = Number(node?.arguments?.['eugraph.selfTimeMs'] ?? node?.time ?? 0);
+        const selfMs = profileNumber(node, 'selfTimeMs') || Number(node?.time ?? 0);
         const row = h('div', {
           class: `profile-row${maxSelf > 0 && selfMs >= maxSelf * 0.9 ? ' profile-hot' : ''}`,
         });

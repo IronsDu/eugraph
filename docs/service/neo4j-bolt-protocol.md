@@ -205,8 +205,9 @@ Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在
 - `eugraph`：语句级摘要（planning/execution/commit、rows/chunks、dbHits、ioDispatches、
   wtSearch/wtSearchNear、prefetchHits/prefetchMisses）。
 
-EuGraph 专有指标同时写入每个节点的 `args`（键名 `eugraph.*`），因为官方 JS driver 的
-`ProfiledPlan` 只保留 `args` 和标准字段；Python driver 还能读到原始 `eugraph` 子对象。
+EuGraph 专有指标同时写入每个节点的 `args.eugraph`（嵌套 map），因为官方 JS driver 的
+`ProfiledPlan` 只保留 `args` 和标准字段；Python driver 还能读到节点顶层 `eugraph` 子对象。
+cypher-shell 的 `Other` 列会直接显示这个嵌套 map，而不是一串无键名的数字。
 
 节点级 `time` 是**整数毫秒**（Java driver 的 `ProfiledPlan.time()` 是 `long`；发送 double 会报
 `Cannot coerce FLOAT to Java long without losing precision`）。更精确的 self/inclusive 时间在
