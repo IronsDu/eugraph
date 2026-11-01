@@ -111,7 +111,7 @@ OS 线程；需要线程本地状态的地方不能假设“原线程”。
    interceptor；如将来引入鉴权/审计 interceptor，需要改为在 helper 内显式调用）。
 6. 实测：`rpc_integration_tests` 在 4 个网络 IO worker 下 28/28 通过、全套 8.6 s
    （修复前同配置约 141 s，逐 RPC 5 s 级停顿）；3000 行 `UNWIND` 流式查询约 15 ms。
-   TCK 3959 scenarios / 3907 passed / 0 failed，769.2 s（旧基线约 1470–1500 s）。
+   TCK 3959 scenarios / 3906 passed / 52 undefined / 1 known failure（`Temporal2 [6]` tzdata）。
    线程归因：handler/stream 日志在 `ThriftIO*`，算子执行在 `eugraph-compute`，存储
    在 `eugraph-io*`。
 

@@ -189,4 +189,4 @@ GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。�
   - TCK 定向回归通过：`with-skip-limit`、`with-where`、`with-orderBy` 合计 320/320。
 - 全量验证（本分支最终）：
   - CTest 单元/集成（排除 tck_tests 与外部驱动集成）：1028 个测试，100% 通过，4 个 LoaderIntegration 按预期 Skip。
-  - 全量 TCK：3897 scenarios，3845 passed，52 undefined（均为 CALL/procedure 未实现场景），0 failed；R-8/R-9/R-12 批次后复跑耗时 12m57s。
+  - 全量 TCK（当时快照）：3897 scenarios，3845 passed，52 undefined（CALL/procedure 未实现场景），0 failed；R-8/R-9/R-12 批次后复跑耗时 12m57s。

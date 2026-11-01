@@ -371,7 +371,7 @@ Web Console 直接用官方 neo4j driver，所以只要 Bolt 的 `profile` 摘�
 | Prefetch | 稀疏/稠密属性访问分别产生 hits/misses；数值与 `missingPrefetchCount` 对齐 |
 | Bolt | Python/Java/JS driver：`summary.profile` 可读；`PROFILE` 结果行正确；`PULL` 分页最后才带 profile；`EXPLAIN` 不执行 |
 | Thrift/shell | 最后一个 batch 携带 profile；shell 表格后打印 tree；loader/TCK 忽略空 batch（已覆盖 RPC 测试 + shell 手动验证） |
-| 回归 | 全量 unit/ctest；TCK 3907/3907；无 `EUGRAPH_*` env 时性能不退化 |
+| 回归 | 全量 unit/ctest；TCK 3906/3959 passed（52 undefined，1 known failure）；无 `EUGRAPH_*` env 时性能不退化 |
 | 性能 | 在 c5/c9/c12 上比较 normal vs PROFILE 的 p50；记录 profiling 开销 |
 
 ## 8. 风险与待确认
