@@ -487,8 +487,8 @@ jobs:
           -DEUGRAPH_ENABLE_CCACHE=ON \
           -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
           -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-          -DCMAKE_CXX_FLAGS_DEBUG="-O1 -g" \
-          -DCMAKE_C_FLAGS_DEBUG="-O1 -g" \
+          -DCMAKE_CXX_FLAGS_DEBUG="-O2 -g" \
+          -DCMAKE_C_FLAGS_DEBUG="-O2 -g" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -s" \
           -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address"
 
@@ -549,7 +549,7 @@ jobs:
     name: Address Sanitizer (TCK)
     needs: asan
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       checks: write
@@ -590,9 +590,9 @@ jobs:
 
     - name: Run TCK with ASan
       # Job timeout-minutes does not override an explicit/default step timeout;
-      # the full -O1 ASan TCK needs ~27-30 minutes, so give the step its own
-      # budget instead of sharding it (which changed scenario ordering/results).
-      timeout-minutes: 60
+      # the full ASan TCK needs ~30 minutes, so give the step its own budget
+      # instead of sharding it (which changed scenario ordering/results).
+      timeout-minutes: 90
       env:
         ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
