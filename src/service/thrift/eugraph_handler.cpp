@@ -3,6 +3,7 @@
 
 #include "common/types/temporal_value.hpp"
 #include "query/parser/cypher_parser.hpp"
+#include "service/query_stream_hop.hpp"
 #include "service/thrift/result_format.hpp"
 
 #include <thrift/lib/cpp2/async/ServerStream.h>
@@ -57,6 +58,32 @@ private:
     std::shared_ptr<eugraph::compute::StreamContext> ctx_;
     bool finished_ = false;
 };
+
+/// Run a handler body on the shared compute pool and complete the fbthrift
+/// callback on the connection's EventBase thread.
+///
+/// fbthrift's RocketServerConnection::WriteBatcher only flushes a
+/// request/response reply promptly when the reply is produced on the
+/// connection EventBase thread. A coroutine handler that resumes on a
+/// ThreadManager pool worker after an await (storage dispatch, compute hop)
+/// therefore stalls the reply for 5-7 s. Completing explicitly on the EB keeps
+/// the fast path regardless of how many IO workers are configured.
+template <typename T, typename Fn>
+void runOnComputeAndComplete(apache::thrift::HandlerCallbackPtr<T> cb, folly::Executor::KeepAlive<> compute, Fn fn) {
+    auto* eb = cb->getEventBase();
+    folly::Executor::KeepAlive<> executor =
+        compute ? std::move(compute) : folly::getKeepAliveToken(static_cast<folly::Executor*>(eb));
+    auto task =
+        folly::coro::co_invoke([fn = std::move(fn)]() mutable -> folly::coro::Task<T> { co_return co_await fn(); });
+    std::move(task).scheduleOn(std::move(executor)).start([cb = std::move(cb)](folly::Try<T>&& result) mutable {
+        auto* eb = cb->getEventBase();
+        auto finish = [cb = std::move(cb), result = std::move(result)]() mutable { cb->complete(std::move(result)); };
+        if (eb)
+            eb->runInEventBaseThread(std::move(finish));
+        else
+            finish();
+    });
+}
 
 folly::coro::AsyncGenerator<eugraph::thrift_service::ResultRowBatch&&>
 makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
@@ -130,7 +157,7 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         total_rows += chunk_rows;
         co_yield std::move(thrift_batch);
     }
-    if (!ctx->commit()) {
+    if (!co_await ctx->commitAsync()) {
         spdlog::error("[handler] 提交失败（存储引擎错误）⇒ 明确报错，绝不静默丢写入");
         throw std::runtime_error("Transaction commit failed (storage engine error)");
     }
@@ -904,8 +931,9 @@ EuGraphHandler::co_listEdgeLabels(std::unique_ptr<std::string> graph_name) {
 
 folly::coro::Task<
     apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
-EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
-                                 std::unique_ptr<std::map<std::string, std::string>> parameters) {
+EuGraphHandler::co_executeCypherImpl(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
+                                     std::unique_ptr<std::map<std::string, std::string>> parameters,
+                                     folly::Executor::KeepAlive<> compute, bool prefetch_first_chunk) {
     auto t0 = nowMs();
     spdlog::info("[handler] executeCypher start, graph='{}', query='{}'", *graph_name, *query);
 
@@ -971,7 +999,40 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
         }
     }
 
-    auto exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
+    service::CypherExecutionContext exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
+    // The physical operator generator is consumed by fbthrift's stream loop on
+    // the network IO thread. Rebind it so the operator tree runs on the compute
+    // pool while serialization stays on the IO thread.
+    if (compute) {
+        // Force the first batch's synchronous operator work onto Compute before
+        // the stream loop (on the network IO thread) starts pulling. Without
+        // this, a pure-compute plan would execute its first segment inline on
+        // the IO thread until the first storage await. Later batches still use
+        // the structured viaIfAsync hop (see query_stream_hop.hpp).
+        std::optional<DataChunk> first;
+        bool inner_exhausted = false;
+        std::exception_ptr first_error;
+        if (prefetch_first_chunk) {
+            try {
+                auto next = co_await folly::coro::co_viaIfAsync(compute.get_alias(), exec_ctx.ctx->gen.next());
+                if (next)
+                    first = std::move(*next);
+                else
+                    inner_exhausted = true;
+            } catch (...) {
+                // Keep runtime evaluation errors on the stream: the handler
+                // still returns a stream whose first pull throws. Turning them
+                // into a method-level exception would lose the runtime phase
+                // and error detail (TCK semantics).
+                first_error = std::current_exception();
+            }
+        }
+        if (first_error)
+            exec_ctx.ctx->gen = service::errorGenerator(std::move(first_error));
+        else
+            exec_ctx.ctx->gen = service::hopGeneratorTo(std::move(exec_ctx.ctx->gen), std::move(first), inner_exhausted,
+                                                        std::move(compute));
+    }
 
     thrift_service::QueryStreamMeta meta;
     meta.columns() = exec_ctx.ctx->columns;
@@ -983,6 +1044,143 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
 
     co_return apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>{
         std::move(meta), std::move(gen)};
+}
+
+folly::coro::Task<
+    apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
+EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
+                                 std::unique_ptr<std::map<std::string, std::string>> parameters) {
+    // Direct coroutine entry (tests / non-fbthrift callers): no reply-thread
+    // hop is needed, but operators still run on the shared compute pool.
+    co_return co_await co_executeCypherImpl(std::move(query), std::move(graph_name), std::move(parameters),
+                                            folly::getKeepAliveToken(graph_service_.computeExecutor()),
+                                            /*prefetch_first_chunk=*/false);
+}
+
+void EuGraphHandler::async_tm_createGraph(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<thrift_service::GraphInfo>> callback,
+    std::unique_ptr<std::string> name) {
+    runOnComputeAndComplete(
+        std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+        [this, name = std::move(name)]() mutable -> folly::coro::Task<std::unique_ptr<thrift_service::GraphInfo>> {
+            co_return co_await co_createGraph(std::move(name));
+        });
+}
+
+void EuGraphHandler::async_tm_dropGraph(apache::thrift::HandlerCallbackPtr<bool> callback,
+                                        std::unique_ptr<std::string> name) {
+    runOnComputeAndComplete(std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+                            [this, name = std::move(name)]() mutable -> folly::coro::Task<bool> {
+                                co_return co_await co_dropGraph(std::move(name));
+                            });
+}
+
+void EuGraphHandler::async_tm_listGraphs(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<std::vector<thrift_service::GraphInfo>>> callback) {
+    runOnComputeAndComplete(std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+                            [this]() -> folly::coro::Task<std::unique_ptr<std::vector<thrift_service::GraphInfo>>> {
+                                co_return co_await co_listGraphs();
+                            });
+}
+
+void EuGraphHandler::async_tm_createLabel(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<thrift_service::LabelInfo>> callback,
+    std::unique_ptr<std::string> name, std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> properties,
+    std::unique_ptr<std::string> graph_name, std::unique_ptr<std::vector<std::string>> pk_props,
+    std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> merge_properties) {
+    runOnComputeAndComplete(
+        std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+        [this, name = std::move(name), properties = std::move(properties), graph_name = std::move(graph_name),
+         pk_props = std::move(pk_props),
+         merge_properties =
+             std::move(merge_properties)]() mutable -> folly::coro::Task<std::unique_ptr<thrift_service::LabelInfo>> {
+            co_return co_await co_createLabel(std::move(name), std::move(properties), std::move(graph_name),
+                                              std::move(pk_props), std::move(merge_properties));
+        });
+}
+
+void EuGraphHandler::async_tm_listLabels(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<std::vector<thrift_service::LabelInfo>>> callback,
+    std::unique_ptr<std::string> graph_name) {
+    runOnComputeAndComplete(std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+                            [this, graph_name = std::move(graph_name)]() mutable
+                            -> folly::coro::Task<std::unique_ptr<std::vector<thrift_service::LabelInfo>>> {
+                                co_return co_await co_listLabels(std::move(graph_name));
+                            });
+}
+
+void EuGraphHandler::async_tm_createEdgeLabel(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<thrift_service::EdgeLabelInfo>> callback,
+    std::unique_ptr<std::string> name, std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> properties,
+    std::unique_ptr<std::string> graph_name) {
+    runOnComputeAndComplete(
+        std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+        [this, name = std::move(name), properties = std::move(properties), graph_name = std::move(graph_name)]() mutable
+        -> folly::coro::Task<std::unique_ptr<thrift_service::EdgeLabelInfo>> {
+            co_return co_await co_createEdgeLabel(std::move(name), std::move(properties), std::move(graph_name));
+        });
+}
+
+void EuGraphHandler::async_tm_listEdgeLabels(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<std::vector<thrift_service::EdgeLabelInfo>>> callback,
+    std::unique_ptr<std::string> graph_name) {
+    runOnComputeAndComplete(std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+                            [this, graph_name = std::move(graph_name)]() mutable
+                            -> folly::coro::Task<std::unique_ptr<std::vector<thrift_service::EdgeLabelInfo>>> {
+                                co_return co_await co_listEdgeLabels(std::move(graph_name));
+                            });
+}
+
+void EuGraphHandler::async_tm_batchInsertVertices(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<thrift_service::BatchInsertVerticesResult>> callback,
+    std::unique_ptr<std::string> label_name, std::unique_ptr<std::vector<thrift_service::VertexRecord>> records,
+    std::unique_ptr<std::string> graph_name) {
+    runOnComputeAndComplete(
+        std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+        [this, label_name = std::move(label_name), records = std::move(records),
+         graph_name = std::move(
+             graph_name)]() mutable -> folly::coro::Task<std::unique_ptr<thrift_service::BatchInsertVerticesResult>> {
+            co_return co_await co_batchInsertVertices(std::move(label_name), std::move(records), std::move(graph_name));
+        });
+}
+
+void EuGraphHandler::async_tm_batchInsertEdges(
+    apache::thrift::HandlerCallbackPtr<std::unique_ptr<thrift_service::BatchInsertEdgesResult>> callback,
+    std::unique_ptr<std::string> edge_label_name, std::unique_ptr<std::vector<thrift_service::EdgeRecord>> records,
+    std::unique_ptr<std::string> graph_name) {
+    runOnComputeAndComplete(std::move(callback), folly::getKeepAliveToken(graph_service_.computeExecutor()),
+                            [this, edge_label_name = std::move(edge_label_name), records = std::move(records),
+                             graph_name = std::move(graph_name)]() mutable
+                            -> folly::coro::Task<std::unique_ptr<thrift_service::BatchInsertEdgesResult>> {
+                                co_return co_await co_batchInsertEdges(std::move(edge_label_name), std::move(records),
+                                                                       std::move(graph_name));
+                            });
+}
+
+void EuGraphHandler::async_tm_executeCypher(
+    apache::thrift::HandlerCallbackPtr<
+        apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
+        callback,
+    std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
+    std::unique_ptr<std::map<std::string, std::string>> parameters) {
+    auto compute = folly::getKeepAliveToken(graph_service_.computeExecutor());
+    if (!compute) {
+        // No shared pool (init failure): fall back to the generated coroutine
+        // dispatch, which runs the handler inline on the network IO thread.
+        apache::thrift::ServiceHandler<thrift_service::EuGraphService>::async_tm_executeCypher(
+            std::move(callback), std::move(query), std::move(graph_name), std::move(parameters));
+        return;
+    }
+    auto compute_for_impl = compute;
+    runOnComputeAndComplete(
+        std::move(callback), std::move(compute),
+        [this, query = std::move(query), graph_name = std::move(graph_name), parameters = std::move(parameters),
+         compute_for_impl]() mutable
+        -> folly::coro::Task<
+            apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>> {
+            co_return co_await co_executeCypherImpl(std::move(query), std::move(graph_name), std::move(parameters),
+                                                    compute_for_impl, /*prefetch_first_chunk=*/true);
+        });
 }
 
 // ==================== Batch Import ====================

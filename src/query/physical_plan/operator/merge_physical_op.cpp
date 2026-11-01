@@ -850,6 +850,8 @@ folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPh
     for (const auto& item : items) {
         Value val;
         if (item.value) {
+            std::vector<const binder::BoundExpression*> item_expr{&*item.value};
+            co_await evaluator.prefetch(item_expr, merged_chunk);
             val = evaluateExpr(evaluator, *item.value, &merged_chunk, 0);
         }
         switch (item.kind) {
@@ -1167,8 +1169,31 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
     }
 
     // Phase 3: per-row processing — yield one chunk per row
+    std::vector<const binder::BoundExpression*> prefetch_exprs;
+    auto add_props = [&prefetch_exprs](const auto& props) {
+        for (const auto& [key, expr] : props) {
+            (void)key;
+            prefetch_exprs.push_back(&expr);
+        }
+    };
+    add_props(start_prop_filters_);
+    add_props(start_pending_props_);
+    add_props(edge_prop_filters_);
+    add_props(edge_pending_props_);
+    add_props(end_prop_filters_);
+    add_props(end_pending_props_);
+    for (const auto& item : on_create_items_) {
+        if (item.value)
+            prefetch_exprs.push_back(&*item.value);
+    }
+    for (const auto& item : on_match_items_) {
+        if (item.value)
+            prefetch_exprs.push_back(&*item.value);
+    }
+
     auto child_gen = cancellable(child_->executeChunkTraced());
     while (auto chunk = co_await child_gen.next()) {
+        co_await evaluator.prefetch(prefetch_exprs, *chunk);
         for (size_t row = 0; row < chunk->count; ++row) {
             bool start_created = false;
             bool end_created = false;

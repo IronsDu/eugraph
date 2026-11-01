@@ -32,52 +32,100 @@ Cypher 文本 → Parser → AST（含 EXPLAIN） → Binder → BoundLogicalPla
 
 ## 三、IO/Compute 分离
 
-### 线程池
+### 线程池（当前实现）
 
 Server 进程内有 4 个可配置线程池（另有 WiredTiger 自身的 eviction 线程，由 `--wt-evict-threads-max` 控制）：
 
 | 线程池 | 类型 | 规模参数 | 职责 |
 |--------|------|---------|------|
-| Compute | `CPUThreadPoolExecutor` | `--compute-threads` | 仅 Bolt 模式使用：承载整个 Bolt session 消息处理（解析、计划、执行） |
-| Thrift IO / handler | `IOThreadPoolExecutor`（`ThriftIO`） | `--thrift-io-threads` | Thrift 网络 IO；同时经 `setThreadManagerFromExecutor` 用作 handler 执行池 |
+| Compute | `CPUThreadPoolExecutor` | `--compute-threads` | **进程共享**（`GraphManager` 持有）：Bolt session 消息处理；Thrift 查询的解析/绑定/计划/算子执行/批次生成 |
+| Thrift IO / handler | `IOThreadPoolExecutor`（`ThriftIO`） | `--thrift-io-threads` | Thrift 网络 IO；经 `setThreadManagerFromExecutor` 同时作为 handler 与流循环执行池 |
 | Storage IO | `IOThreadPoolExecutor`（`IoScheduler` 内部） | `--storage-io-threads` | 所有 WiredTiger 调用（scan、get、insert、commit） |
 | Bolt EventBase | `BoltServer` | `--bolt-io-threads` | Bolt 连接的网络 EventBase |
 
-Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 内部创建 `IoScheduler`，由后者自持一个 `IOThreadPoolExecutor`（`src/graph/graph_manager.cpp`）；Thrift 的池则在 `src/program/server/eugraph_server_main.cpp` 单独创建。二者默认值相同（均为 4），但互不共享。
+Compute 池由 `GraphManager::init` 创建（`NamedThreadFactory("eugraph-compute")`），经
+`QueryExecutor::Config::compute_pool` 注入每个图实例，因此 G 个图共享 1 个池，而不是
+`G × --compute-threads` 个线程。
 
-### IoScheduler
+### IoScheduler：真正跨线程（2026-10-31 修复）
 
-`IoScheduler::dispatch(func)` 将同步 WT 调用调度到 Storage IO 线程池：
+`IoScheduler::dispatch/dispatchVoid` 用 `co_withExecutor(io_ka_, child)`，**不是**
+`co_viaIfAsync(io_ka_, child)`：
+
+- `co_viaIfAsync(executor, Task)` 只给子 Task 的 promise 绑定 executor，随后返回普通的
+  `Task::Awaiter`；该 Awaiter 仍在调用方线程内联 resume。修复前实测
+  `work_tid == caller_tid`，`cross_thread=0` —— Storage IO 池线程甚至没有被创建。
+- `co_withExecutor` 返回 `TaskWithExecutor`，其 Awaiter 通过 `executor->add()` 把子协程
+  投递到 Storage IO 池。子协程完成后，`Task::await_transform` 里的
+  `co_viaIfAsync(parentExecutor, ...)` 把调用方协程恢复到**调用方自己的 executor**
+  （Bolt = Compute 池；Thrift = handler/网络 IO 池；`blockingWait` = 其 driver）。
 
 ```
-调用方线程                        Storage IO 线程
-    │                               │
-    ├─ co_await io_.dispatch(...) ──┤
-    │  (协程挂起)                    │
-    │                               ├─ WT 操作执行
-    │                               │
-    │◄──────── 结果返回 ─────────────┤
-    │  (协程恢复)                    │
+调用方 executor                         Storage IO executor
+    │  co_await io_.dispatch(...)           │
+    │  (协程挂起)                            │
+    │                                        ├─ WT 操作执行
+    │◄── continuation 恢复到调用方 executor ──┤
 ```
 
-`co_viaIfAsync` 的语义是：**仅当调用方当前就在同一个 executor 上时才内联执行**，否则调度过去。因此跨池调用必然产生一次线程跳转。
+契约：`dispatch` 必须从**有 executor 的协程**调用（生产入口全部满足；测试里的
+`blockingWait` 会把 Task 绑到其内部 driver）。恢复的是同一 executor/pool，不保证同一
+OS 线程；需要线程本地状态的地方不能假设“原线程”。
+
+单次真实跨线程往返约 **10 µs**（`storage_op_bench` 的 `DispatchBench`；修复前 inline
+约 0.47 µs）。因此这次修复是**语义正确性**修复，不等于性能收益：它把 IO 从计算线程
+移走，但也给每次存储调用增加一次跨线程成本。高频小调用必须靠批量化/减少 dispatch
+次数摊薄，见 [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
 
 ### 各模式的线程归属
 
-**Thrift / RPC 模式**：handler 直接运行在 Thrift IO 池上（该池同时是 Thrift 的网络 IO 池），不经过 Compute 池。算子执行中的每次存储调用都经 `IoScheduler::dispatch`，由于当前线程不属于 Storage IO 池，`co_viaIfAsync` 不会内联，而是把调用调度到 Storage IO 池，完成后再恢复原协程。
+**Thrift / RPC 模式**：
 
-结果是：物理算子树的执行线程在 Thrift IO 池与 Storage IO 池之间来回切换，没有计算隔离；并且 Thrift 模式下**没有任何代码把查询执行调度到 Compute 池**（`eugraph_handler` 中不存在 executor 调度），因此 `--compute-threads` 在纯 Thrift 模式下不生效。
+1. **Thrift IO 池只做网络 IO + 流循环 + 序列化**。handler 本体不再在 IO 线程上执行：
+   `EuGraphHandler` 覆盖了全部 `async_tm_*` 方法，把一个 Task 调度到进程共享 Compute
+   池执行，并在**连接自己的 EventBase 线程**上调用 `HandlerCallback::complete()`。
+2. 为什么必须显式回 EB：fbthrift 5.05.19 的
+   `RocketServerConnection::WriteBatcher` 对“非连接 EventBase 线程产生的请求-响应回包”
+   要等 EventBase 下一次唤醒才 flush；空闲连接的下一次唤醒是 5 s task-expire timer ⇒
+   每个请求-响应 RPC 停顿 **5–7 s**。这不是“handler ThreadManager 指向 Compute”才有的：
+   只要 handler 协程在等待存储/计算后恢复到 **池里的另一个 worker**，回包就会落进
+   `IOWorkerContext::ReplyQueue` 并触发同样的停顿。b1/b4/b-io/tm-simple1 均实测复现，
+   4 个网络 IO 线程也不能解决；只测流式查询会得到假阴性（payload 持续唤醒 EB）。
+3. `co_executeCypherImpl`（参数解析、`executeCypher` 的 parse/bind/plan/`prepareStream`）
+   在 Compute 池执行；`StreamContext::gen` 经 `service::hopGeneratorTo(...)` 包装：每个
+   batch 的 `inner.next()` 用 `co_viaIfAsync(compute, ...)` 绑定到 Compute 池。generator
+   的第一段同步代码仍内联在流循环线程（folly `NextAwaitable` 不调度），但它的第一个
+   `co_await`（扫描的第一次存储 dispatch）之后就在 Compute 池恢复，后续 batch 也从
+   Compute 开始；wrapper 由 fbthrift 流循环在 IO 线程消费，Thrift 序列化也在 IO。
+   没有改用“每个 next() 包一个 Task + co_withExecutor”：那能保证第一段也在 Compute，
+   但会把协程帧从流上摘下来，fbthrift 取消/销毁流时可能触到已释放状态；`viaIfAsync`
+   保持结构化，且是探针验证过的形态。
+4. 存储调用经 `IoScheduler` 到 Storage IO 池，完成后回到 Compute 池（算子的 executor）。
+   **例外**：rollback（析构路径不能 await，不 fsync）、cursor close、图生命周期
+   （create/drop/open/checkpoint）仍按会话/图所有权在语句当前线程同步执行。事务
+   begin/commit 已改为经 `IoScheduler` 到 Storage IO 池（`AsyncGraphDataStore::
+   beginSession/commitSession`）。stream 的第一个 batch 在 async_tm 路径由 Compute
+   预取；后续 batch 从 yield 恢复的第一段同步代码仍可能落在流循环线程，详见
+   [thrift-thread-model.md](../../service/thrift-thread-model.md) §3.4。
+5. `async_tm_*` 覆盖会**绕过 fbthrift service interceptors**（服务端未安装任何
+   interceptor；如将来引入鉴权/审计 interceptor，需要改为在 helper 内显式调用）。
+6. 实测：`rpc_integration_tests` 在 4 个网络 IO worker 下 28/28 通过、全套 8.6 s
+   （修复前同配置约 141 s，逐 RPC 5 s 级停顿）；3000 行 `UNWIND` 流式查询约 15 ms。
+   TCK 3959 scenarios / 3907 passed / 0 failed，769.2 s（旧基线约 1470–1500 s）。
+   线程归因：handler/stream 日志在 `ThriftIO*`，算子执行在 `eugraph-compute`，存储
+   在 `eugraph-io*`。
 
-**Bolt 模式**：`BoltConnection::dispatchMessage` 通过 `scheduleOn(computeExecutor())` 把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接（`src/service/bolt/bolt_server.cpp`）。存储调用再从 Compute 池跳转到 Storage IO 池。因此 Bolt 模式下 `--compute-threads` 才是实际承载查询执行的线程池。
+**Bolt 模式**：`BoltConnection::dispatchMessage` 通过 `scheduleOn(computeExecutor())`
+把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接
+（`src/service/bolt/bolt_server.cpp`）。存储调用再从 Compute 池跳到 Storage IO 池并
+回到 Compute 池。
 
 > 统计一条语句的 IO 成本：设置 `EUGRAPH_IO_TRACE=1`，语句结束时日志会输出
 > `[io-trace] io_dispatches=<N> wt_search=<N> wt_search_near=<N> by_call=<top5> query=<text>`。
-> `io_dispatches` 是该语句 `AsyncGraphDataStore` 发起的 dispatch 调用次数；`wt_search`/
-> `wt_search_near` 是 WT 精确 seek / 前缀 seek 次数；`by_call` 按存储方法拆分。
-> 当前生产 `IoScheduler` 仍是 inline（eager Task + `co_viaIfAsync`），`cross_thread=0`；
-> 真实跨线程成本由 benchmark 的 `CrossThreadDispatchVoid` 单独测量（约 10 µs/次）。
-> 写入路径的 WT session 尚未做 IO 线程绑定，不能直接改成跨线程。
-> 单次成本与归因方法见 [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
+> 修复后 `io_dispatches` 是**真实跨线程 dispatch 次数**（`cross_thread` 全部命中），
+> 可按约 10 µs/次做上界估算；WT 精确 seek/前缀 seek 约 0.4–0.6 µs，因此
+> **dispatch 次数比 seek 次数更值得优化**。单次成本与归因方法见
+> [storage-operation-costs.md](../benchmark/storage-operation-costs.md)。
 
 > 算子级耗时：设置 `EUGRAPH_OP_TRACE=1`，语句结束输出每个物理算子的
 > `[op-trace] <indent>op=<name> rows=<N> chunks=<N> self_cpu_ms=<x> incl_cpu_ms=<y>
@@ -95,28 +143,43 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 > 完整的环境变量、字段表、归因/日志量限制见
 > [metrics-and-tracing.md](../debugging/metrics-and-tracing.md)。
 
-> Bolt 之所以能"整条消息都在 Compute 池上"，是因为它把响应整体物化成 `std::vector<uint8_t>` 后才 `via(socket EventBase)` 写回；Thrift 是流式 RPC，generator 由框架在消费方线程恢复，**不能照搬 Bolt 的做法**（见下方待办 2）。
+### 表达式求值不做 IO（2026-10-31 修复）
+
+拓扑阶段（Scan/Expand/VarLenExpand/ShortestPath）产出的 `VertexValue` 可能只有 id，
+属性需要从存储补齐；`startNode/endNode` 还会在求值过程中**新造**一个裸顶点。旧实现
+在 `eval_property.cpp` 里用 `folly::coro::blockingWait` 现场加载：
+
+- 计算线程被阻塞等 IO；
+- 修复 `IoScheduler` 后，`blockingWait` 的 continuation 会落在 Storage IO 线程上，
+  与“计算线程不碰 IO”的目标直接冲突；
+- 动态标签/`__anon__` 的定义查询同样会现场读 meta。
+
+现在改为**算子边界的两阶段**：
+
+1. `ExpressionEvaluator::prefetch(exprs, chunk)`（协程）在 `evaluate` 之前运行：
+   - 扫描 chunk 的所有列（含 list/map/path 内部）收集裸顶点 id，一次
+     `batchGetVertexData` 批量加载；
+   - 从数据中收集 label / edge-label id，缺失定义才异步查 meta；
+   - 对含 `startNode/endNode` 的表达式做 dry pass：先求值一次并记录“求值过程中新造的
+     裸顶点 id”，批量加载后再让真正的求值命中缓存（最多 3 轮）。
+2. `evaluate`/`evaluatePredicate` 保持同步，但只读缓存，**不含任何 IO**。缓存未命中时
+   不再回退到 IO：计数 `ExpressionEvaluator::missingPrefetchCount()` 并返回 NULL；
+   测试/TCK 要求该计数为 0。
+
+覆盖点：`Filter/Project/Aggregate/Sort/Unwind/Foreach/Set/CreateNode/CreateEdge/Delete/Merge`
+在每批求值前都调用 `prefetch`；`PathElementPropertyRead` 仍走自己的批量加载路径。
 
 ### 已知问题与待办
 
-> 以下均已实测，结论明确但尚未解决。**动线程归属之前请先读完本节**，否则很容易重复踩坑。
-
-**待办 1：Compute 池目前每图一个，应改为进程一个。**
-
-`GraphManager::openGraphInstance` 按 `compute_threads_` 为每个图实例各建一个 `CPUThreadPoolExecutor`（`src/graph/graph_manager.cpp`），因此 G 个图 = `G × --compute-threads` 个线程，而 Bolt 只用得到当前图那一个。改法是让 `GraphManager` 持有一个共享池（与既有的 `io_scheduler_` 同样做法），经 `QueryExecutor::Config` 注入。参考实现见提交 `f2b3884`（该提交同时含下方待办 2 的失败尝试，回退时被一并撤销）。
-
-**待办 2：把 Thrift 的查询执行移出 IO 线程（暂缓，风险已知）。**
-
-动机：Thrift 模式下 handler 与查询执行都占用 IO 线程。已实测**两次失败尝试**，表现都是秒级停顿，根因相同——**跨线程唤醒 IO worker 的 EventBase 在本版本 fbthrift/folly 下会被延迟数秒**：
-
-| 尝试 | 做法 | 实测结果 |
-|------|------|---------|
-| 整段 handler 外派 | `setThreadManagerFromExecutor(compute_pool)` | 请求-响应型 RPC（DDL 等）**回包**延迟 6–7 秒：单用例 1.4s → 12.7s，套件 20s → 262s。原因是响应需跨线程写入 `IOWorkerContext::ReplyQueue`。**流式查询走另一条回包路径、完全不受影响，只测查询会得到假阴性。** |
-| 仅外派计划阶段 | 在 `co_executeCypher` 内 `co_withExecutor` 搬到 Compute 池，再用 `co_current_executor` + `co_withExecutor` 跳回 IO 线程后返回 | DDL 路径正常（0.5s），但 **TCK 全面退化**：单查询中位耗时 5780ms（425 个样本中 318 个 ≥3s），`tck_tests` 从 1470–1500s 涨到 >1980s 仍未结束。原因是 `StreamContext::gen` 在 Compute 线程上创建、却由 Thrift 在 IO 线程消费，**每批 `gen.next()` 都要跨线程恢复**。 |
-
-结论：**在解决跨线程唤醒延迟之前，不要改 Thrift 的线程归属。** 将来若要推进，需要先弄清该唤醒延迟的机制（`IOWorkerContext::ReplyQueue` 基于 `EventBaseAtomicNotificationQueue::startConsumingInternal`），或改走 Bolt 那种"整条消息物化、只把最终字节写回 EventBase"的模型。
-
----
+1. **~10 µs/次 dispatch**：修复后存储调用是真实跨线程。c5/c9/c14 这类批量后的查询
+   可接受（数百次 dispatch），但逐行 expand/写入等高频小调用需要继续做批量化，否则
+   跨线程成本会主导。
+2. **fbthrift WriteBatcher 停顿**：不要在不修 fbthrift 的前提下把 handler ThreadManager
+   移到非网络 IO executor；任何线程模型改动的验收必须包含**非流式请求-响应 RPC**
+   延迟（只测流式查询会假阴性）。
+3. **表达式求值缓存**：`prefetch` 缓存按 evaluator 生命周期累加；写查询如果后续读到
+   同一顶点的更新数据，需要确认该 operator 不会复用旧缓存（当前写 operator 的读取都
+   发生在写入前，测试/TCK 覆盖）。
 
 ## 四、流式执行
 
@@ -150,7 +213,8 @@ AsyncGenerator<DataChunk>
 
 ### 事务生命周期
 
-- 流正常结束：销毁算子树（关游标）后 `StreamContext::commit()`；提交失败必须报错
+- 流正常结束：销毁算子树（关游标）后 `co_await StreamContext::commitAsync()`（经
+  Storage IO 提交）；提交失败必须报错
 - 客户端断连：销毁算子树后 `StreamContext::rollback()`，租约归还池
 - 执行期错误：generator 提前结束，回滚
 - 查询被取消：按“未正常完成”处理，必须回滚而不是提交（见下）
@@ -210,7 +274,7 @@ AsyncGenerator<DataChunk>
 
 3. **全量物化**：调用方若 drain 整个 generator 到内存后才 commit，大结果集内存压力大。
 
-4. **`co_viaIfAsync` 跨池不内联**：Thrift IO 池与 Storage IO 池是两个独立 executor，每次存储调用都会跳转到 Storage IO 池。Thrift / RPC 模式下物理算子树在这两个 IO 池之间切换执行，无计算隔离，且 Compute 池不被使用；只有 Bolt 模式会把 session 处理放到 Compute 池。
+4. **IoScheduler 必须用 `co_withExecutor`，不能用 `co_viaIfAsync`**：对 `Task` 参数，后者只绑定 executor 而内联 resume（修复前 `cross_thread=0`，存储调用实际在计算线程执行）。前者才真正投递到 Storage IO 池；完成后调用方协程由 `Task::await_transform` 恢复到**自己的 executor**（pool 级，不保证同一 OS 线程）。新增/修改 dispatch 路径时用 `tests/test_io_scheduler.cpp` 守住该契约。
 
 5. **事务不再有句柄**：`GraphSession` 由池拥有、租约非拥有；会话归还后不得再使用其 `wt_session()`/cursor。
 
@@ -218,4 +282,20 @@ AsyncGenerator<DataChunk>
 
 7. **先销毁算子树，再结束事务**（顺序红线）：`endStream()` / 析构 `StreamContext` 之前**不要** commit/rollback。顶层 generator 返回空并不代表所有游标都已关闭——`LIMIT` 等提前返回的算子会把子生成器留在 `co_yield` 上，活游标跟着那些协程帧一直活到算子树被销毁。先结束事务会释放 WT session 与游标，随后析构 `WtCursor` 时 `cursor_->close()` 打在已释放内存上（实测 SIGSEGV：`~WtCursor` ← `~VertexScanCursorImpl`）。正确顺序：**销毁流（关游标）→ commit/rollback**。Bolt 侧见 [neo4j-bolt-protocol.md](../../service/neo4j-bolt-protocol.md) 第 10 节。
 
-8. **放弃流就必须回滚**：会话租约随 `StreamContext` 返回池，`GraphSession::close()` 会兜底回滚未提交事务；但"丢弃流"的路径仍必须显式销毁算子树后调用 `StreamContext::rollback()`（Bolt 用 `BoltSession::abandonStream()`，Thrift/RPC 用 `StreamAbandonRollback`），否则游标可能晚于会话释放。池耗尽时 `prepareStream()` 直接报错，绝不降级到无事务执行。
+9. **Thrift 回包必须在连接 EventBase 线程产生**：fbthrift 5.05.19 的
+   `RocketServerConnection::WriteBatcher` 对“非连接 EventBase 线程产生的请求-响应回包”
+   要等 EB 下次唤醒才 flush（空闲连接 5 s task-expire）⇒ 5–7 s 停顿。因此
+   `EuGraphHandler` 覆盖全部 `async_tm_*`：handler 任务跑在 Compute，完成时用
+   `runOnComputeAndComplete()` 把 `HandlerCallback::complete()` 投回连接 EB。
+   **不要**把 handler ThreadManager 指向 Compute 池（那只是把停顿源换个位置）。
+   验收必须包含 4 个网络 IO worker 下的非流式 RPC 延迟。回归测试：
+   `tests/test_rpc_integration.cpp` 的 `RequestResponseRpcHasNoMultiSecondStall` /
+   `StreamingQueryCompletesWithoutStall`，以及
+   `tests/test_query_stream_hop.cpp`（算子批次在 Compute、consumer 在 IO）。
+
+10. **表达式求值不得做 IO**：`ExpressionEvaluator::evaluate/evaluatePredicate` 只读
+    `prefetch()` 填好的缓存；`prefetch()` 是算子边界唯一的加载点（含 startNode/endNode
+    的 dry pass）。`missingPrefetchCount()` 非 0 表示有 operator 漏调 prefetch，会得到
+    NULL 而不是回退到阻塞 IO。
+
+11. **放弃流就必须回滚**：会话租约随 `StreamContext` 返回池，`GraphSession::close()` 会兜底回滚未提交事务；但"丢弃流"的路径仍必须显式销毁算子树后调用 `StreamContext::rollback()`（Bolt 用 `BoltSession::abandonStream()`，Thrift/RPC 用 `StreamAbandonRollback`），否则游标可能晚于会话释放。池耗尽时 `prepareStream()` 直接报错，绝不降级到无事务执行。

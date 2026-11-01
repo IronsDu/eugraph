@@ -134,13 +134,28 @@ folly::coro::Task<void> dispatchLoop(eugraph::IoScheduler& io, size_t n, std::at
     }
 }
 
-/// Measure a real compute -> IO -> compute round trip independently of the
-/// production IoScheduler path (which is currently inline until sessions are
-/// IO-thread bound).
-///
-/// `co_withExecutor` binds the child task to the IO executor and, when the
-/// child completes, resumes the awaiting coroutine on its original executor;
-/// no manual `co_viaIfAsync` back-hop is needed.
+/// The pre-2026-10-31 production shape: `co_viaIfAsync(executor, Task)` only
+/// binds the child's executor and resumes it inline on the caller thread.
+/// Kept for same-binary A/B; not the production path anymore.
+folly::coro::Task<void> dispatchLegacyInlineLoop(eugraph::IoScheduler& io, size_t n,
+                                                 std::atomic<uint64_t>& cross_thread,
+                                                 std::atomic<uint64_t>& return_thread) {
+    const auto caller = std::this_thread::get_id();
+    for (size_t i = 0; i < n; ++i) {
+        auto ioTask = folly::coro::co_invoke([&cross_thread, caller]() -> folly::coro::Task<void> {
+            if (std::this_thread::get_id() != caller)
+                cross_thread.fetch_add(1, std::memory_order_relaxed);
+            co_return;
+        });
+        co_await folly::coro::co_viaIfAsync(folly::getKeepAliveToken(io.executor()), std::move(ioTask));
+        if (std::this_thread::get_id() != caller)
+            return_thread.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+/// Reference cross-thread dispatch: `co_withExecutor` binds the child task to
+/// the IO executor and, when it completes, resumes the awaiting coroutine on
+/// its original executor; no manual back-hop is needed.
 folly::coro::Task<void> dispatchCrossLoop(eugraph::IoScheduler& io, size_t n, std::atomic<uint64_t>& cross_thread,
                                           std::atomic<uint64_t>& return_thread) {
     const auto caller = std::this_thread::get_id();
@@ -173,7 +188,20 @@ protected:
     std::unique_ptr<folly::CPUThreadPoolExecutor> cpu_;
 };
 
-BENCHMARK_F(DispatchBench, InlineDispatchVoid)(benchmark::State& state) {
+BENCHMARK_F(DispatchBench, LegacyInlineDispatchVoid)(benchmark::State& state) {
+    constexpr size_t kBatch = 64;
+    std::atomic<uint64_t> cross_thread{0};
+    std::atomic<uint64_t> return_thread{0};
+    for (auto _ : state) {
+        auto task = dispatchLegacyInlineLoop(*io_, kBatch, cross_thread, return_thread);
+        folly::coro::blockingWait(folly::coro::co_withExecutor(cpu_.get(), std::move(task)));
+    }
+    state.SetItemsProcessed(state.iterations() * kBatch);
+    state.counters["cross_thread"] = static_cast<double>(cross_thread.load(std::memory_order_relaxed));
+    state.counters["return_thread"] = static_cast<double>(return_thread.load(std::memory_order_relaxed));
+}
+
+BENCHMARK_F(DispatchBench, ProductionDispatchVoid)(benchmark::State& state) {
     constexpr size_t kBatch = 64;
     std::atomic<uint64_t> cross_thread{0};
     std::atomic<uint64_t> return_thread{0};

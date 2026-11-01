@@ -44,9 +44,11 @@ public:
         GraphLease graph;
         SessionLease session;
     };
-    std::optional<SessionScope> beginSession(const std::string& graph_name);
-    /// Executor used for Cypher evaluation; Bolt uses it to run query
-    /// coroutines off the socket EventBase.
+    folly::coro::Task<std::optional<SessionScope>> beginSession(const std::string& graph_name);
+    /// Executor used for Cypher evaluation (process-wide graph compute pool):
+    /// Bolt runs session coroutines off the socket EventBase on it; the Thrift
+    /// handler offloads query planning/operator execution to it while keeping
+    /// the handler/stream loop on the network IO pool.
     folly::Executor* computeExecutor();
 
     // Graph lifecycle

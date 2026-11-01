@@ -206,9 +206,9 @@ std::vector<ProcedureShowEntry> builtinProcedureShowEntries() {
 } // namespace
 
 folly::Executor* GraphService::computeExecutor() {
-    // default 图禁止 DROP，因此返回的 executor 指针在进程生命周期内有效。
-    auto lease = gm_.acquireGraph(GraphManager::kDefaultGraphName);
-    return lease && lease->inst && lease->inst->executor ? lease->inst->executor->computeExecutor() : nullptr;
+    // Process-wide pool owned by GraphManager: independent of which graph a
+    // statement targets, and non-null for the whole process lifetime.
+    return gm_.computeExecutor();
 }
 
 GraphLease GraphService::resolveGraph(const std::string& name) {
@@ -225,16 +225,17 @@ GraphLease GraphService::resolveGraph(const std::string& name) {
     return std::move(*lease);
 }
 
-std::optional<GraphService::SessionScope> GraphService::beginSession(const std::string& graph_name) {
+folly::coro::Task<std::optional<GraphService::SessionScope>> GraphService::beginSession(const std::string& graph_name) {
     auto graph = resolveGraph(graph_name);
     if (!graph.inst->session_pool)
         throw std::runtime_error("Graph has no session pool: " + graph_name);
     auto lease = graph.inst->session_pool->acquire();
     if (!lease)
         throw std::runtime_error("Session pool exhausted: " + graph_name);
-    if (!(*lease)->begin_write())
+    auto bound = graph.inst->async_data->for_session(**lease);
+    if (!co_await bound.beginSession(true))
         throw std::runtime_error("Failed to begin explicit transaction: " + graph_name);
-    return SessionScope{std::move(graph), std::move(*lease)};
+    co_return SessionScope{std::move(graph), std::move(*lease)};
 }
 
 GraphEntry GraphService::createGraph(const std::string& name) {

@@ -22,6 +22,11 @@ folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
         co_return;
     }
 
+    std::vector<const binder::BoundExpression*> prefetch_exprs;
+    prefetch_exprs.reserve(items_.size());
+    for (const auto& item : items_)
+        prefetch_exprs.push_back(&item.expr);
+
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
 
@@ -29,6 +34,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
         output.columns.reserve(items_.size());
 
         ExpressionEvaluator evaluator(eval_ctx_);
+        co_await evaluator.prefetch(prefetch_exprs, *chunk);
         for (const auto& item : items_) {
             auto col_kind = binder::getBoundExprType(item.expr).kind;
             // Multi-candidate property access may produce ListValue at runtime,

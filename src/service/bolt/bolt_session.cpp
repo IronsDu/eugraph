@@ -456,7 +456,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         SessionRef txn_session;
         if (in_transaction_) {
             if (!explicit_txn_) {
-                auto scope = service_.beginSession(db_name);
+                auto scope = co_await service_.beginSession(db_name);
                 if (!scope)
                     throw std::runtime_error("Failed to begin explicit transaction");
                 explicit_txn_ = std::move(*scope);
@@ -667,7 +667,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         stream->phys_op.reset();
 
         // Commit auto-commit transaction (explicit transactions commit at COMMIT ✓)
-        if (!stream_in_txn && stream_should_commit && !stream->commit()) {
+        if (!stream_in_txn && stream_should_commit && !co_await stream->commitAsync()) {
             spdlog::error("[bolt] 自动提交失败（存储引擎错误，如 WT PANIC）⇒ 明确报错，绝不静默丢写入");
             co_return makeFailure("DatabaseError", "Transaction commit failed (storage engine error)");
         }
@@ -750,7 +750,11 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleCommit() {
     }
 
     if (explicit_txn_) {
-        const bool committed = explicit_txn_->session->commit().committed();
+        bool committed = false;
+        {
+            auto bound = explicit_txn_->graph.inst->async_data->for_session(*explicit_txn_->session);
+            committed = (co_await bound.commitSession()).committed();
+        }
         explicit_txn_.reset(); // 归还会话（提交后 close/复用 ✓）
         if (!committed) {
             in_transaction_ = false;

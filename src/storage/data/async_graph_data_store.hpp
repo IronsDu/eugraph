@@ -41,6 +41,25 @@ public:
         return AsyncGraphDataStore(store_, io_, session);
     }
 
+    // ==================== Session transaction control ====================
+    // The statement session is bound to this facade, but begin/commit/rollback
+    // are still WT calls on that session. Dispatch them to the Storage IO pool
+    // so a commit (which may fsync) never blocks a compute thread (Bolt) or the
+    // Thrift network/stream-loop thread. The session is used serially: the
+    // caller awaits the dispatch before touching the session again.
+
+    folly::coro::Task<bool> beginSession(bool write) {
+        co_return co_await dispatch([this, write] { return write ? session_.begin_write() : session_.begin_read(); });
+    }
+
+    folly::coro::Task<TxnOutcome> commitSession() {
+        co_return co_await dispatch([this] { return session_.commit(); });
+    }
+
+    folly::coro::Task<void> rollbackSession() {
+        co_await dispatchVoid([this] { session_.rollback(); });
+    }
+
     /// 本实例（一条语句）发起过的 io_.dispatch 次数。每次从一个 executor
     /// 投递到 Storage IO 池都是一次跨池调度；用于按查询统计线程切换开销。
     [[nodiscard]] uint64_t ioDispatches() const noexcept {

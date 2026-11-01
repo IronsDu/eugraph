@@ -31,7 +31,7 @@ GraphInstance（每图一份）
 | `wt::table_*`（自由函数） | 表级 KV ✓、统一 `scanRange` ✓（session 由调用方传入 ✓） | 创建 session ✗、DDL 序列 ✗、业务语义 ✗ |
 | `SchemaDdl` | 接收 `WtSession&` ✓、单连接内建/删/ensure 表的唯一入口 ✓、失败清理 ✓、schema 锁 ✓ | 业务读写 ✗、跨连接原子性 ✗ |
 | `SyncGraphDataStore` | 给定 session 的 KV 读写 ✓ | 建 session ✗、开/提交事务 ✗、持事务表 ✗ |
-| `AsyncGraphDataStore` | 异步 dispatch ✓、构造即绑定会话 ✓、`for_session()` 轻量值 ✓ | 管池 ✗、开事务 ✗ |
+| `AsyncGraphDataStore` | 异步 dispatch ✓、构造即绑定会话 ✓、`for_session()` 轻量值 ✓、begin/commit 经 `beginSession/commitSession` dispatch 到 Storage IO ✓ | 管池 ✗、决定事务生命周期 ✗ |
 | `QueryExecutor` | 取租约 ✓、按语句决定 RO/RW ✓ | 自己建连接/会话 ✗ |
 
 **管理类操作的会话**：不再有 `open_admin_session()` 概念；调用方显式用
@@ -171,7 +171,9 @@ public:
 //        扫描用 acquire_scan_cursor()；区间迭代统一走 wt::scan_range() ✓
 // Async：op(GraphSession& session, …)  ⇒ io_.dispatch([&]{ return shared_.op(session, …); })
 //         for_session(GraphSession&) → 会话绑定的**轻量值**（三个引用，无堆/无空态）✓
-// Executor：auto lease = pool.acquire(); lease->begin_write(); …; lease->commit();
+// Executor：auto lease = pool.acquire();
+//           auto bound = async_data.for_session(*lease);
+//           co_await bound.beginSession(true); …; co_await bound.commitSession();
 ```
 
 **跨 store 边界**：data / meta 是两个 WT 连接，**没有**跨连接原子性 ✗。保持“元数据先写、
@@ -186,8 +188,10 @@ public:
    - 初始 `begin` 只有在 `TxnController::begin` 成功后才清上一个事务的非致命错误 ✓。
 3. **执行**：op 用 `session.wt_session()` 与 `session.acquire_cursor(table)` / `acquire_scan_cursor(table)` ✓
    （cursor 随会话关闭 ✓；打开失败经 `CursorHandle::error()` 显式可见 ✓）。
-4. **提交**：`session.commit()` ✓ —— 本事务出现过任何失败（`StickyError::has()`）⇒ **拒绝提交并回滚** ✓；
-   提交失败 ⇒ 按 `TxnErrorClass` 处理（`Busy` 不毒化 ✓，其余毒化 ✗）。
+4. **提交**：`GraphSession::commit()` ✓ —— 本事务出现过任何失败（`StickyError::has()`）⇒ **拒绝提交并回滚** ✓；
+   提交失败 ⇒ 按 `TxnErrorClass` 处理（`Busy` 不毒化 ✓，其余毒化 ✗）。查询路径经
+   `AsyncGraphDataStore::commitSession()` 把 commit（可能 fsync）dispatch 到 Storage IO，
+   避免阻塞 Compute / Thrift 网络线程；rollback 在析构路径上同步执行（不 fsync）。
 5. **归还**：`~SessionLease` → `SessionPoolCore::put(session)` ✓：
    `session.close()`（关 cursor + **后端事务仍开着 ⇒ 回滚** ✓）→ 毒化 ⇒ **销毁不回池** ✗ →
    池已关闭 ⇒ 销毁 ✓ → 否则 `reset_for_reuse()` + 归位 ✓。

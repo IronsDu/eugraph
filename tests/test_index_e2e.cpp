@@ -108,7 +108,7 @@ static ExecutionResult execSync(QueryExecutor& executor, const std::string& quer
             }
         }
         if (ctx->should_commit) {
-            ctx->commit();
+            co_await ctx->commitAsync();
         }
     }));
     return result;
@@ -131,7 +131,7 @@ static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& que
             }
         }
         if (ctx->should_commit) {
-            ctx->commit();
+            co_await ctx->commitAsync();
         }
     }));
     return result.rows;

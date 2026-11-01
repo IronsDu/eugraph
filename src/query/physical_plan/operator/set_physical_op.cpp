@@ -43,12 +43,20 @@ int findColumn(const Schema& schema, const std::string& name) {
 folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
     auto child_gen = cancellable(child_->executeChunkTraced());
 
+    std::vector<const binder::BoundExpression*> prefetch_exprs;
+    prefetch_exprs.reserve(items_.size());
+    for (const auto& item : items_) {
+        if (item.value)
+            prefetch_exprs.push_back(&*item.value);
+    }
+
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
 
         // Pre-evaluate all value expressions for this chunk.
         std::vector<std::vector<Value>> value_results(items_.size());
         ExpressionEvaluator evaluator(eval_ctx_);
+        co_await evaluator.prefetch(prefetch_exprs, *chunk);
         for (size_t idx = 0; idx < items_.size(); ++idx) {
             if (items_[idx].value.has_value()) {
                 auto col = Column::flat(binder::BoundTypeKind::ANY, n);
