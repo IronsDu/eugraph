@@ -11,6 +11,14 @@ namespace eugraph {
 struct StorageOpCounters {
     std::atomic<uint64_t> wt_search{0};
     std::atomic<uint64_t> wt_search_near{0};
+    std::atomic<uint64_t> io_dispatches{0};
+    std::atomic<uint64_t> prefetch_hits{0};
+    std::atomic<uint64_t> prefetch_misses{0};
+
+    /// When this is a per-operator counter, aggregate points at the statement
+    /// counter. Counters are installed into thread-local storage by the
+    /// operator wrapper; storage work on the IO thread increments both.
+    StorageOpCounters* aggregate = nullptr;
 };
 
 inline thread_local StorageOpCounters* tls_storage_op_counters = nullptr;
@@ -31,13 +39,43 @@ private:
 };
 
 inline void recordWtSearch() noexcept {
-    if (auto* counters = tls_storage_op_counters)
+    if (auto* counters = tls_storage_op_counters) {
         counters->wt_search.fetch_add(1, std::memory_order_relaxed);
+        if (counters->aggregate)
+            counters->aggregate->wt_search.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 inline void recordWtSearchNear() noexcept {
-    if (auto* counters = tls_storage_op_counters)
+    if (auto* counters = tls_storage_op_counters) {
         counters->wt_search_near.fetch_add(1, std::memory_order_relaxed);
+        if (counters->aggregate)
+            counters->aggregate->wt_search_near.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+inline void recordIoDispatch(StorageOpCounters* counters) noexcept {
+    if (!counters)
+        return;
+    counters->io_dispatches.fetch_add(1, std::memory_order_relaxed);
+    if (counters->aggregate)
+        counters->aggregate->io_dispatches.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void recordPrefetchHit() noexcept {
+    if (auto* counters = tls_storage_op_counters) {
+        counters->prefetch_hits.fetch_add(1, std::memory_order_relaxed);
+        if (counters->aggregate)
+            counters->aggregate->prefetch_hits.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+inline void recordPrefetchMiss() noexcept {
+    if (auto* counters = tls_storage_op_counters) {
+        counters->prefetch_misses.fetch_add(1, std::memory_order_relaxed);
+        if (counters->aggregate)
+            counters->aggregate->prefetch_misses.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 } // namespace eugraph

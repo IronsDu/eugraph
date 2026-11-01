@@ -29,6 +29,13 @@ describe('Cypher completions', () => {
     expect(result.items.find((item) => item.text === 'MATCH')?.insert).toBe('MATCH ');
   });
 
+  it('suggests EXPLAIN and PROFILE prefix keywords', () => {
+    const explain = completionsFor('exp', 3, schema);
+    expect(explain.items.map((item) => item.text)).toContain('EXPLAIN');
+    const profile = completionsFor('pro', 3, schema);
+    expect(profile.items.map((item) => item.text)).toContain('PROFILE');
+  });
+
   it('suggests labels after a node colon', () => {
     const query = 'MATCH (n:Per';
     const result = completionsFor(query, query.length, schema);

@@ -10296,3 +10296,44 @@ TEST_F(QueryExecutorTest, OptionalMatchWithWhereNullKeepsProjectedVertex) {
     ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
 }
+
+TEST_F(QueryExecutorTest, ProfileCollectsOperatorMetricsAndTree) {
+    insertTestVertices();
+    insertTestEdges();
+
+    auto ctx = blockingWait(executor_->prepareStream("PROFILE MATCH (n:Person) RETURN n.name"));
+    ASSERT_TRUE(ctx->error.empty()) << ctx->error;
+    ASSERT_TRUE(ctx->profile_requested);
+    ctx->startProfileExecution();
+
+    size_t rows = 0;
+    blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        while (auto chunk = co_await ctx->gen.next())
+            rows += chunk->numRows();
+    }));
+    EXPECT_EQ(rows, 5u);
+
+    const auto profile = ctx->finalizeProfile(/*commit_ns=*/0);
+    ASSERT_FALSE(profile.roots.empty());
+    EXPECT_EQ(profile.rows, 5u);
+    EXPECT_GT(profile.planning_ns, 0u);
+    EXPECT_GT(profile.execution_ns, 0u);
+    EXPECT_GT(profile.io_dispatches, 0u);
+    EXPECT_GT(profile.db_hits, 0u);
+
+    bool saw_child = false;
+    bool saw_io = false;
+    for (const auto& root : profile.roots) {
+        saw_child = saw_child || !root->children.empty();
+        std::function<void(const ProfileNode&)> walk = [&](const ProfileNode& node) {
+            if (node.io_dispatches > 0)
+                saw_io = true;
+            for (const auto& child : node.children)
+                walk(*child);
+        };
+        walk(*root);
+    }
+    EXPECT_TRUE(saw_child);
+    EXPECT_TRUE(saw_io);
+    EXPECT_TRUE(ctx->profile.has_value());
+}

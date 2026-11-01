@@ -26,7 +26,7 @@ type Info = {
 };
 
 type Theme = 'dark' | 'light';
-type Tab = 'table' | 'graph' | 'raw';
+type Tab = 'table' | 'graph' | 'raw' | 'profile';
 type TableMode = 'compact' | 'json';
 
 type FrameHandle = {
@@ -69,6 +69,7 @@ const HELP = `可用命令：
 :params clear            清空参数
 :params {json}           用 JSON 覆盖参数
 :explain <cypher>        查看执行计划
+:profile <cypher>        执行并显示性能摘要
 :schema                  查看 schema 图（db.schema.visualization）
 查询支持用 ; 分隔多条语句；Ctrl/Cmd+Enter 执行。`;
 
@@ -84,6 +85,7 @@ const CYPHER_REFERENCE: ReferenceCategory[] = [
       { title: 'WHERE 过滤', snippet: 'MATCH (n:Person) WHERE n.age > 30 RETURN n LIMIT 100' },
       { title: 'OPTIONAL MATCH', snippet: 'MATCH (n:Person) OPTIONAL MATCH (n)-[r:KNOWS]->(m) RETURN n, r, m LIMIT 100' },
       { title: '变长路径', snippet: 'MATCH p = (a)-[:KNOWS*1..3]->(b) RETURN p LIMIT 10' },
+      { title: 'PROFILE 性能分析', snippet: 'PROFILE MATCH (n:Person) WHERE n.id = 933 RETURN n.firstName' },
     ],
   },
   {
@@ -1146,6 +1148,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
 
   function summarizeResult(records: any[], resultSummary: any): string {
     const parts = [`${records.length} 行`];
+    if (resultSummary?.profile) parts.push('PROFILE');
     if (resultSummary?.resultAvailableAfter !== undefined) {
       parts.push(`首行 ${resultSummary.resultAvailableAfter} ms`);
     }
@@ -1221,6 +1224,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     let graphResult = extractGraph(records);
     let hasGraph = graphResult.graph.order > 0;
     let summaryText = summarizeResult(records, resultSummary);
+    let profile: any = resultSummary?.profile || null;
     let activeTab: Tab = 'table';
     let tableMode: TableMode = 'compact';
     let tablePage = 0;
@@ -1231,11 +1235,13 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     const tablePanel = h('div', { class: 'view-panel' });
     const graphPanel = h('div', { class: 'view-panel graph-panel' });
     const rawPanel = h('div', { class: 'view-panel raw-panel' });
+    const profilePanel = h('div', { class: 'view-panel profile-panel' });
 
     const tabButtons: Record<Tab, HTMLButtonElement> = {
       table: h('button', { class: 'tab active' }, 'Table') as HTMLButtonElement,
       graph: h('button', { class: 'tab', disabled: '' }, 'Graph') as HTMLButtonElement,
       raw: h('button', { class: 'tab' }, 'RAW') as HTMLButtonElement,
+      profile: h('button', { class: 'tab hidden' }, 'Profile') as HTMLButtonElement,
     };
     tabButtons.graph.disabled = !hasGraph;
     tabButtons.graph.textContent = hasGraph ? 'Graph' : 'Graph (无点边)';
@@ -1259,6 +1265,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       tabButtons.table,
       tabButtons.graph,
       tabButtons.raw,
+      tabButtons.profile,
       h('span', { class: 'spacer' }),
       modeSelect,
       exportButton
@@ -1275,7 +1282,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     header.insertBefore(queryEditor, header.firstChild);
     header.insertBefore(executeEditButton, close);
     header.insertBefore(cancelEditButton, close);
-    const body = h('div', { class: 'frame-body' }, tablePanel, graphPanel, rawPanel);
+    const body = h('div', { class: 'frame-body' }, tablePanel, graphPanel, rawPanel, profilePanel);
     const root = h('article', { class: 'result-frame' }, header, editError, toolbar, body);
 
     function renderTable(): void {
@@ -1355,6 +1362,84 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       }
     }
 
+    function profileNumber(node: any, key: string): number {
+      const args = node?.arguments ?? {};
+      const value = args[`eugraph.${key}`] ?? node?.eugraph?.[key];
+      return typeof value === 'number' ? value : Number(value ?? 0) || 0;
+    }
+
+    function profileMs(value: number): string {
+      return `${value.toFixed(value >= 10 ? 1 : 2)} ms`;
+    }
+
+    function renderProfile(): void {
+      profilePanel.replaceChildren();
+      if (!profile) {
+        profilePanel.append(h('div', { class: 'empty' }, '这条语句没有 PROFILE 摘要（需要以 PROFILE 开头）'));
+        return;
+      }
+      const rootArgs = profile.arguments ?? {};
+      const summary = h('div', { class: 'profile-summary' });
+      const cards: Array<[string, string]> = [
+        ['planning', profileMs(Number(rootArgs['eugraph.planningMs'] ?? 0))],
+        ['execution', profileMs(Number(rootArgs['eugraph.executionMs'] ?? 0))],
+        ['commit', profileMs(Number(rootArgs['eugraph.commitMs'] ?? 0))],
+        ['dbHits', String(Number(rootArgs['eugraph.totalDbHits'] ?? 0))],
+        ['ioDispatches', String(Number(rootArgs['eugraph.totalIoDispatches'] ?? 0))],
+        ['WT search', String(Number(rootArgs['eugraph.totalWtSearch'] ?? 0))],
+        ['prefetch miss', String(Number(rootArgs['eugraph.totalPrefetchMisses'] ?? 0))],
+      ];
+      for (const [label, value] of cards) {
+        summary.append(h('div', { class: 'profile-card' }, h('span', {}, label), h('strong', {}, value)));
+      }
+      profilePanel.append(summary);
+
+      const header = h(
+        'div',
+        { class: 'profile-row profile-head' },
+        h('span', { class: 'profile-op' }, 'Operator'),
+        h('span', {}, 'rows'),
+        h('span', {}, 'dbHits'),
+        h('span', {}, 'io'),
+        h('span', {}, 'WT'),
+        h('span', {}, 'self'),
+        h('span', {}, 'incl'),
+        h('span', {}, 'prefetch miss')
+      );
+      const tree = h('div', { class: 'profile-tree' }, header);
+      const maxSelf = (() => {
+        let best = 0;
+        const walk = (node: any) => {
+          best = Math.max(best, Number(node?.time ?? 0));
+          for (const child of node?.children ?? []) walk(child);
+        };
+        walk(profile);
+        return best;
+      })();
+
+      const walk = (node: any, depth: number): void => {
+        const selfMs = Number(node?.time ?? profileNumber(node, 'selfTimeMs'));
+        const row = h('div', {
+          class: `profile-row${maxSelf > 0 && selfMs >= maxSelf * 0.9 ? ' profile-hot' : ''}`,
+        });
+        row.style.paddingLeft = `${depth * 18}px`;
+        row.append(
+          h('span', { class: 'profile-op' }, String(node?.operatorType ?? '?').replace(/@eugraph$/, '')),
+          h('span', {}, String(node?.rows ?? 0)),
+          h('span', {}, String(node?.dbHits ?? 0)),
+          h('span', {}, String(profileNumber(node, 'ioDispatches'))),
+          h('span', {}, String(profileNumber(node, 'wtSearch') + profileNumber(node, 'wtSearchNear'))),
+          h('span', {}, profileMs(selfMs)),
+          h('span', {}, profileMs(profileNumber(node, 'inclusiveTimeMs'))),
+          h('span', {}, String(profileNumber(node, 'prefetchMisses')))
+        );
+        tree.append(row);
+        for (const child of node?.children ?? []) walk(child, depth + 1);
+      };
+      walk(profile, 0);
+      profilePanel.append(tree);
+    }
+
     function renderRaw(): void {
       rawPanel.replaceChildren();
       if (columns.length === 0) {
@@ -1376,13 +1461,16 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
 
     function activate(tab: Tab): void {
       if (tab === 'graph' && !hasGraph) tab = 'table';
+      if (tab === 'profile' && !profile) tab = 'table';
       activeTab = tab;
+      if (tab === 'profile') renderProfile();
       for (const [name, button] of Object.entries(tabButtons)) {
         button.classList.toggle('active', name === tab);
       }
       tablePanel.classList.toggle('hidden', tab !== 'table');
       graphPanel.classList.toggle('hidden', tab !== 'graph');
       rawPanel.classList.toggle('hidden', tab !== 'raw');
+      profilePanel.classList.toggle('hidden', tab !== 'profile');
 
       if (tab === 'graph') {
         if (!graphView) {
@@ -1415,6 +1503,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       records = nextRecords;
       graphResult = extractGraph(records);
       hasGraph = graphResult.graph.order > 0;
+      profile = nextSummary?.profile || null;
       summaryText = summarizeResult(records, nextSummary);
       handle.query = query;
       handle.summaryText = summaryText;
@@ -1427,6 +1516,8 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       exportButton.disabled = columns.length === 0 || records.length === 0;
       tabButtons.graph.disabled = !hasGraph;
       tabButtons.graph.textContent = hasGraph ? 'Graph' : 'Graph (无点边)';
+      tabButtons.profile.classList.toggle('hidden', !profile);
+      renderProfile();
 
       graphView?.destroy();
       graphView = null;
@@ -1514,6 +1605,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     tabButtons.table.addEventListener('click', () => activate('table'));
     tabButtons.graph.addEventListener('click', () => activate('graph'));
     tabButtons.raw.addEventListener('click', () => activate('raw'));
+    tabButtons.profile.addEventListener('click', () => activate('profile'));
     modeSelect.addEventListener('change', () => {
       tableMode = modeSelect.value as TableMode;
       tablePage = 0;
@@ -1702,6 +1794,14 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
           return;
         }
         await executeAndRender(`EXPLAIN ${args}`, token);
+        return;
+      }
+      case 'profile': {
+        if (!args.trim()) {
+          setMessage('用法：:profile <cypher>', 'error');
+          return;
+        }
+        await executeAndRender(`PROFILE ${args}`, token);
         return;
       }
       case 'schema':

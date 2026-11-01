@@ -11,6 +11,7 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "query/planner/binder.hpp"
+#include "query/profile/query_profile.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/session_pool.hpp"
@@ -21,8 +22,10 @@
 
 #include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -51,6 +54,29 @@ struct StreamContext {
     /// purpose: it must not be the thing that keeps them alive during teardown.
     std::shared_ptr<QueryContext> query_context;
     bool should_commit = true;
+    /// PROFILE state. `profile` is only populated after the stream is fully
+    /// drained (and, for auto-commit, after the transaction commit).
+    bool profile_requested = false;
+    std::optional<QueryProfile> profile;
+    uint64_t planning_ns = 0;
+    std::optional<std::chrono::steady_clock::time_point> execution_start;
+
+    void startProfileExecution() {
+        if (profile_requested && !execution_start)
+            execution_start = std::chrono::steady_clock::now();
+    }
+
+    QueryProfile finalizeProfile(uint64_t commit_ns) {
+        if (!profile_requested || !query_context)
+            return {};
+        const auto now = std::chrono::steady_clock::now();
+        const uint64_t execution_ns =
+            execution_start ? static_cast<uint64_t>(
+                                  std::chrono::duration_cast<std::chrono::nanoseconds>(now - *execution_start).count())
+                            : 0;
+        profile = query_context->buildProfile(planning_ns, execution_ns, commit_ns);
+        return *profile;
+    }
     // Owned by StreamContext so references in physical operators remain valid
     std::unordered_map<LabelId, LabelDef> label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
@@ -77,7 +103,7 @@ struct StreamContext {
                                  searches, search_nears, query_store->ioDispatchSummary(), query_text);
             }
         }
-        if (query_context && query_context->opTraceEnabled()) {
+        if (query_context && query_context->opTraceLogEnabled()) {
             const auto& records = query_context->opTraceRecords();
             for (const auto& record : records) {
                 uint64_t child_wall_ns = 0;

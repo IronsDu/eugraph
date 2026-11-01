@@ -1086,3 +1086,21 @@ TEST_F(CypherParserTest, QuotedRelationshipTypeIsNormalized) {
     ASSERT_EQ(rel.rel_types.size(), 1);
     EXPECT_EQ(rel.rel_types[0], "CONTAINER_OF");
 }
+
+TEST_F(CypherParserTest, ProfilePrefixBuildsProfileStatement) {
+    auto stmt = parseSuccess("PROFILE MATCH (n:Person) RETURN n");
+    auto* profile = std::get_if<std::unique_ptr<ProfileStatement>>(&stmt);
+    ASSERT_NE(profile, nullptr);
+    ASSERT_NE(*profile, nullptr);
+    EXPECT_NE((*profile)->query, nullptr);
+}
+
+TEST_F(CypherParserTest, ExplainProfileCombinationIsRejected) {
+    auto error = parseError("EXPLAIN PROFILE MATCH (n) RETURN n");
+    EXPECT_FALSE(error.message.empty());
+}
+
+TEST_F(CypherParserTest, ProfileExplainCombinationIsRejected) {
+    auto error = parseError("PROFILE EXPLAIN MATCH (n) RETURN n");
+    EXPECT_FALSE(error.message.empty());
+}

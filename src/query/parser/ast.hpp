@@ -454,10 +454,14 @@ struct ExplainStatement {
     std::unique_ptr<RegularQuery> query;
 };
 
+struct ProfileStatement {
+    std::unique_ptr<RegularQuery> query;
+};
+
 // ==================== 顶层 Statement ====================
 
-using Statement =
-    std::variant<std::unique_ptr<RegularQuery>, std::unique_ptr<StandaloneCall>, std::unique_ptr<ExplainStatement>>;
+using Statement = std::variant<std::unique_ptr<RegularQuery>, std::unique_ptr<StandaloneCall>,
+                               std::unique_ptr<ExplainStatement>, std::unique_ptr<ProfileStatement>>;
 
 // ==================== 辅助：创建 Expression 的便捷函数 ====================
 

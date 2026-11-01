@@ -1,5 +1,7 @@
 #include "query/evaluator/expression_evaluator.hpp"
 
+#include "storage/storage_op_metrics.hpp"
+
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
@@ -88,10 +90,12 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 auto pit = prefetched_vertex_data_.find(vertex.id);
                 if (pit != prefetched_vertex_data_.end()) {
                     props = &pit->second.properties;
+                    recordPrefetchHit();
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vertex.id);
                 } else {
                     missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
+                    recordPrefetchMiss();
                 }
             }
             std::vector<Value> found;
@@ -340,10 +344,12 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     if (!vertex.labels.has_value())
                         vertex.labels = pit->second.labels;
                     vertex.properties = pit->second.properties;
+                    recordPrefetchHit();
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vertex.id);
                 } else {
                     missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
+                    recordPrefetchMiss();
                 }
             }
             // 总是补查 __anon__：REMOVE LABEL 把属性迁移到 __anon__ 后，

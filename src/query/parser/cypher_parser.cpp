@@ -269,13 +269,19 @@ private:
     // === Query ===
 
     Statement buildQuery(AP::QueryContext* ctx) {
-        bool is_explain = (ctx->EXPLAIN() != nullptr);
+        const bool is_explain = (ctx->EXPLAIN() != nullptr);
+        const bool is_profile = (ctx->PROFILE() != nullptr);
         if (ctx->regularQuery()) {
             auto rq = buildRegularQuery(ctx->regularQuery());
             if (is_explain) {
                 auto es = std::make_unique<ExplainStatement>();
                 es->query = std::move(rq);
                 return Statement(std::move(es));
+            }
+            if (is_profile) {
+                auto ps = std::make_unique<ProfileStatement>();
+                ps->query = std::move(rq);
+                return Statement(std::move(ps));
             }
             return Statement(std::move(rq));
         }

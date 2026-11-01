@@ -1003,6 +1003,7 @@ EuGraphHandler::co_executeCypherImpl(std::unique_ptr<std::string> query, std::un
     // The physical operator generator is consumed by fbthrift's stream loop on
     // the network IO thread. Rebind it so the operator tree runs on the compute
     // pool while serialization stays on the IO thread.
+    exec_ctx.ctx->startProfileExecution();
     if (compute) {
         // Force the first batch's synchronous operator work onto Compute before
         // the stream loop (on the network IO thread) starts pulling. Without

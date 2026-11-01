@@ -196,6 +196,21 @@ Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在
 
 回归：`tests/test_query_executor.cpp` 的 `BytesParamsAndPropertiesRoundtrip`（期望值实测自 neo4j）。
 
+## PROFILE 结果摘要
+
+`PROFILE <cypher>` 执行完成后，最终 `PULL` 的 `SUCCESS` metadata 增加：
+
+- `profile`：与 neo4j driver 的 `ProfiledPlan` 兼容的树（`operatorType`、`args`、
+  `identifiers`、`dbHits`、`rows`、`time`、`children`）；
+- `eugraph`：语句级摘要（planning/execution/commit、rows/chunks、dbHits、ioDispatches、
+  wtSearch/wtSearchNear、prefetchHits/prefetchMisses）。
+
+EuGraph 专有指标同时写入每个节点的 `args`（键名 `eugraph.*`），因为官方 JS driver 的
+`ProfiledPlan` 只保留 `args` 和标准字段；Python driver 还能读到原始 `eugraph` 子对象。
+
+`PULL` 未取完（`has_more=true`）时不带 profile；只有最后一次完整 `PULL` 才带摘要。
+`DISCARD`/取消不产生 profile。`EXPLAIN` 仍走普通结果行（Plan 文本），不使用该摘要。
+
 ## 实现机制
 
 ### 1. 分块传输编码（Chunked Transfer Encoding）

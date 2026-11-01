@@ -308,6 +308,20 @@ EXPLAIN MATCH (n:Person) RETURN n
 
 仅构建物理算子树并格式化为文本返回，不实际执行。
 
+### PROFILE — 执行并查看性能
+
+```cypher
+PROFILE MATCH (n:Person {id: $id}) RETURN n.firstName
+```
+
+执行查询并返回正常结果；Bolt/Web Console 通过结果摘要（`summary.profile`）展示算子树和
+性能指标。与 `EXPLAIN` 互斥；`PROFILE` 会真实执行写操作，只想看计划请用 `EXPLAIN`。
+
+当前指标包括：每个算子的 `rows`/`chunks`、`dbHits`（WT search + search_near）、
+`ioDispatches`、`wtSearch`/`wtSearchNear`、`prefetchHits`/`prefetchMisses`、
+`self/inclusive` wall/CPU，以及语句级 planning/execution/commit 时间。
+Thrift/shell 的摘要传输尚未实现（在 shell 中只返回结果行）。
+
 ---
 
 ## 二、写查询

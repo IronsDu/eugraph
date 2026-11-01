@@ -37,6 +37,8 @@ export type CompletionResult = {
 };
 
 const KEYWORDS: Array<[string, string]> = [
+  ['EXPLAIN', '查看执行计划'],
+  ['PROFILE', '执行并显示性能指标'],
   ['MATCH', '匹配模式'],
   ['OPTIONAL MATCH', '可选匹配'],
   ['WHERE', '过滤条件'],

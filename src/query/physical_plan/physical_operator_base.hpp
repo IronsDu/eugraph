@@ -93,11 +93,7 @@ public:
     /// context no matter which order the tree is torn down in; the planner attaches
     /// it once, on the root.
     void setQueryContext(std::shared_ptr<QueryContext> ctx) {
-        query_ctx_ = std::move(ctx);
-        for (const auto* child : children()) {
-            if (child)
-                const_cast<PhysicalOperator*>(child)->setQueryContext(query_ctx_);
-        }
+        attachQueryContext(std::move(ctx), nullptr);
     }
     const std::shared_ptr<QueryContext>& queryContext() const {
         return query_ctx_;
@@ -151,6 +147,21 @@ protected:
     }
 
 private:
+    void attachQueryContext(std::shared_ptr<QueryContext> ctx, OpTraceRecord* parent) {
+        query_ctx_ = std::move(ctx);
+        if (query_ctx_ && query_ctx_->opTraceEnabled() && !trace_record_) {
+            std::vector<std::string> identifiers;
+            identifiers.reserve(outputSchema().size());
+            for (const auto& column : outputSchema())
+                identifiers.push_back(column);
+            trace_record_ = query_ctx_->addOpTrace(toString(), parent, std::move(identifiers));
+        }
+        for (const auto* child : children()) {
+            if (child)
+                const_cast<PhysicalOperator*>(child)->attachQueryContext(query_ctx_, trace_record_.get());
+        }
+    }
+
     Schema output_schema_;
     std::vector<binder::BoundType> output_types_;
     /// Per-statement execution state; null for operators built outside a statement

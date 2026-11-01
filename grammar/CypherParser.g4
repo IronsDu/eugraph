@@ -41,7 +41,7 @@ script
 
 // statements
 query
-    : EXPLAIN? regularQuery
+    : (EXPLAIN | PROFILE)? regularQuery
     | standaloneCall
     ;
 

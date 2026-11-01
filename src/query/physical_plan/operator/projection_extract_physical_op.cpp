@@ -105,7 +105,7 @@ std::string ProjectionExtractPhysicalOp::toString() const {
 }
 
 folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk() {
-    auto child_gen = cancellable(child_->executeChunk());
+    auto child_gen = cancellable(child_->executeChunkTraced());
     // Reused across chunks/specs: ConstructVertex's vid->VertexValue maps.
     std::unordered_map<VertexId, VertexValuePtr> ctor_by_vid;
     std::unordered_map<VertexId, VertexValuePtr> ctor_anon_ptrs;
