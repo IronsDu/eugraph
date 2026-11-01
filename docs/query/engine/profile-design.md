@@ -272,6 +272,7 @@ struct StorageOpCounters {
 
 - 标准字段对齐 neo4j driver 的 `profile` 读取路径：
   `operatorType` / `args` / `identifiers` / `dbHits` / `rows` / `children` / `time`；
+  `args` 必须保留 `Rows` / `DbHits`，cypher-shell 靠它们渲染 `Rows` / `DB Hits` 列；
 - EuGraph 扩展同时写进每节点 `args.eugraph`（嵌套 map）与节点顶层 `eugraph` map：
   Python driver 保留原始 metadata；JS driver 的 `ProfiledPlan` 只保留
   `args`/标准字段，因此 Web Console 从 `arguments.eugraph.*` 读取；cypher-shell 的

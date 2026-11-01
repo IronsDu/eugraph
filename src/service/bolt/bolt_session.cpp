@@ -63,6 +63,10 @@ PackValue profileNodeToValue(const compute::ProfileNode& node, const compute::Qu
     map.emplace("operatorType", ps(node.operator_type + "@eugraph"));
     PackMap args;
     args.emplace("Details", ps(node.details));
+    // cypher-shell builds its plan columns from these standard argument keys;
+    // without them it omits the Rows / DB Hits columns entirely.
+    args.emplace("DbHits", ps(static_cast<int64_t>(node.db_hits)));
+    args.emplace("Rows", ps(static_cast<int64_t>(node.rows)));
     // The JS driver exposes args as ProfiledPlan.arguments; the Java/cypher-shell
     // renderer prints all argument *values* in its "Other" column without keys.
     // Keep the custom metrics as one nested map so that column stays readable.
