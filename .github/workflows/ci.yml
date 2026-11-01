@@ -476,6 +476,9 @@ jobs:
       run: |
         mkdir build
         cd build
+        # Keep ASan but optimize: -O0 made the TCK exceed the runner's
+        # lifetime limit (>30 min). -O1 preserves sanitizer coverage while
+        # making the full TCK fit the job budget.
         cmake .. \
           -G Ninja \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
@@ -484,9 +487,6 @@ jobs:
           -DEUGRAPH_ENABLE_CCACHE=ON \
           -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
           -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-          # Keep ASan but optimize: -O0 made the TCK exceed the runner's
-          # lifetime limit (>30 min). -O1 preserves sanitizer coverage while
-          # making the full TCK fit the job budget.
           -DCMAKE_CXX_FLAGS_DEBUG="-O1 -g" \
           -DCMAKE_C_FLAGS_DEBUG="-O1 -g" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -s" \
