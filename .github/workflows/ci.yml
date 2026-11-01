@@ -541,20 +541,15 @@ jobs:
         check_name: Unit Test Results
         comment_title: Unit Test Report
 
-  # ASan TCK is split into two shards. A full -O0 ASan TCK run takes ~27-30
-  # minutes on a 4-vCPU hosted runner, and the TCK step itself is killed at
-  # that point (the recorded job timeout is not reliable here). Each shard
-  # carries roughly half of the feature files and gets its own runner budget;
-  # together they cover the same 231 feature files as before.
+  # ASan TCK is a separate job: the full ASan TCK takes ~20-25 min on a hosted
+  # runner and the combined unit+TCK job has been observed to hit the runner's
+  # lifetime limit before TCK finishes. The unit job uploads just the two
+  # binaries; this job has its own budget and does not rebuild.
   asan-tck:
-    name: Address Sanitizer (TCK ${{ matrix.shard }})
+    name: Address Sanitizer (TCK)
     needs: asan
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [a, b]
+    timeout-minutes: 60
     permissions:
       contents: read
       checks: write
@@ -577,97 +572,75 @@ jobs:
         tar -xzf asan-tck-binaries.tar.gz
         chmod +x build/eugraph-server build/tests/tck/tck_tests
 
-    - name: Build TCK feature shard
-      run: |
-        shard="${{ matrix.shard }}"
-        dir="/tmp/tck-shard-$shard"
-        mkdir -p "$dir"
-        i=0
-        while IFS= read -r file; do
-          if [ "$shard" = "a" ] && [ $((i % 2)) -eq 0 ]; then
-            cp "$file" "$dir/$(basename "$file" .feature)-$i.feature"
-          elif [ "$shard" = "b" ] && [ $((i % 2)) -eq 1 ]; then
-            cp "$file" "$dir/$(basename "$file" .feature)-$i.feature"
-          fi
-          i=$((i + 1))
-        done < <(find third_party/openCypher/tck/features -type f -name '*.feature' | sort)
-        if [ "$shard" = "b" ]; then
-          for file in $(find tests/tck/features-eugraph -type f -name '*.feature' | sort); do
-            cp "$file" "$dir/eugraph-$(basename "$file")"
-          done
-        fi
-        count=$(find "$dir" -type f -name '*.feature' | wc -l)
-        echo "TCK shard $shard: $count feature files"
-        test "$count" -gt 0
-
     - name: Restore TCK baseline report
       if: github.event_name == 'pull_request'
       uses: actions/cache/restore@v4
       with:
-        path: build/tck-baseline-report-${{ matrix.shard }}.md
-        key: tck-baseline-report-${{ github.base_ref }}-${{ matrix.shard }}-${{ github.sha }}
-        restore-keys: tck-baseline-report-${{ github.base_ref }}-${{ matrix.shard }}-
+        path: build/tck-baseline-report.md
+        key: tck-baseline-report-${{ github.base_ref }}-${{ github.sha }}
+        restore-keys: tck-baseline-report-${{ github.base_ref }}-
 
     - name: Restore TCK step baseline
       if: github.event_name == 'pull_request'
       uses: actions/cache/restore@v4
       with:
-        path: build/tck-step-baseline-${{ matrix.shard }}.json
-        key: tck-step-baseline-${{ github.base_ref }}-${{ matrix.shard }}-${{ github.sha }}
-        restore-keys: tck-step-baseline-${{ github.base_ref }}-${{ matrix.shard }}-
+        path: build/tck-step-baseline.json
+        key: tck-step-baseline-${{ github.base_ref }}-${{ github.sha }}
+        restore-keys: tck-step-baseline-${{ github.base_ref }}-
 
     - name: Run TCK with ASan
       env:
         ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report-${{ matrix.shard }}.md
-        TCK_STEP_BASELINE_PATH: ${{ github.workspace }}/build/tck-step-baseline-${{ matrix.shard }}.json
+        TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
+        TCK_STEP_BASELINE_PATH: ${{ github.workspace }}/build/tck-step-baseline.json
         TCK_FAIL_ON_REGRESSION: 1
       run: |
         python3 tests/tck/run_tck.py \
           --server-bin "$PWD/build/eugraph-server" \
           --tck-bin "$PWD/build/tests/tck/tck_tests" \
-          --features "/tmp/tck-shard-${{ matrix.shard }}" \
-          --report "$PWD/build/tck-report-${{ matrix.shard }}.md" \
-          --step-results-file "$PWD/build/tck-step-results-${{ matrix.shard }}.json"
+          --features "$PWD/third_party/openCypher/tck/features" \
+          --features "$PWD/tests/tck/features-eugraph" \
+          --report "$PWD/build/tck-report.md" \
+          --step-results-file "$PWD/build/tck-step-results.json"
 
     - name: Upload TCK report
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: asan-tck-report-${{ matrix.shard }}
-        path: build/tck-report-${{ matrix.shard }}.md
+        name: asan-tck-report
+        path: build/tck-report.md
         if-no-files-found: warn
         retention-days: 7
         overwrite: true
 
     - name: Post TCK report to PR
       uses: marocchino/sticky-pull-request-comment@v2
-      if: github.event_name == 'pull_request' && hashFiles('build/tck-report-${{ matrix.shard }}.md') != '' && always()
+      if: github.event_name == 'pull_request' && hashFiles('build/tck-report.md') != '' && always()
       with:
-        path: build/tck-report-${{ matrix.shard }}.md
-        header: tck-report-${{ matrix.shard }}
+        path: build/tck-report.md
+        header: tck-report
 
     - name: Save TCK baseline report
-      if: github.event_name == 'push' && hashFiles('build/tck-report-${{ matrix.shard }}.md') != ''
-      run: cp build/tck-report-${{ matrix.shard }}.md build/tck-baseline-report-${{ matrix.shard }}.md
+      if: github.event_name == 'push' && hashFiles('build/tck-report.md') != ''
+      run: cp build/tck-report.md build/tck-baseline-report.md
 
     - name: Cache TCK baseline report
       if: github.event_name == 'push'
       uses: actions/cache/save@v4
       with:
-        path: build/tck-baseline-report-${{ matrix.shard }}.md
-        key: tck-baseline-report-${{ github.ref_name }}-${{ matrix.shard }}-${{ github.sha }}
+        path: build/tck-baseline-report.md
+        key: tck-baseline-report-${{ github.ref_name }}-${{ github.sha }}
 
     - name: Save TCK step baseline
-      if: github.event_name == 'push' && hashFiles('build/tck-step-results-${{ matrix.shard }}.json') != ''
-      run: cp build/tck-step-results-${{ matrix.shard }}.json build/tck-step-baseline-${{ matrix.shard }}.json
+      if: github.event_name == 'push' && hashFiles('build/tck-step-results.json') != ''
+      run: cp build/tck-step-results.json build/tck-step-baseline.json
 
     - name: Cache TCK step baseline
       if: github.event_name == 'push'
       uses: actions/cache/save@v4
       with:
-        path: build/tck-step-baseline-${{ matrix.shard }}.json
-        key: tck-step-baseline-${{ github.ref_name }}-${{ matrix.shard }}-${{ github.sha }}
+        path: build/tck-step-baseline.json
+        key: tck-step-baseline-${{ github.ref_name }}-${{ github.sha }}
 
   # Undefined Behavior Sanitizer
   ubsan:
