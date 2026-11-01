@@ -1753,7 +1753,7 @@ html[data-theme='light'] .graph-notice {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 86px;
+  min-width: 108px;
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1772,7 +1772,7 @@ html[data-theme='light'] .graph-notice {
 }
 
 .profile-tree {
-  min-width: 1280px;
+  min-width: 1520px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
 }
@@ -1804,6 +1804,10 @@ html[data-theme='light'] .graph-notice {
 
 .profile-row span:nth-child(n + 2) {
   text-align: right;
+}
+
+.profile-head span {
+  white-space: nowrap;
 }
 
 .profile-head {

@@ -1386,10 +1386,10 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         ['rows', String(profileNumber(profile, 'totalRows'))],
         ['chunks', String(profileNumber(profile, 'totalChunks'))],
         ['DB hits', String(profileNumber(profile, 'totalDbHits'))],
-        ['ioDispatches', String(profileNumber(profile, 'totalIoDispatches'))],
-        ['WT search', `${profileNumber(profile, 'totalWtSearch')} / ${profileNumber(profile, 'totalWtSearchNear')}`],
+        ['IO dispatches', String(profileNumber(profile, 'totalIoDispatches'))],
+        ['WT seeks s/n', `${profileNumber(profile, 'totalWtSearch')} / ${profileNumber(profile, 'totalWtSearchNear')}`],
         ['scan rows', String(profileNumber(profile, 'totalScanRows'))],
-        ['prefetch', `${profileNumber(profile, 'totalPrefetchHits')} / ${profileNumber(profile, 'totalPrefetchMisses')}`],
+        ['prefetch h/m', `${profileNumber(profile, 'totalPrefetchHits')} / ${profileNumber(profile, 'totalPrefetchMisses')}`],
       ];
       for (const [label, value] of cards) {
         summary.append(h('div', { class: 'profile-card' }, h('span', {}, label), h('strong', {}, value)));
@@ -1400,16 +1400,16 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         'div',
         { class: 'profile-row profile-head' },
         h('span', { class: 'profile-op' }, 'Operator / Details'),
-        h('span', {}, 'rows'),
-        h('span', {}, 'chunks'),
-        h('span', {}, 'DB hits'),
-        h('span', {}, 'io'),
-        h('span', {}, 'WT s/n'),
-        h('span', {}, 'scan'),
-        h('span', {}, 'self ms'),
-        h('span', {}, 'incl ms'),
-        h('span', {}, 'CPU s/i'),
-        h('span', {}, 'prefetch h/m')
+        h('span', { title: 'Output rows' }, 'rows'),
+        h('span', { title: 'Output chunks' }, 'chunks'),
+        h('span', { title: 'WT seeks + scan rows' }, 'DB hits'),
+        h('span', { title: 'Storage IO dispatches' }, 'IO dispatches'),
+        h('span', { title: 'WT seek calls (search / search_near)' }, 'WT seeks s/n'),
+        h('span', { title: 'Rows read by scan cursors' }, 'scan rows'),
+        h('span', { title: 'Self wall time' }, 'self (ms)'),
+        h('span', { title: 'Inclusive wall time' }, 'inclusive (ms)'),
+        h('span', { title: 'Self / inclusive CPU time' }, 'CPU s/i (ms)'),
+        h('span', { title: 'Prefetch hits / misses' }, 'prefetch h/m')
       );
       const tree = h('div', { class: 'profile-tree' }, header);
       const maxSelf = (() => {
