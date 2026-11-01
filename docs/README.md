@@ -156,7 +156,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [查询引擎](query/engine/query-engine-design.md) | 逻辑计划、物理计划、Catalog、FunctionRegistry、BoundExpression、DataChunk、向量化求值 |
 | [表达式求值 Benchmarks](query/engine/evaluator-benchmarks.md) | google benchmark 基线、优化前后对比与运行方法 |
 | [执行模型](query/engine/execution-model.md) | Pull-based 火山模型、协程调度、IO/Compute 分离、流式执行、关键不变量 |
-| [PROFILE 设计](query/engine/profile-design.md) | `PROFILE` 语法/执行/结果摘要，Bolt/Thrift 输出，算子级 dbHits/ioDispatches/prefetch 等 EuGraph 指标（Bolt + Web 已实现） |
+| [PROFILE 设计](query/engine/profile-design.md) | `PROFILE` 语法/执行/结果摘要，Bolt/Thrift 输出，算子级 dbHits/ioDispatches/prefetch 等 EuGraph 指标（Bolt + Web + Thrift/shell 已实现） |
 | [表达式求值 Prefetch 设计](query/engine/evaluator-prefetch-design.md) | 求值器不再做 IO：算子边界 prefetch、裸顶点批量加载、startNode/endNode dry pass、missingPrefetchCount |
 | [事务模型](query/engine/transaction-model.md) | 事务生命周期、snapshot isolation、流式事务、批量操作事务 |
 | [时间语义（对齐 neo4j）](query/engine/temporal-semantics.md) | 月末夹取、duration.between 的月/天拆分、时区比较、epoch 基准、date - date 扩展与验证方式 |

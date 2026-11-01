@@ -3,6 +3,7 @@
 
 #include "common/types/temporal_value.hpp"
 #include "query/parser/cypher_parser.hpp"
+#include "query/profile/query_profile.hpp"
 #include "service/query_stream_hop.hpp"
 #include "service/thrift/result_format.hpp"
 
@@ -85,6 +86,46 @@ void runOnComputeAndComplete(apache::thrift::HandlerCallbackPtr<T> cb, folly::Ex
     });
 }
 
+eugraph::thrift_service::ProfileNode toThriftProfileNode(const eugraph::compute::ProfileNode& node) {
+    eugraph::thrift_service::ProfileNode out;
+    out.operator_type() = node.operator_type;
+    out.details() = node.details;
+    out.identifiers() = node.identifiers;
+    out.rows() = static_cast<int64_t>(node.rows);
+    out.chunks() = static_cast<int64_t>(node.chunks);
+    out.db_hits() = static_cast<int64_t>(node.db_hits);
+    out.wt_search() = static_cast<int64_t>(node.wt_search);
+    out.wt_search_near() = static_cast<int64_t>(node.wt_search_near);
+    out.io_dispatches() = static_cast<int64_t>(node.io_dispatches);
+    out.prefetch_hits() = static_cast<int64_t>(node.prefetch_hits);
+    out.prefetch_misses() = static_cast<int64_t>(node.prefetch_misses);
+    out.self_time_ms() = static_cast<double>(node.self_wall_ns) / 1e6;
+    out.inclusive_time_ms() = static_cast<double>(node.inclusive_wall_ns) / 1e6;
+    out.self_cpu_ms() = static_cast<double>(node.self_cpu_ns) / 1e6;
+    out.inclusive_cpu_ms() = static_cast<double>(node.inclusive_cpu_ns) / 1e6;
+    for (const auto& child : node.children)
+        out.children().value().push_back(toThriftProfileNode(*child));
+    return out;
+}
+
+eugraph::thrift_service::QueryProfile toThriftProfile(const eugraph::compute::QueryProfile& profile) {
+    eugraph::thrift_service::QueryProfile out;
+    out.planning_ms() = static_cast<double>(profile.planning_ns) / 1e6;
+    out.execution_ms() = static_cast<double>(profile.execution_ns) / 1e6;
+    out.commit_ms() = static_cast<double>(profile.commit_ns) / 1e6;
+    out.rows() = static_cast<int64_t>(profile.rows);
+    out.chunks() = static_cast<int64_t>(profile.chunks);
+    out.db_hits() = static_cast<int64_t>(profile.db_hits);
+    out.wt_search() = static_cast<int64_t>(profile.wt_search);
+    out.wt_search_near() = static_cast<int64_t>(profile.wt_search_near);
+    out.io_dispatches() = static_cast<int64_t>(profile.io_dispatches);
+    out.prefetch_hits() = static_cast<int64_t>(profile.prefetch_hits);
+    out.prefetch_misses() = static_cast<int64_t>(profile.prefetch_misses);
+    for (const auto& root : profile.roots)
+        out.roots().value().push_back(toThriftProfileNode(*root));
+    return out;
+}
+
 folly::coro::AsyncGenerator<eugraph::thrift_service::ResultRowBatch&&>
 makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
@@ -157,9 +198,22 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         total_rows += chunk_rows;
         co_yield std::move(thrift_batch);
     }
+    const auto commit_start = std::chrono::steady_clock::now();
     if (!co_await ctx->commitAsync()) {
         spdlog::error("[handler] 提交失败（存储引擎错误）⇒ 明确报错，绝不静默丢写入");
         throw std::runtime_error("Transaction commit failed (storage engine error)");
+    }
+    const uint64_t commit_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - commit_start).count());
+    if (ctx->profile_requested) {
+        const auto profile = ctx->finalizeProfile(commit_ns);
+        abandon_rollback.markFinished();
+        spdlog::info("[handler] executeCypher stream done, {} rows, profile={} roots, took={}ms", total_rows,
+                     profile.roots.size(), nowMs() - t0);
+        eugraph::thrift_service::ResultRowBatch summary;
+        summary.profile() = toThriftProfile(profile);
+        co_yield std::move(summary);
+        co_return;
     }
     abandon_rollback.markFinished();
     spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);

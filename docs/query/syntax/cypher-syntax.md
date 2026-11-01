@@ -320,7 +320,8 @@ PROFILE MATCH (n:Person {id: $id}) RETURN n.firstName
 当前指标包括：每个算子的 `rows`/`chunks`、`dbHits`（WT search + search_near）、
 `ioDispatches`、`wtSearch`/`wtSearchNear`、`prefetchHits`/`prefetchMisses`、
 `self/inclusive` wall/CPU，以及语句级 planning/execution/commit 时间。
-Thrift/shell 的摘要传输尚未实现（在 shell 中只返回结果行）。
+Shell 会在结果表后打印同一棵 profile 树；Thrift 客户端通过最终空 batch 的
+`profile` 可选字段读取。
 
 ---
 

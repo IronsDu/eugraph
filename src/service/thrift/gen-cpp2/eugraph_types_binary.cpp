@@ -88,6 +88,16 @@ template uint32_t QueryStreamMeta::write<>(apache::thrift::BinaryProtocolWriter*
 template uint32_t QueryStreamMeta::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
 template uint32_t QueryStreamMeta::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
 
+template void ProfileNode::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t ProfileNode::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t ProfileNode::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t ProfileNode::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
+template void QueryProfile::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t QueryProfile::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t QueryProfile::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t QueryProfile::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
 template void ResultRowBatch::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
 template uint32_t ResultRowBatch::write<>(apache::thrift::BinaryProtocolWriter*) const;
 template uint32_t ResultRowBatch::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;

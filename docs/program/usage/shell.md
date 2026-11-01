@@ -52,6 +52,16 @@ eugraph-shell --host 127.0.0.1 --port 9090
 | `:exit` / `:quit` | 退出 Shell |
 | 其他（不以 `:` 开头） | 作为 Cypher 查询发送，`;` 结尾 |
 
+### PROFILE / EXPLAIN
+
+```cypher
+PROFILE MATCH (n:Person {id: 933}) RETURN n.firstName;
+```
+
+`PROFILE` 正常返回结果行，并在结果表后打印 planner/execution/commit 时间和算子级
+`rows`、`dbHits`、`ioDispatches`、WT search、self/incl time、prefetch hit/miss。
+`EXPLAIN` 只返回 plan 文本，不执行。
+
 ## 多行输入
 
 Cypher 查询以 `;` 结尾。未以 `;` 结尾时进入续写模式（`......> ` 提示符）。

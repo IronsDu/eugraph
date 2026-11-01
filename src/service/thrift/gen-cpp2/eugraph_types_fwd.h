@@ -26,6 +26,8 @@ class BatchInsertEdgesResult;
 class ResultValue;
 class ResultRow;
 class QueryStreamMeta;
+class ProfileNode;
+class QueryProfile;
 class ResultRowBatch;
 class GraphInfo;
 } // namespace eugraph::thrift_service

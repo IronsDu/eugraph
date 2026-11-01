@@ -334,12 +334,92 @@ struct VisitByFieldId<::eugraph::thrift_service::QueryStreamMeta> {
 };
 
 template <>
+struct VisitByFieldId<::eugraph::thrift_service::ProfileNode> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).operator_type_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).details_ref());
+    case 3:
+      return f(2, static_cast<T&&>(t).identifiers_ref());
+    case 4:
+      return f(3, static_cast<T&&>(t).rows_ref());
+    case 5:
+      return f(4, static_cast<T&&>(t).chunks_ref());
+    case 6:
+      return f(5, static_cast<T&&>(t).db_hits_ref());
+    case 7:
+      return f(6, static_cast<T&&>(t).wt_search_ref());
+    case 8:
+      return f(7, static_cast<T&&>(t).wt_search_near_ref());
+    case 9:
+      return f(8, static_cast<T&&>(t).io_dispatches_ref());
+    case 10:
+      return f(9, static_cast<T&&>(t).prefetch_hits_ref());
+    case 11:
+      return f(10, static_cast<T&&>(t).prefetch_misses_ref());
+    case 12:
+      return f(11, static_cast<T&&>(t).self_time_ms_ref());
+    case 13:
+      return f(12, static_cast<T&&>(t).inclusive_time_ms_ref());
+    case 14:
+      return f(13, static_cast<T&&>(t).self_cpu_ms_ref());
+    case 15:
+      return f(14, static_cast<T&&>(t).inclusive_cpu_ms_ref());
+    case 16:
+      return f(15, static_cast<T&&>(t).children_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift_service::ProfileNode");
+    }
+  }
+};
+
+template <>
+struct VisitByFieldId<::eugraph::thrift_service::QueryProfile> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).planning_ms_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).execution_ms_ref());
+    case 3:
+      return f(2, static_cast<T&&>(t).commit_ms_ref());
+    case 4:
+      return f(3, static_cast<T&&>(t).rows_ref());
+    case 5:
+      return f(4, static_cast<T&&>(t).chunks_ref());
+    case 6:
+      return f(5, static_cast<T&&>(t).db_hits_ref());
+    case 7:
+      return f(6, static_cast<T&&>(t).wt_search_ref());
+    case 8:
+      return f(7, static_cast<T&&>(t).wt_search_near_ref());
+    case 9:
+      return f(8, static_cast<T&&>(t).io_dispatches_ref());
+    case 10:
+      return f(9, static_cast<T&&>(t).prefetch_hits_ref());
+    case 11:
+      return f(10, static_cast<T&&>(t).prefetch_misses_ref());
+    case 12:
+      return f(11, static_cast<T&&>(t).roots_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift_service::QueryProfile");
+    }
+  }
+};
+
+template <>
 struct VisitByFieldId<::eugraph::thrift_service::ResultRowBatch> {
   template <typename F, typename T>
   void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
     switch (fieldId) {
     case 1:
       return f(0, static_cast<T&&>(t).rows_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).profile_ref());
     default:
       throwInvalidThriftId(fieldId, "::eugraph::thrift_service::ResultRowBatch");
     }

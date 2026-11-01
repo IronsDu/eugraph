@@ -11,6 +11,7 @@
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -22,6 +23,34 @@ namespace shell {
 using namespace eugraph::thrift_service;
 
 // ==================== Value formatting ====================
+
+std::string formatProfileNode(const ProfileNode& node, int depth) {
+    std::ostringstream os;
+    os << std::string(static_cast<size_t>(depth) * 2, ' ') << node.operator_type().value()
+       << " rows=" << node.rows().value() << " chunks=" << node.chunks().value() << " dbHits=" << node.db_hits().value()
+       << " io=" << node.io_dispatches().value() << " wt=" << node.wt_search().value() << "/"
+       << node.wt_search_near().value() << " self=" << std::fixed << std::setprecision(3) << node.self_time_ms().value()
+       << "ms incl=" << node.inclusive_time_ms().value() << "ms"
+       << " prefetch=" << node.prefetch_hits().value() << "/" << node.prefetch_misses().value() << "\n";
+    if (!node.details().value().empty())
+        os << std::string(static_cast<size_t>(depth) * 2 + 2, ' ') << node.details().value() << "\n";
+    for (const auto& child : *node.children())
+        os << formatProfileNode(child, depth + 1);
+    return os.str();
+}
+
+std::string formatProfile(const QueryProfile& profile) {
+    std::ostringstream os;
+    os << "Profile: planning=" << std::fixed << std::setprecision(3) << profile.planning_ms().value()
+       << "ms execution=" << profile.execution_ms().value() << "ms commit=" << profile.commit_ms().value() << "ms\n";
+    os << "  rows=" << profile.rows().value() << " chunks=" << profile.chunks().value()
+       << " dbHits=" << profile.db_hits().value() << " io=" << profile.io_dispatches().value()
+       << " wt=" << profile.wt_search().value() << "/" << profile.wt_search_near().value()
+       << " prefetch=" << profile.prefetch_hits().value() << "/" << profile.prefetch_misses().value() << "\n";
+    for (const auto& root : *profile.roots())
+        os << formatProfileNode(root, 1);
+    return os.str();
+}
 
 std::string formatTable(const std::vector<std::string>& columns, const std::vector<std::vector<std::string>>& rows) {
     if (columns.empty()) {
@@ -400,8 +429,11 @@ static void runRpcRepl(const ShellConfig& config) {
                     size_t total_rows = 0;
                     std::vector<std::vector<std::string>> all_rows;
                     std::string stream_error;
+                    std::optional<QueryProfile> profile;
                     std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
                         if (batch.hasValue()) {
+                            if (batch->profile().has_value())
+                                profile = *batch->profile();
                             for (const auto& row : *batch->rows()) {
                                 std::vector<std::string> cells;
                                 for (const auto& val : *row.values()) {
@@ -419,10 +451,15 @@ static void runRpcRepl(const ShellConfig& config) {
                     if (!stream_error.empty()) {
                         std::cerr << "Error: " << stream_error << std::endl;
                     } else if (meta.columns()->empty()) {
-                        std::cout << "OK" << std::endl;
+                        std::cout << "OK\n";
+                        if (profile)
+                            std::cout << formatProfile(*profile) << std::endl;
                     } else {
                         std::cout << formatTable(*meta.columns(), all_rows);
                         std::cout << total_rows << " row" << (total_rows == 1 ? "" : "s");
+                        if (profile)
+                            std::cout << "\n" << formatProfile(*profile);
+                        std::cout << std::endl;
                     }
                 } catch (const std::exception& e) {
                     std::cerr << "Error: " << e.what() << std::endl;

@@ -1,6 +1,6 @@
 # PROFILE 设计（neo4j 语法 + EuGraph 专有指标）
 
-> 状态：**Phase 1 已实现**（Bolt + Web Console；Thrift/shell 摘要列为 Phase 2）。
+> 状态：**Phase 1 已实现**（Bolt + Web Console + Thrift/shell）。
 > 目标：让 `PROFILE <cypher>` 像 neo4j 一样执行查询并返回结果摘要，同时在 plan 节点上
 > 暴露 EuGraph 自己的调度/存储/预取指标，直接用于定位热点算子。
 
@@ -51,11 +51,12 @@ plan 节点语义。
 - Bolt 最终 `PULL` 的 `SUCCESS` 返回 `profile` + 顶层 `eugraph` 摘要，官方 Python/JS
   driver 实测可读；
 - Web Console：`PROFILE`/`EXPLAIN` 智能提示、`:profile <cypher>` 命令、Profile 结果页；
+- Thrift/shell：`ResultRowBatch.profile` 可选字段 + 最后一个空 batch 携带摘要，shell 打印
+  算子级 profile；
 - 保持 `EXPLAIN` 行为不变；PROFILE 关闭时零采集开销。
 
-未完成 / Phase 2：
+Phase 2（可选增强）：
 
-- Thrift/shell 的 profile 摘要（流协议目前只有行 batch，计划加最终空 batch）；
 - Web 的火焰图/排序交互（当前是 Profile 表格 + 热点高亮）；
 - `PROFILE CALL` / DDL / procedure 级 profile。
 
@@ -285,10 +286,9 @@ struct StorageOpCounters {
 
 Thrift 流没有“结果摘要”消息，且 `QueryStreamMeta` 在结果之前发送。方案：
 
-- 在 `ResultRowBatch` 增加可选 profile 字段，最后一个空 batch 携带 profile；
-  旧客户端忽略未知 optional 字段，看到 0 行 batch 不影响结果；
-- 或者新增 `QueryProfile` 结构，随最终 batch 发送（推荐 typed，避免 shell 解析 JSON）；
-- `QueryStreamMeta` 可加 `optional bool profiled` 让客户端预期最终摘要；
+- `ResultRowBatch` 已增加 `2: optional QueryProfile profile`；服务器在 commit 后产生
+  一个 **rows 为空的最终 batch** 携带 profile；
+- 旧客户端忽略未知 optional 字段；loader/TCK 的 0 行 batch 不影响结果；
 - shell 在 drain 后打印：
 
 ```text
@@ -329,9 +329,8 @@ profile JSON/tree，后续再做可视化。
 3. `StreamContext` profile finalize（planning/execution/commit、rows/chunks）；
 4. Bolt final `SUCCESS.profile` + Python driver 集成测试；
 5. Web Console 的 Profile 结果页与 `:profile` 命令、`PROFILE` 智能提示；
-6. 单元测试、Bolt driver 集成测试、TCK 回归、无 profile 路径开销检查。
-
-Thrift/shell 的摘要输出移到 Phase 2。
+6. Thrift `ResultRowBatch.profile` + shell 文本树；
+7. 单元测试、Bolt/Thrift driver 集成测试、TCK 回归、无 profile 路径开销检查。
 
 ### Phase 2（指标完善）
 
@@ -356,7 +355,7 @@ Thrift/shell 的摘要输出移到 Phase 2。
 | Metrics | 构造有 IO 的查询，`ioDispatches`/`wtSearch`/`wtSearchNear` 非零；关闭 profile 时 counters 不变 |
 | Prefetch | 稀疏/稠密属性访问分别产生 hits/misses；数值与 `missingPrefetchCount` 对齐 |
 | Bolt | Python/Java/JS driver：`summary.profile` 可读；`PROFILE` 结果行正确；`PULL` 分页最后才带 profile；`EXPLAIN` 不执行 |
-| Thrift/shell | 最后一个 batch 携带 profile；shell 表格后打印 tree；loader/TCK 忽略空 batch |
+| Thrift/shell | 最后一个 batch 携带 profile；shell 表格后打印 tree；loader/TCK 忽略空 batch（已覆盖 RPC 测试 + shell 手动验证） |
 | 回归 | 全量 unit/ctest；TCK 3907/3907；无 `EUGRAPH_*` env 时性能不退化 |
 | 性能 | 在 c5/c9/c12 上比较 normal vs PROFILE 的 p50；记录 profiling 开销 |
 
@@ -379,8 +378,8 @@ Thrift/shell 的摘要输出移到 Phase 2。
 
 ## 9. 已采用的最小决策
 
-1. 首期范围：regularQuery 的 `PROFILE` + Bolt + Web；Thrift/shell、CALL/DDL 后置。
-2. Thrift 的 profile 字段变更后置，期间 `PROFILE` 在 shell 只返回正常结果、不显示摘要。
+1. 首期范围：regularQuery 的 `PROFILE` + Bolt + Web + Thrift/shell；CALL/DDL 后置。
+2. Thrift `ResultRowBatch` 增加可选 profile 字段；旧客户端忽略该字段。
 3. `dbHits = WT search + search_near`（文档明确标注不可与 neo4j page-cache dbHits 横比）。
 4. `PROFILE` 写查询按 neo4j 语义真实执行并提交。
 5. 扩展字段同时放 `args`（`eugraph.*`）和 `eugraph` map：兼容 JS driver，也保留

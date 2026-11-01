@@ -198,10 +198,53 @@ struct ForEachField<::eugraph::thrift_service::QueryStreamMeta> {
 };
 
 template <>
+struct ForEachField<::eugraph::thrift_service::ProfileNode> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).operator_type_ref()...);
+    f(1, static_cast<T&&>(t).details_ref()...);
+    f(2, static_cast<T&&>(t).identifiers_ref()...);
+    f(3, static_cast<T&&>(t).rows_ref()...);
+    f(4, static_cast<T&&>(t).chunks_ref()...);
+    f(5, static_cast<T&&>(t).db_hits_ref()...);
+    f(6, static_cast<T&&>(t).wt_search_ref()...);
+    f(7, static_cast<T&&>(t).wt_search_near_ref()...);
+    f(8, static_cast<T&&>(t).io_dispatches_ref()...);
+    f(9, static_cast<T&&>(t).prefetch_hits_ref()...);
+    f(10, static_cast<T&&>(t).prefetch_misses_ref()...);
+    f(11, static_cast<T&&>(t).self_time_ms_ref()...);
+    f(12, static_cast<T&&>(t).inclusive_time_ms_ref()...);
+    f(13, static_cast<T&&>(t).self_cpu_ms_ref()...);
+    f(14, static_cast<T&&>(t).inclusive_cpu_ms_ref()...);
+    f(15, static_cast<T&&>(t).children_ref()...);
+  }
+};
+
+template <>
+struct ForEachField<::eugraph::thrift_service::QueryProfile> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).planning_ms_ref()...);
+    f(1, static_cast<T&&>(t).execution_ms_ref()...);
+    f(2, static_cast<T&&>(t).commit_ms_ref()...);
+    f(3, static_cast<T&&>(t).rows_ref()...);
+    f(4, static_cast<T&&>(t).chunks_ref()...);
+    f(5, static_cast<T&&>(t).db_hits_ref()...);
+    f(6, static_cast<T&&>(t).wt_search_ref()...);
+    f(7, static_cast<T&&>(t).wt_search_near_ref()...);
+    f(8, static_cast<T&&>(t).io_dispatches_ref()...);
+    f(9, static_cast<T&&>(t).prefetch_hits_ref()...);
+    f(10, static_cast<T&&>(t).prefetch_misses_ref()...);
+    f(11, static_cast<T&&>(t).roots_ref()...);
+  }
+};
+
+template <>
 struct ForEachField<::eugraph::thrift_service::ResultRowBatch> {
   template <typename F, typename... T>
   void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
     f(0, static_cast<T&&>(t).rows_ref()...);
+    f(1, static_cast<T&&>(t).profile_ref()...);
   }
 };
 
