@@ -790,11 +790,28 @@ private:
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
-        auto* counters = tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
-        if (counters != nullptr) {
-            recordIoDispatch(counters);
-            auto wrapped = [func = std::move(func), counters]() mutable -> std::invoke_result_t<F> {
-                StorageOpMetricsScope scope(counters);
+        StorageOpCounters* raw_counters =
+            tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
+        // Keep the counter object alive until the queued IO lambda finishes.
+        // A cancelled query may destroy its operator/query context while the
+        // dispatch is still in flight; the raw counters pointer would otherwise
+        // dangle in recordIoDispatch / the IO-thread metrics scope.
+        std::shared_ptr<StorageOpCounters> counters =
+            tls_storage_op_counters != nullptr ? pinStorageOpCounters(raw_counters) : profile_counters_;
+        if (counters) {
+            recordIoDispatch(counters.get());
+            auto wrapped = [func = std::move(func),
+                            counters = std::move(counters)]() mutable -> std::invoke_result_t<F> {
+                StorageOpMetricsScope scope(counters.get());
+                return func();
+            };
+            return io_.dispatch(std::move(wrapped));
+        }
+        if (raw_counters != nullptr) {
+            // Fallback for non-shared test/local counters.
+            recordIoDispatch(raw_counters);
+            auto wrapped = [func = std::move(func), raw_counters]() mutable -> std::invoke_result_t<F> {
+                StorageOpMetricsScope scope(raw_counters);
                 return func();
             };
             return io_.dispatch(std::move(wrapped));
@@ -802,9 +819,10 @@ private:
         if (!trace)
             return io_.dispatch(std::move(func));
 
-        auto* statement_counters = io_stats_.seeks.get();
-        auto wrapped = [func = std::move(func), statement_counters]() mutable -> std::invoke_result_t<F> {
-            StorageOpMetricsScope scope(statement_counters);
+        auto statement_counters = io_stats_.seeks;
+        auto wrapped = [func = std::move(func),
+                        statement_counters = std::move(statement_counters)]() mutable -> std::invoke_result_t<F> {
+            StorageOpMetricsScope scope(statement_counters.get());
             return func();
         };
         return io_.dispatch(std::move(wrapped));
@@ -815,11 +833,22 @@ private:
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
-        auto* counters = tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
-        if (counters != nullptr) {
-            recordIoDispatch(counters);
-            auto wrapped = [func = std::move(func), counters]() mutable {
-                StorageOpMetricsScope scope(counters);
+        StorageOpCounters* raw_counters =
+            tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
+        std::shared_ptr<StorageOpCounters> counters =
+            tls_storage_op_counters != nullptr ? pinStorageOpCounters(raw_counters) : profile_counters_;
+        if (counters) {
+            recordIoDispatch(counters.get());
+            auto wrapped = [func = std::move(func), counters = std::move(counters)]() mutable {
+                StorageOpMetricsScope scope(counters.get());
+                func();
+            };
+            return io_.dispatchVoid(std::move(wrapped));
+        }
+        if (raw_counters != nullptr) {
+            recordIoDispatch(raw_counters);
+            auto wrapped = [func = std::move(func), raw_counters]() mutable {
+                StorageOpMetricsScope scope(raw_counters);
                 func();
             };
             return io_.dispatchVoid(std::move(wrapped));
@@ -827,9 +856,9 @@ private:
         if (!trace)
             return io_.dispatchVoid(std::move(func));
 
-        auto* statement_counters = io_stats_.seeks.get();
-        auto wrapped = [func = std::move(func), statement_counters]() mutable {
-            StorageOpMetricsScope scope(statement_counters);
+        auto statement_counters = io_stats_.seeks;
+        auto wrapped = [func = std::move(func), statement_counters = std::move(statement_counters)]() mutable {
+            StorageOpMetricsScope scope(statement_counters.get());
             func();
         };
         return io_.dispatchVoid(std::move(wrapped));

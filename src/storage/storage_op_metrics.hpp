@@ -2,13 +2,14 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 namespace eugraph {
 
 /// Per-statement WT cursor seek counters. The active counter object is
 /// installed by AsyncGraphDataStore around each IO-thread dispatch; sync store
 /// code only touches thread-local state, so no session->counter lookup is needed.
-struct StorageOpCounters {
+struct StorageOpCounters : std::enable_shared_from_this<StorageOpCounters> {
     std::atomic<uint64_t> wt_search{0};
     std::atomic<uint64_t> wt_search_near{0};
     std::atomic<uint64_t> wt_scan_rows{0};
@@ -16,11 +17,22 @@ struct StorageOpCounters {
     std::atomic<uint64_t> prefetch_hits{0};
     std::atomic<uint64_t> prefetch_misses{0};
 
-    /// When this is a per-operator counter, aggregate points at the statement
-    /// counter. Counters are installed into thread-local storage by the
-    /// operator wrapper; storage work on the IO thread increments both.
-    StorageOpCounters* aggregate = nullptr;
+    /// When this is a per-operator counter, aggregate owns the statement
+    /// counter. Durable ownership keeps the statement counters alive while an
+    /// IO dispatch that captured them is still queued after query cancellation.
+    std::shared_ptr<StorageOpCounters> aggregate;
 };
+
+/// Pin counters for an async hop: returns a shared_ptr owning `raw` when the
+/// object is shared_ptr-owned (per-operator / profiling counters), so a queued
+/// IO task keeps it alive after a cancelled query drops its own reference.
+/// Returns empty for non-shared (stack/test) counters; callers then keep the
+/// raw pointer as before.
+inline std::shared_ptr<StorageOpCounters> pinStorageOpCounters(StorageOpCounters* raw) {
+    if (raw == nullptr)
+        return nullptr;
+    return raw->weak_from_this().lock();
+}
 
 inline thread_local StorageOpCounters* tls_storage_op_counters = nullptr;
 
