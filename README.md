@@ -1,7 +1,7 @@
 # EuGraph
 
-![OpenCypher TCK](https://img.shields.io/badge/OpenCypher%20TCK-3847%20passed%2C%200%20failed-brightgreen)
-![CALL](https://img.shields.io/badge/CALL%2FProcedure-Not%20Yet-yellow)
+![OpenCypher TCK](https://img.shields.io/badge/OpenCypher%20TCK-3906%20passed%2C%201%20known%20failure-yellow)
+![CALL](https://img.shields.io/badge/Builtin%20CALL-Supported-brightgreen)
 
 单机图数据库：
 
@@ -12,11 +12,20 @@
 
 ### 查询语言：openCypher（含扩展）
 
-openCypher TCK 覆盖情况：全部已执行场景通过；目前未实现的场景集中在 `CALL` / 存储过程相关能力。详细分类结果见 [docs/tests/tck-results.md](docs/tests/tck-results.md)。
+openCypher TCK 当前为 **3959 scenarios / 3906 passed / 52 undefined / 1 known failure**；
+52 个 undefined 主要是自定义 `CALL` / procedure 场景，唯一的 known failure 是
+`Temporal2 [6]` 的 tzdata/LMT 差异；没有新增回归。详细分类结果见
+[docs/tests/tck-results.md](docs/tests/tck-results.md)。
 
 **扩展**（在 openCypher 基础上新增）
 
 - `EXPLAIN` 前缀（`EXPLAIN MATCH ...`）
+- `PROFILE` 前缀（执行查询并返回普通结果 + 算子级 profile；与 `EXPLAIN` 互斥）
+  - 指标包括 rows/chunks、dbHits（WT seek + scan rows）、ioDispatches、WT search/search_near、
+    self/inclusive wall/CPU、prefetch hits/misses；支持 Bolt、Web Console、Thrift 和 shell
+  - 详见 [docs/query/engine/profile-design.md](docs/query/engine/profile-design.md)
+- `FOREACH (x IN list | ...)` 更新子句
+- 内置过程调用：`CALL db.*`、`SHOW ...`、`CALL ... YIELD ...`；自定义过程尚未实现
 - 多标签与强弱模式混合属性访问
   - **便捷模式 / 弱模式**：`n.name` 自动在所有标签（含隐藏的 `__anon__`）中查找属性；单个标签命中返回标量，多个标签同名冲突时合并为列表返回
   - **强模式 / 类型安全模式**：`n::Label` / `n::Label.prop`，在编译期校验属性是否存在，并只访问指定标签下的属性；也支持 `SET n::Label.prop = ...`
@@ -26,10 +35,8 @@ openCypher TCK 覆盖情况：全部已执行场景通过；目前未实现的�
 
 **暂未实现 / 远期规划**
 
-- `CALL` / 存储过程
+- 自定义 `CALL` / procedure（内置 `db.*`、`SHOW ...` 已支持）
 - Neo4j 扩展中的 `LOAD CSV`（项目另有独立的 `eugraph-loader` CSV 批量导入工具替代）
-- Neo4j 扩展中的 `FOREACH`
-- Neo4j 扩展中的 `PROFILE`（已有 `EXPLAIN`，`PROFILE` 暂未实现）
 
 ### Neo4j Bolt 协议支持
 

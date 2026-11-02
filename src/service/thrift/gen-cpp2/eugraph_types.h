@@ -83,7 +83,36 @@ struct list_json;
 struct map_json;
 struct values;
 struct columns;
+struct operator_type;
+struct details;
+struct identifiers;
 struct rows;
+struct chunks;
+struct db_hits;
+struct wt_search;
+struct wt_search_near;
+struct io_dispatches;
+struct prefetch_hits;
+struct prefetch_misses;
+struct self_time_ms;
+struct inclusive_time_ms;
+struct self_cpu_ms;
+struct inclusive_cpu_ms;
+struct children;
+struct planning_ms;
+struct execution_ms;
+struct commit_ms;
+struct rows;
+struct chunks;
+struct db_hits;
+struct wt_search;
+struct wt_search_near;
+struct io_dispatches;
+struct prefetch_hits;
+struct prefetch_misses;
+struct roots;
+struct rows;
+struct profile;
 struct graph_id;
 struct name;
 struct created_at;
@@ -377,9 +406,125 @@ APACHE_THRIFT_DEFINE_ACCESSOR(values);
 #define APACHE_THRIFT_ACCESSOR_columns
 APACHE_THRIFT_DEFINE_ACCESSOR(columns);
 #endif
+#ifndef APACHE_THRIFT_ACCESSOR_operator_type
+#define APACHE_THRIFT_ACCESSOR_operator_type
+APACHE_THRIFT_DEFINE_ACCESSOR(operator_type);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_details
+#define APACHE_THRIFT_ACCESSOR_details
+APACHE_THRIFT_DEFINE_ACCESSOR(details);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_identifiers
+#define APACHE_THRIFT_ACCESSOR_identifiers
+APACHE_THRIFT_DEFINE_ACCESSOR(identifiers);
+#endif
 #ifndef APACHE_THRIFT_ACCESSOR_rows
 #define APACHE_THRIFT_ACCESSOR_rows
 APACHE_THRIFT_DEFINE_ACCESSOR(rows);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_chunks
+#define APACHE_THRIFT_ACCESSOR_chunks
+APACHE_THRIFT_DEFINE_ACCESSOR(chunks);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_db_hits
+#define APACHE_THRIFT_ACCESSOR_db_hits
+APACHE_THRIFT_DEFINE_ACCESSOR(db_hits);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_wt_search
+#define APACHE_THRIFT_ACCESSOR_wt_search
+APACHE_THRIFT_DEFINE_ACCESSOR(wt_search);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_wt_search_near
+#define APACHE_THRIFT_ACCESSOR_wt_search_near
+APACHE_THRIFT_DEFINE_ACCESSOR(wt_search_near);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_io_dispatches
+#define APACHE_THRIFT_ACCESSOR_io_dispatches
+APACHE_THRIFT_DEFINE_ACCESSOR(io_dispatches);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_prefetch_hits
+#define APACHE_THRIFT_ACCESSOR_prefetch_hits
+APACHE_THRIFT_DEFINE_ACCESSOR(prefetch_hits);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_prefetch_misses
+#define APACHE_THRIFT_ACCESSOR_prefetch_misses
+APACHE_THRIFT_DEFINE_ACCESSOR(prefetch_misses);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_self_time_ms
+#define APACHE_THRIFT_ACCESSOR_self_time_ms
+APACHE_THRIFT_DEFINE_ACCESSOR(self_time_ms);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_inclusive_time_ms
+#define APACHE_THRIFT_ACCESSOR_inclusive_time_ms
+APACHE_THRIFT_DEFINE_ACCESSOR(inclusive_time_ms);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_self_cpu_ms
+#define APACHE_THRIFT_ACCESSOR_self_cpu_ms
+APACHE_THRIFT_DEFINE_ACCESSOR(self_cpu_ms);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_inclusive_cpu_ms
+#define APACHE_THRIFT_ACCESSOR_inclusive_cpu_ms
+APACHE_THRIFT_DEFINE_ACCESSOR(inclusive_cpu_ms);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_children
+#define APACHE_THRIFT_ACCESSOR_children
+APACHE_THRIFT_DEFINE_ACCESSOR(children);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_planning_ms
+#define APACHE_THRIFT_ACCESSOR_planning_ms
+APACHE_THRIFT_DEFINE_ACCESSOR(planning_ms);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_execution_ms
+#define APACHE_THRIFT_ACCESSOR_execution_ms
+APACHE_THRIFT_DEFINE_ACCESSOR(execution_ms);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_commit_ms
+#define APACHE_THRIFT_ACCESSOR_commit_ms
+APACHE_THRIFT_DEFINE_ACCESSOR(commit_ms);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_rows
+#define APACHE_THRIFT_ACCESSOR_rows
+APACHE_THRIFT_DEFINE_ACCESSOR(rows);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_chunks
+#define APACHE_THRIFT_ACCESSOR_chunks
+APACHE_THRIFT_DEFINE_ACCESSOR(chunks);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_db_hits
+#define APACHE_THRIFT_ACCESSOR_db_hits
+APACHE_THRIFT_DEFINE_ACCESSOR(db_hits);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_wt_search
+#define APACHE_THRIFT_ACCESSOR_wt_search
+APACHE_THRIFT_DEFINE_ACCESSOR(wt_search);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_wt_search_near
+#define APACHE_THRIFT_ACCESSOR_wt_search_near
+APACHE_THRIFT_DEFINE_ACCESSOR(wt_search_near);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_io_dispatches
+#define APACHE_THRIFT_ACCESSOR_io_dispatches
+APACHE_THRIFT_DEFINE_ACCESSOR(io_dispatches);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_prefetch_hits
+#define APACHE_THRIFT_ACCESSOR_prefetch_hits
+APACHE_THRIFT_DEFINE_ACCESSOR(prefetch_hits);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_prefetch_misses
+#define APACHE_THRIFT_ACCESSOR_prefetch_misses
+APACHE_THRIFT_DEFINE_ACCESSOR(prefetch_misses);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_roots
+#define APACHE_THRIFT_ACCESSOR_roots
+APACHE_THRIFT_DEFINE_ACCESSOR(roots);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_rows
+#define APACHE_THRIFT_ACCESSOR_rows
+APACHE_THRIFT_DEFINE_ACCESSOR(rows);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_profile
+#define APACHE_THRIFT_ACCESSOR_profile
+APACHE_THRIFT_DEFINE_ACCESSOR(profile);
 #endif
 #ifndef APACHE_THRIFT_ACCESSOR_graph_id
 #define APACHE_THRIFT_ACCESSOR_graph_id
@@ -544,6 +689,8 @@ class BatchInsertEdgesResult;
 class ResultValue;
 class ResultRow;
 class QueryStreamMeta;
+class ProfileNode;
+class QueryProfile;
 class ResultRowBatch;
 class GraphInfo;
 } // namespace eugraph::thrift_service
@@ -6418,6 +6565,1572 @@ unsigned long QueryStreamMeta::read(Protocol_* iprot) {
 }
 
 
+/** Glean {"file": "proto/eugraph.thrift", "name": "ProfileNode", "kind": "struct" } */
+class ProfileNode final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 16;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::operator_type,
+    ::apache::thrift::ident::details,
+    ::apache::thrift::ident::identifiers,
+    ::apache::thrift::ident::rows,
+    ::apache::thrift::ident::chunks,
+    ::apache::thrift::ident::db_hits,
+    ::apache::thrift::ident::wt_search,
+    ::apache::thrift::ident::wt_search_near,
+    ::apache::thrift::ident::io_dispatches,
+    ::apache::thrift::ident::prefetch_hits,
+    ::apache::thrift::ident::prefetch_misses,
+    ::apache::thrift::ident::self_time_ms,
+    ::apache::thrift::ident::inclusive_time_ms,
+    ::apache::thrift::ident::self_cpu_ms,
+    ::apache::thrift::ident::inclusive_cpu_ms,
+    ::apache::thrift::ident::children
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::string_t,
+    ::apache::thrift::type::string_t,
+    ::apache::thrift::type::list<::apache::thrift::type::string_t>,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::double_t,
+    ::apache::thrift::type::double_t,
+    ::apache::thrift::type::double_t,
+    ::apache::thrift::type::double_t,
+    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::ProfileNode>>
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = ProfileNode;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  ProfileNode();
+
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  ProfileNode(apache::thrift::FragileConstructor, ::std::string operator_type__arg, ::std::string details__arg, ::std::vector<::std::string> identifiers__arg, ::std::int64_t rows__arg, ::std::int64_t chunks__arg, ::std::int64_t db_hits__arg, ::std::int64_t wt_search__arg, ::std::int64_t wt_search_near__arg, ::std::int64_t io_dispatches__arg, ::std::int64_t prefetch_hits__arg, ::std::int64_t prefetch_misses__arg, double self_time_ms__arg, double inclusive_time_ms__arg, double self_cpu_ms__arg, double inclusive_cpu_ms__arg, ::std::vector<::eugraph::thrift_service::ProfileNode> children__arg);
+
+  ProfileNode(ProfileNode&&) noexcept;
+
+  ProfileNode(const ProfileNode& src);
+
+
+  ProfileNode& operator=(ProfileNode&&) noexcept;
+  ProfileNode& operator=(const ProfileNode& src);
+
+  ~ProfileNode();
+
+ private:
+  ::std::string __fbthrift_field_operator_type;
+ private:
+  ::std::string __fbthrift_field_details;
+ private:
+  ::std::vector<::std::string> __fbthrift_field_identifiers;
+ private:
+  ::std::int64_t __fbthrift_field_rows;
+ private:
+  ::std::int64_t __fbthrift_field_chunks;
+ private:
+  ::std::int64_t __fbthrift_field_db_hits;
+ private:
+  ::std::int64_t __fbthrift_field_wt_search;
+ private:
+  ::std::int64_t __fbthrift_field_wt_search_near;
+ private:
+  ::std::int64_t __fbthrift_field_io_dispatches;
+ private:
+  ::std::int64_t __fbthrift_field_prefetch_hits;
+ private:
+  ::std::int64_t __fbthrift_field_prefetch_misses;
+ private:
+  double __fbthrift_field_self_time_ms;
+ private:
+  double __fbthrift_field_inclusive_time_ms;
+ private:
+  double __fbthrift_field_self_cpu_ms;
+ private:
+  double __fbthrift_field_inclusive_cpu_ms;
+ private:
+  ::std::vector<::eugraph::thrift_service::ProfileNode> __fbthrift_field_children;
+ private:
+  apache::thrift::detail::isset_bitset<16, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const ProfileNode&) const;
+  bool operator<(const ProfileNode&) const;
+
+  /** Glean { "field": "operator_type" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> operator_type_ref() const& {
+    return {this->__fbthrift_field_operator_type, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "operator_type" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> operator_type_ref() & {
+    return {this->__fbthrift_field_operator_type, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "operator_type" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> operator_type_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_operator_type), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "operator_type" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> operator_type() const& {
+    return {this->__fbthrift_field_operator_type, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "operator_type" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> operator_type() & {
+    return {this->__fbthrift_field_operator_type, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "operator_type" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> operator_type() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_operator_type), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "details" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> details_ref() const& {
+    return {this->__fbthrift_field_details, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "details" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> details_ref() & {
+    return {this->__fbthrift_field_details, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "details" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> details_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_details), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "details" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> details() const& {
+    return {this->__fbthrift_field_details, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "details" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> details() & {
+    return {this->__fbthrift_field_details, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "details" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> details() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_details), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "identifiers" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> identifiers_ref() const& {
+    return {this->__fbthrift_field_identifiers, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "identifiers" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> identifiers_ref() & {
+    return {this->__fbthrift_field_identifiers, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "identifiers" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> identifiers_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_identifiers), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "identifiers" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> identifiers() const& {
+    return {this->__fbthrift_field_identifiers, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "identifiers" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> identifiers() & {
+    return {this->__fbthrift_field_identifiers, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "identifiers" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> identifiers() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_identifiers), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> rows_ref() const& {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> rows_ref() & {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> rows_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_rows), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> rows() const& {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> rows() & {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> rows() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_rows), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> chunks_ref() const& {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> chunks_ref() & {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> chunks_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_chunks), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> chunks() const& {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> chunks() & {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> chunks() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_chunks), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> db_hits_ref() const& {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> db_hits_ref() & {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> db_hits_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_db_hits), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> db_hits() const& {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> db_hits() & {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> db_hits() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_db_hits), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search_ref() const& {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search_ref() & {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search() const& {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search() & {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search_near_ref() const& {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search_near_ref() & {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search_near_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search_near), __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search_near() const& {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search_near() & {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search_near() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search_near), __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> io_dispatches_ref() const& {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> io_dispatches_ref() & {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> io_dispatches_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_io_dispatches), __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> io_dispatches() const& {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> io_dispatches() & {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> io_dispatches() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_io_dispatches), __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_hits_ref() const& {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_hits_ref() & {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_hits_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_hits), __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_hits() const& {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_hits() & {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_hits() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_hits), __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_misses_ref() const& {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_misses_ref() & {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_misses_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_misses), __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_misses() const& {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_misses() & {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_misses() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_misses), __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "self_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> self_time_ms_ref() const& {
+    return {this->__fbthrift_field_self_time_ms, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "self_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> self_time_ms_ref() & {
+    return {this->__fbthrift_field_self_time_ms, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "self_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> self_time_ms_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_self_time_ms), __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "self_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> self_time_ms() const& {
+    return {this->__fbthrift_field_self_time_ms, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "self_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> self_time_ms() & {
+    return {this->__fbthrift_field_self_time_ms, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "self_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> self_time_ms() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_self_time_ms), __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inclusive_time_ms_ref() const& {
+    return {this->__fbthrift_field_inclusive_time_ms, __isset.at(12), __isset.bit(12)};
+  }
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inclusive_time_ms_ref() & {
+    return {this->__fbthrift_field_inclusive_time_ms, __isset.at(12), __isset.bit(12)};
+  }
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inclusive_time_ms_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inclusive_time_ms), __isset.at(12), __isset.bit(12)};
+  }
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inclusive_time_ms() const& {
+    return {this->__fbthrift_field_inclusive_time_ms, __isset.at(12), __isset.bit(12)};
+  }
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inclusive_time_ms() & {
+    return {this->__fbthrift_field_inclusive_time_ms, __isset.at(12), __isset.bit(12)};
+  }
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inclusive_time_ms() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inclusive_time_ms), __isset.at(12), __isset.bit(12)};
+  }
+
+  /** Glean { "field": "self_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> self_cpu_ms_ref() const& {
+    return {this->__fbthrift_field_self_cpu_ms, __isset.at(13), __isset.bit(13)};
+  }
+
+  /** Glean { "field": "self_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> self_cpu_ms_ref() & {
+    return {this->__fbthrift_field_self_cpu_ms, __isset.at(13), __isset.bit(13)};
+  }
+
+  /** Glean { "field": "self_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> self_cpu_ms_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_self_cpu_ms), __isset.at(13), __isset.bit(13)};
+  }
+
+  /** Glean { "field": "self_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> self_cpu_ms() const& {
+    return {this->__fbthrift_field_self_cpu_ms, __isset.at(13), __isset.bit(13)};
+  }
+
+  /** Glean { "field": "self_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> self_cpu_ms() & {
+    return {this->__fbthrift_field_self_cpu_ms, __isset.at(13), __isset.bit(13)};
+  }
+
+  /** Glean { "field": "self_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> self_cpu_ms() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_self_cpu_ms), __isset.at(13), __isset.bit(13)};
+  }
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inclusive_cpu_ms_ref() const& {
+    return {this->__fbthrift_field_inclusive_cpu_ms, __isset.at(14), __isset.bit(14)};
+  }
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inclusive_cpu_ms_ref() & {
+    return {this->__fbthrift_field_inclusive_cpu_ms, __isset.at(14), __isset.bit(14)};
+  }
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inclusive_cpu_ms_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inclusive_cpu_ms), __isset.at(14), __isset.bit(14)};
+  }
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inclusive_cpu_ms() const& {
+    return {this->__fbthrift_field_inclusive_cpu_ms, __isset.at(14), __isset.bit(14)};
+  }
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inclusive_cpu_ms() & {
+    return {this->__fbthrift_field_inclusive_cpu_ms, __isset.at(14), __isset.bit(14)};
+  }
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inclusive_cpu_ms() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inclusive_cpu_ms), __isset.at(14), __isset.bit(14)};
+  }
+
+  /** Glean { "field": "children" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> children_ref() const& {
+    return {this->__fbthrift_field_children, __isset.at(15), __isset.bit(15)};
+  }
+
+  /** Glean { "field": "children" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> children_ref() & {
+    return {this->__fbthrift_field_children, __isset.at(15), __isset.bit(15)};
+  }
+
+  /** Glean { "field": "children" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> children_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_children), __isset.at(15), __isset.bit(15)};
+  }
+
+  /** Glean { "field": "children" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> children() const& {
+    return {this->__fbthrift_field_children, __isset.at(15), __isset.bit(15)};
+  }
+
+  /** Glean { "field": "children" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> children() & {
+    return {this->__fbthrift_field_children, __isset.at(15), __isset.bit(15)};
+  }
+
+  /** Glean { "field": "children" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> children() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_children), __isset.at(15), __isset.bit(15)};
+  }
+
+  /** Glean { "field": "operator_type" } */
+  [[deprecated("Use `FOO.operator_type().value()` instead of `FOO.get_operator_type()`")]]
+  const ::std::string& get_operator_type() const& {
+    return __fbthrift_field_operator_type;
+  }
+
+  /** Glean { "field": "operator_type" } */
+  [[deprecated("Use `FOO.operator_type().value()` instead of `FOO.get_operator_type()`")]]
+  ::std::string get_operator_type() && {
+    return static_cast<::std::string&&>(__fbthrift_field_operator_type);
+  }
+
+  /** Glean { "field": "operator_type" } */
+  template <typename T_ProfileNode_operator_type_struct_setter = ::std::string>
+  [[deprecated("Use `FOO.operator_type() = BAR` instead of `FOO.set_operator_type(BAR)`")]]
+  ::std::string& set_operator_type(T_ProfileNode_operator_type_struct_setter&& operator_type_) {
+    operator_type_ref() = std::forward<T_ProfileNode_operator_type_struct_setter>(operator_type_);
+    return __fbthrift_field_operator_type;
+  }
+
+  /** Glean { "field": "details" } */
+  [[deprecated("Use `FOO.details().value()` instead of `FOO.get_details()`")]]
+  const ::std::string& get_details() const& {
+    return __fbthrift_field_details;
+  }
+
+  /** Glean { "field": "details" } */
+  [[deprecated("Use `FOO.details().value()` instead of `FOO.get_details()`")]]
+  ::std::string get_details() && {
+    return static_cast<::std::string&&>(__fbthrift_field_details);
+  }
+
+  /** Glean { "field": "details" } */
+  template <typename T_ProfileNode_details_struct_setter = ::std::string>
+  [[deprecated("Use `FOO.details() = BAR` instead of `FOO.set_details(BAR)`")]]
+  ::std::string& set_details(T_ProfileNode_details_struct_setter&& details_) {
+    details_ref() = std::forward<T_ProfileNode_details_struct_setter>(details_);
+    return __fbthrift_field_details;
+  }
+
+  /** Glean { "field": "identifiers" } */
+  [[deprecated("Use `FOO.identifiers().value()` instead of `FOO.get_identifiers()`")]]
+  const ::std::vector<::std::string>& get_identifiers() const&;
+
+  /** Glean { "field": "identifiers" } */
+  [[deprecated("Use `FOO.identifiers().value()` instead of `FOO.get_identifiers()`")]]
+  ::std::vector<::std::string> get_identifiers() &&;
+
+  /** Glean { "field": "identifiers" } */
+  template <typename T_ProfileNode_identifiers_struct_setter = ::std::vector<::std::string>>
+  [[deprecated("Use `FOO.identifiers() = BAR` instead of `FOO.set_identifiers(BAR)`")]]
+  ::std::vector<::std::string>& set_identifiers(T_ProfileNode_identifiers_struct_setter&& identifiers_) {
+    identifiers_ref() = std::forward<T_ProfileNode_identifiers_struct_setter>(identifiers_);
+    return __fbthrift_field_identifiers;
+  }
+
+  /** Glean { "field": "rows" } */
+  [[deprecated("Use `FOO.rows().value()` instead of `FOO.get_rows()`")]]
+  ::std::int64_t get_rows() const;
+
+  /** Glean { "field": "rows" } */
+  [[deprecated("Use `FOO.rows() = BAR` instead of `FOO.set_rows(BAR)`")]]
+  ::std::int64_t& set_rows(::std::int64_t rows_);
+
+  /** Glean { "field": "chunks" } */
+  [[deprecated("Use `FOO.chunks().value()` instead of `FOO.get_chunks()`")]]
+  ::std::int64_t get_chunks() const;
+
+  /** Glean { "field": "chunks" } */
+  [[deprecated("Use `FOO.chunks() = BAR` instead of `FOO.set_chunks(BAR)`")]]
+  ::std::int64_t& set_chunks(::std::int64_t chunks_);
+
+  /** Glean { "field": "db_hits" } */
+  [[deprecated("Use `FOO.db_hits().value()` instead of `FOO.get_db_hits()`")]]
+  ::std::int64_t get_db_hits() const;
+
+  /** Glean { "field": "db_hits" } */
+  [[deprecated("Use `FOO.db_hits() = BAR` instead of `FOO.set_db_hits(BAR)`")]]
+  ::std::int64_t& set_db_hits(::std::int64_t db_hits_);
+
+  /** Glean { "field": "wt_search" } */
+  [[deprecated("Use `FOO.wt_search().value()` instead of `FOO.get_wt_search()`")]]
+  ::std::int64_t get_wt_search() const;
+
+  /** Glean { "field": "wt_search" } */
+  [[deprecated("Use `FOO.wt_search() = BAR` instead of `FOO.set_wt_search(BAR)`")]]
+  ::std::int64_t& set_wt_search(::std::int64_t wt_search_);
+
+  /** Glean { "field": "wt_search_near" } */
+  [[deprecated("Use `FOO.wt_search_near().value()` instead of `FOO.get_wt_search_near()`")]]
+  ::std::int64_t get_wt_search_near() const;
+
+  /** Glean { "field": "wt_search_near" } */
+  [[deprecated("Use `FOO.wt_search_near() = BAR` instead of `FOO.set_wt_search_near(BAR)`")]]
+  ::std::int64_t& set_wt_search_near(::std::int64_t wt_search_near_);
+
+  /** Glean { "field": "io_dispatches" } */
+  [[deprecated("Use `FOO.io_dispatches().value()` instead of `FOO.get_io_dispatches()`")]]
+  ::std::int64_t get_io_dispatches() const;
+
+  /** Glean { "field": "io_dispatches" } */
+  [[deprecated("Use `FOO.io_dispatches() = BAR` instead of `FOO.set_io_dispatches(BAR)`")]]
+  ::std::int64_t& set_io_dispatches(::std::int64_t io_dispatches_);
+
+  /** Glean { "field": "prefetch_hits" } */
+  [[deprecated("Use `FOO.prefetch_hits().value()` instead of `FOO.get_prefetch_hits()`")]]
+  ::std::int64_t get_prefetch_hits() const;
+
+  /** Glean { "field": "prefetch_hits" } */
+  [[deprecated("Use `FOO.prefetch_hits() = BAR` instead of `FOO.set_prefetch_hits(BAR)`")]]
+  ::std::int64_t& set_prefetch_hits(::std::int64_t prefetch_hits_);
+
+  /** Glean { "field": "prefetch_misses" } */
+  [[deprecated("Use `FOO.prefetch_misses().value()` instead of `FOO.get_prefetch_misses()`")]]
+  ::std::int64_t get_prefetch_misses() const;
+
+  /** Glean { "field": "prefetch_misses" } */
+  [[deprecated("Use `FOO.prefetch_misses() = BAR` instead of `FOO.set_prefetch_misses(BAR)`")]]
+  ::std::int64_t& set_prefetch_misses(::std::int64_t prefetch_misses_);
+
+  /** Glean { "field": "self_time_ms" } */
+  [[deprecated("Use `FOO.self_time_ms().value()` instead of `FOO.get_self_time_ms()`")]]
+  double get_self_time_ms() const;
+
+  /** Glean { "field": "self_time_ms" } */
+  [[deprecated("Use `FOO.self_time_ms() = BAR` instead of `FOO.set_self_time_ms(BAR)`")]]
+  double& set_self_time_ms(double self_time_ms_);
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  [[deprecated("Use `FOO.inclusive_time_ms().value()` instead of `FOO.get_inclusive_time_ms()`")]]
+  double get_inclusive_time_ms() const;
+
+  /** Glean { "field": "inclusive_time_ms" } */
+  [[deprecated("Use `FOO.inclusive_time_ms() = BAR` instead of `FOO.set_inclusive_time_ms(BAR)`")]]
+  double& set_inclusive_time_ms(double inclusive_time_ms_);
+
+  /** Glean { "field": "self_cpu_ms" } */
+  [[deprecated("Use `FOO.self_cpu_ms().value()` instead of `FOO.get_self_cpu_ms()`")]]
+  double get_self_cpu_ms() const;
+
+  /** Glean { "field": "self_cpu_ms" } */
+  [[deprecated("Use `FOO.self_cpu_ms() = BAR` instead of `FOO.set_self_cpu_ms(BAR)`")]]
+  double& set_self_cpu_ms(double self_cpu_ms_);
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  [[deprecated("Use `FOO.inclusive_cpu_ms().value()` instead of `FOO.get_inclusive_cpu_ms()`")]]
+  double get_inclusive_cpu_ms() const;
+
+  /** Glean { "field": "inclusive_cpu_ms" } */
+  [[deprecated("Use `FOO.inclusive_cpu_ms() = BAR` instead of `FOO.set_inclusive_cpu_ms(BAR)`")]]
+  double& set_inclusive_cpu_ms(double inclusive_cpu_ms_);
+
+  /** Glean { "field": "children" } */
+  [[deprecated("Use `FOO.children().value()` instead of `FOO.get_children()`")]]
+  const ::std::vector<::eugraph::thrift_service::ProfileNode>& get_children() const&;
+
+  /** Glean { "field": "children" } */
+  [[deprecated("Use `FOO.children().value()` instead of `FOO.get_children()`")]]
+  ::std::vector<::eugraph::thrift_service::ProfileNode> get_children() &&;
+
+  /** Glean { "field": "children" } */
+  template <typename T_ProfileNode_children_struct_setter = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  [[deprecated("Use `FOO.children() = BAR` instead of `FOO.set_children(BAR)`")]]
+  ::std::vector<::eugraph::thrift_service::ProfileNode>& set_children(T_ProfileNode_children_struct_setter&& children_) {
+    children_ref() = std::forward<T_ProfileNode_children_struct_setter>(children_);
+    return __fbthrift_field_children;
+  }
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<ProfileNode>;
+  friend void swap(ProfileNode& a, ProfileNode& b);
+};
+
+template <class Protocol_>
+unsigned long ProfileNode::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "QueryProfile", "kind": "struct" } */
+class QueryProfile final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 12;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4,5,6,7,8,9,10,11,12};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::planning_ms,
+    ::apache::thrift::ident::execution_ms,
+    ::apache::thrift::ident::commit_ms,
+    ::apache::thrift::ident::rows,
+    ::apache::thrift::ident::chunks,
+    ::apache::thrift::ident::db_hits,
+    ::apache::thrift::ident::wt_search,
+    ::apache::thrift::ident::wt_search_near,
+    ::apache::thrift::ident::io_dispatches,
+    ::apache::thrift::ident::prefetch_hits,
+    ::apache::thrift::ident::prefetch_misses,
+    ::apache::thrift::ident::roots
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::double_t,
+    ::apache::thrift::type::double_t,
+    ::apache::thrift::type::double_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::ProfileNode>>
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = QueryProfile;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  QueryProfile();
+
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  QueryProfile(apache::thrift::FragileConstructor, double planning_ms__arg, double execution_ms__arg, double commit_ms__arg, ::std::int64_t rows__arg, ::std::int64_t chunks__arg, ::std::int64_t db_hits__arg, ::std::int64_t wt_search__arg, ::std::int64_t wt_search_near__arg, ::std::int64_t io_dispatches__arg, ::std::int64_t prefetch_hits__arg, ::std::int64_t prefetch_misses__arg, ::std::vector<::eugraph::thrift_service::ProfileNode> roots__arg);
+
+  QueryProfile(QueryProfile&&) noexcept;
+
+  QueryProfile(const QueryProfile& src);
+
+
+  QueryProfile& operator=(QueryProfile&&) noexcept;
+  QueryProfile& operator=(const QueryProfile& src);
+
+  ~QueryProfile();
+
+ private:
+  double __fbthrift_field_planning_ms;
+ private:
+  double __fbthrift_field_execution_ms;
+ private:
+  double __fbthrift_field_commit_ms;
+ private:
+  ::std::int64_t __fbthrift_field_rows;
+ private:
+  ::std::int64_t __fbthrift_field_chunks;
+ private:
+  ::std::int64_t __fbthrift_field_db_hits;
+ private:
+  ::std::int64_t __fbthrift_field_wt_search;
+ private:
+  ::std::int64_t __fbthrift_field_wt_search_near;
+ private:
+  ::std::int64_t __fbthrift_field_io_dispatches;
+ private:
+  ::std::int64_t __fbthrift_field_prefetch_hits;
+ private:
+  ::std::int64_t __fbthrift_field_prefetch_misses;
+ private:
+  ::std::vector<::eugraph::thrift_service::ProfileNode> __fbthrift_field_roots;
+ private:
+  apache::thrift::detail::isset_bitset<12, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const QueryProfile&) const;
+  bool operator<(const QueryProfile&) const;
+
+  /** Glean { "field": "planning_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> planning_ms_ref() const& {
+    return {this->__fbthrift_field_planning_ms, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "planning_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> planning_ms_ref() & {
+    return {this->__fbthrift_field_planning_ms, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "planning_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> planning_ms_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_planning_ms), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "planning_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> planning_ms() const& {
+    return {this->__fbthrift_field_planning_ms, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "planning_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> planning_ms() & {
+    return {this->__fbthrift_field_planning_ms, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "planning_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> planning_ms() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_planning_ms), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "execution_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> execution_ms_ref() const& {
+    return {this->__fbthrift_field_execution_ms, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "execution_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> execution_ms_ref() & {
+    return {this->__fbthrift_field_execution_ms, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "execution_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> execution_ms_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_execution_ms), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "execution_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> execution_ms() const& {
+    return {this->__fbthrift_field_execution_ms, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "execution_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> execution_ms() & {
+    return {this->__fbthrift_field_execution_ms, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "execution_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> execution_ms() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_execution_ms), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "commit_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> commit_ms_ref() const& {
+    return {this->__fbthrift_field_commit_ms, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "commit_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> commit_ms_ref() & {
+    return {this->__fbthrift_field_commit_ms, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "commit_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> commit_ms_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_commit_ms), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "commit_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> commit_ms() const& {
+    return {this->__fbthrift_field_commit_ms, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "commit_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> commit_ms() & {
+    return {this->__fbthrift_field_commit_ms, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "commit_ms" } */
+  template <typename..., typename fbthrift_T = double>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> commit_ms() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_commit_ms), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> rows_ref() const& {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> rows_ref() & {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> rows_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_rows), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> rows() const& {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> rows() & {
+    return {this->__fbthrift_field_rows, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "rows" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> rows() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_rows), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> chunks_ref() const& {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> chunks_ref() & {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> chunks_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_chunks), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> chunks() const& {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> chunks() & {
+    return {this->__fbthrift_field_chunks, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "chunks" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> chunks() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_chunks), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> db_hits_ref() const& {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> db_hits_ref() & {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> db_hits_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_db_hits), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> db_hits() const& {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> db_hits() & {
+    return {this->__fbthrift_field_db_hits, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "db_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> db_hits() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_db_hits), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search_ref() const& {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search_ref() & {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search() const& {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search() & {
+    return {this->__fbthrift_field_wt_search, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search_near_ref() const& {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search_near_ref() & {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search_near_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search_near), __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> wt_search_near() const& {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> wt_search_near() & {
+    return {this->__fbthrift_field_wt_search_near, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "wt_search_near" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> wt_search_near() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_wt_search_near), __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> io_dispatches_ref() const& {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> io_dispatches_ref() & {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> io_dispatches_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_io_dispatches), __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> io_dispatches() const& {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> io_dispatches() & {
+    return {this->__fbthrift_field_io_dispatches, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "io_dispatches" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> io_dispatches() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_io_dispatches), __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_hits_ref() const& {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_hits_ref() & {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_hits_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_hits), __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_hits() const& {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_hits() & {
+    return {this->__fbthrift_field_prefetch_hits, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_hits" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_hits() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_hits), __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_misses_ref() const& {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_misses_ref() & {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_misses_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_misses), __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> prefetch_misses() const& {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> prefetch_misses() & {
+    return {this->__fbthrift_field_prefetch_misses, __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "prefetch_misses" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> prefetch_misses() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_prefetch_misses), __isset.at(10), __isset.bit(10)};
+  }
+
+  /** Glean { "field": "roots" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> roots_ref() const& {
+    return {this->__fbthrift_field_roots, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "roots" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> roots_ref() & {
+    return {this->__fbthrift_field_roots, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "roots" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> roots_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_roots), __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "roots" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> roots() const& {
+    return {this->__fbthrift_field_roots, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "roots" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> roots() & {
+    return {this->__fbthrift_field_roots, __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "roots" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> roots() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_roots), __isset.at(11), __isset.bit(11)};
+  }
+
+  /** Glean { "field": "planning_ms" } */
+  [[deprecated("Use `FOO.planning_ms().value()` instead of `FOO.get_planning_ms()`")]]
+  double get_planning_ms() const;
+
+  /** Glean { "field": "planning_ms" } */
+  [[deprecated("Use `FOO.planning_ms() = BAR` instead of `FOO.set_planning_ms(BAR)`")]]
+  double& set_planning_ms(double planning_ms_);
+
+  /** Glean { "field": "execution_ms" } */
+  [[deprecated("Use `FOO.execution_ms().value()` instead of `FOO.get_execution_ms()`")]]
+  double get_execution_ms() const;
+
+  /** Glean { "field": "execution_ms" } */
+  [[deprecated("Use `FOO.execution_ms() = BAR` instead of `FOO.set_execution_ms(BAR)`")]]
+  double& set_execution_ms(double execution_ms_);
+
+  /** Glean { "field": "commit_ms" } */
+  [[deprecated("Use `FOO.commit_ms().value()` instead of `FOO.get_commit_ms()`")]]
+  double get_commit_ms() const;
+
+  /** Glean { "field": "commit_ms" } */
+  [[deprecated("Use `FOO.commit_ms() = BAR` instead of `FOO.set_commit_ms(BAR)`")]]
+  double& set_commit_ms(double commit_ms_);
+
+  /** Glean { "field": "rows" } */
+  [[deprecated("Use `FOO.rows().value()` instead of `FOO.get_rows()`")]]
+  ::std::int64_t get_rows() const;
+
+  /** Glean { "field": "rows" } */
+  [[deprecated("Use `FOO.rows() = BAR` instead of `FOO.set_rows(BAR)`")]]
+  ::std::int64_t& set_rows(::std::int64_t rows_);
+
+  /** Glean { "field": "chunks" } */
+  [[deprecated("Use `FOO.chunks().value()` instead of `FOO.get_chunks()`")]]
+  ::std::int64_t get_chunks() const;
+
+  /** Glean { "field": "chunks" } */
+  [[deprecated("Use `FOO.chunks() = BAR` instead of `FOO.set_chunks(BAR)`")]]
+  ::std::int64_t& set_chunks(::std::int64_t chunks_);
+
+  /** Glean { "field": "db_hits" } */
+  [[deprecated("Use `FOO.db_hits().value()` instead of `FOO.get_db_hits()`")]]
+  ::std::int64_t get_db_hits() const;
+
+  /** Glean { "field": "db_hits" } */
+  [[deprecated("Use `FOO.db_hits() = BAR` instead of `FOO.set_db_hits(BAR)`")]]
+  ::std::int64_t& set_db_hits(::std::int64_t db_hits_);
+
+  /** Glean { "field": "wt_search" } */
+  [[deprecated("Use `FOO.wt_search().value()` instead of `FOO.get_wt_search()`")]]
+  ::std::int64_t get_wt_search() const;
+
+  /** Glean { "field": "wt_search" } */
+  [[deprecated("Use `FOO.wt_search() = BAR` instead of `FOO.set_wt_search(BAR)`")]]
+  ::std::int64_t& set_wt_search(::std::int64_t wt_search_);
+
+  /** Glean { "field": "wt_search_near" } */
+  [[deprecated("Use `FOO.wt_search_near().value()` instead of `FOO.get_wt_search_near()`")]]
+  ::std::int64_t get_wt_search_near() const;
+
+  /** Glean { "field": "wt_search_near" } */
+  [[deprecated("Use `FOO.wt_search_near() = BAR` instead of `FOO.set_wt_search_near(BAR)`")]]
+  ::std::int64_t& set_wt_search_near(::std::int64_t wt_search_near_);
+
+  /** Glean { "field": "io_dispatches" } */
+  [[deprecated("Use `FOO.io_dispatches().value()` instead of `FOO.get_io_dispatches()`")]]
+  ::std::int64_t get_io_dispatches() const;
+
+  /** Glean { "field": "io_dispatches" } */
+  [[deprecated("Use `FOO.io_dispatches() = BAR` instead of `FOO.set_io_dispatches(BAR)`")]]
+  ::std::int64_t& set_io_dispatches(::std::int64_t io_dispatches_);
+
+  /** Glean { "field": "prefetch_hits" } */
+  [[deprecated("Use `FOO.prefetch_hits().value()` instead of `FOO.get_prefetch_hits()`")]]
+  ::std::int64_t get_prefetch_hits() const;
+
+  /** Glean { "field": "prefetch_hits" } */
+  [[deprecated("Use `FOO.prefetch_hits() = BAR` instead of `FOO.set_prefetch_hits(BAR)`")]]
+  ::std::int64_t& set_prefetch_hits(::std::int64_t prefetch_hits_);
+
+  /** Glean { "field": "prefetch_misses" } */
+  [[deprecated("Use `FOO.prefetch_misses().value()` instead of `FOO.get_prefetch_misses()`")]]
+  ::std::int64_t get_prefetch_misses() const;
+
+  /** Glean { "field": "prefetch_misses" } */
+  [[deprecated("Use `FOO.prefetch_misses() = BAR` instead of `FOO.set_prefetch_misses(BAR)`")]]
+  ::std::int64_t& set_prefetch_misses(::std::int64_t prefetch_misses_);
+
+  /** Glean { "field": "roots" } */
+  [[deprecated("Use `FOO.roots().value()` instead of `FOO.get_roots()`")]]
+  const ::std::vector<::eugraph::thrift_service::ProfileNode>& get_roots() const&;
+
+  /** Glean { "field": "roots" } */
+  [[deprecated("Use `FOO.roots().value()` instead of `FOO.get_roots()`")]]
+  ::std::vector<::eugraph::thrift_service::ProfileNode> get_roots() &&;
+
+  /** Glean { "field": "roots" } */
+  template <typename T_QueryProfile_roots_struct_setter = ::std::vector<::eugraph::thrift_service::ProfileNode>>
+  [[deprecated("Use `FOO.roots() = BAR` instead of `FOO.set_roots(BAR)`")]]
+  ::std::vector<::eugraph::thrift_service::ProfileNode>& set_roots(T_QueryProfile_roots_struct_setter&& roots_) {
+    roots_ref() = std::forward<T_QueryProfile_roots_struct_setter>(roots_);
+    return __fbthrift_field_roots;
+  }
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<QueryProfile>;
+  friend void swap(QueryProfile& a, QueryProfile& b);
+};
+
+template <class Protocol_>
+unsigned long QueryProfile::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
 /** Glean {"file": "proto/eugraph.thrift", "name": "ResultRowBatch", "kind": "struct" } */
 class ResultRowBatch final  {
  private:
@@ -6433,16 +8146,18 @@ class ResultRowBatch final  {
   FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
     return "eugraph";
   }
-  static constexpr std::size_t __fbthrift_num_fields = 1;
+  static constexpr std::size_t __fbthrift_num_fields = 2;
 
-  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1};
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2};
 
   using __fbthrift_reflection_idents = folly::tag_t<
-    ::apache::thrift::ident::rows
+    ::apache::thrift::ident::rows,
+    ::apache::thrift::ident::profile
   >;
 
   using __fbthrift_reflection_type_tags = folly::tag_t<
-    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::ResultRow>>
+    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::ResultRow>>,
+    ::apache::thrift::type::struct_t<::eugraph::thrift_service::QueryProfile>
   >;
   void __fbthrift_clear();
   void __fbthrift_clear_terse_fields();
@@ -6462,7 +8177,7 @@ class ResultRowBatch final  {
 
   // FragileConstructor for use in initialization lists only.
   [[deprecated("This constructor is deprecated")]]
-  ResultRowBatch(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::ResultRow> rows__arg);
+  ResultRowBatch(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::ResultRow> rows__arg, ::eugraph::thrift_service::QueryProfile profile__arg);
 
   ResultRowBatch(ResultRowBatch&&) noexcept;
 
@@ -6477,7 +8192,9 @@ class ResultRowBatch final  {
  private:
   ::std::vector<::eugraph::thrift_service::ResultRow> __fbthrift_field_rows;
  private:
-  apache::thrift::detail::isset_bitset<1, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+  ::eugraph::thrift_service::QueryProfile __fbthrift_field_profile;
+ private:
+  apache::thrift::detail::isset_bitset<2, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
 
  public:
 
@@ -6520,6 +8237,42 @@ class ResultRowBatch final  {
     return {static_cast<fbthrift_T&&>(this->__fbthrift_field_rows), __isset.at(0), __isset.bit(0)};
   }
 
+  /** Glean { "field": "profile" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::QueryProfile>
+  FOLLY_ERASE ::apache::thrift::optional_field_ref<const fbthrift_T&> profile_ref() const& {
+    return {this->__fbthrift_field_profile, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "profile" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::QueryProfile>
+  FOLLY_ERASE ::apache::thrift::optional_field_ref<fbthrift_T&> profile_ref() & {
+    return {this->__fbthrift_field_profile, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "profile" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::QueryProfile>
+  FOLLY_ERASE ::apache::thrift::optional_field_ref<fbthrift_T&&> profile_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_profile), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "profile" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::QueryProfile>
+  FOLLY_ERASE ::apache::thrift::optional_field_ref<const fbthrift_T&> profile() const& {
+    return {this->__fbthrift_field_profile, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "profile" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::QueryProfile>
+  FOLLY_ERASE ::apache::thrift::optional_field_ref<fbthrift_T&> profile() & {
+    return {this->__fbthrift_field_profile, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "profile" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::QueryProfile>
+  FOLLY_ERASE ::apache::thrift::optional_field_ref<fbthrift_T&&> profile() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_profile), __isset.at(1), __isset.bit(1)};
+  }
+
   /** Glean { "field": "rows" } */
   [[deprecated("Use `FOO.rows().value()` instead of `FOO.get_rows()`")]]
   const ::std::vector<::eugraph::thrift_service::ResultRow>& get_rows() const&;
@@ -6534,6 +8287,24 @@ class ResultRowBatch final  {
   ::std::vector<::eugraph::thrift_service::ResultRow>& set_rows(T_ResultRowBatch_rows_struct_setter&& rows_) {
     rows_ref() = std::forward<T_ResultRowBatch_rows_struct_setter>(rows_);
     return __fbthrift_field_rows;
+  }
+
+  /** Glean { "field": "profile" } */
+  [[deprecated("Use `FOO.profile().value()` instead of `FOO.get_profile()`")]]
+  const ::eugraph::thrift_service::QueryProfile* get_profile() const&;
+
+  /** Glean { "field": "profile" } */
+  [[deprecated("Use `FOO.profile().value()` instead of `FOO.get_profile()`")]]
+  ::eugraph::thrift_service::QueryProfile* get_profile() &;
+
+  ::eugraph::thrift_service::QueryProfile* get_profile() && = delete;
+
+  /** Glean { "field": "profile" } */
+  template <typename T_ResultRowBatch_profile_struct_setter = ::eugraph::thrift_service::QueryProfile>
+  [[deprecated("Use `FOO.profile() = BAR` instead of `FOO.set_profile(BAR)`")]]
+  ::eugraph::thrift_service::QueryProfile& set_profile(T_ResultRowBatch_profile_struct_setter&& profile_) {
+    profile_ref() = std::forward<T_ResultRowBatch_profile_struct_setter>(profile_);
+    return __fbthrift_field_profile;
   }
 
   template <class Protocol_>
@@ -6850,107 +8621,117 @@ template <> struct TEnumTraits<::eugraph::thrift_service::ResultValue::Type> {
 namespace apache::thrift::detail {
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PropertyDefThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xef\xfd\x38\xe1\x83\x0f\x05\xce\x49\x25\x31\xc8\x61\x81\xe5\x96", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xb5\x29\xf3\x6e\xd3\xcd\xdf\x1b\xcb\x41\x93\x15\xc1\xa9\x1a\xeb", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::DateTimeValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xeb\x61\x0a\x73\x41\xa9\xe1\x5a\x83\xda\x36\x8b\x45\x3e\x6d\xfe", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xc3\x3f\x65\x11\xf0\xef\xc5\x65\xa9\xe7\xc9\x76\x82\x4d\xb3\x97", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::TimeValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xdf\x17\xae\xea\xe7\x16\xe6\xb0\x66\x87\xca\x93\xc9\xd1\x63\xfa", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x4a\x2a\x06\x50\x11\x39\x19\x29\x01\xf6\x17\xba\xfd\xf5\x15\x34", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::DurationValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xf2\x00\xfd\x32\x70\x7a\x6b\xb1\x5e\xd8\x59\xf5\xd6\xbb\x86\x37", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xa5\x86\x9b\xb9\xcf\xfb\x1a\xf8\x69\x89\xdb\xef\xcf\x0c\x4f\x33", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PropertyValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x3e\x8c\x72\x00\x1c\xe4\x41\x59\x5f\x55\x94\xb2\xb6\xec\x7c\x3a", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x49\xb4\x16\x8a\x68\xa5\x48\xda\xf6\x99\x0b\x35\x08\xdf\x6b\x2d", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::LabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x20\x1f\xa5\xf4\x45\x52\xea\xe3\x59\xf4\x24\xcd\x87\x54\x51\x8e", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x66\x85\x9a\xc3\x46\x52\x89\xcf\x6a\x56\x4b\x59\xdf\xb2\x8d\x14", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::EdgeLabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xd8\xd6\x93\x76\xe4\x0e\x99\x68\x03\xeb\x5c\x54\x3d\xea\x0f\x52", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x80\x6d\xc6\x46\xc2\x17\x80\x5b\x0c\x5b\x30\x6c\x96\xbc\x8b\x38", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PkKey, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x82\x0f\x33\x39\x13\xc8\x1e\x96\x6b\x10\x6f\x7e\x9f\x6b\xef\xae", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x28\x7c\xda\x0b\xef\x96\x3b\x04\x6c\x4c\xa0\xb9\x24\xc4\x06\xb3", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PkRef, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x18\x37\x76\x82\x55\x66\xb7\x48\x01\xde\x1e\x24\x58\x30\xe9\x8d", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x4e\x53\xf5\xc0\xba\xb3\xb3\xe4\xec\xba\x80\xd6\x8a\x01\x65\xaf", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::VertexRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xe9\x88\xe3\xba\xeb\x98\x71\x9d\x4d\x15\xda\x0f\xc8\x0f\xd9\x5e", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x07\xc0\xfe\x52\xeb\x30\xeb\x94\x7d\xca\xda\x7e\x4b\x99\x85\x9d", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::EdgeRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xc2\x17\xd3\xcd\x56\xd4\xda\xfb\x75\x07\x3f\x9b\xf7\x21\x73\x75", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x7b\xc7\x80\xf6\xc1\x37\xac\xf3\x3e\x68\x1f\x9c\x59\x06\x2b\x59", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::BatchInsertVerticesResult, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x9f\xd1\xdd\xf9\x1b\x28\x86\x8e\x64\xc7\xd3\xd3\xe2\x9f\x16\x00", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xf3\xc5\x2f\x3f\x9f\x93\x76\x1e\xc2\x17\x8a\xf9\x7d\x9e\xc5\x88", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::BatchInsertEdgesResult, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xae\xf3\x7f\x79\xca\x96\x1f\x07\x59\x26\x49\xe8\x54\x3f\x78\x56", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xf2\x9a\x66\x06\xb3\xac\x2f\xb1\xaa\x65\x79\x21\x93\x76\x16\x44", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::ResultValue, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xb5\x91\x2c\x8e\x52\xf3\x95\x93\x30\x12\x9d\x0c\x97\x22\x37\xb8", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x47\x45\x12\xa3\x3d\x89\x64\x51\x08\x61\xc1\xb1\xb5\xe2\x97\x6e", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::ResultRow, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x91\x04\x3d\x8c\xc5\xde\x9a\x6a\x8a\x53\x63\x06\xf8\xbf\x7d\x5d", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xb6\x9b\xa6\x64\x0a\x35\x2c\xa6\x41\xd1\x78\x36\x05\x4e\xea\x37", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::QueryStreamMeta, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x67\xab\xea\xdf\x02\xc4\x6a\x6c\x99\x1b\xf5\xa4\x99\x51\x37\x0f", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xf0\x56\x1d\x1e\x0c\x94\xa3\x61\x0f\xc2\x4e\xef\xe6\x3d\x77\x85", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift_service::ProfileNode, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xd0\x7a\x5d\x82\x5f\xe5\x8a\xd7\x92\x86\x86\x1f\xdb\x02\x92\x02", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift_service::QueryProfile, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xe3\x60\x8b\x4c\xdf\xf2\x1b\x03\x7e\x0c\x1b\xfa\xf7\xa0\x9f\x17", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::ResultRowBatch, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x30\x99\xbc\x3f\x49\xd4\xbf\x7d\x7e\x7c\x40\x85\xb7\x26\x99\xd3", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x57\x93\x78\xf6\xaf\x40\x45\xdc\xc4\xe4\xdf\xfd\x1b\xc5\xf6\xa0", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::GraphInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x12\x5f\x35\x9c\x73\x52\x17\xbf\x71\x21\x43\x4d\xb8\x91\x3f\x06", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x03\x0d\x0a\xb5\x6c\xcd\x64\x40\x85\x06\x30\x42\x48\xf9\x7f\xa2", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PropertyType, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x9a\xfb\x12\x02\xe6\xe0\x65\xff\xb2\x6a\x0a\x61\xaf\x88\xe6\x1e", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x25\xba\x29\x79\x02\x49\x0c\x15\xe5\xce\xac\xb1\xd8\x66\xe0\x3c", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::DateTimeKind, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\x10\x5f\x16\x1c\x28\x29\x2a\x4f\xfc\xaa\xd7\x5e\xdc\x64\xfe\x0a", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\xb0\x84\x38\xa5\x57\x27\xce\x69\x34\xf6\xc8\x57\x03\x39\x6c\x5f", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::TimeKind, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -707735861551392123;
-  static constexpr ::std::string_view definitionKey = {"\xde\x82\x07\x4f\x8b\x9b\x87\x92\x01\x07\xc0\xec\x8c\xeb\x51\x72", 16};
+  static constexpr int64_t programId = 7395737359629119015;
+  static constexpr ::std::string_view definitionKey = {"\x7b\xb4\x35\x7b\xb4\x8e\x46\x9c\x16\x07\x23\x48\xd6\xa3\x20\x73", 16};
 };
 } // namespace apache::thrift::detail

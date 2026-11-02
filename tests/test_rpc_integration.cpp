@@ -729,3 +729,28 @@ int main(int argc, char** argv) {
     folly::Init init(&argc, &argv, /*removeFlags=*/false);
     return RUN_ALL_TESTS();
 }
+
+TEST_F(RpcIntegrationTest, ProfileSummaryIsSentOnFinalThriftBatch) {
+    auto [meta, stream] = client_->executeCypher("PROFILE RETURN 1 AS x", "default");
+    ASSERT_EQ(meta.columns()->size(), 1u);
+
+    size_t rows = 0;
+    std::optional<QueryProfile> profile;
+    std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
+        if (!batch.hasValue())
+            return;
+        if (batch->profile().has_value())
+            profile = *batch->profile();
+        for (const auto& row : *batch->rows()) {
+            EXPECT_EQ(row.values()->size(), 1u);
+            ++rows;
+        }
+    });
+
+    EXPECT_EQ(rows, 1u);
+    ASSERT_TRUE(profile.has_value());
+    EXPECT_EQ(profile->rows().value(), 1);
+    ASSERT_FALSE(profile->roots()->empty());
+    EXPECT_EQ(profile->roots()->front().operator_type().value(), "Project");
+    EXPECT_GT(profile->execution_ms().value(), 0.0);
+}

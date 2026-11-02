@@ -88,6 +88,16 @@ template uint32_t QueryStreamMeta::write<>(apache::thrift::CompactProtocolWriter
 template uint32_t QueryStreamMeta::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
 template uint32_t QueryStreamMeta::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
 
+template void ProfileNode::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t ProfileNode::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t ProfileNode::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t ProfileNode::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
+template void QueryProfile::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t QueryProfile::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t QueryProfile::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t QueryProfile::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
 template void ResultRowBatch::readNoXfer<>(apache::thrift::CompactProtocolReader*);
 template uint32_t ResultRowBatch::write<>(apache::thrift::CompactProtocolWriter*) const;
 template uint32_t ResultRowBatch::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;

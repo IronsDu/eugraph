@@ -431,6 +431,52 @@ StructMetadata<::eugraph::thrift_service::QueryStreamMeta>::gen(ThriftMetadata& 
   return res.first->second;
 }
 const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift_service::ProfileNode>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.ProfileNode", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_ProfileNode = res.first->second;
+  eugraph_ProfileNode.name() = "eugraph.ProfileNode";
+  eugraph_ProfileNode.is_union() = false;
+  static const auto* const
+  eugraph_ProfileNode_fields = new std::array<EncodedThriftField, 16>{ {
+    { 1, "operator_type", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "details", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "identifiers", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE)), std::vector<ThriftConstStruct>{ }},    { 4, "rows", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 5, "chunks", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 6, "db_hits", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 7, "wt_search", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 8, "wt_search_near", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 9, "io_dispatches", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 10, "prefetch_hits", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 11, "prefetch_misses", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 12, "self_time_ms", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 13, "inclusive_time_ms", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 14, "self_cpu_ms", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 15, "inclusive_cpu_ms", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 16, "children", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::ProfileNode>>("eugraph.ProfileNode")), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_ProfileNode_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_ProfileNode.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift_service::QueryProfile>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.QueryProfile", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_QueryProfile = res.first->second;
+  eugraph_QueryProfile.name() = "eugraph.QueryProfile";
+  eugraph_QueryProfile.is_union() = false;
+  static const auto* const
+  eugraph_QueryProfile_fields = new std::array<EncodedThriftField, 12>{ {
+    { 1, "planning_ms", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "execution_ms", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "commit_ms", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 4, "rows", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 5, "chunks", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 6, "db_hits", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 7, "wt_search", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 8, "wt_search_near", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 9, "io_dispatches", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 10, "prefetch_hits", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 11, "prefetch_misses", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 12, "roots", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::ProfileNode>>("eugraph.ProfileNode")), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_QueryProfile_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_QueryProfile.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
 StructMetadata<::eugraph::thrift_service::ResultRowBatch>::gen(ThriftMetadata& metadata) {
   auto res = metadata.structs()->emplace("eugraph.ResultRowBatch", ::apache::thrift::metadata::ThriftStruct{});
   if (!res.second) {
@@ -440,8 +486,8 @@ StructMetadata<::eugraph::thrift_service::ResultRowBatch>::gen(ThriftMetadata& m
   eugraph_ResultRowBatch.name() = "eugraph.ResultRowBatch";
   eugraph_ResultRowBatch.is_union() = false;
   static const auto* const
-  eugraph_ResultRowBatch_fields = new std::array<EncodedThriftField, 1>{ {
-    { 1, "rows", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::ResultRow>>("eugraph.ResultRow")), std::vector<ThriftConstStruct>{ }},  }};
+  eugraph_ResultRowBatch_fields = new std::array<EncodedThriftField, 2>{ {
+    { 1, "rows", false, std::make_unique<List>(std::make_unique<Struct<::eugraph::thrift_service::ResultRow>>("eugraph.ResultRow")), std::vector<ThriftConstStruct>{ }},    { 2, "profile", true, std::make_unique<Struct<::eugraph::thrift_service::QueryProfile>>("eugraph.QueryProfile"), std::vector<ThriftConstStruct>{ }},  }};
   for (const auto& f : *eugraph_ResultRowBatch_fields) {
     ::apache::thrift::metadata::ThriftField field;
     field.id() = f.id;

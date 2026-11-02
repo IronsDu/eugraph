@@ -2550,6 +2550,626 @@ namespace apache {
 namespace thrift {
 namespace detail {
 
+void TccStructTraits<::eugraph::thrift_service::ProfileNode>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift_service::ProfileNode>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift_service {
+
+std::string_view ProfileNode::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<ProfileNode>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view ProfileNode::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<ProfileNode>::name;
+}
+
+ProfileNode::ProfileNode(const ProfileNode&) = default;
+ProfileNode& ProfileNode::operator=(const ProfileNode&) = default;
+ProfileNode::ProfileNode() :
+    __fbthrift_field_rows(),
+    __fbthrift_field_chunks(),
+    __fbthrift_field_db_hits(),
+    __fbthrift_field_wt_search(),
+    __fbthrift_field_wt_search_near(),
+    __fbthrift_field_io_dispatches(),
+    __fbthrift_field_prefetch_hits(),
+    __fbthrift_field_prefetch_misses(),
+    __fbthrift_field_self_time_ms(),
+    __fbthrift_field_inclusive_time_ms(),
+    __fbthrift_field_self_cpu_ms(),
+    __fbthrift_field_inclusive_cpu_ms() {
+}
+
+
+ProfileNode::~ProfileNode() {}
+
+ProfileNode::ProfileNode([[maybe_unused]] ProfileNode&& other) noexcept :
+    __fbthrift_field_operator_type(std::move(other.__fbthrift_field_operator_type)),
+    __fbthrift_field_details(std::move(other.__fbthrift_field_details)),
+    __fbthrift_field_identifiers(std::move(other.__fbthrift_field_identifiers)),
+    __fbthrift_field_rows(std::move(other.__fbthrift_field_rows)),
+    __fbthrift_field_chunks(std::move(other.__fbthrift_field_chunks)),
+    __fbthrift_field_db_hits(std::move(other.__fbthrift_field_db_hits)),
+    __fbthrift_field_wt_search(std::move(other.__fbthrift_field_wt_search)),
+    __fbthrift_field_wt_search_near(std::move(other.__fbthrift_field_wt_search_near)),
+    __fbthrift_field_io_dispatches(std::move(other.__fbthrift_field_io_dispatches)),
+    __fbthrift_field_prefetch_hits(std::move(other.__fbthrift_field_prefetch_hits)),
+    __fbthrift_field_prefetch_misses(std::move(other.__fbthrift_field_prefetch_misses)),
+    __fbthrift_field_self_time_ms(std::move(other.__fbthrift_field_self_time_ms)),
+    __fbthrift_field_inclusive_time_ms(std::move(other.__fbthrift_field_inclusive_time_ms)),
+    __fbthrift_field_self_cpu_ms(std::move(other.__fbthrift_field_self_cpu_ms)),
+    __fbthrift_field_inclusive_cpu_ms(std::move(other.__fbthrift_field_inclusive_cpu_ms)),
+    __fbthrift_field_children(std::move(other.__fbthrift_field_children)),
+    __isset(other.__isset) {
+}
+
+ProfileNode& ProfileNode::operator=([[maybe_unused]] ProfileNode&& other) noexcept {
+    this->__fbthrift_field_operator_type = std::move(other.__fbthrift_field_operator_type);
+    this->__fbthrift_field_details = std::move(other.__fbthrift_field_details);
+    this->__fbthrift_field_identifiers = std::move(other.__fbthrift_field_identifiers);
+    this->__fbthrift_field_rows = std::move(other.__fbthrift_field_rows);
+    this->__fbthrift_field_chunks = std::move(other.__fbthrift_field_chunks);
+    this->__fbthrift_field_db_hits = std::move(other.__fbthrift_field_db_hits);
+    this->__fbthrift_field_wt_search = std::move(other.__fbthrift_field_wt_search);
+    this->__fbthrift_field_wt_search_near = std::move(other.__fbthrift_field_wt_search_near);
+    this->__fbthrift_field_io_dispatches = std::move(other.__fbthrift_field_io_dispatches);
+    this->__fbthrift_field_prefetch_hits = std::move(other.__fbthrift_field_prefetch_hits);
+    this->__fbthrift_field_prefetch_misses = std::move(other.__fbthrift_field_prefetch_misses);
+    this->__fbthrift_field_self_time_ms = std::move(other.__fbthrift_field_self_time_ms);
+    this->__fbthrift_field_inclusive_time_ms = std::move(other.__fbthrift_field_inclusive_time_ms);
+    this->__fbthrift_field_self_cpu_ms = std::move(other.__fbthrift_field_self_cpu_ms);
+    this->__fbthrift_field_inclusive_cpu_ms = std::move(other.__fbthrift_field_inclusive_cpu_ms);
+    this->__fbthrift_field_children = std::move(other.__fbthrift_field_children);
+    __isset = other.__isset;
+    return *this;
+}
+
+
+ProfileNode::ProfileNode(apache::thrift::FragileConstructor, ::std::string operator_type__arg, ::std::string details__arg, ::std::vector<::std::string> identifiers__arg, ::std::int64_t rows__arg, ::std::int64_t chunks__arg, ::std::int64_t db_hits__arg, ::std::int64_t wt_search__arg, ::std::int64_t wt_search_near__arg, ::std::int64_t io_dispatches__arg, ::std::int64_t prefetch_hits__arg, ::std::int64_t prefetch_misses__arg, double self_time_ms__arg, double inclusive_time_ms__arg, double self_cpu_ms__arg, double inclusive_cpu_ms__arg, ::std::vector<::eugraph::thrift_service::ProfileNode> children__arg) :
+    __fbthrift_field_operator_type(std::move(operator_type__arg)),
+    __fbthrift_field_details(std::move(details__arg)),
+    __fbthrift_field_identifiers(std::move(identifiers__arg)),
+    __fbthrift_field_rows(std::move(rows__arg)),
+    __fbthrift_field_chunks(std::move(chunks__arg)),
+    __fbthrift_field_db_hits(std::move(db_hits__arg)),
+    __fbthrift_field_wt_search(std::move(wt_search__arg)),
+    __fbthrift_field_wt_search_near(std::move(wt_search_near__arg)),
+    __fbthrift_field_io_dispatches(std::move(io_dispatches__arg)),
+    __fbthrift_field_prefetch_hits(std::move(prefetch_hits__arg)),
+    __fbthrift_field_prefetch_misses(std::move(prefetch_misses__arg)),
+    __fbthrift_field_self_time_ms(std::move(self_time_ms__arg)),
+    __fbthrift_field_inclusive_time_ms(std::move(inclusive_time_ms__arg)),
+    __fbthrift_field_self_cpu_ms(std::move(self_cpu_ms__arg)),
+    __fbthrift_field_inclusive_cpu_ms(std::move(inclusive_cpu_ms__arg)),
+    __fbthrift_field_children(std::move(children__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+  __isset.set(folly::index_constant<2>(), true);
+  __isset.set(folly::index_constant<3>(), true);
+  __isset.set(folly::index_constant<4>(), true);
+  __isset.set(folly::index_constant<5>(), true);
+  __isset.set(folly::index_constant<6>(), true);
+  __isset.set(folly::index_constant<7>(), true);
+  __isset.set(folly::index_constant<8>(), true);
+  __isset.set(folly::index_constant<9>(), true);
+  __isset.set(folly::index_constant<10>(), true);
+  __isset.set(folly::index_constant<11>(), true);
+  __isset.set(folly::index_constant<12>(), true);
+  __isset.set(folly::index_constant<13>(), true);
+  __isset.set(folly::index_constant<14>(), true);
+  __isset.set(folly::index_constant<15>(), true);
+}
+
+
+void ProfileNode::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_operator_type = apache::thrift::StringTraits<::std::string>::fromStringLiteral("");
+  this->__fbthrift_field_details = apache::thrift::StringTraits<::std::string>::fromStringLiteral("");
+  this->__fbthrift_field_identifiers.clear();
+  this->__fbthrift_field_rows = ::std::int64_t();
+  this->__fbthrift_field_chunks = ::std::int64_t();
+  this->__fbthrift_field_db_hits = ::std::int64_t();
+  this->__fbthrift_field_wt_search = ::std::int64_t();
+  this->__fbthrift_field_wt_search_near = ::std::int64_t();
+  this->__fbthrift_field_io_dispatches = ::std::int64_t();
+  this->__fbthrift_field_prefetch_hits = ::std::int64_t();
+  this->__fbthrift_field_prefetch_misses = ::std::int64_t();
+  this->__fbthrift_field_self_time_ms = double();
+  this->__fbthrift_field_inclusive_time_ms = double();
+  this->__fbthrift_field_self_cpu_ms = double();
+  this->__fbthrift_field_inclusive_cpu_ms = double();
+  this->__fbthrift_field_children.clear();
+  __isset = {};
+}
+
+void ProfileNode::__fbthrift_clear_terse_fields() {
+}
+
+bool ProfileNode::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool ProfileNode::operator==([[maybe_unused]] const ProfileNode& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool ProfileNode::operator<([[maybe_unused]] const ProfileNode& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+const ::std::vector<::std::string>& ProfileNode::get_identifiers() const& {
+  return __fbthrift_field_identifiers;
+}
+
+::std::vector<::std::string> ProfileNode::get_identifiers() && {
+  return static_cast<::std::vector<::std::string>&&>(__fbthrift_field_identifiers);
+}
+
+::std::int64_t ProfileNode::get_rows() const {
+  return __fbthrift_field_rows;
+}
+
+::std::int64_t& ProfileNode::set_rows(::std::int64_t rows_) {
+  rows_ref() = rows_;
+  return __fbthrift_field_rows;
+}
+
+::std::int64_t ProfileNode::get_chunks() const {
+  return __fbthrift_field_chunks;
+}
+
+::std::int64_t& ProfileNode::set_chunks(::std::int64_t chunks_) {
+  chunks_ref() = chunks_;
+  return __fbthrift_field_chunks;
+}
+
+::std::int64_t ProfileNode::get_db_hits() const {
+  return __fbthrift_field_db_hits;
+}
+
+::std::int64_t& ProfileNode::set_db_hits(::std::int64_t db_hits_) {
+  db_hits_ref() = db_hits_;
+  return __fbthrift_field_db_hits;
+}
+
+::std::int64_t ProfileNode::get_wt_search() const {
+  return __fbthrift_field_wt_search;
+}
+
+::std::int64_t& ProfileNode::set_wt_search(::std::int64_t wt_search_) {
+  wt_search_ref() = wt_search_;
+  return __fbthrift_field_wt_search;
+}
+
+::std::int64_t ProfileNode::get_wt_search_near() const {
+  return __fbthrift_field_wt_search_near;
+}
+
+::std::int64_t& ProfileNode::set_wt_search_near(::std::int64_t wt_search_near_) {
+  wt_search_near_ref() = wt_search_near_;
+  return __fbthrift_field_wt_search_near;
+}
+
+::std::int64_t ProfileNode::get_io_dispatches() const {
+  return __fbthrift_field_io_dispatches;
+}
+
+::std::int64_t& ProfileNode::set_io_dispatches(::std::int64_t io_dispatches_) {
+  io_dispatches_ref() = io_dispatches_;
+  return __fbthrift_field_io_dispatches;
+}
+
+::std::int64_t ProfileNode::get_prefetch_hits() const {
+  return __fbthrift_field_prefetch_hits;
+}
+
+::std::int64_t& ProfileNode::set_prefetch_hits(::std::int64_t prefetch_hits_) {
+  prefetch_hits_ref() = prefetch_hits_;
+  return __fbthrift_field_prefetch_hits;
+}
+
+::std::int64_t ProfileNode::get_prefetch_misses() const {
+  return __fbthrift_field_prefetch_misses;
+}
+
+::std::int64_t& ProfileNode::set_prefetch_misses(::std::int64_t prefetch_misses_) {
+  prefetch_misses_ref() = prefetch_misses_;
+  return __fbthrift_field_prefetch_misses;
+}
+
+double ProfileNode::get_self_time_ms() const {
+  return __fbthrift_field_self_time_ms;
+}
+
+double& ProfileNode::set_self_time_ms(double self_time_ms_) {
+  self_time_ms_ref() = self_time_ms_;
+  return __fbthrift_field_self_time_ms;
+}
+
+double ProfileNode::get_inclusive_time_ms() const {
+  return __fbthrift_field_inclusive_time_ms;
+}
+
+double& ProfileNode::set_inclusive_time_ms(double inclusive_time_ms_) {
+  inclusive_time_ms_ref() = inclusive_time_ms_;
+  return __fbthrift_field_inclusive_time_ms;
+}
+
+double ProfileNode::get_self_cpu_ms() const {
+  return __fbthrift_field_self_cpu_ms;
+}
+
+double& ProfileNode::set_self_cpu_ms(double self_cpu_ms_) {
+  self_cpu_ms_ref() = self_cpu_ms_;
+  return __fbthrift_field_self_cpu_ms;
+}
+
+double ProfileNode::get_inclusive_cpu_ms() const {
+  return __fbthrift_field_inclusive_cpu_ms;
+}
+
+double& ProfileNode::set_inclusive_cpu_ms(double inclusive_cpu_ms_) {
+  inclusive_cpu_ms_ref() = inclusive_cpu_ms_;
+  return __fbthrift_field_inclusive_cpu_ms;
+}
+
+const ::std::vector<::eugraph::thrift_service::ProfileNode>& ProfileNode::get_children() const& {
+  return __fbthrift_field_children;
+}
+
+::std::vector<::eugraph::thrift_service::ProfileNode> ProfileNode::get_children() && {
+  return static_cast<::std::vector<::eugraph::thrift_service::ProfileNode>&&>(__fbthrift_field_children);
+}
+
+void swap([[maybe_unused]] ProfileNode& a, [[maybe_unused]] ProfileNode& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_operator_type, b.__fbthrift_field_operator_type);
+  swap(a.__fbthrift_field_details, b.__fbthrift_field_details);
+  swap(a.__fbthrift_field_identifiers, b.__fbthrift_field_identifiers);
+  swap(a.__fbthrift_field_rows, b.__fbthrift_field_rows);
+  swap(a.__fbthrift_field_chunks, b.__fbthrift_field_chunks);
+  swap(a.__fbthrift_field_db_hits, b.__fbthrift_field_db_hits);
+  swap(a.__fbthrift_field_wt_search, b.__fbthrift_field_wt_search);
+  swap(a.__fbthrift_field_wt_search_near, b.__fbthrift_field_wt_search_near);
+  swap(a.__fbthrift_field_io_dispatches, b.__fbthrift_field_io_dispatches);
+  swap(a.__fbthrift_field_prefetch_hits, b.__fbthrift_field_prefetch_hits);
+  swap(a.__fbthrift_field_prefetch_misses, b.__fbthrift_field_prefetch_misses);
+  swap(a.__fbthrift_field_self_time_ms, b.__fbthrift_field_self_time_ms);
+  swap(a.__fbthrift_field_inclusive_time_ms, b.__fbthrift_field_inclusive_time_ms);
+  swap(a.__fbthrift_field_self_cpu_ms, b.__fbthrift_field_self_cpu_ms);
+  swap(a.__fbthrift_field_inclusive_cpu_ms, b.__fbthrift_field_inclusive_cpu_ms);
+  swap(a.__fbthrift_field_children, b.__fbthrift_field_children);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void ProfileNode::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t ProfileNode::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t ProfileNode::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t ProfileNode::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void ProfileNode::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t ProfileNode::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t ProfileNode::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t ProfileNode::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        ProfileNode,
+        ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>,
+        ::std::vector<::eugraph::thrift_service::ProfileNode>>,
+    "inconsistent use of json option");
+
+} // namespace eugraph::thrift_service
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
+void TccStructTraits<::eugraph::thrift_service::QueryProfile>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift_service::QueryProfile>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift_service {
+
+std::string_view QueryProfile::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<QueryProfile>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view QueryProfile::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<QueryProfile>::name;
+}
+
+QueryProfile::QueryProfile(const QueryProfile&) = default;
+QueryProfile& QueryProfile::operator=(const QueryProfile&) = default;
+QueryProfile::QueryProfile() :
+    __fbthrift_field_planning_ms(),
+    __fbthrift_field_execution_ms(),
+    __fbthrift_field_commit_ms(),
+    __fbthrift_field_rows(),
+    __fbthrift_field_chunks(),
+    __fbthrift_field_db_hits(),
+    __fbthrift_field_wt_search(),
+    __fbthrift_field_wt_search_near(),
+    __fbthrift_field_io_dispatches(),
+    __fbthrift_field_prefetch_hits(),
+    __fbthrift_field_prefetch_misses() {
+}
+
+
+QueryProfile::~QueryProfile() {}
+
+QueryProfile::QueryProfile([[maybe_unused]] QueryProfile&& other) noexcept :
+    __fbthrift_field_planning_ms(std::move(other.__fbthrift_field_planning_ms)),
+    __fbthrift_field_execution_ms(std::move(other.__fbthrift_field_execution_ms)),
+    __fbthrift_field_commit_ms(std::move(other.__fbthrift_field_commit_ms)),
+    __fbthrift_field_rows(std::move(other.__fbthrift_field_rows)),
+    __fbthrift_field_chunks(std::move(other.__fbthrift_field_chunks)),
+    __fbthrift_field_db_hits(std::move(other.__fbthrift_field_db_hits)),
+    __fbthrift_field_wt_search(std::move(other.__fbthrift_field_wt_search)),
+    __fbthrift_field_wt_search_near(std::move(other.__fbthrift_field_wt_search_near)),
+    __fbthrift_field_io_dispatches(std::move(other.__fbthrift_field_io_dispatches)),
+    __fbthrift_field_prefetch_hits(std::move(other.__fbthrift_field_prefetch_hits)),
+    __fbthrift_field_prefetch_misses(std::move(other.__fbthrift_field_prefetch_misses)),
+    __fbthrift_field_roots(std::move(other.__fbthrift_field_roots)),
+    __isset(other.__isset) {
+}
+
+QueryProfile& QueryProfile::operator=([[maybe_unused]] QueryProfile&& other) noexcept {
+    this->__fbthrift_field_planning_ms = std::move(other.__fbthrift_field_planning_ms);
+    this->__fbthrift_field_execution_ms = std::move(other.__fbthrift_field_execution_ms);
+    this->__fbthrift_field_commit_ms = std::move(other.__fbthrift_field_commit_ms);
+    this->__fbthrift_field_rows = std::move(other.__fbthrift_field_rows);
+    this->__fbthrift_field_chunks = std::move(other.__fbthrift_field_chunks);
+    this->__fbthrift_field_db_hits = std::move(other.__fbthrift_field_db_hits);
+    this->__fbthrift_field_wt_search = std::move(other.__fbthrift_field_wt_search);
+    this->__fbthrift_field_wt_search_near = std::move(other.__fbthrift_field_wt_search_near);
+    this->__fbthrift_field_io_dispatches = std::move(other.__fbthrift_field_io_dispatches);
+    this->__fbthrift_field_prefetch_hits = std::move(other.__fbthrift_field_prefetch_hits);
+    this->__fbthrift_field_prefetch_misses = std::move(other.__fbthrift_field_prefetch_misses);
+    this->__fbthrift_field_roots = std::move(other.__fbthrift_field_roots);
+    __isset = other.__isset;
+    return *this;
+}
+
+
+QueryProfile::QueryProfile(apache::thrift::FragileConstructor, double planning_ms__arg, double execution_ms__arg, double commit_ms__arg, ::std::int64_t rows__arg, ::std::int64_t chunks__arg, ::std::int64_t db_hits__arg, ::std::int64_t wt_search__arg, ::std::int64_t wt_search_near__arg, ::std::int64_t io_dispatches__arg, ::std::int64_t prefetch_hits__arg, ::std::int64_t prefetch_misses__arg, ::std::vector<::eugraph::thrift_service::ProfileNode> roots__arg) :
+    __fbthrift_field_planning_ms(std::move(planning_ms__arg)),
+    __fbthrift_field_execution_ms(std::move(execution_ms__arg)),
+    __fbthrift_field_commit_ms(std::move(commit_ms__arg)),
+    __fbthrift_field_rows(std::move(rows__arg)),
+    __fbthrift_field_chunks(std::move(chunks__arg)),
+    __fbthrift_field_db_hits(std::move(db_hits__arg)),
+    __fbthrift_field_wt_search(std::move(wt_search__arg)),
+    __fbthrift_field_wt_search_near(std::move(wt_search_near__arg)),
+    __fbthrift_field_io_dispatches(std::move(io_dispatches__arg)),
+    __fbthrift_field_prefetch_hits(std::move(prefetch_hits__arg)),
+    __fbthrift_field_prefetch_misses(std::move(prefetch_misses__arg)),
+    __fbthrift_field_roots(std::move(roots__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+  __isset.set(folly::index_constant<2>(), true);
+  __isset.set(folly::index_constant<3>(), true);
+  __isset.set(folly::index_constant<4>(), true);
+  __isset.set(folly::index_constant<5>(), true);
+  __isset.set(folly::index_constant<6>(), true);
+  __isset.set(folly::index_constant<7>(), true);
+  __isset.set(folly::index_constant<8>(), true);
+  __isset.set(folly::index_constant<9>(), true);
+  __isset.set(folly::index_constant<10>(), true);
+  __isset.set(folly::index_constant<11>(), true);
+}
+
+
+void QueryProfile::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_planning_ms = double();
+  this->__fbthrift_field_execution_ms = double();
+  this->__fbthrift_field_commit_ms = double();
+  this->__fbthrift_field_rows = ::std::int64_t();
+  this->__fbthrift_field_chunks = ::std::int64_t();
+  this->__fbthrift_field_db_hits = ::std::int64_t();
+  this->__fbthrift_field_wt_search = ::std::int64_t();
+  this->__fbthrift_field_wt_search_near = ::std::int64_t();
+  this->__fbthrift_field_io_dispatches = ::std::int64_t();
+  this->__fbthrift_field_prefetch_hits = ::std::int64_t();
+  this->__fbthrift_field_prefetch_misses = ::std::int64_t();
+  this->__fbthrift_field_roots.clear();
+  __isset = {};
+}
+
+void QueryProfile::__fbthrift_clear_terse_fields() {
+}
+
+bool QueryProfile::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool QueryProfile::operator==([[maybe_unused]] const QueryProfile& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool QueryProfile::operator<([[maybe_unused]] const QueryProfile& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+double QueryProfile::get_planning_ms() const {
+  return __fbthrift_field_planning_ms;
+}
+
+double& QueryProfile::set_planning_ms(double planning_ms_) {
+  planning_ms_ref() = planning_ms_;
+  return __fbthrift_field_planning_ms;
+}
+
+double QueryProfile::get_execution_ms() const {
+  return __fbthrift_field_execution_ms;
+}
+
+double& QueryProfile::set_execution_ms(double execution_ms_) {
+  execution_ms_ref() = execution_ms_;
+  return __fbthrift_field_execution_ms;
+}
+
+double QueryProfile::get_commit_ms() const {
+  return __fbthrift_field_commit_ms;
+}
+
+double& QueryProfile::set_commit_ms(double commit_ms_) {
+  commit_ms_ref() = commit_ms_;
+  return __fbthrift_field_commit_ms;
+}
+
+::std::int64_t QueryProfile::get_rows() const {
+  return __fbthrift_field_rows;
+}
+
+::std::int64_t& QueryProfile::set_rows(::std::int64_t rows_) {
+  rows_ref() = rows_;
+  return __fbthrift_field_rows;
+}
+
+::std::int64_t QueryProfile::get_chunks() const {
+  return __fbthrift_field_chunks;
+}
+
+::std::int64_t& QueryProfile::set_chunks(::std::int64_t chunks_) {
+  chunks_ref() = chunks_;
+  return __fbthrift_field_chunks;
+}
+
+::std::int64_t QueryProfile::get_db_hits() const {
+  return __fbthrift_field_db_hits;
+}
+
+::std::int64_t& QueryProfile::set_db_hits(::std::int64_t db_hits_) {
+  db_hits_ref() = db_hits_;
+  return __fbthrift_field_db_hits;
+}
+
+::std::int64_t QueryProfile::get_wt_search() const {
+  return __fbthrift_field_wt_search;
+}
+
+::std::int64_t& QueryProfile::set_wt_search(::std::int64_t wt_search_) {
+  wt_search_ref() = wt_search_;
+  return __fbthrift_field_wt_search;
+}
+
+::std::int64_t QueryProfile::get_wt_search_near() const {
+  return __fbthrift_field_wt_search_near;
+}
+
+::std::int64_t& QueryProfile::set_wt_search_near(::std::int64_t wt_search_near_) {
+  wt_search_near_ref() = wt_search_near_;
+  return __fbthrift_field_wt_search_near;
+}
+
+::std::int64_t QueryProfile::get_io_dispatches() const {
+  return __fbthrift_field_io_dispatches;
+}
+
+::std::int64_t& QueryProfile::set_io_dispatches(::std::int64_t io_dispatches_) {
+  io_dispatches_ref() = io_dispatches_;
+  return __fbthrift_field_io_dispatches;
+}
+
+::std::int64_t QueryProfile::get_prefetch_hits() const {
+  return __fbthrift_field_prefetch_hits;
+}
+
+::std::int64_t& QueryProfile::set_prefetch_hits(::std::int64_t prefetch_hits_) {
+  prefetch_hits_ref() = prefetch_hits_;
+  return __fbthrift_field_prefetch_hits;
+}
+
+::std::int64_t QueryProfile::get_prefetch_misses() const {
+  return __fbthrift_field_prefetch_misses;
+}
+
+::std::int64_t& QueryProfile::set_prefetch_misses(::std::int64_t prefetch_misses_) {
+  prefetch_misses_ref() = prefetch_misses_;
+  return __fbthrift_field_prefetch_misses;
+}
+
+const ::std::vector<::eugraph::thrift_service::ProfileNode>& QueryProfile::get_roots() const& {
+  return __fbthrift_field_roots;
+}
+
+::std::vector<::eugraph::thrift_service::ProfileNode> QueryProfile::get_roots() && {
+  return static_cast<::std::vector<::eugraph::thrift_service::ProfileNode>&&>(__fbthrift_field_roots);
+}
+
+void swap([[maybe_unused]] QueryProfile& a, [[maybe_unused]] QueryProfile& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_planning_ms, b.__fbthrift_field_planning_ms);
+  swap(a.__fbthrift_field_execution_ms, b.__fbthrift_field_execution_ms);
+  swap(a.__fbthrift_field_commit_ms, b.__fbthrift_field_commit_ms);
+  swap(a.__fbthrift_field_rows, b.__fbthrift_field_rows);
+  swap(a.__fbthrift_field_chunks, b.__fbthrift_field_chunks);
+  swap(a.__fbthrift_field_db_hits, b.__fbthrift_field_db_hits);
+  swap(a.__fbthrift_field_wt_search, b.__fbthrift_field_wt_search);
+  swap(a.__fbthrift_field_wt_search_near, b.__fbthrift_field_wt_search_near);
+  swap(a.__fbthrift_field_io_dispatches, b.__fbthrift_field_io_dispatches);
+  swap(a.__fbthrift_field_prefetch_hits, b.__fbthrift_field_prefetch_hits);
+  swap(a.__fbthrift_field_prefetch_misses, b.__fbthrift_field_prefetch_misses);
+  swap(a.__fbthrift_field_roots, b.__fbthrift_field_roots);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void QueryProfile::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t QueryProfile::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t QueryProfile::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t QueryProfile::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void QueryProfile::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t QueryProfile::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t QueryProfile::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t QueryProfile::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        QueryProfile,
+        ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>,
+        ::std::vector<::eugraph::thrift_service::ProfileNode>>,
+    "inconsistent use of json option");
+
+} // namespace eugraph::thrift_service
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
 void TccStructTraits<::eugraph::thrift_service::ResultRowBatch>::translateFieldName(
     std::string_view _fname,
     int16_t& fid,
@@ -2587,25 +3207,30 @@ ResultRowBatch::~ResultRowBatch() {}
 
 ResultRowBatch::ResultRowBatch([[maybe_unused]] ResultRowBatch&& other) noexcept :
     __fbthrift_field_rows(std::move(other.__fbthrift_field_rows)),
+    __fbthrift_field_profile(std::move(other.__fbthrift_field_profile)),
     __isset(other.__isset) {
 }
 
 ResultRowBatch& ResultRowBatch::operator=([[maybe_unused]] ResultRowBatch&& other) noexcept {
     this->__fbthrift_field_rows = std::move(other.__fbthrift_field_rows);
+    this->__fbthrift_field_profile = std::move(other.__fbthrift_field_profile);
     __isset = other.__isset;
     return *this;
 }
 
 
-ResultRowBatch::ResultRowBatch(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::ResultRow> rows__arg) :
-    __fbthrift_field_rows(std::move(rows__arg)) { 
+ResultRowBatch::ResultRowBatch(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::ResultRow> rows__arg, ::eugraph::thrift_service::QueryProfile profile__arg) :
+    __fbthrift_field_rows(std::move(rows__arg)),
+    __fbthrift_field_profile(std::move(profile__arg)) { 
   __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
 }
 
 
 void ResultRowBatch::__fbthrift_clear() {
   // clear all fields
   this->__fbthrift_field_rows.clear();
+  ::apache::thrift::clear(this->__fbthrift_field_profile);
   __isset = {};
 }
 
@@ -2633,9 +3258,18 @@ const ::std::vector<::eugraph::thrift_service::ResultRow>& ResultRowBatch::get_r
   return static_cast<::std::vector<::eugraph::thrift_service::ResultRow>&&>(__fbthrift_field_rows);
 }
 
+const ::eugraph::thrift_service::QueryProfile* ResultRowBatch::get_profile() const& {
+  return profile_ref().has_value() ? std::addressof(__fbthrift_field_profile) : nullptr;
+}
+
+::eugraph::thrift_service::QueryProfile* ResultRowBatch::get_profile() & {
+  return profile_ref().has_value() ? std::addressof(__fbthrift_field_profile) : nullptr;
+}
+
 void swap([[maybe_unused]] ResultRowBatch& a, [[maybe_unused]] ResultRowBatch& b) {
   using ::std::swap;
   swap(a.__fbthrift_field_rows, b.__fbthrift_field_rows);
+  swap(a.__fbthrift_field_profile, b.__fbthrift_field_profile);
   swap(a.__isset, b.__isset);
 }
 
@@ -2655,6 +3289,12 @@ static_assert(
         ResultRowBatch,
         ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>,
         ::std::vector<::eugraph::thrift_service::ResultRow>>,
+    "inconsistent use of json option");
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        ResultRowBatch,
+        ::apache::thrift::type_class::structure,
+        ::eugraph::thrift_service::QueryProfile>,
     "inconsistent use of json option");
 
 } // namespace eugraph::thrift_service

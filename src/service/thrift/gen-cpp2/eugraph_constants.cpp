@@ -14,10 +14,10 @@ namespace eugraph::thrift_service {
 namespace eugraph_constants {
 
 
-::std::string_view _fbthrift_schema_f62d9dfbd16c9a85() {
+::std::string_view _fbthrift_schema_66a2eff1bcc76e27() {
   return "";
 }
-::folly::Range<const ::std::string_view*> _fbthrift_schema_f62d9dfbd16c9a85_includes() {
+::folly::Range<const ::std::string_view*> _fbthrift_schema_66a2eff1bcc76e27_includes() {
   return {};
 }
 

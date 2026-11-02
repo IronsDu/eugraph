@@ -147,7 +147,7 @@ meta 读写）都经 `IoScheduler::dispatch` 到 Storage IO 池。
 | `tests/test_rpc_integration.cpp::StreamingQueryCompletesWithoutStall` | 3000 行 `UNWIND` 流式查询 < 5 s，行数精确 |
 | `tests/test_query_stream_hop.cpp`（4 个） | 包装 generator 的 operator 在 Compute 启动/恢复、consumer 仍在网络 IO executor、首 batch 预取、空流不重复 next |
 | `tests/test_io_scheduler.cpp` | storage callable 在 IO executor、调用方回自己的 executor、异常传播 |
-| TCK（`ctest -R tck_tests`） | 2026-10-31 实测 3959 scenarios / 3907 passed / 0 failed，769.2 s（旧基线约 1470–1500 s） |
+| TCK（`ctest -R tck_tests`） | 2026-11-02 实测 3959 scenarios / 3906 passed / 52 undefined / 1 known failure（`Temporal2 [6]`） |
 | Bolt Python/Java/JS driver 集成 | 3/3 通过；覆盖显式 `BEGIN`/`COMMIT`/`ROLLBACK`（commit/begin 均经 Storage IO dispatch） |
 
 `RpcIntegrationTest` 固定使用 4 个网络 IO worker（`setNumIOWorkerThreads(4)`），

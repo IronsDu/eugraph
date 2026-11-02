@@ -38,7 +38,13 @@ public:
 
     /// 为某条语句构造一个轻量、绑定该会话的实例（返回值，不堆分配）✓
     [[nodiscard]] AsyncGraphDataStore for_session(GraphSession& session) const {
-        return AsyncGraphDataStore(store_, io_, session);
+        AsyncGraphDataStore store(store_, io_, session);
+        store.profile_counters_ = profile_counters_;
+        return store;
+    }
+
+    void setProfileCounters(std::shared_ptr<StorageOpCounters> counters) {
+        profile_counters_ = std::move(counters);
     }
 
     // ==================== Session transaction control ====================
@@ -304,6 +310,7 @@ public:
                                           batch.push_back(BatchedEdge{vid, entry});
                                           return true;
                                       });
+                recordWtScanRows(batch.size());
             });
             offset += n;
             if (!batch.empty())
@@ -700,8 +707,11 @@ private:
         auto cursor = co_await dispatch([&]() {
             auto created = make_cursor();
             out.clear();
-            if (created)
+            if (created) {
                 fetch(*created, out);
+                if (!out.empty())
+                    recordWtScanRows(out.size());
+            }
             return created;
         });
         if (!cursor || out.empty())
@@ -714,6 +724,8 @@ private:
             const bool has_more = co_await dispatch([&]() {
                 out.clear();
                 fetch(*cursor, out);
+                if (!out.empty())
+                    recordWtScanRows(out.size());
                 return !out.empty();
             });
             if (!has_more)
@@ -778,12 +790,21 @@ private:
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
+        auto* counters = tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
+        if (counters != nullptr) {
+            recordIoDispatch(counters);
+            auto wrapped = [func = std::move(func), counters]() mutable -> std::invoke_result_t<F> {
+                StorageOpMetricsScope scope(counters);
+                return func();
+            };
+            return io_.dispatch(std::move(wrapped));
+        }
         if (!trace)
             return io_.dispatch(std::move(func));
 
-        auto* counters = io_stats_.seeks.get();
-        auto wrapped = [func = std::move(func), counters]() mutable -> std::invoke_result_t<F> {
-            StorageOpMetricsScope scope(counters);
+        auto* statement_counters = io_stats_.seeks.get();
+        auto wrapped = [func = std::move(func), statement_counters]() mutable -> std::invoke_result_t<F> {
+            StorageOpMetricsScope scope(statement_counters);
             return func();
         };
         return io_.dispatch(std::move(wrapped));
@@ -794,12 +815,21 @@ private:
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
+        auto* counters = tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
+        if (counters != nullptr) {
+            recordIoDispatch(counters);
+            auto wrapped = [func = std::move(func), counters]() mutable {
+                StorageOpMetricsScope scope(counters);
+                func();
+            };
+            return io_.dispatchVoid(std::move(wrapped));
+        }
         if (!trace)
             return io_.dispatchVoid(std::move(func));
 
-        auto* counters = io_stats_.seeks.get();
-        auto wrapped = [func = std::move(func), counters]() mutable {
-            StorageOpMetricsScope scope(counters);
+        auto* statement_counters = io_stats_.seeks.get();
+        auto wrapped = [func = std::move(func), statement_counters]() mutable {
+            StorageOpMetricsScope scope(statement_counters);
             func();
         };
         return io_.dispatchVoid(std::move(wrapped));
@@ -809,6 +839,7 @@ private:
     IoScheduler& io_;
     GraphSession& session_;
     IoStats io_stats_;
+    std::shared_ptr<StorageOpCounters> profile_counters_;
 };
 
 } // namespace eugraph

@@ -14,6 +14,117 @@ int64_t elapsedMs(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
+using PackValue = packstream::Value;
+using PackMap = std::unordered_map<std::string, packstream::PackStreamValueStorage>;
+using PackList = std::vector<packstream::PackStreamValueStorage>;
+
+packstream::PackStreamValueStorage ps(int64_t value) {
+    return packstream::PackStreamValueStorage{PackValue{value}};
+}
+packstream::PackStreamValueStorage ps(double value) {
+    return packstream::PackStreamValueStorage{PackValue{value}};
+}
+packstream::PackStreamValueStorage ps(std::string value) {
+    return packstream::PackStreamValueStorage{PackValue{std::move(value)}};
+}
+packstream::PackStreamValueStorage psMap(PackMap value) {
+    return packstream::PackStreamValueStorage{PackValue{std::move(value)}};
+}
+packstream::PackStreamValueStorage psList(PackList value) {
+    return packstream::PackStreamValueStorage{PackValue{std::move(value)}};
+}
+
+PackList stringsToPackList(const std::vector<std::string>& values) {
+    PackList list;
+    list.reserve(values.size());
+    for (const auto& value : values)
+        list.push_back(ps(value));
+    return list;
+}
+
+PackMap profileEugraphNode(const compute::ProfileNode& node) {
+    PackMap map;
+    map.emplace("chunks", ps(static_cast<int64_t>(node.chunks)));
+    map.emplace("scanRows", ps(static_cast<int64_t>(node.scan_rows)));
+    map.emplace("selfTimeMs", ps(static_cast<double>(node.self_wall_ns) / 1e6));
+    map.emplace("inclusiveTimeMs", ps(static_cast<double>(node.inclusive_wall_ns) / 1e6));
+    map.emplace("selfCpuMs", ps(static_cast<double>(node.self_cpu_ns) / 1e6));
+    map.emplace("inclusiveCpuMs", ps(static_cast<double>(node.inclusive_cpu_ns) / 1e6));
+    map.emplace("ioDispatches", ps(static_cast<int64_t>(node.io_dispatches)));
+    map.emplace("wtSearch", ps(static_cast<int64_t>(node.wt_search)));
+    map.emplace("wtSearchNear", ps(static_cast<int64_t>(node.wt_search_near)));
+    map.emplace("prefetchHits", ps(static_cast<int64_t>(node.prefetch_hits)));
+    map.emplace("prefetchMisses", ps(static_cast<int64_t>(node.prefetch_misses)));
+    return map;
+}
+
+PackValue profileNodeToValue(const compute::ProfileNode& node, const compute::QueryProfile* summary = nullptr,
+                             bool root = false) {
+    PackMap map;
+    map.emplace("operatorType", ps(node.operator_type + "@eugraph"));
+    PackMap args;
+    args.emplace("Details", ps(node.details));
+    // cypher-shell builds its plan columns from these standard argument keys;
+    // without them it omits the Rows / DB Hits columns entirely.
+    args.emplace("DbHits", ps(static_cast<int64_t>(node.db_hits)));
+    args.emplace("Rows", ps(static_cast<int64_t>(node.rows)));
+    // The JS driver exposes args as ProfiledPlan.arguments; the Java/cypher-shell
+    // renderer prints all argument *values* in its "Other" column without keys.
+    // Keep the custom metrics as one nested map so that column stays readable.
+    auto eugraph = profileEugraphNode(node);
+    if (summary != nullptr && root) {
+        // The root node's own counters usually differ from the statement totals
+        // (planning/commit dispatches, child operators). Keep the root's node
+        // metrics and expose totals under explicit total* names so neither the
+        // Web cards nor cypher-shell's Other column silently show the root's 0.
+        eugraph.emplace("planningMs", ps(static_cast<double>(summary->planning_ns) / 1e6));
+        eugraph.emplace("executionMs", ps(static_cast<double>(summary->execution_ns) / 1e6));
+        eugraph.emplace("commitMs", ps(static_cast<double>(summary->commit_ns) / 1e6));
+        eugraph.emplace("totalRows", ps(static_cast<int64_t>(summary->rows)));
+        eugraph.emplace("totalChunks", ps(static_cast<int64_t>(summary->chunks)));
+        eugraph.emplace("totalDbHits", ps(static_cast<int64_t>(summary->db_hits)));
+        eugraph.emplace("totalIoDispatches", ps(static_cast<int64_t>(summary->io_dispatches)));
+        eugraph.emplace("totalWtSearch", ps(static_cast<int64_t>(summary->wt_search)));
+        eugraph.emplace("totalWtSearchNear", ps(static_cast<int64_t>(summary->wt_search_near)));
+        eugraph.emplace("totalScanRows", ps(static_cast<int64_t>(summary->scan_rows)));
+        eugraph.emplace("totalPrefetchHits", ps(static_cast<int64_t>(summary->prefetch_hits)));
+        eugraph.emplace("totalPrefetchMisses", ps(static_cast<int64_t>(summary->prefetch_misses)));
+    }
+    args.emplace("eugraph", psMap(std::move(eugraph)));
+    map.emplace("args", psMap(std::move(args)));
+    map.emplace("identifiers", psList(stringsToPackList(node.identifiers)));
+    map.emplace("dbHits", ps(static_cast<int64_t>(node.db_hits)));
+    map.emplace("rows", ps(static_cast<int64_t>(node.rows)));
+    // The Java driver's ProfiledPlan.time is a long (milliseconds); sending a
+    // double here fails with "Cannot coerce FLOAT to Java long without losing
+    // precision" in cypher-shell. Keep the precise value under eugraph.*.
+    map.emplace("time", ps(static_cast<int64_t>((node.self_wall_ns + 500000) / 1000000)));
+
+    PackList children;
+    children.reserve(node.children.size());
+    for (const auto& child : node.children)
+        children.push_back(packstream::PackStreamValueStorage{profileNodeToValue(*child)});
+    map.emplace("children", psList(std::move(children)));
+    map.emplace("eugraph", psMap(profileEugraphNode(node)));
+    return PackValue{std::move(map)};
+}
+
+PackMap profileSummaryEugraph(const compute::QueryProfile& profile) {
+    PackMap map;
+    map.emplace("planningMs", ps(static_cast<double>(profile.planning_ns) / 1e6));
+    map.emplace("executionMs", ps(static_cast<double>(profile.execution_ns) / 1e6));
+    map.emplace("commitMs", ps(static_cast<double>(profile.commit_ns) / 1e6));
+    map.emplace("rows", ps(static_cast<int64_t>(profile.rows)));
+    map.emplace("chunks", ps(static_cast<int64_t>(profile.chunks)));
+    map.emplace("dbHits", ps(static_cast<int64_t>(profile.db_hits)));
+    map.emplace("wtSearch", ps(static_cast<int64_t>(profile.wt_search)));
+    map.emplace("wtSearchNear", ps(static_cast<int64_t>(profile.wt_search_near)));
+    map.emplace("ioDispatches", ps(static_cast<int64_t>(profile.io_dispatches)));
+    map.emplace("prefetchHits", ps(static_cast<int64_t>(profile.prefetch_hits)));
+    map.emplace("prefetchMisses", ps(static_cast<int64_t>(profile.prefetch_misses)));
+    return map;
+}
+
 } // namespace
 
 // ==================== Handshake ====================
@@ -513,6 +624,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
     if (state_ != SessionState::STREAMING && state_ != SessionState::TX_STREAMING) {
         co_return makeFailure("ProtocolError", "Unexpected PULL in current state");
     }
+    if (stream_ctx_)
+        stream_ctx_->startProfileExecution();
 
     if (!stream_ctx_) {
         // No stream context (e.g., CALL db.ping()): return SUCCESS with no records.
@@ -667,9 +780,19 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         stream->phys_op.reset();
 
         // Commit auto-commit transaction (explicit transactions commit at COMMIT ✓)
+        const auto commit_start = std::chrono::steady_clock::now();
         if (!stream_in_txn && stream_should_commit && !co_await stream->commitAsync()) {
             spdlog::error("[bolt] 自动提交失败（存储引擎错误，如 WT PANIC）⇒ 明确报错，绝不静默丢写入");
             co_return makeFailure("DatabaseError", "Transaction commit failed (storage engine error)");
+        }
+        const uint64_t commit_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - commit_start)
+                .count());
+        if (stream->profile_requested) {
+            const auto profile = stream->finalizeProfile(commit_ns);
+            if (!profile.roots.empty())
+                meta["profile"] = profileNodeToValue(*profile.roots.front(), &profile, /*root=*/true);
+            meta["eugraph"] = PackValue{profileSummaryEugraph(profile)};
         }
         stream.reset();
 

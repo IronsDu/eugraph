@@ -160,8 +160,44 @@ struct QueryStreamMeta {
   1: list<string> columns
 }
 
+struct ProfileNode {
+  1: string operator_type
+  2: string details
+  3: list<string> identifiers
+  4: i64 rows
+  5: i64 chunks
+  6: i64 db_hits
+  7: i64 wt_search
+  8: i64 wt_search_near
+  9: i64 io_dispatches
+  10: i64 prefetch_hits
+  11: i64 prefetch_misses
+  12: double self_time_ms
+  13: double inclusive_time_ms
+  14: double self_cpu_ms
+  15: double inclusive_cpu_ms
+  16: list<ProfileNode> children
+}
+
+struct QueryProfile {
+  1: double planning_ms
+  2: double execution_ms
+  3: double commit_ms
+  4: i64 rows
+  5: i64 chunks
+  6: i64 db_hits
+  7: i64 wt_search
+  8: i64 wt_search_near
+  9: i64 io_dispatches
+  10: i64 prefetch_hits
+  11: i64 prefetch_misses
+  12: list<ProfileNode> roots
+}
+
 struct ResultRowBatch {
   1: list<ResultRow> rows
+  // PROFILE only: the server emits one final empty batch carrying the summary.
+  2: optional QueryProfile profile
 }
 
 // ==================== Graph Management ====================

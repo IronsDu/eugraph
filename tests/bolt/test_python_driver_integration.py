@@ -735,3 +735,36 @@ class TestConnectionLifetime:
                 list(pool.map(worker, range(4)))
         finally:
             driver.close()
+
+
+class TestProfile:
+    """PROFILE syntax returns the normal rows plus an execution plan summary."""
+
+    def test_profile_returns_summary_and_rows(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run("CREATE (:ProfileTest {v: 1})")
+                result = session.run("PROFILE MATCH (n:ProfileTest) RETURN n.v")
+                records = list(result)
+                summary = result.consume()
+
+            assert [record["n.v"] for record in records] == [1]
+            assert summary.profile is not None
+            assert summary.profile.get("operatorType", "").endswith("@eugraph")
+            assert summary.profile.get("rows") == 1
+            assert "eugraph" in summary.metadata
+            assert summary.metadata["eugraph"]["rows"] == 1
+            root_eugraph = summary.profile["args"]["eugraph"]
+            assert root_eugraph["totalIoDispatches"] > 0
+            assert root_eugraph["totalWtSearch"] + root_eugraph["totalWtSearchNear"] > 0
+            assert root_eugraph["totalScanRows"] > 0
+
+            def walk(node):
+                yield node
+                for child in node.get("children", []):
+                    yield from walk(child)
+
+            assert any(node.get("eugraph", {}).get("ioDispatches", 0) > 0 for node in walk(summary.profile))
+        finally:
+            driver.close()

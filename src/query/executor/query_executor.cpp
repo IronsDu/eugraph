@@ -32,9 +32,11 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
                              QueryCancel cancel, SessionRef existing_session) {
     auto ctx = std::make_shared<StreamContext>();
     ctx->query_text = cypher_query;
+    const auto planning_start = std::chrono::steady_clock::now();
 
-    // 0. Quick guard: skip DDL if query starts with EXPLAIN (so DDL isn't executed for EXPLAIN queries)
-    // The actual EXPLAIN handling is in the grammar/AST below.
+    // 0. Quick guard: skip DDL if query starts with EXPLAIN/PROFILE (so DDL isn't
+    // executed for a plan/profile request). The actual prefix handling is in the
+    // grammar/AST below.
     bool skip_ddl = false;
     {
         std::string trimmed = cypher_query;
@@ -45,7 +47,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         if (trimmed.size() >= 7) {
             std::string prefix = trimmed.substr(0, 7);
             std::transform(prefix.begin(), prefix.end(), prefix.begin(), ::toupper);
-            if (prefix == "EXPLAIN" && (trimmed.size() == 7 || std::isspace(static_cast<unsigned char>(trimmed[7])))) {
+            if ((prefix == "EXPLAIN" || prefix == "PROFILE") &&
+                (trimmed.size() == 7 || std::isspace(static_cast<unsigned char>(trimmed[7])))) {
                 skip_ddl = true;
             }
         }
@@ -76,15 +79,20 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     }
     auto stmt_var = std::move(std::get<cypher::Statement>(parse_result));
 
-    // 1.5. Extract EXPLAIN flag from AST
+    // 1.5. Extract EXPLAIN / PROFILE mode from AST
     bool is_explain = false;
+    bool is_profile = false;
     cypher::Statement stmt;
     if (auto* es = std::get_if<std::unique_ptr<cypher::ExplainStatement>>(&stmt_var)) {
         is_explain = true;
         stmt = cypher::Statement(std::move((*es)->query));
+    } else if (auto* ps = std::get_if<std::unique_ptr<cypher::ProfileStatement>>(&stmt_var)) {
+        is_profile = true;
+        stmt = cypher::Statement(std::move((*ps)->query));
     } else {
         stmt = std::move(stmt_var);
     }
+    ctx->profile_requested = is_profile;
 
     // Load label/edge_label mappings from metadata service
     auto labels = co_await async_meta_.listLabels();
@@ -164,11 +172,13 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // cancellation flag, later deadlines/budgets) belongs. Operators hold it through
     // a shared_ptr, and the store stays unaware of it -- cancellation is observed on
     // the operator side, where upstream chunks are consumed.
-    auto query_ctx = std::make_shared<QueryContext>(std::move(cancel));
+    auto query_ctx = std::make_shared<QueryContext>(std::move(cancel), is_profile);
     ctx->query_context = query_ctx;
     // 显式事务分支：会话已由 BEGIN 开启，这里只构造绑定门面；自动提交分支已在上面构造。
     if (!ctx->query_store)
         ctx->query_store.emplace(async_data_.for_session(active_session->get()));
+    if (is_profile)
+        ctx->query_store->setProfileCounters(query_ctx->statementCounters());
     IAsyncGraphDataStore& query_data = *ctx->query_store;
 
     // Store label/edge_label defs + name→id maps in StreamContext so physical operator
@@ -351,6 +361,9 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // One attach call reaches the whole tree (base class recurses over children).
     ctx->phys_op->setQueryContext(ctx->query_context);
     ctx->gen = ctx->phys_op->executeChunkTraced();
+    ctx->planning_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - planning_start)
+            .count());
 
     co_return ctx;
 }

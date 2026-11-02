@@ -123,12 +123,18 @@ folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunkTracedImpl(
     if (!trace_record_)
         trace_record_ = query_ctx_->addOpTrace(toString(), tls_current_op_trace);
     tls_current_op_trace = trace_record_.get();
+    auto* previous_counters = tls_storage_op_counters;
+    auto* node_counters = trace_record_->counters.get();
+    if (node_counters)
+        tls_storage_op_counters = node_counters;
     struct RestoreCurrentTrace {
         OpTraceRecord* previous;
+        StorageOpCounters* previous_counters;
         ~RestoreCurrentTrace() {
             tls_current_op_trace = previous;
+            tls_storage_op_counters = previous_counters;
         }
-    } restore{previous};
+    } restore{previous, previous_counters};
 
     auto start_wall = std::chrono::steady_clock::now();
     auto start_thread = std::this_thread::get_id();
@@ -162,8 +168,12 @@ folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunkTracedImpl(
         // right sub-plan show up under its left child and inflated the join's
         // "self" time by the whole right side.
         tls_current_op_trace = previous;
+        if (node_counters)
+            tls_storage_op_counters = previous_counters;
         co_yield std::move(*chunk);
         tls_current_op_trace = trace_record_.get();
+        if (node_counters)
+            tls_storage_op_counters = node_counters;
         // Do not charge time spent by downstream operators after this yield to
         // this operator: reset wall/CPU/thread when the generator is resumed.
         start_wall = std::chrono::steady_clock::now();

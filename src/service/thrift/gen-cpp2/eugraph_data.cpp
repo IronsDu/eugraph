@@ -460,18 +460,154 @@ THRIFT_DATA_MEMBER const std::array<int, 1> TStructDataStorage<::eugraph::thrift
   0,
 }};
 
-THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::name = "ResultRowBatch";
-THRIFT_DATA_MEMBER const std::array<std::string_view, 1> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::fields_names = { {
+THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift_service::ProfileNode>::name = "ProfileNode";
+THRIFT_DATA_MEMBER const std::array<std::string_view, 16> TStructDataStorage<::eugraph::thrift_service::ProfileNode>::fields_names = { {
+  "operator_type"sv,
+  "details"sv,
+  "identifiers"sv,
   "rows"sv,
+  "chunks"sv,
+  "db_hits"sv,
+  "wt_search"sv,
+  "wt_search_near"sv,
+  "io_dispatches"sv,
+  "prefetch_hits"sv,
+  "prefetch_misses"sv,
+  "self_time_ms"sv,
+  "inclusive_time_ms"sv,
+  "self_cpu_ms"sv,
+  "inclusive_cpu_ms"sv,
+  "children"sv,
 }};
-THRIFT_DATA_MEMBER const std::array<int16_t, 1> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::fields_ids = { {
+THRIFT_DATA_MEMBER const std::array<int16_t, 16> TStructDataStorage<::eugraph::thrift_service::ProfileNode>::fields_ids = { {
   1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15,
+  16,
 }};
-THRIFT_DATA_MEMBER const std::array<protocol::TType, 1> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::fields_types = { {
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 16> TStructDataStorage<::eugraph::thrift_service::ProfileNode>::fields_types = { {
+  TType::T_STRING,
+  TType::T_STRING,
+  TType::T_LIST,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_DOUBLE,
+  TType::T_DOUBLE,
+  TType::T_DOUBLE,
+  TType::T_DOUBLE,
   TType::T_LIST,
 }};
-THRIFT_DATA_MEMBER const std::array<int, 1> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::isset_indexes = { {
+THRIFT_DATA_MEMBER const std::array<int, 16> TStructDataStorage<::eugraph::thrift_service::ProfileNode>::isset_indexes = { {
   0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15,
+}};
+
+THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift_service::QueryProfile>::name = "QueryProfile";
+THRIFT_DATA_MEMBER const std::array<std::string_view, 12> TStructDataStorage<::eugraph::thrift_service::QueryProfile>::fields_names = { {
+  "planning_ms"sv,
+  "execution_ms"sv,
+  "commit_ms"sv,
+  "rows"sv,
+  "chunks"sv,
+  "db_hits"sv,
+  "wt_search"sv,
+  "wt_search_near"sv,
+  "io_dispatches"sv,
+  "prefetch_hits"sv,
+  "prefetch_misses"sv,
+  "roots"sv,
+}};
+THRIFT_DATA_MEMBER const std::array<int16_t, 12> TStructDataStorage<::eugraph::thrift_service::QueryProfile>::fields_ids = { {
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+}};
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 12> TStructDataStorage<::eugraph::thrift_service::QueryProfile>::fields_types = { {
+  TType::T_DOUBLE,
+  TType::T_DOUBLE,
+  TType::T_DOUBLE,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_LIST,
+}};
+THRIFT_DATA_MEMBER const std::array<int, 12> TStructDataStorage<::eugraph::thrift_service::QueryProfile>::isset_indexes = { {
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+}};
+
+THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::name = "ResultRowBatch";
+THRIFT_DATA_MEMBER const std::array<std::string_view, 2> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::fields_names = { {
+  "rows"sv,
+  "profile"sv,
+}};
+THRIFT_DATA_MEMBER const std::array<int16_t, 2> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::fields_ids = { {
+  1,
+  2,
+}};
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 2> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::fields_types = { {
+  TType::T_LIST,
+  TType::T_STRUCT,
+}};
+THRIFT_DATA_MEMBER const std::array<int, 2> TStructDataStorage<::eugraph::thrift_service::ResultRowBatch>::isset_indexes = { {
+  0,
+  1,
 }};
 
 THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift_service::GraphInfo>::name = "GraphInfo";
@@ -544,6 +680,12 @@ namespace detail {
     nullptr;
 
 ::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift_service::QueryStreamMeta, false>::bundle)() =
+    nullptr;
+
+::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift_service::ProfileNode, false>::bundle)() =
+    nullptr;
+
+::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift_service::QueryProfile, false>::bundle)() =
     nullptr;
 
 ::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift_service::ResultRowBatch, false>::bundle)() =

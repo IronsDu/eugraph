@@ -20,16 +20,16 @@ public:
     COUNT = 33, ANY = 34, NONE = 35, SINGLE = 36, REDUCE = 37, SHORTESTPATH = 38, 
     ALLSHORTESTPATHS = 39, ALL = 40, ASC = 41, ASCENDING = 42, BY = 43, 
     CREATE = 44, DELETE = 45, DESC = 46, DESCENDING = 47, DETACH = 48, EXISTS = 49, 
-    EXPLAIN = 50, LIMIT = 51, MATCH = 52, MERGE = 53, ON = 54, OPTIONAL = 55, 
-    ORDER = 56, REMOVE = 57, RETURN = 58, SET = 59, SKIP_W = 60, WHERE = 61, 
-    WITH = 62, UNION = 63, UNWIND = 64, AND = 65, AS = 66, CONTAINS = 67, 
-    DISTINCT = 68, ENDS = 69, IN = 70, IS = 71, NOT = 72, OR = 73, STARTS = 74, 
-    XOR = 75, FALSE = 76, TRUE = 77, NULL_W = 78, CONSTRAINT = 79, DO = 80, 
-    FOR = 81, REQUIRE = 82, UNIQUE = 83, CASE = 84, WHEN = 85, THEN = 86, 
-    ELSE = 87, END = 88, MANDATORY = 89, SCALAR = 90, OF = 91, ADD = 92, 
-    DROP = 93, FOREACH = 94, ID = 95, ESC_LITERAL = 96, CHAR_LITERAL = 97, 
-    STRING_LITERAL = 98, DIGIT = 99, FLOAT = 100, WS = 101, COMMENT = 102, 
-    LINE_COMMENT = 103, ERRCHAR = 104, Letter = 105
+    EXPLAIN = 50, PROFILE = 51, LIMIT = 52, MATCH = 53, MERGE = 54, ON = 55, 
+    OPTIONAL = 56, ORDER = 57, REMOVE = 58, RETURN = 59, SET = 60, SKIP_W = 61, 
+    WHERE = 62, WITH = 63, UNION = 64, UNWIND = 65, AND = 66, AS = 67, CONTAINS = 68, 
+    DISTINCT = 69, ENDS = 70, IN = 71, IS = 72, NOT = 73, OR = 74, STARTS = 75, 
+    XOR = 76, FALSE = 77, TRUE = 78, NULL_W = 79, CONSTRAINT = 80, DO = 81, 
+    FOR = 82, REQUIRE = 83, UNIQUE = 84, CASE = 85, WHEN = 86, THEN = 87, 
+    ELSE = 88, END = 89, MANDATORY = 90, SCALAR = 91, OF = 92, ADD = 93, 
+    DROP = 94, FOREACH = 95, ID = 96, ESC_LITERAL = 97, CHAR_LITERAL = 98, 
+    STRING_LITERAL = 99, DIGIT = 100, FLOAT = 101, WS = 102, COMMENT = 103, 
+    LINE_COMMENT = 104, ERRCHAR = 105, Letter = 106
   };
 
   enum {
@@ -198,6 +198,7 @@ public:
     virtual size_t getRuleIndex() const override;
     RegularQueryContext *regularQuery();
     antlr4::tree::TerminalNode *EXPLAIN();
+    antlr4::tree::TerminalNode *PROFILE();
     StandaloneCallContext *standaloneCall();
 
 

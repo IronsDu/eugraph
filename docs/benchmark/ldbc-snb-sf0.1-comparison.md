@@ -186,6 +186,6 @@ person/target；每条语句执行 3 次取 min，eugraph/neo4j 按 E→N→N→
 - **代码验证**（提交 `10f4aab1`）：`query_executor_tests` **603/603**、
   `index_e2e_tests` 56/56、`rpc_integration_tests` 28/28（4 个网络 IO worker）、
   `io_scheduler_tests` 6/6、`query_stream_hop_tests` 4/4；分组跑完 `ctest` **1421/1421**。
-- **全量 TCK**：**3907/3959 scenarios，0 failed**，769.2 s（旧基线约 1470–1500 s）。
+- **全量 TCK**：**3959 scenarios / 3906 passed / 52 undefined / 1 known failure**（`Temporal2 [6]` tzdata）。
 - 本轮不是同代码 base/opt A/B：主要变化是 loader 行级标签重导入 + compute/IO 分离后的
   真实跨线程 dispatch。同轮比值与 §2 的 min 是本轮判定口径。

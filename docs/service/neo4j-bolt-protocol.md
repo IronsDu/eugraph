@@ -196,6 +196,33 @@ Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在
 
 回归：`tests/test_query_executor.cpp` 的 `BytesParamsAndPropertiesRoundtrip`（期望值实测自 neo4j）。
 
+## PROFILE 结果摘要
+
+`PROFILE <cypher>` 执行完成后，最终 `PULL` 的 `SUCCESS` metadata 增加：
+
+- `profile`：与 neo4j driver 的 `ProfiledPlan` 兼容的树（`operatorType`、`args`、
+  `identifiers`、`dbHits`、`rows`、`time`、`children`）；
+- `eugraph`：语句级摘要（planning/execution/commit、rows/chunks、dbHits、ioDispatches、
+  wtSearch/wtSearchNear、scanRows、prefetchHits/prefetchMisses）。扫描算子（如
+  `LabelScan`）的 `dbHits` 包含扫描游标读出的行数，因此不再出现 0。
+
+EuGraph 专有指标同时写入每个节点的 `args.eugraph`（嵌套 map），因为官方 JS driver 的
+`ProfiledPlan` 只保留 `args` 和标准字段；Python driver 还能读到节点顶层 `eugraph` 子对象。
+cypher-shell 的 `Other` 列会直接显示这个嵌套 map，而不是一串无键名的数字。
+标准 `args` 还必须保留 `Rows` / `DbHits`：cypher-shell 用这两个 key 决定是否渲染
+`Rows` / `DB Hits` 列；删除后表格会只剩 `Operator | Details | Other`。
+
+根节点的 `args.eugraph` 同时保留根算子自身指标和语句级 `total*` 汇总（`totalIoDispatches`、
+`totalWtSearch`、`totalWtSearchNear`、`totalDbHits`、`totalRows`、`totalChunks`、
+`totalPrefetch*`）；Web 的汇总卡片读 `total*`，避免把根算子的 0 当成语句总量。
+
+节点级 `time` 是**整数毫秒**（Java driver 的 `ProfiledPlan.time()` 是 `long`；发送 double 会报
+`Cannot coerce FLOAT to Java long without losing precision`）。更精确的 self/inclusive 时间在
+`eugraph.selfTimeMs` / `eugraph.inclusiveTimeMs`。
+
+`PULL` 未取完（`has_more=true`）时不带 profile；只有最后一次完整 `PULL` 才带摘要。
+`DISCARD`/取消不产生 profile。`EXPLAIN` 仍走普通结果行（Plan 文本），不使用该摘要。
+
 ## 实现机制
 
 ### 1. 分块传输编码（Chunked Transfer Encoding）
