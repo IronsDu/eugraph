@@ -298,6 +298,33 @@ c14 稳定 **−36~39%**（约 154 → 95 ms），与 neo4j 14.6 ms 的差距从
 剩余：命中的 2/3 已去掉，未命中的 1/3 与两个 PC 的 compute（Filter/PE）仍是 ~95 ms 的
 主体；进一步需要合并两个 PC 的公共前缀（planner/CSE）或做 PC 去相关 join。
 
+### 3.7 evaluator prefetch 遍历快路径（2026-11-02）
+
+- 根因：`ExpressionEvaluator::prefetch` 对每个 chunk 的**每一列 × 每一行**做
+  `input.getValue(c, r)` 再 `scan`，只为找出裸顶点/运行时标签；c6 的 Filter 输入
+  11,538 行 × 11 列，其中大部分是 INT64/STRING/EDGE 标量列。GDB 采样热点落在
+  `prefetch → _Hashtable::_M_emplace_uniq`，PROFILE 的 Filter self CPU 约 25 ms。
+- 改动：按列类型跳过不可能包含实体的标量列（BOOL/INT64/DOUBLE/STRING/时间/NULL/
+  topology ref）；VERTEX/EDGE/LIST/MAP/PATH 的 FLAT 列直接读 typed buffer；只有
+  CONSTANT/DICTIONARY/ANY 走 Value 泛化路径。`note_labels` 只收集当前 `label_defs`
+  快照里不存在的标签（DDL 中途新建的），避免每行构造标签 set。
+- 同机交错 A/B（15 轮 + 3 warmup，min；正常/对调 data copy 各一轮）：
+
+```text
+query        base min   opt min   opt/base     (对调 data copy)
+complex-6      85.16      69.11     0.812      89.70 → 66.59（0.742）
+complex-10     52.19      51.43     0.985
+complex-14     90.69      89.60     0.988
+complex-9     126.39     128.53     1.017      120.11 → 120.73（1.005）
+complex-5     192.66     192.77     1.001
+complex-3      96.88     100.70     1.039       95.79 →  96.76（1.010）
+```
+
+  c6 稳定 **−19~26%**（85→69 ms），其 Filter self CPU 从 ~25 ms 降到 2.2 ms；
+  其余查询在噪声内。结果逐行一致。
+- 验证：`query_executor_tests` **608/608**、`ctest --preset debug` **1436/1436**
+  （含 TCK）、`verify_ldbc_results.py` **21/21**。
+
 ### 3.1 通用方向
 
 1. **边邻接局部性**：低 degree 展开的主要成本仍是全局 `edge_index` 的 per-source 定位，
