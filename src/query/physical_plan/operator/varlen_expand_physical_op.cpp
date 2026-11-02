@@ -170,6 +170,14 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         co_return out;
     };
 
+    auto labelsAllowed = [&](const LabelIdSet& labels) {
+        for (LabelId need : dst_label_ids_) {
+            if (labels.find(need) == labels.end())
+                return false;
+        }
+        return true;
+    };
+
     auto hasDstLabels = [&](VertexId vid) -> folly::coro::Task<bool> {
         if (dst_label_ids_.empty())
             co_return true;
@@ -177,15 +185,38 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         if (it != dst_label_cache.end())
             co_return it->second;
         auto labels = co_await store_.getVertexLabels(vid);
-        bool ok = true;
-        for (LabelId need : dst_label_ids_) {
-            if (labels.find(need) == labels.end()) {
-                ok = false;
-                break;
-            }
-        }
+        const bool ok = labelsAllowed(labels);
         dst_label_cache.emplace(vid, ok);
         co_return ok;
+    };
+
+    // A VLE frontier can have thousands of neighbors. Checking labels one
+    // neighbor at a time costs one storage dispatch per vertex (complex-12:
+    // ~47k dispatches). Resolve the whole adjacency list in bounded batches
+    // and let the existing per-vertex cache serve the DFS checks.
+    auto preloadDstLabels = [&](const std::vector<VertexId>& vids) -> folly::coro::Task<void> {
+        if (dst_label_ids_.empty() || vids.empty())
+            co_return;
+        constexpr size_t kLabelBatch = 1024;
+        std::vector<VertexId> missing;
+        std::unordered_set<VertexId> seen;
+        missing.reserve(std::min(vids.size(), kLabelBatch));
+        seen.reserve(vids.size());
+        for (VertexId vid : vids) {
+            if (dst_label_cache.find(vid) == dst_label_cache.end() && seen.insert(vid).second)
+                missing.push_back(vid);
+            if (missing.size() == kLabelBatch) {
+                auto labels = co_await store_.getVertexLabelsBatch(missing);
+                for (size_t i = 0; i < missing.size(); ++i)
+                    dst_label_cache.emplace(missing[i], labelsAllowed(labels[i]));
+                missing.clear();
+            }
+        }
+        if (!missing.empty()) {
+            auto labels = co_await store_.getVertexLabelsBatch(missing);
+            for (size_t i = 0; i < missing.size(); ++i)
+                dst_label_cache.emplace(missing[i], labelsAllowed(labels[i]));
+        }
     };
 
     auto scanAll = [&](VertexId vid) -> folly::coro::Task<std::vector<DirectedEdgeEntry>> {
@@ -201,8 +232,62 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         } else {
             result = co_await scanDirected(vid, dir);
         }
+        std::vector<VertexId> neighbors;
+        neighbors.reserve(result.size());
+        for (const auto& edge : result)
+            neighbors.push_back(edge.neighbor_id);
+        co_await preloadDstLabels(neighbors);
         adjacency_cache.emplace(vid, result);
         co_return result;
+    };
+
+    // Resolve all children of one frontier vertex with one scanEdgesBatch per
+    // label instead of one scanEdges dispatch per child. The DFS order and the
+    // per-source edge order are unchanged; this only warms adjacency_cache.
+    auto preloadAdjacency = [&](const std::vector<DirectedEdgeEntry>& edges) -> folly::coro::Task<void> {
+        std::vector<VertexId> missing;
+        std::unordered_set<VertexId> seen;
+        missing.reserve(edges.size());
+        seen.reserve(edges.size());
+        for (const auto& edge : edges) {
+            if (adjacency_cache.find(edge.neighbor_id) == adjacency_cache.end() &&
+                seen.insert(edge.neighbor_id).second) {
+                missing.push_back(edge.neighbor_id);
+                adjacency_cache.emplace(edge.neighbor_id, std::vector<DirectedEdgeEntry>{});
+            }
+        }
+        if (missing.empty())
+            co_return;
+
+        auto scan_into_cache = [&](Direction scan_dir, bool phy_out) -> folly::coro::Task<void> {
+            for (const auto& label_filter : scan_filters) {
+                auto batch_gen = cancellable(store_.scanEdgesBatch(missing, scan_dir, label_filter));
+                while (auto batch = co_await batch_gen.next()) {
+                    for (const auto& be : *batch) {
+                        auto it = adjacency_cache.find(be.src_id);
+                        if (it != adjacency_cache.end())
+                            it->second.push_back({be.entry.neighbor_id, be.entry.edge_id, be.entry.edge_label_id,
+                                                  be.entry.seq, phy_out});
+                    }
+                }
+            }
+        };
+        if (split_undirected) {
+            co_await scan_into_cache(Direction::OUT, true);
+            co_await scan_into_cache(Direction::IN, false);
+        } else {
+            co_await scan_into_cache(dir, dir == Direction::OUT);
+        }
+
+        std::vector<VertexId> neighbors;
+        for (VertexId vid : missing) {
+            auto it = adjacency_cache.find(vid);
+            if (it == adjacency_cache.end())
+                continue;
+            for (const auto& edge : it->second)
+                neighbors.push_back(edge.neighbor_id);
+        }
+        co_await preloadDstLabels(neighbors);
     };
 
     while (auto chunk = co_await child_gen.next()) {
@@ -277,6 +362,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
             // Collect initial edges from source vertex
             std::vector<DirectedEdgeEntry> start_edges = co_await scanAll(src_id);
+            if (max_hops_ < 0 || max_hops_ > 1)
+                co_await preloadAdjacency(start_edges);
             if (prev_edge_id != INVALID_EDGE_ID) {
                 start_edges.erase(std::remove_if(start_edges.begin(), start_edges.end(),
                                                  [&](const DirectedEdgeEntry& e) { return e.edge_id == prev_edge_id; }),
@@ -531,6 +618,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     visited_edges.insert(edge_key);
 
                     auto next_edges = co_await scanAll(edge.neighbor_id);
+                    if (max_hops_ < 0 || next_depth + 1 < max_hops_)
+                        co_await preloadAdjacency(next_edges);
 
                     VertexId push_physical_src = edge.physical_out ? frame.vertex : edge.neighbor_id;
                     VertexId push_physical_dst = edge.physical_out ? edge.neighbor_id : frame.vertex;
