@@ -3,8 +3,10 @@
 #include "storage/data/graph_session.hpp"
 #include "storage/wt_table_ops.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <numeric>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
 
@@ -590,19 +592,27 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
         return out;
     }
     auto* c = cursor.get();
-    size_t out_index = 0;
+    // Sort the probe order, not the output: Expand produces message ids grouped
+    // by friend, so the original order jumps around vertex_data. Reusing the
+    // prefix buffer and probing in id order cuts allocations/page misses.
+    std::vector<size_t> order(vids.size());
+    std::iota(order.begin(), order.end(), size_t{0});
+    if (vids.size() > 64) {
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return vids[a] < vids[b]; });
+    }
     // Reuse one candidate buffer across all vids: c9 calls this for 53k vertices.
     std::vector<std::optional<PropertyValue>> found(candidates.size());
-    for (VertexId vid : vids) {
+    std::string prefix;
+    prefix.reserve(64);
+    for (size_t out_index : order) {
+        const VertexId vid = vids[out_index];
         std::fill(found.begin(), found.end(), std::nullopt);
-        std::string prefix = KeyCodec::encodeVertexDataPropPrefix(vid);
+        prefix = KeyCodec::encodeVertexDataPropPrefix(vid);
         setItem(c, prefix);
         int exact = 0;
         int ret = (recordWtSearchNear(), c->search_near(c, &exact));
-        if (ret == WT_NOTFOUND) {
-            ++out_index;
+        if (ret == WT_NOTFOUND)
             continue;
-        }
         if (ret != 0) {
             gs.fail_from_wt(ret, "getVertexCoalescePropertiesBatch: search_near failed");
             return out;
@@ -627,7 +637,6 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
         for (auto& v : found)
             if (v)
                 out[out_index].push_back(std::move(*v));
-        ++out_index;
     }
     return out;
 }

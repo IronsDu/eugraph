@@ -142,7 +142,7 @@ person/target；每条语句执行 3 次取 min，eugraph/neo4j 按 E→N→N→
 |---|---|---|---|---|
 | P1 | 🔴 complex-14 | 144.1 ms vs 15.95 ms（约 9.0×） | allShortestPaths 后两路 PC 的实际 Comment/Post 展开；同数据 4 条路径，结果一致 | PC 去相关/展开批量化；见 [pattern-comprehension-anchor-label-scan.md](../query/pattern-comprehension-anchor-label-scan.md) |
 | P1 | 🔴 complex-10 | 52.6 ms vs 9.49 ms（约 5.5×） | VLE 之后的 `IS_LOCATED_IN` / `HAS_CREATOR` 展开顺序 | 调整 join/expand 顺序，减少中间行 |
-| P1 | 🟠 complex-9 | 128.7 ms vs 27.6 ms（约 4.7×） | `message.id` 过滤前预取已由 Filter 边界消除；剩余是 53k 条 `HAS_CREATOR` 的 per-edge 成本 + creationDate coalesce | 展开侧共享 cursor / 目标属性过滤下推；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
+| P1 | 🟠 complex-9 | 125.2 ms vs 29.7 ms（约 4.2×） | 属性 coalesce 探测已按 id 排序；剩余是 53k 条 `HAS_CREATOR` 的 per-edge 成本 | 展开侧共享 cursor / 目标属性过滤下推；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
 | P1 | 🟠 complex-1 | 23.2 ms vs 6.49 ms（约 3.6×） | shortestPath 后还有 OPTIONAL/collect 属性展开 | profile 后处理；绝对值 ~23 ms，收益有限 |
 | P1 | 🟡 complex-5 | 180.9 ms vs 84.5 ms（约 2.1×） | correlated `LeftJoin` 已按 512 行批处理；剩余是 89k posts/creator 的两次 Expand（per-edge 成本） | `dst IN list` 下推进 Expand，或从 174 个 friend 反向展开后与 forum 半连接 |
 | P2 | 🟠 complex-6 | 83.1 ms vs 27.0 ms（约 3.1×） | 已通过标签前向扫描从 ~9× 降到 ~3.1×；剩余是 post/tag 展开与属性读取 | 继续 profile 该路径 |
@@ -179,6 +179,36 @@ optimized: c12 min 152 ms   profile VLE  80 ms / ioDispatches 192
 neo4j profile 的对照：neo4j 的 `VarLengthExpand(All)` 约 65,689 行 / 131,307 dbHits，
 没有 EuGraph 的跨线程 dispatch 成本；优化后 EuGraph VLE 的 dbHits 仍较高，但 dispatch
 已不再是主瓶颈。
+
+### 3.3 complex-9 属性探测顺序（2026-11-02）
+
+GDB 采样显示 c9 的 `ProjectionExtract`/`Filter` 主要耗在
+`SyncGraphDataStore::getVertexCoalescePropertiesBatch`。该函数对 Expand 产出的
+message id 逐个 `search_near`；id 按 friend 分组，WT 页面访问跳跃。
+
+改动：批量探测前按 `VertexId` 排序探测顺序，并复用 prefix 缓冲区；结果仍按调用方
+输入下标回填，输出行序不变。新增 unsorted vids 的回归单测。
+
+同机 A/B：
+
+```text
+c9 baseline:  min 134.6 / 132.7 ms
+c9 sorted:    min 122.1 / 120.2 ms
+```
+
+端到端（5 轮）complex-9 约 **125 ms** vs neo4j 30 ms（4.2×），21/21 结果仍一致。
+complex-5 的 A/B 在噪声范围内（约 195–210 ms），不宣称收益。
+
+### 3.4 complex-14 采样结论（2026-11-02，未改代码）
+
+c14 当前约 166 ms（neo4j 18 ms）。PROFILE：`allShortestPaths` 约 16 ms；剩余主要是
+两个 `PatternComprehensionApply` 分支：每个分支把 4 条路径的 12 条关系展开成
+3,780–3,788 行，再做 `a.id/b.id` 端点过滤。GDB 采样热点是
+`ExpressionEvaluator`（PC 端点谓词/`reduce`）与 `ExpandPhysicalOp`，不是单点存储
+miss；没有低风险的单算子批量化可直接落地。
+
+下一步应做 **PC 去相关**：从 path 的端点 id 直接 index-probe `a`/`b`，或把两个 PC
+的公共路径展开合并；这需要 planner/算子层改动，不能靠局部阈值。当前 c14 未做修改。
 
 ### 3.1 通用方向
 

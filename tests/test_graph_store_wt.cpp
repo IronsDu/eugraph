@@ -927,15 +927,17 @@ TEST_F(WTGraphStoreTest, CoalescePropertiesBatchAcrossLabels) {
     commit(txn);
 
     const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}, {2, 0}, {1, 1}, {2, 1}};
-    auto out = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {930, 931, 999}, candidates);
+    // Deliberately unsorted: the batch may probe vertex_data in id order, but the
+    // result vector must stay aligned with the caller's input order.
+    auto out = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {931, 999, 930}, candidates);
     ASSERT_EQ(out.size(), 3u);
-    ASSERT_EQ(out[0].size(), 3u);
-    EXPECT_EQ(std::get<std::string>(out[0][0]), "A");
-    EXPECT_EQ(std::get<std::string>(out[0][1]), "B");
-    EXPECT_EQ(std::get<int64_t>(out[0][2]), 42);
-    ASSERT_EQ(out[1].size(), 1u);
-    EXPECT_EQ(std::get<std::string>(out[1][0]), "C");
-    EXPECT_TRUE(out[2].empty());
+    ASSERT_EQ(out[0].size(), 1u);
+    EXPECT_EQ(std::get<std::string>(out[0][0]), "C");
+    EXPECT_TRUE(out[1].empty());
+    ASSERT_EQ(out[2].size(), 3u);
+    EXPECT_EQ(std::get<std::string>(out[2][0]), "A");
+    EXPECT_EQ(std::get<std::string>(out[2][1]), "B");
+    EXPECT_EQ(std::get<int64_t>(out[2][2]), 42);
 
     auto empty_candidates = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {930}, {});
     ASSERT_EQ(empty_candidates.size(), 1u);
