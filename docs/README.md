@@ -163,6 +163,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [时间语义（对齐 neo4j）](query/engine/temporal-semantics.md) | 月末夹取、duration.between 的月/天拆分、时区比较、epoch 基准、date - date 扩展与验证方式 |
 | [查询错误模型](query/engine/error-model.md) | 错误分类 → Neo4j 状态码、消息契约、整数溢出/除零与 map 参数校验、与 neo4j 的差异清单 |
 | [ProjectionExtract 按需属性物化设计](query/engine/projection-extract-design.md) | 需求驱动的属性物化：SlotId 系统、六阶段管线、PEPlan、ColumnSpec |
+| [延迟目标标签判定设计](query/engine/deferred-label-filter-design.md) | Expand 的 dst label filter 延迟到 PE 物化时过滤：标签+属性同一前缀扫描、PE 行压缩、planner 门控；目标 c9/c6 的 286k/135k 行标签扫描 |
 | [SlotId 架构设计](query/engine/slot-id-design.md) | 全局唯一槽位标识符：动机、设计决策、物理布局映射、内部/用户槽位分区 |
 | [CrossProduct 相关变量等值约束](query/engine/cross-product-correlation.md) | WITH 后独立 MATCH / 多 pattern 同名变量的独立作用域绑定与实体 ID 等值约束设计 |
 | [Pattern 作用域与 Join 等值约束](query/engine/pattern-scope-join-design.md) | 剩余 TCK 失败的模块化设计：合法性前置分析、统一 Join 等值、OPTIONAL 关联、varlen 列表与标签顺序 |
