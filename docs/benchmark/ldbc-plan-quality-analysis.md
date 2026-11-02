@@ -38,6 +38,10 @@ Person(id) seek → KNOWS*1..2 (174 friends) → Expand HAS_CREATOR (53,192 mess
 - **属性读**：coalesce 对每个 message `search_near{vid}{0x01}` 后逐属性行 `next`，
   单条约 1.2–1.3 µs；neo4j 的 node record 内联属性约 0.2 µs。
 - 去掉标签检查后 c9 仍约 92 ms，差距主体是 53k 次属性读的**存储布局**。
+- 已实测并否证的替代路径：把 coalesce 的“前缀扫描 + 逐属性 next”改成“每个候选一次精确
+  search”（同二进制 env 开关，c9/c3 同机交错 A/B）反而 **慢 1.50×**（c9 119→180 ms、
+  c3 92→139 ms；c14 +23%、c6 +30%）。4 个候选 = 4 次 B-tree 下降，比 1 次下降 + 少量
+  next 更贵；**不要走这条**。
 
 ## 3. c6：计划正确，`:Post` 标签检查 13.3 ms
 
