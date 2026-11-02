@@ -9,6 +9,8 @@
 
 #include <folly/coro/AsyncGenerator.h>
 
+#include <atomic>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -73,6 +75,10 @@ struct ColumnSpec {
     uint16_t prop_id = 0;
     /// Candidates for LoadVertexPropCoalesce.
     std::vector<std::pair<LabelId, uint16_t>> coalesce_candidates;
+    /// Non-empty: the coalesce prefetch also loads labels in the same prefix
+    /// scan and rows lacking any of them are dropped (deferred destination
+    /// label filter; see docs/query/engine/deferred-label-filter-design.md).
+    std::vector<LabelId> required_labels;
 };
 
 /// Unified schema-reshaping operator that loads vertex/edge properties and
@@ -107,7 +113,17 @@ public:
         return {child_.get()};
     }
 
+    /// Attach a destination-label filter to the coalesce spec reading
+    /// `source_col`. Returns true when such a spec exists (the planner then
+    /// clears Expand's own filter and the operator drops matching rows).
+    bool setRequiredLabels(size_t source_col, const std::vector<LabelId>& labels);
+
+    /// Diagnostics: number of deferred destination-label filters attached.
+    static uint64_t deferredLabelFilterCount() noexcept;
+    static void resetDeferredLabelFilterCount() noexcept;
+
 private:
+    static std::atomic<uint64_t> deferred_label_filter_count_;
     std::vector<ColumnSpec> specs_;
     IAsyncGraphDataStore& store_;
     std::unordered_map<LabelId, std::string> vertex_label_names_;

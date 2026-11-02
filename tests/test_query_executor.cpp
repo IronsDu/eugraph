@@ -7,6 +7,8 @@
 
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/executor/query_executor.hpp"
+#include "query/physical_plan/operator/expand_physical_op.hpp"
+#include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "storage/data/async_graph_data_store.hpp"
@@ -10147,6 +10149,108 @@ TEST_F(QueryExecutorTest, ShortestPathEndpointDynamicPropertyTriggersPrefetch) {
     EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "dp3");
     EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u)
         << "dynamic property evaluation hit a bare vertex outside the prefetch cache (would have blocked on IO)";
+}
+
+TEST_F(QueryExecutorTest, DynamicPropertyReadsOwnedVertexProperties) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name: 'dyn'})").error.empty());
+
+    ExpressionEvaluator::resetMissingPrefetchCount();
+    auto result =
+        execSyncParams(*executor_, "MATCH (p:Person) RETURN p[$key] AS v", {{"key", Value(std::string("name"))}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "dyn");
+    EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u);
+}
+
+TEST_F(QueryExecutorTest, DynamicPropertyMissingReturnsNull) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person)").error.empty());
+
+    auto result =
+        execSyncParams(*executor_, "MATCH (p:Person) RETURN p[$key] AS v", {{"key", Value(std::string("name"))}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]));
+}
+
+TEST_F(QueryExecutorTest, DynamicPropertyFallsBackToAnonLabel) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    // Recreate executor so the catalog picks up the __anon__ label.
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    ASSERT_TRUE(execSync(*executor_, "CREATE ({name: 'anon-dyn'})").error.empty());
+
+    ExpressionEvaluator::resetMissingPrefetchCount();
+    auto result = execSyncParams(*executor_, "MATCH (n) RETURN n[$key] AS v", {{"key", Value(std::string("name"))}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "anon-dyn");
+    EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PatternComprehensionReusesCorrelatedAnchorExpansions) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(b:Person {name: 'b'}), "
+                                     "(a)-[:KNOWS]->(c:Person {name: 'c'}), "
+                                     "(b)-[:KNOWS]->(d:Person {name: 'd'}), "
+                                     "(c)-[:KNOWS]->(d)")
+                    .error.empty());
+
+    ExpandPhysicalOp::resetCacheHitCount();
+    auto result =
+        execSync(*executor_, "MATCH p = allShortestPaths((a:Person {name: 'a'})-[:KNOWS*..3]-(d:Person {name: 'd'})) "
+                             "WITH p, relationships(p) AS rels "
+                             "RETURN [n IN nodes(p) | n.name] AS names, "
+                             "       [r IN rels | "
+                             "        size([(x:Person)-[:KNOWS]->(y:Person) "
+                             "              WHERE x.name = startNode(r).name | y.name])] AS counts");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 2u);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        EXPECT_EQ(std::get<ListValuePtr>(row[0])->elements.size(), 3u); // a -> {b|c} -> d
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[1]));
+        const auto& counts = std::get<ListValuePtr>(row[1])->elements;
+        ASSERT_EQ(counts.size(), 2u); // one list entry per path relationship
+        // a out-degree 2 (a->b, a->c); b/c out-degree 1 (b->d, c->d).
+        EXPECT_EQ(std::get<int64_t>(counts[0].value), 2);
+        EXPECT_EQ(std::get<int64_t>(counts[1].value), 1);
+    }
+    EXPECT_GT(ExpandPhysicalOp::cacheHitCount(), 0u)
+        << "correlated PC re-execution did not reuse the Expand neighbour cache";
+}
+
+TEST_F(QueryExecutorTest, DeferredDestinationLabelFilterDropsRows) {
+    // Entity declares no properties; name lives on Person/City, so reading
+    // b.name through the Entity label needs the coalesce spec the deferral
+    // attaches to.
+    auto entity_id = blockingWait(async_meta_->createLabel("Entity"));
+    ASSERT_NE(entity_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(entity_id));
+    // Broad enough for the planner to defer the label check to materialization.
+    async_meta_->setLabelVertexCount(entity_id, 100000);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(b:Entity:Person {name: 'x'}), "
+                                     "(a)-[:KNOWS]->(c:Person {name: 'y'})")
+                    .error.empty());
+
+    ProjectionExtractPhysicalOp::resetDeferredLabelFilterCount();
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'a'})-[:KNOWS]->(b:Entity) "
+                                       "RETURN b.name AS n ORDER BY n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u) << "a destination without the Entity label must be dropped";
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "x");
+    EXPECT_GT(ProjectionExtractPhysicalOp::deferredLabelFilterCount(), 0u)
+        << "deferred destination-label filter was not attached";
 }
 
 // ==================== operator-level trace attribution ====================

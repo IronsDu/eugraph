@@ -6,11 +6,13 @@
 #include "query/dataset/data_chunk.hpp"
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/function/function_registry.hpp"
+#include "query/function/scalar/start_end_node_function.hpp"
 #include "query/parser/ast.hpp"
 #include "query/planner/binder/bind_binary_op.hpp"
 #include "query/planner/binder/bind_unary_op.hpp"
 #include "query/planner/bound_expression/bound_binary_op.hpp"
 #include "query/planner/bound_expression/bound_column_ref.hpp"
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
 #include "query/planner/bound_expression/bound_unary_op.hpp"
@@ -603,4 +605,187 @@ TEST(EvaluatorTypedKernelTest, TypedTailPublishesFreshPayloadWithSameElements) {
     EXPECT_EQ(col.buffer->list_data[0].get(), input_payload_before) << "输入句柄不应被替换";
     EXPECT_EQ(col.buffer->list_data[0]->elements.size(), 4) << "输入列表不应被改动";
     EXPECT_NE(out.buffer->list_data[0].get(), col.buffer->list_data[0].get()) << "输出必须是新载荷，不能与输入共享";
+}
+
+// ==================== startNode/endNode constant-column fast path ====================
+
+TEST(EvaluatorTypedKernelTest, StartEndNodeConstantEdgeColumnSharesOneVertex) {
+    constexpr size_t n = 32;
+    auto edge = mk<EdgeValue>();
+    edge->id = 7;
+    edge->src_id = 101;
+    edge->dst_id = 202;
+
+    Column arg = Column::constant(Value(edge));
+    Column out = Column::flat(BoundTypeKind::VERTEX, n);
+    std::vector<const Column*> args{&arg};
+    function::EvalContext ctx;
+
+    function::scalar::startNodeBatchFn(args, out, n, ctx);
+    for (size_t i = 0; i < n; ++i) {
+        const Value v = out.getValue(i);
+        ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(v)) << i;
+        EXPECT_EQ(std::get<VertexValuePtr>(v)->id, 101u) << i;
+    }
+    const auto first = std::get<VertexValuePtr>(out.getValue(0));
+    for (size_t i = 1; i < n; ++i)
+        EXPECT_EQ(std::get<VertexValuePtr>(out.getValue(i)), first) << "常量边列应共享同一合成顶点";
+
+    function::scalar::endNodeBatchFn(args, out, n, ctx);
+    for (size_t i = 0; i < n; ++i) {
+        ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(out.getValue(i))) << i;
+        EXPECT_EQ(std::get<VertexValuePtr>(out.getValue(i))->id, 202u) << i;
+    }
+}
+
+TEST(EvaluatorTypedKernelTest, StartEndNodeFlatEdgeColumnPerRow) {
+    constexpr size_t n = 8;
+    Column arg = Column::flat(BoundTypeKind::EDGE, n);
+    for (size_t i = 0; i < n; ++i) {
+        auto edge = mk<EdgeValue>();
+        edge->id = 100 + i;
+        edge->src_id = 1000 + i;
+        edge->dst_id = 2000 + i;
+        arg.setValue(i, Value(edge));
+    }
+    Column out = Column::flat(BoundTypeKind::VERTEX, n);
+    std::vector<const Column*> args{&arg};
+    function::EvalContext ctx;
+
+    function::scalar::startNodeBatchFn(args, out, n, ctx);
+    for (size_t i = 0; i < n; ++i)
+        EXPECT_EQ(std::get<VertexValuePtr>(out.getValue(i))->id, 1000u + i) << i;
+
+    function::scalar::endNodeBatchFn(args, out, n, ctx);
+    for (size_t i = 0; i < n; ++i)
+        EXPECT_EQ(std::get<VertexValuePtr>(out.getValue(i))->id, 2000u + i) << i;
+}
+
+// ==================== dynamic property evaluation ====================
+
+namespace {
+
+function::EvalContext dynamicPropContext(std::unordered_map<LabelId, LabelDef>& defs) {
+    function::EvalContext ctx;
+    ctx.label_defs = &defs;
+    return ctx;
+}
+
+void addNamePropertyDef(std::unordered_map<LabelId, LabelDef>& defs, LabelId label_id) {
+    LabelDef def;
+    def.id = label_id;
+    def.name = "Person";
+    PropertyDef pd;
+    pd.name = "name";
+    pd.type = PropertyType::STRING;
+    def.properties.push_back(pd);
+    defs.emplace(label_id, std::move(def));
+}
+
+BoundExpression makeDynamicPropertyRef(const std::string& property) {
+    auto ref = std::make_unique<BoundDynamicPropertyRef>();
+    ref->property = property;
+    ref->object = BoundExpression(BoundColumnRef(0, BoundType(BoundTypeKind::VERTEX, nullptr), "n"));
+    ref->result_type = BoundType::Any();
+    return BoundExpression(std::move(ref));
+}
+
+} // namespace
+
+TEST(EvaluatorTypedKernelTest, DynamicPropertyReadsOwnedProperties) {
+    constexpr LabelId kLabel = 7;
+    std::unordered_map<LabelId, LabelDef> defs;
+    addNamePropertyDef(defs, kLabel);
+
+    DataChunk input;
+    input.count = 1;
+    input.addColumn(BoundTypeKind::VERTEX);
+    input.columns[0].reserve(1);
+    auto vertex = mk<VertexValue>();
+    vertex->id = 1;
+    vertex->properties[kLabel] = Properties{PropertyValue(std::string("owned"))};
+    input.columns[0].setValue(0, Value(vertex));
+
+    ExpressionEvaluator evaluator(dynamicPropContext(defs));
+    Column out = Column::flat(BoundTypeKind::STRING, 1);
+    evaluator.evaluate(makeDynamicPropertyRef("name"), input, out);
+
+    const Value v = out.getValue(0);
+    ASSERT_TRUE(std::holds_alternative<std::string>(v));
+    EXPECT_EQ(std::get<std::string>(v), "owned");
+    // Read-only: the shared payload must not be rewritten by evaluation.
+    ASSERT_EQ(vertex->properties.count(kLabel), 1u);
+    ASSERT_EQ(vertex->properties.at(kLabel).size(), 1u);
+}
+
+TEST(EvaluatorTypedKernelTest, DynamicPropertyListValueStaysList) {
+    constexpr LabelId kLabel = 8;
+    std::unordered_map<LabelId, LabelDef> defs;
+    LabelDef def;
+    def.id = kLabel;
+    def.name = "Person";
+    PropertyDef pd;
+    pd.name = "tags";
+    pd.type = PropertyType::STRING_ARRAY;
+    def.properties.push_back(pd);
+    defs.emplace(kLabel, std::move(def));
+
+    DataChunk input;
+    input.count = 1;
+    input.addColumn(BoundTypeKind::VERTEX);
+    input.columns[0].reserve(1);
+    auto vertex = mk<VertexValue>();
+    vertex->id = 2;
+    vertex->properties[kLabel] = Properties{PropertyValue(std::vector<std::string>{"a", "b"})};
+    input.columns[0].setValue(0, Value(vertex));
+
+    ExpressionEvaluator evaluator(dynamicPropContext(defs));
+    Column out = Column::flat(BoundTypeKind::LIST, 1);
+    evaluator.evaluate(makeDynamicPropertyRef("tags"), input, out);
+
+    const Value v = out.getValue(0);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(v));
+    const auto& elements = std::get<ListValuePtr>(v)->elements;
+    ASSERT_EQ(elements.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(elements[0].value), "a");
+    EXPECT_EQ(std::get<std::string>(elements[1].value), "b");
+}
+
+TEST(EvaluatorTypedKernelTest, DynamicPropertyMissingReturnsNull) {
+    constexpr LabelId kLabel = 9;
+    std::unordered_map<LabelId, LabelDef> defs;
+    addNamePropertyDef(defs, kLabel);
+
+    DataChunk input;
+    input.count = 1;
+    input.addColumn(BoundTypeKind::VERTEX);
+    input.columns[0].reserve(1);
+    auto vertex = mk<VertexValue>();
+    vertex->id = 3;
+    vertex->properties[kLabel] = Properties{};
+    input.columns[0].setValue(0, Value(vertex));
+
+    ExpressionEvaluator evaluator(dynamicPropContext(defs));
+    Column out = Column::flat(BoundTypeKind::ANY, 1);
+    evaluator.evaluate(makeDynamicPropertyRef("name"), input, out);
+
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(out.getValue(0)));
+}
+
+TEST(EvaluatorTypedKernelTest, DynamicPropertyOnDeletedVertexThrows) {
+    std::unordered_map<LabelId, LabelDef> defs;
+    addNamePropertyDef(defs, 10);
+
+    DataChunk input;
+    input.count = 1;
+    input.addColumn(BoundTypeKind::VERTEX);
+    input.columns[0].reserve(1);
+    auto vertex = mk<VertexValue>();
+    vertex->id = 4;
+    vertex->deleted = true;
+    input.columns[0].setValue(0, Value(vertex));
+
+    ExpressionEvaluator evaluator(dynamicPropContext(defs));
+    Column out = Column::flat(BoundTypeKind::ANY, 1);
+    EXPECT_THROW(evaluator.evaluate(makeDynamicPropertyRef("name"), input, out), std::runtime_error);
 }

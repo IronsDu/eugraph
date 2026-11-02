@@ -107,6 +107,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [LDBC c5/c9/c14 neo4j 计划对比](query/ldbc-neo4j-plan-comparison.md) | PROFILE 形状/dbHits、eugraph 对应计划与下一步优化方向 |
+| [LDBC 计划质量与剩余瓶颈](benchmark/ldbc-plan-quality-analysis.md) | c5/c6/c9/c14 的 EuGraph vs neo4j 逐算子 rows/dbHits 对照：计划形状是否一致、标签扫描/per-edge seek/PC 冗余的实测成本与优先级 |
 | [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同源数据同机交错 A/B 耗时对比、21/21 结果一致性验证（`scripts/verify_ldbc_results.py`）、并发 QPS（`scripts/bench_bolt_qps.py`）、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`） |
 | [双调度器 hop 并发吞吐](benchmark/scheduler-hop-throughput.md) | 两个单 worker executor 下 compute→IO→compute 的吞吐/延迟曲线，区分并发流水线与 batch 摊薄 |
 | [Storage 操作成本](benchmark/storage-operation-costs.md) | WT `search`/`search_near` 与 IO dispatch 的单次成本、语句级计数与归因方法 |
@@ -162,6 +163,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [时间语义（对齐 neo4j）](query/engine/temporal-semantics.md) | 月末夹取、duration.between 的月/天拆分、时区比较、epoch 基准、date - date 扩展与验证方式 |
 | [查询错误模型](query/engine/error-model.md) | 错误分类 → Neo4j 状态码、消息契约、整数溢出/除零与 map 参数校验、与 neo4j 的差异清单 |
 | [ProjectionExtract 按需属性物化设计](query/engine/projection-extract-design.md) | 需求驱动的属性物化：SlotId 系统、六阶段管线、PEPlan、ColumnSpec |
+| [延迟目标标签判定设计](query/engine/deferred-label-filter-design.md) | Expand 的 dst label filter 延迟到 PE 物化时过滤：标签+属性同一前缀扫描、PE 行压缩、planner 门控；目标 c9/c6 的 286k/135k 行标签扫描 |
 | [SlotId 架构设计](query/engine/slot-id-design.md) | 全局唯一槽位标识符：动机、设计决策、物理布局映射、内部/用户槽位分区 |
 | [CrossProduct 相关变量等值约束](query/engine/cross-product-correlation.md) | WITH 后独立 MATCH / 多 pattern 同名变量的独立作用域绑定与实体 ID 等值约束设计 |
 | [Pattern 作用域与 Join 等值约束](query/engine/pattern-scope-join-design.md) | 剩余 TCK 失败的模块化设计：合法性前置分析、统一 Join 等值、OPTIONAL 关联、varlen 列表与标签顺序 |

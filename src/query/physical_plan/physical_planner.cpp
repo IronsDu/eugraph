@@ -2654,6 +2654,15 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     ctx.eval_ctx.meta = &meta;
     ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
 
+    // A statement with no write operator keeps one read snapshot for its whole
+    // execution; only then may correlated sub-plans memoize adjacency scans.
+    {
+        std::unordered_set<binder::SlotId> all_slots;
+        bool has_write = false;
+        collectOpSlots(bound_plan.root, all_slots, has_write);
+        ctx.read_only = !has_write;
+    }
+
     // Phase 0: Allocate slot_ids for every variable name (incl. aliases) so
     // subsequent passes can resolve names synchronously. Also build the alias
     // slot map (alias_slot → canonical_slot) by scanning Project items of the
@@ -2952,7 +2961,16 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     ctx.eval_ctx.store = &store;
     ctx.eval_ctx.meta = &meta;
     ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
+
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
+    // A statement with no write operator keeps one read snapshot for its whole
+    // execution; only then may correlated sub-plans memoize adjacency scans.
+    {
+        std::unordered_set<binder::SlotId> all_slots;
+        bool has_write = false;
+        collectOpSlots(materialized, all_slots, has_write);
+        ctx.read_only = !has_write;
+    }
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
     optimizer::rewriteInternalEdgeUniqueness(materialized, ctx.var_slots);
     optimizer::rewriteRefCompatiblePredicates(materialized, ctx.var_slots);
@@ -3122,17 +3140,46 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
                         std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids,
-                        dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels),
-                        full_edge_scan);
+                        dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels), full_edge_scan,
+                        ctx.read_only && ctx.correlated_subplan_depth > 0);
                     if (ctx.expand_allowed_filter && ctx.expand_allowed_filter->dst_var == v.dst_variable &&
                         v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT) {
                         result->setAllowedDstFilter(ctx.expand_allowed_filter->index_id,
                                                     ctx.expand_allowed_filter->edge_label);
                         ctx.filtered_expand = result.get();
                     }
+                    ExpandPhysicalOp* expand_op = result.get();
+                    int expand_dst_col = -1;
+                    for (size_t ci = 0; ci < output_schema.size(); ++ci) {
+                        if (output_schema[ci] == v.dst_variable) {
+                            expand_dst_col = static_cast<int>(ci);
+                            break;
+                        }
+                    }
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+                    // Deferred destination-label check: when the PE directly above
+                    // this Expand materialises the dst vertex through a coalesce
+                    // spec, it can load labels in the same prefix scan and drop
+                    // non-matching rows. Only for broad destination labels: below
+                    // ~64K vertices the existing forward label_fwd scan is cheaper
+                    // than per-vertex label reads (c5 Person/Forum regression).
+                    if (ctx.read_only && !v.dst_label_ids.empty() && !dst_bound && expand_dst_col >= 0) {
+                        bool broad_labels = true;
+                        for (LabelId need : v.dst_label_ids) {
+                            auto cit = ctx.label_vertex_counts.find(need);
+                            if (cit == ctx.label_vertex_counts.end() || cit->second < 65536) {
+                                broad_labels = false;
+                                break;
+                            }
+                        }
+                        if (broad_labels) {
+                            auto* pe = dynamic_cast<ProjectionExtractPhysicalOp*>(plan_result.op.get());
+                            if (pe && pe->setRequiredLabels(static_cast<size_t>(expand_dst_col), v.dst_label_ids))
+                                expand_op->clearDstLabelFilter();
+                        }
+                    }
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
                     // Reverse a zero-or-more OUT varlen that starts from a

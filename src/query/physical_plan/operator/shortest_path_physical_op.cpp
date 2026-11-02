@@ -95,50 +95,89 @@ void ShortestPathPhysicalOp::deriveOutputLayout(const TupleSlotLayout& input_lay
         slot_layout_.append(path_slot_);
 }
 
-folly::coro::Task<std::shared_ptr<const ShortestPathPhysicalOp::NeighborList>>
-ShortestPathPhysicalOp::scan(VertexId vid, Direction scan_dir) {
-    const uint64_t key = (static_cast<uint64_t>(vid) << 2) | static_cast<uint64_t>(scan_dir);
-    if (auto it = edge_cache_.find(key); it != edge_cache_.end())
-        co_return it->second;
+folly::coro::Task<std::vector<std::shared_ptr<const ShortestPathPhysicalOp::NeighborList>>>
+ShortestPathPhysicalOp::scanBatch(const std::vector<VertexId>& vids, Direction scan_dir) {
+    std::vector<std::shared_ptr<const NeighborList>> result(vids.size());
+    std::vector<VertexId> missing;
+    std::vector<size_t> missing_pos;
+    std::unordered_map<VertexId, size_t> batch_index;
+    missing.reserve(vids.size());
+    missing_pos.reserve(vids.size());
+    for (size_t i = 0; i < vids.size(); ++i) {
+        const VertexId vid = vids[i];
+        if (vid == INVALID_VERTEX_ID)
+            continue;
+        const uint64_t key = (static_cast<uint64_t>(vid) << 2) | static_cast<uint64_t>(scan_dir);
+        if (auto it = edge_cache_.find(key); it != edge_cache_.end()) {
+            result[i] = it->second;
+            continue;
+        }
+        if (batch_index.find(vid) != batch_index.end())
+            continue;
+        batch_index.emplace(vid, missing.size());
+        missing.push_back(vid);
+        missing_pos.push_back(i);
+    }
+    if (missing.empty())
+        co_return result;
 
-    auto out = std::make_shared<NeighborList>();
-    auto append = [&](Direction dir) -> folly::coro::Task<void> {
-        std::vector<ISyncGraphDataStore::EdgeIndexEntry> scan_batch;
+    std::vector<NeighborList> lists(missing.size());
+    auto append_dir = [&](Direction dir) -> folly::coro::Task<void> {
         for (const auto& label_filter : scan_filters_) {
-            auto gen = cancellable(store_.scanEdges(vid, dir, label_filter, scan_batch));
+            auto gen = cancellable(store_.scanEdgesBatch(missing, dir, label_filter));
             while (auto batch = co_await gen.next()) {
-                for (const auto& e : *batch) {
+                for (const auto& be : *batch) {
+                    auto it = batch_index.find(be.src_id);
+                    if (it == batch_index.end())
+                        continue;
+                    Neighbor n;
+                    n.id = be.entry.neighbor_id;
                     EdgeLink link;
-                    link.from = vid;
-                    link.to = e.neighbor_id;
+                    link.from = be.src_id;
+                    link.to = n.id;
                     if (dir == Direction::OUT) {
-                        link.src = vid;
-                        link.dst = e.neighbor_id;
+                        link.src = be.src_id;
+                        link.dst = n.id;
                     } else {
-                        link.src = e.neighbor_id;
-                        link.dst = vid;
+                        link.src = n.id;
+                        link.dst = be.src_id;
                     }
-                    link.edge_id = e.edge_id;
-                    link.edge_label_id = e.edge_label_id;
-                    link.seq = e.seq;
-                    out->push_back(Neighbor{e.neighbor_id, link});
+                    link.edge_id = be.entry.edge_id;
+                    link.edge_label_id = be.entry.edge_label_id;
+                    link.seq = be.entry.seq;
+                    n.link = link;
+                    lists[it->second].push_back(n);
                 }
             }
         }
         co_return;
     };
-
     if (scan_dir == Direction::BOTH) {
-        co_await append(Direction::OUT);
-        co_await append(Direction::IN);
+        co_await append_dir(Direction::OUT);
+        co_await append_dir(Direction::IN);
     } else {
-        co_await append(scan_dir);
+        co_await append_dir(scan_dir);
     }
-    if (cached_neighbors_ + out->size() <= MAX_CACHED_NEIGHBORS) {
-        cached_neighbors_ += out->size();
-        edge_cache_.emplace(key, out);
+
+    for (size_t j = 0; j < missing.size(); ++j) {
+        auto list = std::make_shared<NeighborList>(std::move(lists[j]));
+        const VertexId vid = missing[j];
+        const uint64_t key = (static_cast<uint64_t>(vid) << 2) | static_cast<uint64_t>(scan_dir);
+        if (cached_neighbors_ + list->size() <= MAX_CACHED_NEIGHBORS) {
+            cached_neighbors_ += list->size();
+            edge_cache_.emplace(key, list);
+        }
+        result[missing_pos[j]] = std::move(list);
     }
-    co_return out;
+    // Duplicate frontier entries (normally impossible) share the same list.
+    for (size_t i = 0; i < vids.size(); ++i) {
+        if (result[i])
+            continue;
+        auto it = batch_index.find(vids[i]);
+        if (it != batch_index.end())
+            result[i] = result[missing_pos[it->second]];
+    }
+    co_return result;
 }
 
 folly::coro::Task<bool> ShortestPathPhysicalOp::hasDstLabels(VertexId vid) {
@@ -209,11 +248,13 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
 
         std::vector<VertexId> next;
         if (expand_forward) {
-            for (VertexId v : f_frontier) {
+            auto forward_lists = co_await scanBatch(f_frontier, forward_dir_);
+            for (size_t fi = 0; fi < f_frontier.size(); ++fi) {
                 if (cancelled())
                     co_return std::nullopt;
-                auto edges = co_await scan(v, forward_dir_);
-                for (const auto& e : *edges) {
+                const VertexId v = f_frontier[fi];
+                const auto& edges = *forward_lists[fi];
+                for (const auto& e : edges) {
                     if (e.id == v)
                         continue;
                     auto [it, inserted] = f_visit.try_emplace(e.id, Visit{next_depth, {}, false});
@@ -237,11 +278,13 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
             f_frontier = std::move(next);
             f_depth = next_depth;
         } else {
-            for (VertexId v : b_frontier) {
+            auto backward_lists = co_await scanBatch(b_frontier, backward_dir_);
+            for (size_t bi = 0; bi < b_frontier.size(); ++bi) {
                 if (cancelled())
                     co_return std::nullopt;
-                auto edges = co_await scan(v, backward_dir_);
-                for (const auto& e : *edges) {
+                const VertexId v = b_frontier[bi];
+                const auto& edges = *backward_lists[bi];
+                for (const auto& e : edges) {
                     if (e.id == v)
                         continue;
                     EdgeLink back;
@@ -321,11 +364,13 @@ folly::coro::AsyncGenerator<PathValue> ShortestPathPhysicalOp::allShortestPaths(
 
     for (size_t depth = 1; depth <= best && !frontier.empty(); ++depth) {
         std::vector<VertexId> next;
-        for (VertexId v : frontier) {
+        auto frontier_lists = co_await scanBatch(frontier, forward_dir_);
+        for (size_t fi = 0; fi < frontier.size(); ++fi) {
             if (cancelled())
                 co_return;
-            auto edges = co_await scan(v, forward_dir_);
-            for (const auto& e : *edges) {
+            const VertexId v = frontier[fi];
+            const auto& edges = *frontier_lists[fi];
+            for (const auto& e : edges) {
                 if (e.id == v || e.id == start)
                     continue;
                 // The endpoint may be reachable below the lower hop bound.

@@ -305,6 +305,29 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
         return nullptr;
     }
 
+    // Planning heuristic: count vertices per label once per graph open. The
+    // deferred destination-label filter uses these counts to decide whether a
+    // full label_fwd scan or a per-vertex label read is cheaper. Counts may go
+    // stale under writes; they are only a heuristic.
+    {
+        auto all_labels = folly::coro::blockingWait(instance->async_meta->listLabels());
+        const auto t0 = std::chrono::steady_clock::now();
+        uint64_t total = 0;
+        for (const auto& label : all_labels) {
+            uint64_t count = 0;
+            instance->sync_data->scanVerticesByLabel(*instance->async_session, label.id, [&count](VertexId) {
+                ++count;
+                return true;
+            });
+            instance->async_meta->setLabelVertexCount(label.id, count);
+            total += count;
+        }
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        spdlog::info("Label vertex counts computed for graph '{}' ({} labels, {} vertices, {} ms)", name,
+                     all_labels.size(), total, ms);
+    }
+
     // Ensure __anon__ label exists for unlabeled node properties
     {
         auto anon_def = folly::coro::blockingWait(instance->async_meta->getLabelDef(std::string(kAnonLabelName)));

@@ -192,14 +192,21 @@ folly::coro::Task<void> ExpressionEvaluator::prefetch(const std::vector<const bi
     std::unordered_set<LabelId> label_ids;
     std::unordered_set<EdgeLabelId> edge_label_ids;
 
-    auto note_labels = [&label_ids](const VertexValue& vertex) {
+    auto note_labels = [&label_ids, this](const VertexValue& vertex) {
+        // Labels already present in the live schema snapshot need no extra
+        // def load; only labels created mid-query (DDL) are collected.
+        auto known = [this](LabelId id) {
+            return eval_ctx_.label_defs && eval_ctx_.label_defs->find(id) != eval_ctx_.label_defs->end();
+        };
         if (vertex.labels) {
             for (LabelId id : *vertex.labels)
-                label_ids.insert(id);
+                if (!known(id))
+                    label_ids.insert(id);
         }
         for (const auto& [id, props] : vertex.properties) {
             (void)props;
-            label_ids.insert(id);
+            if (!known(id))
+                label_ids.insert(id);
         }
     };
 
@@ -242,9 +249,90 @@ folly::coro::Task<void> ExpressionEvaluator::prefetch(const std::vector<const bi
             },
             value);
     };
+
+    // Scalar columns cannot carry graph entities. Walking them through
+    // Value/getValue copies every cell for nothing: complex-6's Filter scanned
+    // 11 columns x 11.5K rows here and spent ~25 ms of self CPU. Visit graph
+    // columns through their typed buffers and skip everything else.
+    const size_t rows = input.numRows();
     for (size_t c = 0; c < input.numColumns(); ++c) {
-        for (size_t r = 0; r < input.numRows(); ++r) {
-            Value value = input.getValue(c, r);
+        const Column& col = input.columns[c];
+        switch (col.type) {
+        case binder::BoundTypeKind::BOOL:
+        case binder::BoundTypeKind::INT64:
+        case binder::BoundTypeKind::DOUBLE:
+        case binder::BoundTypeKind::STRING:
+        case binder::BoundTypeKind::DATETIME:
+        case binder::BoundTypeKind::TIME:
+        case binder::BoundTypeKind::DURATION:
+        case binder::BoundTypeKind::NULL_TYPE:
+        case binder::BoundTypeKind::VERTEX_REF:
+        case binder::BoundTypeKind::EDGE_KEY:
+        case binder::BoundTypeKind::PATH_TOPOLOGY:
+            continue;
+        default:
+            break;
+        }
+
+        if (col.form == VectorForm::FLAT && col.buffer) {
+            const bool is_nullable = col.buffer->validity.size() > 0;
+            switch (col.type) {
+            case binder::BoundTypeKind::VERTEX:
+                for (size_t r = 0; r < rows; ++r) {
+                    const auto& vertex = col.buffer->vertex_data[r];
+                    if (!vertex || (is_nullable && col.isNull(r)))
+                        continue;
+                    note_labels(*vertex);
+                    if (vertex->properties.empty() && seen.insert(vertex->id).second)
+                        ids.push_back(vertex->id);
+                }
+                continue;
+            case binder::BoundTypeKind::EDGE:
+                for (size_t r = 0; r < rows; ++r) {
+                    const auto& edge = col.buffer->edge_data[r];
+                    if (!edge || (is_nullable && col.isNull(r)))
+                        continue;
+                    if (edge->properties.has_value())
+                        edge_label_ids.insert(edge->label_id);
+                }
+                continue;
+            case binder::BoundTypeKind::LIST:
+                for (size_t r = 0; r < rows; ++r) {
+                    const auto& list = col.buffer->list_data[r];
+                    if (!list || (is_nullable && col.isNull(r)))
+                        continue;
+                    for (const auto& elem : list->elements)
+                        scan(scan, elem.value);
+                }
+                continue;
+            case binder::BoundTypeKind::MAP:
+                for (size_t r = 0; r < rows; ++r) {
+                    const auto& map = col.buffer->map_data[r];
+                    if (!map || (is_nullable && col.isNull(r)))
+                        continue;
+                    for (const auto& [key, storage] : map->entries) {
+                        (void)key;
+                        scan(scan, storage.value);
+                    }
+                }
+                continue;
+            case binder::BoundTypeKind::PATH:
+                for (size_t r = 0; r < rows; ++r) {
+                    const auto& path = col.buffer->path_data[r];
+                    if (!path || (is_nullable && col.isNull(r)))
+                        continue;
+                    for (const auto& elem : path->elements)
+                        scan(scan, elem.value);
+                }
+                continue;
+            default:
+                break;
+            }
+        }
+
+        // CONSTANT / DICTIONARY / ANY / nested cases: use the generic path.
+        for (size_t r = 0; r < rows; ++r) {
+            Value value = col.getValue(r);
             scan(scan, value);
         }
     }

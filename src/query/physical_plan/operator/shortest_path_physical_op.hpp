@@ -72,7 +72,11 @@ private:
         std::vector<EdgeLink> parents;
     };
 
-    folly::coro::Task<std::shared_ptr<const NeighborList>> scan(VertexId vid, Direction scan_dir);
+    /// Expand a whole BFS frontier with one batched storage scan per path
+    /// label instead of one dispatch per vertex. Returns one list per input
+    /// vertex, in input order; repeated vertices share the cached list.
+    folly::coro::Task<std::vector<std::shared_ptr<const NeighborList>>> scanBatch(const std::vector<VertexId>& vids,
+                                                                                  Direction scan_dir);
     folly::coro::Task<std::optional<PathValue>> shortestBidirectional(VertexId start, VertexId end);
     /// Streams paths instead of materialising a vector of PathValue. The
     /// caller keeps at most one DataChunk batch of them.

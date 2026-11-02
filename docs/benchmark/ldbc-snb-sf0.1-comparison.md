@@ -56,46 +56,45 @@
 
 ## 2. 可运行性与耗时
 
-> **最新全量复跑（2026-11-01，干净同源数据，Release 8/4，id 两边均为 INTEGER）**：
-> complex-5 **180.9 ms** vs neo4j 84.5 ms（2.1×）、complex-9 **128.7 ms** vs 27.6 ms（4.7×）、
-> complex-12 **695.5 ms** vs 87.9 ms（7.9×）、complex-14 **144.1 ms** vs 15.95 ms（9.0×）。
-> **2026-11-02 VLE 优化后**：complex-12 同机 5 轮交错 A/B 为 **158.4 ms** vs 95.4 ms（1.7×），
-> 相对优化前基线的 min 735→152 ms；详见 §3.2。
-> **21/21 查询结果语义一致**；c14 仅 `ORDER BY pathWeight desc` 在权重 17.0 并列时
-> 输出顺序不同（同多重集，见 §4）。
+> **最新全量复跑（2026-11-02，干净同源数据，Release 8/4）**：21 条读查询、同机交错
+> 12 轮 + 2 warmup 取 min；c9 取 §3.9 延迟标签判定 A/B 的优化后值。绝对值受 CPU
+> 频率影响（本轮峰值低于 2026-11-01 轮），跨轮次只看同轮比值。
+> 19:57 复跑时本机被限制在 **2.0 GHz powersave**（绝对值约 2×、比率也失真），该轮
+> 只用于确认 **21/21 语义一致**，不并入下表。c14 仅 `ORDER BY pathWeight desc` 在
+> 权重 17.0 并列时输出顺序不同（同多重集，见 §4）。
 
 ### 2.1 Short reads
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
-| short-4 | 0.75 | 1.14 | 🟢 快 1.5× |
-| short-3 | 1.12 | 1.40 | 🟢 快 1.3× |
-| short-5 | 0.79 | 0.95 | 🟢 快 1.2× |
-| short-1 | 1.14 | 1.30 | 🟢 快 1.1× |
-| short-6 | 1.12 | 1.06 | 🟡 约 1.0× |
-| short-7 | 1.15 | 0.94 | 🟡 慢 1.2×（0 行） |
-| short-2 | 4.07 | 2.00 | 🟡 慢 2.0× |
+| short-5 | 0.83 | 0.72 | 🟡 慢 1.2× |
+| short-4 | 0.81 | 0.63 | 🟡 慢 1.3× |
+| short-1 | 0.98 | 0.68 | 🟡 慢 1.4× |
+| short-3 | 1.13 | 0.77 | 🟡 慢 1.5× |
+| short-6 | 1.03 | 0.65 | 🟡 慢 1.6× |
+| short-7 | 1.10 | 0.67 | 🟡 慢 1.6×（0 行） |
+| short-2 | 4.37 | 1.64 | 🟡 慢 2.7× |
 
 ### 2.2 Complex reads
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
-| complex-13 | 1.19 | 2.14 | 🟢 快 1.8×（shortestPath） |
-| complex-8 | 3.29 | 2.54 | 🟡 慢 1.3× |
-| complex-2 | 6.99 | 4.16 | 🟡 慢 1.7× |
-| complex-7 | 5.81 | 3.05 | 🟡 慢 1.9× |
-| complex-11 | 7.67 | 3.95 | 🟡 慢 1.9× |
-| complex-5 | **180.9** | 84.5 | 🟡 慢 2.1× |
-| complex-4 | 8.73 | 3.88 | 🟡 慢 2.3×（0 行） |
-| complex-6 | 83.1 | 27.0 | 🟠 慢 3.1× |
-| complex-1 | 23.2 | 6.49 | 🟠 慢 3.6× |
-| complex-3 | 100.9 | 26.1 | 🟠 慢 3.9×（0 行） |
-| complex-9 | **128.7** | 27.6 | 🟠 慢 4.7× |
-| complex-10 | 52.6 | 9.49 | 🔴 慢 5.5× |
-| complex-12 | **158.4** | 95.4 | 🟡 慢 1.7×（VLE 优化后；优化前 695.5） |
-| complex-14 | **144.1** | 15.95 | 🔴 慢 9.0×（ORDER BY 并列，同多重集） |
+| complex-13 | 1.03 | 0.93 | 🟡 慢 1.1×（shortestPath） |
+| complex-12 | 146.92 | 90.87 | 🟡 慢 1.6×（VLE 优化后；优化前 695.5） |
+| complex-8 | 3.25 | 1.74 | 🟡 慢 1.9× |
+| complex-5 | **181.98** | 86.15 | 🟡 慢 2.1× |
+| complex-6 | 63.58 | 27.11 | 🟡 慢 2.3× |
+| complex-11 | 4.78 | 1.92 | 🟡 慢 2.5× |
+| complex-2 | 6.72 | 2.52 | 🟡 慢 2.7× |
+| complex-7 | 5.28 | 1.74 | 🟠 慢 3.0× |
+| complex-4 | 8.45 | 2.38 | 🟠 慢 3.6×（0 行） |
+| complex-1 | 13.65 | 3.71 | 🟠 慢 3.7× |
+| complex-3 | 98.32 | 25.16 | 🟠 慢 3.9×（0 行） |
+| complex-9 | **110.2** | 27.0 | 🟠 慢 4.1× |
+| complex-14 | **85.10** | 14.35 | 🔴 慢 5.9×（ORDER BY 并列，同多重集） |
+| complex-10 | 50.41 | 6.48 | 🔴 慢 7.8× |
 
-> 每轮两引擎各一次，15 轮取 min、3 轮 warmup；绝对值受 CPU 频率影响，跨轮次只看同轮比值。
+> 每轮两引擎各一次，12 轮取 min、2 轮 warmup；c9 取 §3.9 A/B 的优化后值。
 > c3/c4、short-7 两边都是 0 行，耗时只代表扫描/过滤成本。complex-12 的 VLE 优化见 §3.2；
 > c14 的顺序差异只是 `pathWeight=17.0` 并列，不是结果差异。
 
@@ -199,7 +198,7 @@ c9 sorted:    min 122.1 / 120.2 ms
 端到端（5 轮）complex-9 约 **125 ms** vs neo4j 30 ms（4.2×），21/21 结果仍一致。
 complex-5 的 A/B 在噪声范围内（约 195–210 ms），不宣称收益。
 
-### 3.4 complex-14 采样结论（2026-11-02，未改代码）
+### 3.4 complex-14 采样结论（2026-11-02，PC 本身未改）
 
 c14 当前约 166 ms（neo4j 18 ms）。PROFILE：`allShortestPaths` 约 16 ms；剩余主要是
 两个 `PatternComprehensionApply` 分支：每个分支把 4 条路径的 12 条关系展开成
@@ -208,7 +207,162 @@ c14 当前约 166 ms（neo4j 18 ms）。PROFILE：`allShortestPaths` 约 16 ms�
 miss；没有低风险的单算子批量化可直接落地。
 
 下一步应做 **PC 去相关**：从 path 的端点 id 直接 index-probe `a`/`b`，或把两个 PC
-的公共路径展开合并；这需要 planner/算子层改动，不能靠局部阈值。当前 c14 未做修改。
+的公共路径展开合并；这需要 planner/算子层改动，不能靠局部阈值。
+
+> 2026-11-02 后续：§3.5 已消除采样中 `ExpressionEvaluator` 的逐行整顶点深拷贝；
+> PC 的两分支展开仍是剩余大头。
+
+### 3.5 evaluator 动态属性读取去拷贝（2026-11-02）
+
+§3.4 定位到的 `ExpressionEvaluator` 热点中，有一部分是**逐行整顶点深拷贝**，不需要
+planner 改动即可消除：
+
+- 根因：`evalDynamicPropertyRef` 对每个 `VertexValuePtr` 执行
+  `mk<VertexValue>(*held)`（`eval_property.cpp` 旧 335 行），深拷贝整份
+  `properties`（`unordered_map<LabelId, vector<optional<PropertyValue>>>`，Person 的
+  `speaks`/`email` 还是 `vector<string>`）；拓扑顶点（`startNode`/`endNode`）还会把
+  prefetch 缓存里的 `Properties` 再拷一次。c14 的 PC 谓词每行有 4 个属性引用
+  （`a.id`/`b.id`/`startNode(r).id`/`endNode(r).id`），3,788 行 × 2 个分支。
+- 证据：GDB 全线程采样在 c14 compute 线程上命中
+  `evalDynamicPropertyRef → _Hashtable::_M_assign`；PROFILE 的 Filter self CPU 为
+  14.7 ms/分支。同一二进制内做语义等价改写（`a.id = startNode(r).id` →
+  `a = startNode(r)`，结果逐行一致）得到 c14 **158.9 → 121.8 ms** 的上界。
+- 改动：动态属性求值改为**只读视图**——owned `properties` 优先；拓扑顶点直接读
+  `prefetched_vertex_data_`；`__anon__` 仅从缓存读取，不再合并进副本。
+  `startNode`/`endNode` 对 `CONSTANT` 边列只合成一次端点（PC apply 的常见形态）。
+- 同机交错 A/B（15 轮 + 3 warmup，取 min；两棵二进制各用一份同源 data copy，
+  交替顺序）：
+
+```text
+query        base min   opt min   opt/base
+complex-14    158.19     133.72     0.845
+complex-12    155.98     146.46     0.939
+complex-5     199.41     191.09     0.958
+complex-6      90.43      88.57     0.979
+complex-3      99.10      96.99     0.979
+complex-9     119.27     119.64     1.003
+short-2         3.92       3.91     0.997
+complex-10     51.39      52.67     1.025
+complex-1      22.94      23.58     1.028
+```
+
+  c14 的 Filter self CPU 从 14.7 ms/分支降到 8.4–8.9 ms/分支；c10/c1 的 +2~3% 与 p50
+  同向但绝对差 ~1 ms。把两份 data copy 对调后复测（25 轮），c10/c1 回到 +1.0%/+1.2%、
+  c6 为 −1.5%，说明这部分主要是进程/数据副本的局部性，而非改动回归；结果逐行一致
+  （9/9 查询 `same=True`）。
+- 验证：新增 9 个用例（6 个 evaluator 单测 + 3 个 executor 端到端）；`query_executor_tests`
+  **607/607**；`ctest --preset debug` **1435/1435**（含 TCK）；`verify_ldbc_results.py`
+  **21/21** 语义一致。
+- 剩余：c14 仍有约 134 ms vs neo4j 14.6 ms，瓶颈回到两个 PC 分支各 3,788 行的
+  Expand/PE（§3.4 的 PC 去相关方向）；c6 的 Filter self CPU 仍约 25 ms，GDB 显示是
+  `prefetch` 的全列/全行 Value 遍历（下一步候选）。
+
+### 3.6 c14 PC 相关子计划的邻居缓存（2026-11-02）
+
+c14 的 PC 按「每条路径关系 × 两个端点」执行：4 条路径 12 条关系，去重后只有 8 个人，
+`CorrelatedVertexProbe` 却发射 24 个锚点，同一个人（933/1129 等）的
+`a←HAS_CREATOR←comment` 展开被重复 4 次；两个 PC（`→:Post` / `→:Comment`）又把相同
+前缀各跑一遍。PROFILE/GDB 显示这些重复 expand 的存储等待是 c14 的主要成本。
+
+改动（`ExpandPhysicalOp`）：
+
+- 每个 Expand 实例增加有界邻居缓存：键 = `src_vertex_id`，值 = **经 `dst_label_ids_`
+  过滤后**的邻居（dst/edge_id/label/seq/physical_out），保持原扫描顺序。
+- 只在 `read_only && correlated_subplan_depth > 0`（PC right subplan）启用；
+  `dst_bound`/`edge_bound`/allowed-filter/undirected 拆分路径不启用。
+- 命中直接复用邻居，跳过 `scanEdgesBatch` 与 `getVertexLabelsBatch`；未命中沿用原
+  扫描路径，过滤后写入缓存；命中/未命中混合时按原 edge-major 顺序重组，输出行序不变。
+- 上限 64K 边 / 64K 源；超限停用（保留已有条目），避免无重复的大扫描占内存。
+- `read_only` 在 `planBound`/`planChosen` 入口用 `collectOpSlots(..., has_write)` 计算；
+  写语句一律不缓存，缓存正确性依赖只读语句的单一 WT 快照。
+
+同机交错 A/B（15 轮 + 3 warmup，min；两棵二进制、两份同源 data copy，正常/对调各一轮）：
+
+```text
+query        base min   opt min   opt/base     (对调 data copy)
+complex-14    153.96      94.34     0.613     149.82 → 95.17（0.635）
+complex-5     203.57     200.36     0.984     202.20 → 207.96（1.028）
+complex-9     127.14     124.07     0.976     128.08 → 128.48（1.003）
+complex-6      93.30      91.11     0.977      90.29 →  90.66（1.004）
+complex-10     54.06      54.85     1.015      57.22 →  51.85（0.906）
+```
+
+c14 稳定 **−36~39%**（约 154 → 95 ms），与 neo4j 14.6 ms 的差距从 ~9.4× 收窄到 ~6.5×；
+其余查询在噪声内。结果逐行一致。
+
+验证：新增 `PatternComprehensionReusesCorrelatedAnchorExpansions`（断言结果 +
+`ExpandPhysicalOp::cacheHitCount() > 0`，旧代码上该断言必失败）；`query_executor_tests`
+**608/608**；`ctest --preset debug` **1436/1436**（含 TCK）；`verify_ldbc_results.py` **21/21**。
+
+剩余：命中的 2/3 已去掉，未命中的 1/3 与两个 PC 的 compute（Filter/PE）仍是 ~95 ms 的
+主体；进一步需要合并两个 PC 的公共前缀（planner/CSE）或做 PC 去相关 join。
+
+### 3.7 evaluator prefetch 遍历快路径（2026-11-02）
+
+- 根因：`ExpressionEvaluator::prefetch` 对每个 chunk 的**每一列 × 每一行**做
+  `input.getValue(c, r)` 再 `scan`，只为找出裸顶点/运行时标签；c6 的 Filter 输入
+  11,538 行 × 11 列，其中大部分是 INT64/STRING/EDGE 标量列。GDB 采样热点落在
+  `prefetch → _Hashtable::_M_emplace_uniq`，PROFILE 的 Filter self CPU 约 25 ms。
+- 改动：按列类型跳过不可能包含实体的标量列（BOOL/INT64/DOUBLE/STRING/时间/NULL/
+  topology ref）；VERTEX/EDGE/LIST/MAP/PATH 的 FLAT 列直接读 typed buffer；只有
+  CONSTANT/DICTIONARY/ANY 走 Value 泛化路径。`note_labels` 只收集当前 `label_defs`
+  快照里不存在的标签（DDL 中途新建的），避免每行构造标签 set。
+- 同机交错 A/B（15 轮 + 3 warmup，min；正常/对调 data copy 各一轮）：
+
+```text
+query        base min   opt min   opt/base     (对调 data copy)
+complex-6      85.16      69.11     0.812      89.70 → 66.59（0.742）
+complex-10     52.19      51.43     0.985
+complex-14     90.69      89.60     0.988
+complex-9     126.39     128.53     1.017      120.11 → 120.73（1.005）
+complex-5     192.66     192.77     1.001
+complex-3      96.88     100.70     1.039       95.79 →  96.76（1.010）
+```
+
+  c6 稳定 **−19~26%**（85→69 ms），其 Filter self CPU 从 ~25 ms 降到 2.2 ms；
+  其余查询在噪声内。结果逐行一致。
+- 验证：`query_executor_tests` **608/608**、`ctest --preset debug` **1436/1436**
+  （含 TCK）、`verify_ldbc_results.py` **21/21**。
+
+### 3.8 shortestPath/allShortestPaths 的 BFS frontier 批量扫描（2026-11-02）
+
+- 根因：`ShortestPathPhysicalOp::scan(vid)` 对 BFS frontier 的**每个顶点**发一次
+  `scanEdges` dispatch。c1 的 PROFILE 有 **674 次 ioDispatches**（22 ms 里约 6–7 ms
+  是 dispatch 开销）；c14 的 `allShortestPaths` 352 次。邻接缓存只消除重复访问，
+  不改变“每个顶点一次跨线程 dispatch”的形态。
+- 改动：新增 `scanBatch(frontier, dir)`，用一次 `scanEdgesBatch` 扫描整个 frontier
+  （每个路径 label 一次），按源顶点分组回填为每条 frontier 顶点的邻居表；邻接缓存、
+  每源边顺序、BFS 访问顺序与 path 构造顺序均保持不变。`shortestBidirectional` 的
+  前向/后向 frontier 与 `allShortestPaths` 都改走批量路径。
+- 同机交错 A/B（15 轮 + 3 warmup，min；正常/对调 data copy 各一轮）：
+
+```text
+query        base min   opt min   opt/base     (对调 data copy)
+complex-1      22.45      15.31     0.682      21.99 → 14.53（0.661）
+complex-14     90.90      84.23     0.927      94.50 → 89.52（0.947）
+complex-13      0.97       0.93     0.959       0.98 →  0.87（0.891）
+complex-10     53.17      51.40     0.967      54.34 → 52.76（0.971）
+complex-12    162.54     150.53     0.926
+short-2         4.14       3.93     0.950
+```
+
+  c1 稳定 **−32~34%**（22→15 ms），c14 再降 ~7%（allShortestPaths），c13/c10 小幅；
+  结果逐行一致；§2.1/§2.2 的全量表已包含本改动（c1 13.65 ms、c14 85.10 ms）。
+- 验证：`query_executor_tests` **608/608**、`ctest --preset debug` 全量（含 TCK）、
+  `verify_ldbc_results.py` **21/21**。
+
+### 3.9 c9 的 Message 标签过滤延迟到物化（2026-11-02）
+
+- 根因：`(friend)<-[:HAS_CREATOR]-(message:Message)` 在 53,192 条边上触发
+  “扫整张 `label_fwd_Message`（286,744 行）再过滤”的启发式，实测 ~26 ms。
+- 改动：按 [deferred-label-filter-design.md](../query/engine/deferred-label-filter-design.md)
+  把目标标签判定延迟到直接父节点的 `ProjectionExtract`：一次 `{vid}` 前缀扫描同时读标签与
+  coalesce 候选属性，PE 按标签压缩输出行。仅对只读语句、宽标签（统计顶点数 ≥64K）启用；
+  标签计数在图 open 时统计一次（sf0.1 74 ms）。
+- 结构判据：c9 的 Expand `scanRows` **339,936 → 53,192**。
+- A/B（15 轮，min；正常/对调数据副本）：c9 **130.2→110.2（−15.4%）**，对调
+  134.7→110.4（−18.0%）；c5/c14 差异在同二进制 self-A/B 的 ~10% 噪声内；结果一致。
+- 验证：新增 2 个测试；`query_executor_tests` 609/609；全量 ctest（含 TCK）；verify 21/21。
 
 ### 3.1 通用方向
 

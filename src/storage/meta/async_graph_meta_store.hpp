@@ -77,6 +77,15 @@ public:
         return schema_;
     }
 
+    /// Planning heuristic: approximate vertex count per label (refreshed at
+    /// graph open; later writes may make it stale). Never used for semantics.
+    void setLabelVertexCount(LabelId id, uint64_t count) {
+        schema_.label_vertex_counts[id] = count;
+    }
+    const std::unordered_map<LabelId, uint64_t>& labelVertexCounts() const {
+        return schema_.label_vertex_counts;
+    }
+
 private:
     folly::coro::Task<void> saveNextIds();
     folly::coro::Task<void> refillVertexIdCache(uint64_t count);

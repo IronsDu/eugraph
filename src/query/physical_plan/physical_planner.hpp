@@ -43,6 +43,8 @@ struct PlanContext {
     std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id;
     std::unordered_map<LabelId, LabelDef>& label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
+    /// Per-label vertex counts (planning heuristic; may be stale).
+    const std::unordered_map<LabelId, uint64_t>& label_vertex_counts;
     function::EvalContext eval_ctx;
     /// Per-slot requirements collected from downstream operators.
     /// Drives ProjectionExtractPhysicalOp spec generation.
@@ -112,6 +114,12 @@ struct PlanContext {
     /// Project/Aggregate above does not forward (TCK WithWhere1:
     /// `WITH other WHERE r IS NULL` returned NULL vertices).
     bool suppress_filter_defer = false;
+
+    /// True when the statement contains no write operator (computed once at
+    /// the start of planBound). Correlated sub-plan neighbour caches may only
+    /// be enabled here: a read-only statement keeps one WT snapshot for its
+    /// whole execution, so cached adjacency cannot go stale.
+    bool read_only = false;
 
     /// Edge variable named by startNode()/endNode() in the anchor Filter
     /// currently being planned. Used to find the correlation column in a PC

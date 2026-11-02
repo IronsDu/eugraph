@@ -76,6 +76,26 @@ public:
     virtual std::vector<std::vector<PropertyValue>>
     getVertexCoalescePropertiesBatch(GraphSession& session, const std::vector<VertexId>& vids,
                                      const std::vector<std::pair<LabelId, uint16_t>>& candidates) = 0;
+    /// Combined result: coalesced candidate values + the vertex's full label set.
+    struct CoalescedVertexData {
+        std::vector<PropertyValue> values;
+        LabelIdSet labels;
+    };
+    /// Labels + coalesced candidates in one `{vid}` prefix scan. Default
+    /// implementation reuses the two existing batch calls; the storage
+    /// implementation overrides it with a single cursor pass.
+    virtual std::vector<CoalescedVertexData>
+    getVertexCoalesceDataBatch(GraphSession& session, const std::vector<VertexId>& vids,
+                               const std::vector<std::pair<LabelId, uint16_t>>& candidates) {
+        auto values = getVertexCoalescePropertiesBatch(session, vids, candidates);
+        auto labels = getVertexLabelsBatch(session, vids);
+        std::vector<CoalescedVertexData> out(vids.size());
+        for (size_t i = 0; i < vids.size(); ++i) {
+            out[i].values = std::move(values[i]);
+            out[i].labels = std::move(labels[i]);
+        }
+        return out;
+    }
     /// Batch fetch of a SUBSET of properties. Default implementation falls back to one
     /// point lookup per (row, property); implementations may override it to read the whole
     /// batch with a single cursor. Semantics must match the fallback exactly: `props` is

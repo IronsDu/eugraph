@@ -54,6 +54,9 @@ struct StreamContext {
     /// purpose: it must not be the thing that keeps them alive during teardown.
     std::shared_ptr<QueryContext> query_context;
     bool should_commit = true;
+    /// Planning heuristic: per-label vertex counts snapshotted for this
+    /// statement (see GraphSchema::label_vertex_counts).
+    std::unordered_map<LabelId, uint64_t> label_vertex_counts;
     /// PROFILE state. `profile` is only populated after the stream is fully
     /// drained (and, for auto-commit, after the transaction commit).
     bool profile_requested = false;

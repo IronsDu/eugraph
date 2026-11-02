@@ -37,6 +37,17 @@ inline void startNodeBatchFn(const std::vector<const Column*>& args, Column& res
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
+    // A CONSTANT edge column broadcasts one edge to every row (this is how
+    // PatternComprehensionApply feeds the correlated path relationship into the
+    // per-apply subplan). Synthesize the endpoint once and share the handle:
+    // complex-14 evaluated startNode(r) once per row for thousands of rows over
+    // the same 12 relationships.
+    if (arg_col.form == VectorForm::CONSTANT) {
+        Value endpoint = startNodeImpl(arg_col.constant_value);
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, endpoint);
+        return;
+    }
     for (size_t i = 0; i < count; ++i)
         result.setValue(i, startNodeImpl(arg_col.getValue(i)));
 }
@@ -46,6 +57,12 @@ inline void endNodeBatchFn(const std::vector<const Column*>& args, Column& resul
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
+    if (arg_col.form == VectorForm::CONSTANT) {
+        Value endpoint = endNodeImpl(arg_col.constant_value);
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, endpoint);
+        return;
+    }
     for (size_t i = 0; i < count; ++i)
         result.setValue(i, endNodeImpl(arg_col.getValue(i)));
 }
