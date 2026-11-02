@@ -97,6 +97,11 @@ neo4j 也是 89k 次关系展开，但邻接/属性内联在 node/rel record 里
 **不要做的事**：继续在算子里做无测量的 cursor/批处理微调；用简单 pattern 重排替代
 CBO；给 label 检查加全局缓存（读快照隔离下会返回新于事务快照的标签）。
 
+**已尝试并否证**：给 `existence_only` 的 PC 在 collect 输入前插 `Limit(1)`（让每个相关
+apply 在首个匹配后停止）。c10 的内层 PC 是用户可见 list comprehension，
+`existence_only=false`（PROFILE 里没有插入 Limit），A/B c10 −2%（噪声，已回退）。
+该改写只对 `EXISTS { ... }` / 布尔模式谓词派生的 PC 生效，LDBC 21 条里没有这类形态。
+
 ## 7. 复现
 
 ```bash
