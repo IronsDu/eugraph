@@ -359,6 +359,33 @@ complex-3      96.88     100.70     1.039       95.79 →  96.76（1.010）
 - 验证：`query_executor_tests` **608/608**、`ctest --preset debug` **1436/1436**
   （含 TCK）、`verify_ldbc_results.py` **21/21**。
 
+### 3.8 shortestPath/allShortestPaths 的 BFS frontier 批量扫描（2026-11-02）
+
+- 根因：`ShortestPathPhysicalOp::scan(vid)` 对 BFS frontier 的**每个顶点**发一次
+  `scanEdges` dispatch。c1 的 PROFILE 有 **674 次 ioDispatches**（22 ms 里约 6–7 ms
+  是 dispatch 开销）；c14 的 `allShortestPaths` 352 次。邻接缓存只消除重复访问，
+  不改变“每个顶点一次跨线程 dispatch”的形态。
+- 改动：新增 `scanBatch(frontier, dir)`，用一次 `scanEdgesBatch` 扫描整个 frontier
+  （每个路径 label 一次），按源顶点分组回填为每条 frontier 顶点的邻居表；邻接缓存、
+  每源边顺序、BFS 访问顺序与 path 构造顺序均保持不变。`shortestBidirectional` 的
+  前向/后向 frontier 与 `allShortestPaths` 都改走批量路径。
+- 同机交错 A/B（15 轮 + 3 warmup，min；正常/对调 data copy 各一轮）：
+
+```text
+query        base min   opt min   opt/base     (对调 data copy)
+complex-1      22.45      15.31     0.682      21.99 → 14.53（0.661）
+complex-14     90.90      84.23     0.927      94.50 → 89.52（0.947）
+complex-13      0.97       0.93     0.959       0.98 →  0.87（0.891）
+complex-10     53.17      51.40     0.967      54.34 → 52.76（0.971）
+complex-12    162.54     150.53     0.926
+short-2         4.14       3.93     0.950
+```
+
+  c1 稳定 **−32~34%**（22→15 ms），c14 再降 ~7%（allShortestPaths），c13/c10 小幅；
+  结果逐行一致。§2.4 的全量表产生于本改动之前，c1/c14 的最新值以本节为准。
+- 验证：`query_executor_tests` **608/608**、`ctest --preset debug` 全量（含 TCK）、
+  `verify_ldbc_results.py` **21/21**。
+
 ### 3.1 通用方向
 
 1. **边邻接局部性**：低 degree 展开的主要成本仍是全局 `edge_index` 的 per-source 定位，
