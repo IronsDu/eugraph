@@ -102,7 +102,7 @@ public:
         record->identifiers = std::move(identifiers);
         if (profile_) {
             record->counters = std::make_shared<StorageOpCounters>();
-            record->counters->aggregate = statement_counters_.get();
+            record->counters->aggregate = statement_counters_;
         }
         op_trace_records_.push_back(record);
         return record;
