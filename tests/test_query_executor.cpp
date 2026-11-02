@@ -10149,6 +10149,50 @@ TEST_F(QueryExecutorTest, ShortestPathEndpointDynamicPropertyTriggersPrefetch) {
         << "dynamic property evaluation hit a bare vertex outside the prefetch cache (would have blocked on IO)";
 }
 
+TEST_F(QueryExecutorTest, DynamicPropertyReadsOwnedVertexProperties) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name: 'dyn'})").error.empty());
+
+    ExpressionEvaluator::resetMissingPrefetchCount();
+    auto result =
+        execSyncParams(*executor_, "MATCH (p:Person) RETURN p[$key] AS v", {{"key", Value(std::string("name"))}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "dyn");
+    EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u);
+}
+
+TEST_F(QueryExecutorTest, DynamicPropertyMissingReturnsNull) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person)").error.empty());
+
+    auto result =
+        execSyncParams(*executor_, "MATCH (p:Person) RETURN p[$key] AS v", {{"key", Value(std::string("name"))}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]));
+}
+
+TEST_F(QueryExecutorTest, DynamicPropertyFallsBackToAnonLabel) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    // Recreate executor so the catalog picks up the __anon__ label.
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    ASSERT_TRUE(execSync(*executor_, "CREATE ({name: 'anon-dyn'})").error.empty());
+
+    ExpressionEvaluator::resetMissingPrefetchCount();
+    auto result = execSyncParams(*executor_, "MATCH (n) RETURN n[$key] AS v", {{"key", Value(std::string("name"))}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "anon-dyn");
+    EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u);
+}
+
 // ==================== operator-level trace attribution ====================
 
 namespace {

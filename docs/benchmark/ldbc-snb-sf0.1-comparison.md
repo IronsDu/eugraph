@@ -199,7 +199,7 @@ c9 sorted:    min 122.1 / 120.2 ms
 端到端（5 轮）complex-9 约 **125 ms** vs neo4j 30 ms（4.2×），21/21 结果仍一致。
 complex-5 的 A/B 在噪声范围内（约 195–210 ms），不宣称收益。
 
-### 3.4 complex-14 采样结论（2026-11-02，未改代码）
+### 3.4 complex-14 采样结论（2026-11-02，PC 本身未改）
 
 c14 当前约 166 ms（neo4j 18 ms）。PROFILE：`allShortestPaths` 约 16 ms；剩余主要是
 两个 `PatternComprehensionApply` 分支：每个分支把 4 条路径的 12 条关系展开成
@@ -208,7 +208,55 @@ c14 当前约 166 ms（neo4j 18 ms）。PROFILE：`allShortestPaths` 约 16 ms�
 miss；没有低风险的单算子批量化可直接落地。
 
 下一步应做 **PC 去相关**：从 path 的端点 id 直接 index-probe `a`/`b`，或把两个 PC
-的公共路径展开合并；这需要 planner/算子层改动，不能靠局部阈值。当前 c14 未做修改。
+的公共路径展开合并；这需要 planner/算子层改动，不能靠局部阈值。
+
+> 2026-11-02 后续：§3.5 已消除采样中 `ExpressionEvaluator` 的逐行整顶点深拷贝；
+> PC 的两分支展开仍是剩余大头。
+
+### 3.5 evaluator 动态属性读取去拷贝（2026-11-02）
+
+§3.4 定位到的 `ExpressionEvaluator` 热点中，有一部分是**逐行整顶点深拷贝**，不需要
+planner 改动即可消除：
+
+- 根因：`evalDynamicPropertyRef` 对每个 `VertexValuePtr` 执行
+  `mk<VertexValue>(*held)`（`eval_property.cpp` 旧 335 行），深拷贝整份
+  `properties`（`unordered_map<LabelId, vector<optional<PropertyValue>>>`，Person 的
+  `speaks`/`email` 还是 `vector<string>`）；拓扑顶点（`startNode`/`endNode`）还会把
+  prefetch 缓存里的 `Properties` 再拷一次。c14 的 PC 谓词每行有 4 个属性引用
+  （`a.id`/`b.id`/`startNode(r).id`/`endNode(r).id`），3,788 行 × 2 个分支。
+- 证据：GDB 全线程采样在 c14 compute 线程上命中
+  `evalDynamicPropertyRef → _Hashtable::_M_assign`；PROFILE 的 Filter self CPU 为
+  14.7 ms/分支。同一二进制内做语义等价改写（`a.id = startNode(r).id` →
+  `a = startNode(r)`，结果逐行一致）得到 c14 **158.9 → 121.8 ms** 的上界。
+- 改动：动态属性求值改为**只读视图**——owned `properties` 优先；拓扑顶点直接读
+  `prefetched_vertex_data_`；`__anon__` 仅从缓存读取，不再合并进副本。
+  `startNode`/`endNode` 对 `CONSTANT` 边列只合成一次端点（PC apply 的常见形态）。
+- 同机交错 A/B（15 轮 + 3 warmup，取 min；两棵二进制各用一份同源 data copy，
+  交替顺序）：
+
+```text
+query        base min   opt min   opt/base
+complex-14    158.19     133.72     0.845
+complex-12    155.98     146.46     0.939
+complex-5     199.41     191.09     0.958
+complex-6      90.43      88.57     0.979
+complex-3      99.10      96.99     0.979
+complex-9     119.27     119.64     1.003
+short-2         3.92       3.91     0.997
+complex-10     51.39      52.67     1.025
+complex-1      22.94      23.58     1.028
+```
+
+  c14 的 Filter self CPU 从 14.7 ms/分支降到 8.4–8.9 ms/分支；c10/c1 的 +2~3% 与 p50
+  同向但绝对差 ~1 ms。把两份 data copy 对调后复测（25 轮），c10/c1 回到 +1.0%/+1.2%、
+  c6 为 −1.5%，说明这部分主要是进程/数据副本的局部性，而非改动回归；结果逐行一致
+  （9/9 查询 `same=True`）。
+- 验证：新增 9 个用例（6 个 evaluator 单测 + 3 个 executor 端到端）；`query_executor_tests`
+  **607/607**；`ctest --preset debug` **1435/1435**（含 TCK）；`verify_ldbc_results.py`
+  **21/21** 语义一致。
+- 剩余：c14 仍有约 134 ms vs neo4j 14.6 ms，瓶颈回到两个 PC 分支各 3,788 行的
+  Expand/PE（§3.4 的 PC 去相关方向）；c6 的 Filter self CPU 仍约 25 ms，GDB 显示是
+  `prefetch` 的全列/全行 Value 遍历（下一步候选）。
 
 ### 3.1 通用方向
 

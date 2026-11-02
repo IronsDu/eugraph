@@ -329,21 +329,19 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
             const auto& held = std::get<VertexValuePtr>(ov);
             if (!held)
                 continue;
-            // Enrich a private copy. The handle may be shared with other rows and
-            // columns, and back when VertexValue was stored inline this assignment
-            // copied it -- so mutating in place would be a new, observable change.
-            auto working = mk<VertexValue>(*held);
-            VertexValue& vertex = *working;
+            // Read-only view. This loop runs once per row; cloning the shared
+            // VertexValue here (its Properties map can hold vector<string>
+            // values such as Person.speaks) dominated complex-14's PC
+            // predicate. Owned properties win; topology-form entities
+            // (startNode/endNode, path elements) read the prefetch cache.
+            const VertexValue& vertex = *held;
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
-            // Topology-form vertices only carry the id; prefetch() filled the
-            // cache. Enrich the private copy, never the shared handle.
+            const std::unordered_map<LabelId, Properties>* props = &vertex.properties;
             if (vertex.properties.empty() && eval_ctx_.store) {
                 auto pit = prefetched_vertex_data_.find(vertex.id);
                 if (pit != prefetched_vertex_data_.end()) {
-                    if (!vertex.labels.has_value())
-                        vertex.labels = pit->second.labels;
-                    vertex.properties = pit->second.properties;
+                    props = &pit->second.properties;
                     recordPrefetchHit();
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vertex.id);
@@ -352,47 +350,55 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     recordPrefetchMiss();
                 }
             }
-            // 总是补查 __anon__：REMOVE LABEL 把属性迁移到 __anon__ 后，
-            // vertex 可能 (a) 已无任何用户标签，或 (b) 还有其它标签但属性
-            // 副本在 __anon__。anon_label_id_cached_ 由 prefetch() 异步解析。
-            if (eval_ctx_.meta && !vertex.properties.count(anon_label_id_cached_)) {
-                LabelId anon_lid = anon_label_id_cached_;
-                if (anon_lid != INVALID_LABEL_ID) {
-                    auto pit = prefetched_vertex_data_.find(vertex.id);
-                    if (pit != prefetched_vertex_data_.end()) {
-                        auto anon_it = pit->second.properties.find(anon_lid);
-                        if (anon_it != pit->second.properties.end())
-                            vertex.properties[anon_lid] = anon_it->second;
-                    }
+            // __anon__ may exist only in the prefetch cache after REMOVE LABEL
+            // migrated the property. Read it from there instead of merging into
+            // a copy: (a) the vertex may have no user label left, (b) it may
+            // still have labels while the property copy lives under __anon__.
+            const LabelId anon_lid = anon_label_id_cached_;
+            const Properties* anon_props = nullptr;
+            if (eval_ctx_.meta && anon_lid != INVALID_LABEL_ID && props->find(anon_lid) == props->end()) {
+                auto pit = prefetched_vertex_data_.find(vertex.id);
+                if (pit != prefetched_vertex_data_.end()) {
+                    auto anon_it = pit->second.properties.find(anon_lid);
+                    if (anon_it != pit->second.properties.end())
+                        anon_props = &anon_it->second;
                 }
             }
-            for (const auto& [label_id, props_vec] : vertex.properties) {
+
+            auto read_props = [&](LabelId label_id, const Properties& props_vec) {
                 const uint16_t prop_id = propIdFor(label_id);
                 if (prop_id != kMissingProp && prop_id < props_vec.size()) {
                     const auto& pv = props_vec[prop_id];
                     if (pv.has_value())
                         r = pvToValue(*pv);
                 }
-            }
+            };
+            for (const auto& [label_id, props_vec] : *props)
+                read_props(label_id, props_vec);
+            if (anon_props)
+                read_props(anon_lid, *anon_props);
+
             // Fallback: DDL may have created the property mid-query after the
             // static LabelDef snapshot was taken. Reload from meta to preserve
             // dynamic-property visibility for freshly created labels/props.
             if (std::holds_alternative<std::monostate>(r) && eval_ctx_.meta) {
-                for (const auto& [label_id, props_vec] : vertex.properties) {
-                    if (props_vec.empty())
-                        continue;
+                auto read_fallback = [&](LabelId label_id, const Properties& props_vec) {
+                    if (!std::holds_alternative<std::monostate>(r) || props_vec.empty())
+                        return;
                     const auto* fresh_ldef = findLabelDef(label_id);
-                    if (fresh_ldef) {
-                        for (const auto& pd : fresh_ldef->properties) {
-                            if (pd.name == ref.property && pd.id < props_vec.size() && props_vec[pd.id].has_value()) {
-                                r = pvToValue(*props_vec[pd.id]);
-                                break;
-                            }
-                        }
-                        if (!std::holds_alternative<std::monostate>(r))
+                    if (!fresh_ldef)
+                        return;
+                    for (const auto& pd : fresh_ldef->properties) {
+                        if (pd.name == ref.property && pd.id < props_vec.size() && props_vec[pd.id].has_value()) {
+                            r = pvToValue(*props_vec[pd.id]);
                             break;
+                        }
                     }
-                }
+                };
+                for (const auto& [label_id, props_vec] : *props)
+                    read_fallback(label_id, props_vec);
+                if (anon_props)
+                    read_fallback(anon_lid, *anon_props);
             }
         } else if (std::holds_alternative<EdgeValuePtr>(ov)) {
             const auto& edge = (*std::get<EdgeValuePtr>(ov));
