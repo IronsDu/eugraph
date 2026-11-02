@@ -7,6 +7,7 @@
 
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/executor/query_executor.hpp"
+#include "query/physical_plan/operator/expand_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "storage/data/async_graph_data_store.hpp"
@@ -10191,6 +10192,38 @@ TEST_F(QueryExecutorTest, DynamicPropertyFallsBackToAnonLabel) {
     ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "anon-dyn");
     EXPECT_EQ(ExpressionEvaluator::missingPrefetchCount(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PatternComprehensionReusesCorrelatedAnchorExpansions) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(b:Person {name: 'b'}), "
+                                     "(a)-[:KNOWS]->(c:Person {name: 'c'}), "
+                                     "(b)-[:KNOWS]->(d:Person {name: 'd'}), "
+                                     "(c)-[:KNOWS]->(d)")
+                    .error.empty());
+
+    ExpandPhysicalOp::resetCacheHitCount();
+    auto result =
+        execSync(*executor_, "MATCH p = allShortestPaths((a:Person {name: 'a'})-[:KNOWS*..3]-(d:Person {name: 'd'})) "
+                             "WITH p, relationships(p) AS rels "
+                             "RETURN [n IN nodes(p) | n.name] AS names, "
+                             "       [r IN rels | "
+                             "        size([(x:Person)-[:KNOWS]->(y:Person) "
+                             "              WHERE x.name = startNode(r).name | y.name])] AS counts");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 2u);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        EXPECT_EQ(std::get<ListValuePtr>(row[0])->elements.size(), 3u); // a -> {b|c} -> d
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[1]));
+        const auto& counts = std::get<ListValuePtr>(row[1])->elements;
+        ASSERT_EQ(counts.size(), 2u); // one list entry per path relationship
+        // a out-degree 2 (a->b, a->c); b/c out-degree 1 (b->d, c->d).
+        EXPECT_EQ(std::get<int64_t>(counts[0].value), 2);
+        EXPECT_EQ(std::get<int64_t>(counts[1].value), 1);
+    }
+    EXPECT_GT(ExpandPhysicalOp::cacheHitCount(), 0u)
+        << "correlated PC re-execution did not reuse the Expand neighbour cache";
 }
 
 // ==================== operator-level trace attribution ====================

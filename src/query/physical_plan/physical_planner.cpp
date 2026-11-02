@@ -2654,6 +2654,15 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     ctx.eval_ctx.meta = &meta;
     ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
 
+    // A statement with no write operator keeps one read snapshot for its whole
+    // execution; only then may correlated sub-plans memoize adjacency scans.
+    {
+        std::unordered_set<binder::SlotId> all_slots;
+        bool has_write = false;
+        collectOpSlots(bound_plan.root, all_slots, has_write);
+        ctx.read_only = !has_write;
+    }
+
     // Phase 0: Allocate slot_ids for every variable name (incl. aliases) so
     // subsequent passes can resolve names synchronously. Also build the alias
     // slot map (alias_slot → canonical_slot) by scanning Project items of the
@@ -2952,7 +2961,16 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     ctx.eval_ctx.store = &store;
     ctx.eval_ctx.meta = &meta;
     ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
+
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
+    // A statement with no write operator keeps one read snapshot for its whole
+    // execution; only then may correlated sub-plans memoize adjacency scans.
+    {
+        std::unordered_set<binder::SlotId> all_slots;
+        bool has_write = false;
+        collectOpSlots(materialized, all_slots, has_write);
+        ctx.read_only = !has_write;
+    }
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
     optimizer::rewriteInternalEdgeUniqueness(materialized, ctx.var_slots);
     optimizer::rewriteRefCompatiblePredicates(materialized, ctx.var_slots);
@@ -3122,8 +3140,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
                         std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids,
-                        dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels),
-                        full_edge_scan);
+                        dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels), full_edge_scan,
+                        ctx.read_only && ctx.correlated_subplan_depth > 0);
                     if (ctx.expand_allowed_filter && ctx.expand_allowed_filter->dst_var == v.dst_variable &&
                         v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT) {
                         result->setAllowedDstFilter(ctx.expand_allowed_filter->index_id,

@@ -113,6 +113,12 @@ struct PlanContext {
     /// `WITH other WHERE r IS NULL` returned NULL vertices).
     bool suppress_filter_defer = false;
 
+    /// True when the statement contains no write operator (computed once at
+    /// the start of planBound). Correlated sub-plan neighbour caches may only
+    /// be enabled here: a read-only statement keeps one WT snapshot for its
+    /// whole execution, so cached adjacency cannot go stale.
+    bool read_only = false;
+
     /// Edge variable named by startNode()/endNode() in the anchor Filter
     /// currently being planned. Used to find the correlation column in a PC
     /// anchor CrossProduct (whose edge type may be ANY).

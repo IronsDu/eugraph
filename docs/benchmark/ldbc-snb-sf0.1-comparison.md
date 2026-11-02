@@ -258,6 +258,46 @@ complex-1      22.94      23.58     1.028
   Expand/PE（§3.4 的 PC 去相关方向）；c6 的 Filter self CPU 仍约 25 ms，GDB 显示是
   `prefetch` 的全列/全行 Value 遍历（下一步候选）。
 
+### 3.6 c14 PC 相关子计划的邻居缓存（2026-11-02）
+
+c14 的 PC 按「每条路径关系 × 两个端点」执行：4 条路径 12 条关系，去重后只有 8 个人，
+`CorrelatedVertexProbe` 却发射 24 个锚点，同一个人（933/1129 等）的
+`a←HAS_CREATOR←comment` 展开被重复 4 次；两个 PC（`→:Post` / `→:Comment`）又把相同
+前缀各跑一遍。PROFILE/GDB 显示这些重复 expand 的存储等待是 c14 的主要成本。
+
+改动（`ExpandPhysicalOp`）：
+
+- 每个 Expand 实例增加有界邻居缓存：键 = `src_vertex_id`，值 = **经 `dst_label_ids_`
+  过滤后**的邻居（dst/edge_id/label/seq/physical_out），保持原扫描顺序。
+- 只在 `read_only && correlated_subplan_depth > 0`（PC right subplan）启用；
+  `dst_bound`/`edge_bound`/allowed-filter/undirected 拆分路径不启用。
+- 命中直接复用邻居，跳过 `scanEdgesBatch` 与 `getVertexLabelsBatch`；未命中沿用原
+  扫描路径，过滤后写入缓存；命中/未命中混合时按原 edge-major 顺序重组，输出行序不变。
+- 上限 64K 边 / 64K 源；超限停用（保留已有条目），避免无重复的大扫描占内存。
+- `read_only` 在 `planBound`/`planChosen` 入口用 `collectOpSlots(..., has_write)` 计算；
+  写语句一律不缓存，缓存正确性依赖只读语句的单一 WT 快照。
+
+同机交错 A/B（15 轮 + 3 warmup，min；两棵二进制、两份同源 data copy，正常/对调各一轮）：
+
+```text
+query        base min   opt min   opt/base     (对调 data copy)
+complex-14    153.96      94.34     0.613     149.82 → 95.17（0.635）
+complex-5     203.57     200.36     0.984     202.20 → 207.96（1.028）
+complex-9     127.14     124.07     0.976     128.08 → 128.48（1.003）
+complex-6      93.30      91.11     0.977      90.29 →  90.66（1.004）
+complex-10     54.06      54.85     1.015      57.22 →  51.85（0.906）
+```
+
+c14 稳定 **−36~39%**（约 154 → 95 ms），与 neo4j 14.6 ms 的差距从 ~9.4× 收窄到 ~6.5×；
+其余查询在噪声内。结果逐行一致。
+
+验证：新增 `PatternComprehensionReusesCorrelatedAnchorExpansions`（断言结果 +
+`ExpandPhysicalOp::cacheHitCount() > 0`，旧代码上该断言必失败）；`query_executor_tests`
+**608/608**；`ctest --preset debug` **1436/1436**（含 TCK）；`verify_ldbc_results.py` **21/21**。
+
+剩余：命中的 2/3 已去掉，未命中的 1/3 与两个 PC 的 compute（Filter/PE）仍是 ~95 ms 的
+主体；进一步需要合并两个 PC 的公共前缀（planner/CSE）或做 PC 去相关 join。
+
 ### 3.1 通用方向
 
 1. **边邻接局部性**：低 degree 展开的主要成本仍是全局 `edge_index` 的 per-source 定位，
