@@ -107,6 +107,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [LDBC c5/c9/c14 neo4j 计划对比](query/ldbc-neo4j-plan-comparison.md) | PROFILE 形状/dbHits、eugraph 对应计划与下一步优化方向 |
+| [LDBC 计划质量与剩余瓶颈](benchmark/ldbc-plan-quality-analysis.md) | c5/c6/c9/c14 的 EuGraph vs neo4j 逐算子 rows/dbHits 对照：计划形状是否一致、标签扫描/per-edge seek/PC 冗余的实测成本与优先级 |
 | [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同源数据同机交错 A/B 耗时对比、21/21 结果一致性验证（`scripts/verify_ldbc_results.py`）、并发 QPS（`scripts/bench_bolt_qps.py`）、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`） |
 | [双调度器 hop 并发吞吐](benchmark/scheduler-hop-throughput.md) | 两个单 worker executor 下 compute→IO→compute 的吞吐/延迟曲线，区分并发流水线与 batch 摊薄 |
 | [Storage 操作成本](benchmark/storage-operation-costs.md) | WT `search`/`search_near` 与 IO dispatch 的单次成本、语句级计数与归因方法 |
