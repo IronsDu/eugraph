@@ -8,6 +8,7 @@
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/executor/query_executor.hpp"
 #include "query/physical_plan/operator/expand_physical_op.hpp"
+#include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "storage/data/async_graph_data_store.hpp"
@@ -10224,6 +10225,32 @@ TEST_F(QueryExecutorTest, PatternComprehensionReusesCorrelatedAnchorExpansions) 
     }
     EXPECT_GT(ExpandPhysicalOp::cacheHitCount(), 0u)
         << "correlated PC re-execution did not reuse the Expand neighbour cache";
+}
+
+TEST_F(QueryExecutorTest, DeferredDestinationLabelFilterDropsRows) {
+    // Entity declares no properties; name lives on Person/City, so reading
+    // b.name through the Entity label needs the coalesce spec the deferral
+    // attaches to.
+    auto entity_id = blockingWait(async_meta_->createLabel("Entity"));
+    ASSERT_NE(entity_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(entity_id));
+    // Broad enough for the planner to defer the label check to materialization.
+    async_meta_->setLabelVertexCount(entity_id, 100000);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(b:Entity:Person {name: 'x'}), "
+                                     "(a)-[:KNOWS]->(c:Person {name: 'y'})")
+                    .error.empty());
+
+    ProjectionExtractPhysicalOp::resetDeferredLabelFilterCount();
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'a'})-[:KNOWS]->(b:Entity) "
+                                       "RETURN b.name AS n ORDER BY n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u) << "a destination without the Entity label must be dropped";
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "x");
+    EXPECT_GT(ProjectionExtractPhysicalOp::deferredLabelFilterCount(), 0u)
+        << "deferred destination-label filter was not attached";
 }
 
 // ==================== operator-level trace attribution ====================

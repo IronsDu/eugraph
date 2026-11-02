@@ -189,12 +189,14 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         ctx->edge_label_defs[el.id] = el;
     ctx->label_name_to_id = std::move(label_name_to_id);
     ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
+    ctx->label_vertex_counts = async_meta_.schema().label_vertex_counts;
 
     PlanContext plan_ctx{
         .label_name_to_id = ctx->label_name_to_id,
         .edge_label_name_to_id = ctx->edge_label_name_to_id,
         .label_defs = ctx->label_defs,
         .edge_label_defs = ctx->edge_label_defs,
+        .label_vertex_counts = ctx->label_vertex_counts,
         .eval_ctx = {},
         .requirements = {},
         .extraction_info = {},

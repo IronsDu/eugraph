@@ -104,6 +104,31 @@ std::string ProjectionExtractPhysicalOp::toString() const {
     return s;
 }
 
+std::atomic<uint64_t> ProjectionExtractPhysicalOp::deferred_label_filter_count_{0};
+
+uint64_t ProjectionExtractPhysicalOp::deferredLabelFilterCount() noexcept {
+    return deferred_label_filter_count_.load(std::memory_order_relaxed);
+}
+
+void ProjectionExtractPhysicalOp::resetDeferredLabelFilterCount() noexcept {
+    deferred_label_filter_count_.store(0, std::memory_order_relaxed);
+}
+
+bool ProjectionExtractPhysicalOp::setRequiredLabels(size_t source_col, const std::vector<LabelId>& labels) {
+    if (labels.empty())
+        return false;
+    bool attached = false;
+    for (auto& spec : specs_) {
+        if (spec.kind != ColumnSpec::Kind::LoadVertexPropCoalesce || spec.source_col != source_col)
+            continue;
+        spec.required_labels = labels;
+        attached = true;
+    }
+    if (attached)
+        deferred_label_filter_count_.fetch_add(1, std::memory_order_relaxed);
+    return attached;
+}
+
 folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk() {
     auto child_gen = cancellable(child_->executeChunkTraced());
     // Reused across chunks/specs: ConstructVertex's vid->VertexValue maps.
@@ -283,6 +308,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
         // scalar if exactly one label has the property, or a list if multiple
         // labels on the same vertex define it.
         std::vector<std::vector<std::vector<PropertyValue>>> vertex_coalesce_cache(n_specs);
+        // Per coalesce spec: labels for the deferred destination-label filter.
+        std::vector<std::vector<std::optional<LabelIdSet>>> label_filter_cache(n_specs);
         for (size_t i = 0; i < n_specs; ++i) {
             const auto& spec = specs_[i];
             if (spec.kind != ColumnSpec::Kind::LoadVertexPropCoalesce)
@@ -306,10 +333,20 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             if (ref_vids.empty())
                 continue;
 
-            auto coalesced = co_await store_.batchGetVertexCoalesceProperties(ref_vids, spec.coalesce_candidates);
-            for (size_t j = 0; j < ref_vids.size() && j < coalesced.size(); ++j) {
-                for (auto& value : coalesced[j])
-                    vertex_coalesce_cache[i][ref_rows[j]].push_back(std::move(value));
+            if (spec.required_labels.empty()) {
+                auto coalesced = co_await store_.batchGetVertexCoalesceProperties(ref_vids, spec.coalesce_candidates);
+                for (size_t j = 0; j < ref_vids.size() && j < coalesced.size(); ++j) {
+                    for (auto& value : coalesced[j])
+                        vertex_coalesce_cache[i][ref_rows[j]].push_back(std::move(value));
+                }
+            } else {
+                auto data = co_await store_.batchGetVertexCoalesceData(ref_vids, spec.coalesce_candidates);
+                label_filter_cache[i].resize(row_count);
+                for (size_t j = 0; j < ref_vids.size() && j < data.size(); ++j) {
+                    for (auto& value : data[j].values)
+                        vertex_coalesce_cache[i][ref_rows[j]].push_back(std::move(value));
+                    label_filter_cache[i][ref_rows[j]] = std::move(data[j].labels);
+                }
             }
         }
 
@@ -438,6 +475,38 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             }
         }
 
+        // Deferred destination-label filters (see
+        // docs/query/engine/deferred-label-filter-design.md): the Expand that
+        // would have dropped these rows already emitted them; dropping here,
+        // before any downstream operator sees the row, is equivalent.
+        std::vector<uint8_t> keep;
+        bool has_label_filter = false;
+        for (size_t i = 0; i < n_specs; ++i)
+            if (!specs_[i].required_labels.empty())
+                has_label_filter = true;
+        if (has_label_filter) {
+            keep.assign(row_count, 1);
+            for (size_t i = 0; i < n_specs; ++i) {
+                const auto& spec = specs_[i];
+                if (spec.required_labels.empty())
+                    continue;
+                for (size_t row = 0; row < row_count; ++row) {
+                    if (!keep[row])
+                        continue;
+                    if (row >= label_filter_cache[i].size() || !label_filter_cache[i][row]) {
+                        keep[row] = 0;
+                        continue;
+                    }
+                    for (LabelId need : spec.required_labels) {
+                        if (!label_filter_cache[i][row]->count(need)) {
+                            keep[row] = 0;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // Per-row caches so multiple specs reading the same source column share
         // the resolved id and (for Construct*) the constructed entity.
         // Per-row entity caches avoid re-issuing labels+properties I/O when
@@ -476,7 +545,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
         // Reused across rows so the maps' bucket arrays are allocated once per
         // chunk rather than once per row.
         RowCache rc;
+        size_t dst_row = 0;
         for (size_t row = 0; row < row_count; ++row) {
+            if (has_label_filter && !keep[row])
+                continue;
             rc.clear();
             for (size_t i = 0; i < n_specs; ++i) {
                 const auto& spec = specs_[i];
@@ -490,15 +562,15 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     // Pure pass-through: copy the typed payload directly instead of
                     // getValue (which builds a Value, deep-copying the payload) followed
                     // by setValue (which copies it again out of that Value).
-                    if (!output.columns[i].copyValueFrom(chunk->columns[spec.source_col], row, row))
-                        output.columns[i].setValue(row, chunk->columns[spec.source_col].getValue(row));
+                    if (!output.columns[i].copyValueFrom(chunk->columns[spec.source_col], row, dst_row))
+                        output.columns[i].setValue(dst_row, chunk->columns[spec.source_col].getValue(row));
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexProp: {
                     if (row < vertex_prop_cache[i].size() && vertex_prop_cache[i][row].has_value())
-                        output.columns[i].setValue(row, propertyValueToValue(*vertex_prop_cache[i][row]));
+                        output.columns[i].setValue(dst_row, propertyValueToValue(*vertex_prop_cache[i][row]));
                     else
-                        output.columns[i].setNull(row);
+                        output.columns[i].setNull(dst_row);
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
@@ -511,12 +583,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         // conflicting values stay a list, matching multi-label
                         // property semantics).
                         if (values.empty()) {
-                            output.columns[i].setNull(row);
+                            output.columns[i].setNull(dst_row);
                         } else if (values.size() == 1) {
                             // Fast path: the common single-label case must not pay
                             // for a per-row dedup vector (complex-3 reads 52k
                             // creationDate values through this path).
-                            output.columns[i].setValue(row, propertyValueToValue(values[0]));
+                            output.columns[i].setValue(dst_row, propertyValueToValue(values[0]));
                         } else {
                             std::vector<PropertyValue> unique_values;
                             unique_values.reserve(values.size());
@@ -532,17 +604,17 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                                     unique_values.push_back(pv);
                             }
                             if (unique_values.size() == 1) {
-                                output.columns[i].setValue(row, propertyValueToValue(unique_values[0]));
+                                output.columns[i].setValue(dst_row, propertyValueToValue(unique_values[0]));
                             } else {
                                 ListValue lv;
                                 lv.elements.reserve(unique_values.size());
                                 for (const auto& pv : unique_values)
                                     lv.elements.push_back(ValueStorage{propertyValueToValue(pv)});
-                                output.columns[i].setValue(row, Value(mk<ListValue>(std::move(lv))));
+                                output.columns[i].setValue(dst_row, Value(mk<ListValue>(std::move(lv))));
                             }
                         }
                     } else {
-                        output.columns[i].setNull(row);
+                        output.columns[i].setNull(dst_row);
                     }
                     break;
                 }
@@ -550,15 +622,15 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     if (row < edge_prop_cache[i].size()) {
                         const auto& pv = edge_prop_cache[i][row];
                         if (!pv.has_value()) {
-                            output.columns[i].setNull(row);
+                            output.columns[i].setNull(dst_row);
                         } else if (output.columns[i].type == binder::BoundTypeKind::INT64 &&
                                    std::holds_alternative<int64_t>(*pv)) {
-                            output.columns[i].buffer->int64_data[row] = std::get<int64_t>(*pv);
+                            output.columns[i].buffer->int64_data[dst_row] = std::get<int64_t>(*pv);
                         } else {
-                            output.columns[i].setValue(row, propertyValueToValue(*pv));
+                            output.columns[i].setValue(dst_row, propertyValueToValue(*pv));
                         }
                     } else {
-                        output.columns[i].setNull(row);
+                        output.columns[i].setNull(dst_row);
                     }
                     break;
                 }
@@ -571,7 +643,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         if (nit != vertex_label_names_.end())
                             lv.elements.push_back(ValueStorage{Value(nit->second)});
                     }
-                    output.columns[i].setValue(row, Value(mk<ListValue>(std::move(lv))));
+                    output.columns[i].setValue(dst_row, Value(mk<ListValue>(std::move(lv))));
                     break;
                 }
                 case ColumnSpec::Kind::LoadEdgeType: {
@@ -580,7 +652,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         break;
                     auto nit = edge_label_names_.find(rc.eid_label);
                     if (nit != edge_label_names_.end())
-                        output.columns[i].setValue(row, Value(nit->second));
+                        output.columns[i].setValue(dst_row, Value(nit->second));
                     break;
                 }
                 case ColumnSpec::Kind::ConstructVertex: {
@@ -588,10 +660,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         // 同一 (spec, vid) 在批内共享同一个 VertexValue ✓；这里只发布
                         // handle，不再按行 deep-copy（payload 是 labels+properties map）。
                         VertexValuePtr vv = vertex_ctor_cache[i][row];
-                        if (!output.columns[i].setVertexValue(row, vv))
-                            output.columns[i].setValue(row, Value(std::move(vv)));
+                        if (!output.columns[i].setVertexValue(dst_row, vv))
+                            output.columns[i].setValue(dst_row, Value(std::move(vv)));
                     } else {
-                        output.columns[i].setNull(row);
+                        output.columns[i].setNull(dst_row);
                     }
                     break;
                 }
@@ -636,12 +708,14 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     // deep-copy it once more.
                     auto ev = mk<EdgeValue>(eit->second);
                     if (!output.columns[i].setEdgeValue(row, ev))
-                        output.columns[i].setValue(row, Value(std::move(ev)));
+                        output.columns[i].setValue(dst_row, Value(std::move(ev)));
                     break;
                 }
                 }
             }
+            ++dst_row;
         }
+        output.count = dst_row;
 
         co_yield std::move(output);
     }

@@ -71,6 +71,42 @@ protected:
     }
 };
 
+TEST_F(WTGraphStoreTest, CoalesceDataBatchMatchesSeparateCalls) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(
+        store_->insertVertex(txn.get(), 700,
+                             std::vector<std::pair<LabelId, Properties>>{
+                                 {1, makeProps({{0, PropertyValue(int64_t{7})}, {1, PropertyValue(std::string("x"))}})},
+                                 {2, makeProps({{0, PropertyValue(int64_t{9})}})}}));
+    ASSERT_TRUE(store_->insertVertex(
+        txn.get(), 701,
+        std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, PropertyValue(int64_t{11})}})}}));
+    commit(txn);
+
+    GraphSession& session = store_->autoSession().get();
+    std::vector<VertexId> vids{701, 700, 999};
+    std::vector<std::pair<LabelId, uint16_t>> candidates{{1, 0}, {2, 0}, {1, 1}};
+    auto combined = store_->getVertexCoalesceDataBatch(session, vids, candidates);
+    auto values = store_->getVertexCoalescePropertiesBatch(session, vids, candidates);
+    auto labels = store_->getVertexLabelsBatch(session, vids);
+    ASSERT_EQ(combined.size(), vids.size());
+    for (size_t i = 0; i < vids.size(); ++i) {
+        ASSERT_EQ(combined[i].values.size(), values[i].size()) << "values differ at " << i;
+        for (size_t k = 0; k < values[i].size(); ++k) {
+            EXPECT_EQ(combined[i].values[k].index(), values[i][k].index()) << "value kind differs at " << i << "," << k;
+            if (std::holds_alternative<int64_t>(values[i][k])) {
+                EXPECT_EQ(std::get<int64_t>(combined[i].values[k]), std::get<int64_t>(values[i][k]));
+            } else if (std::holds_alternative<std::string>(values[i][k])) {
+                EXPECT_EQ(std::get<std::string>(combined[i].values[k]), std::get<std::string>(values[i][k]));
+            }
+        }
+        EXPECT_EQ(combined[i].labels, labels[i]) << "labels differ at " << i;
+    }
+    ASSERT_EQ(combined[1].labels.count(1), 1u);
+    ASSERT_EQ(combined[1].labels.count(2), 1u);
+    EXPECT_TRUE(combined[2].labels.empty());
+}
+
 // ==================== DDL ====================
 
 TEST_F(WTGraphStoreTest, CreateAndDropLabel) {

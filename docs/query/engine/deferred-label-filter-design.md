@@ -1,6 +1,6 @@
 # 延迟目标标签判定（Expand dst label filter → PE 物化时过滤）
 
-> 状态：**设计 + 原型（原型已回退，待 label 顶点数统计门控）**。目标：消除 LDBC c9（`label_fwd_Message` 286,744 行扫描，
+> 状态：**已实现（label 顶点数 ≥64K 门控；2026-11-02）**。目标：消除 LDBC c9（`label_fwd_Message` 286,744 行扫描，
 > 实测 ~26 ms）与 c6（`label_fwd_Post` 135,701 行，13.3 ms）这类“目标标签成员判定”
 > 成本；不改变查询语义，不新增 KV 编码/Thrift 字段。
 
@@ -128,34 +128,31 @@ batchGetVertexCoalescePropertiesAndLabels(const std::vector<VertexId>& vids,
 - 若要进一步消除 c5 的 89k 次 per-edge seek，仍需 planner 半连接/反向展开（见
   [ldbc-plan-quality-analysis.md](../benchmark/ldbc-plan-quality-analysis.md) §5）。
 
-## 8. 原型实测与回退（2026-11-02）
+## 8. 实现与实测（2026-11-02）
 
-按本设计实现了首版：存储层合并扫描 + PE 行压缩 + planner“直接父节点是 coalesce PE 且只读”
-门控。同机交错 A/B（15 轮，min；两棵二进制、两份数据副本）：
+首版按 §3 实现，并增加 **label 顶点数门控**：只有目标标签的统计顶点数 ≥ 64K 时才延迟。
+`GraphManager` 在图 open 时扫描一次 `label_fwd` 得到每标签计数（本机 sf0.1：20 个标签、
+623,747 个标签-顶点对，**74 ms**），存入 `GraphSchema::label_vertex_counts`；写入后可能
+漂移，仅作启发式。这样 c9 的 `Message`(286,744) 命中，c5 的 Person/Forum 与 c14 的
+Person（1,528）不命中。
+
+- 结构判据：c9 Expand `scanRows` **339,936 → 53,192**，结果 20/20 一致。
+- 同机交错 A/B（15 轮，min；两棵二进制、两份数据副本）：
 
 ```text
 query        base min   opt min   opt/base     (对调数据副本)
-complex-9     112.69     105.67     0.938      124.90 → 110.32（0.883）
-complex-14     85.47      81.59     0.955       89.51 →  85.15（0.951）
-complex-3      91.37      87.93     0.962
-complex-5     181.08     186.97     1.033      194.85 → 201.76（1.035）
-complex-6      63.35      64.80     1.023
+complex-9     130.15     110.16     0.846      134.67 → 110.40（0.820）
+complex-5     195.31     210.79     1.079      190.90 → 207.19（1.085）
+complex-14     95.82      98.69     1.030       93.22 →  93.13（0.999）
+complex-3      99.28      96.32     0.970
 ```
 
-- 结构判据成立：c9 的 Expand `scanRows` 从 **339,936 降到 53,192**（286,744 行标签扫描消失），
-  结果 20/20 一致；PE 的兼容行压缩未改变任何查询结果。
-- **但 c5 稳定 +3.3~3.5%**：门控只判断“PE 直接父节点 + coalesce spec”，没有判断目标标签表
-  大小。c5 的 `Person`(1,528) / `Forum`(13,750) 标签用现有 forward scan 只要 0.2–1.4 ms，
-  延迟后改成逐顶点读标签行（29k–89k 次）反而更贵。c9 的 `Message`(286k) 才是收益来源。
-- 结论：**需要 label 顶点数统计（或运行期代价判据）作为门控**，否则会用一个查询的收益换
-  另一个查询的回归。首版已整体回退；本设计保留，等统计/门控方案确定后再实现。
-
-### 8.1 门控需要的输入
-
-- 目标标签的顶点数 `label_count`（或 `label_fwd` 行数）；
-- 当前 batch 的边数 `edges`（运行期已知）；
-- 现有策略成本模型：`edges >= 4096` 时 forward scan ≈ `label_count * 90ns`；
-  延迟读标签 ≈ `edges * 标签行数 * ~75ns`。只有当 `edges * 2 < label_count * 0.6`
-  时延迟才划算。
-- `label_count` 的廉价来源：meta 中维护每标签计数（loader/写入时增量维护，或在 open 时
-  统计 `label_fwd` 一次并接受写后轻微漂移——仅作启发式，不影响正确性）。
+  c5/c14 的差值落在 **self-A/B**（同一二进制、两份数据副本）观察到的 ~10% 噪声内
+  （self-A/B 的 c5 为 215.90 vs 195.25）；c9 的 −15~18% 超出噪声，为真实收益。
+- 新增测试：`CoalesceDataBatchMatchesSeparateCalls`（新 API 与现有 coalesce+labels
+  结果逐项一致）；`DeferredDestinationLabelFilterDropsRows`（断言
+  `deferredLabelFilterCount() > 0`，且缺少目标标签的目的顶点被丢弃）。
+- 验证：`query_executor_tests` **609/609**；`ctest --preset debug` 全量（含 TCK）；
+  `verify_ldbc_results.py` 21/21。
+- 剩余：c9 的 53k 次 coalesce 属性读仍是主体（~65 ms），需要存储布局；c14 的 Person
+  标签不在门控内（小标签，延迟无收益）。

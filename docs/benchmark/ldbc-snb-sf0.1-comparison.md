@@ -387,6 +387,19 @@ short-2         4.14       3.93     0.950
 - 验证：`query_executor_tests` **608/608**、`ctest --preset debug` 全量（含 TCK）、
   `verify_ldbc_results.py` **21/21**。
 
+### 3.9 c9 的 Message 标签过滤延迟到物化（2026-11-02）
+
+- 根因：`(friend)<-[:HAS_CREATOR]-(message:Message)` 在 53,192 条边上触发
+  “扫整张 `label_fwd_Message`（286,744 行）再过滤”的启发式，实测 ~26 ms。
+- 改动：按 [deferred-label-filter-design.md](../query/engine/deferred-label-filter-design.md)
+  把目标标签判定延迟到直接父节点的 `ProjectionExtract`：一次 `{vid}` 前缀扫描同时读标签与
+  coalesce 候选属性，PE 按标签压缩输出行。仅对只读语句、宽标签（统计顶点数 ≥64K）启用；
+  标签计数在图 open 时统计一次（sf0.1 74 ms）。
+- 结构判据：c9 的 Expand `scanRows` **339,936 → 53,192**。
+- A/B（15 轮，min；正常/对调数据副本）：c9 **130.2→110.2（−15.4%）**，对调
+  134.7→110.4（−18.0%）；c5/c14 差异在同二进制 self-A/B 的 ~10% 噪声内；结果一致。
+- 验证：新增 2 个测试；`query_executor_tests` 609/609；全量 ctest（含 TCK）；verify 21/21。
+
 ### 3.1 通用方向
 
 1. **边邻接局部性**：低 degree 展开的主要成本仍是全局 `edge_index` 的 per-source 定位，

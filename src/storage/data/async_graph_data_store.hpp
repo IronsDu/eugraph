@@ -193,6 +193,17 @@ public:
         co_return std::move(result);
     }
 
+    folly::coro::Task<std::vector<ISyncGraphDataStore::CoalescedVertexData>>
+    batchGetVertexCoalesceData(const std::vector<VertexId>& vids,
+                               const std::vector<std::pair<LabelId, uint16_t>>& candidates) override {
+        auto ids = vids;
+        auto cands = candidates;
+        auto result = co_await dispatch([this, ids = std::move(ids), cands = std::move(cands)]() {
+            return store_.getVertexCoalesceDataBatch(session_, ids, cands);
+        });
+        co_return std::move(result);
+    }
+
     // ==================== Edge Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) override {

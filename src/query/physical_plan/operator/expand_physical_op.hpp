@@ -75,6 +75,12 @@ public:
     void setAllowedDstValues(std::shared_ptr<std::vector<PropertyValue>> values) {
         allowed_dst_values_ = std::move(values);
     }
+
+    /// The planner moved this Expand's destination-label check into the PE
+    /// directly above it; drop the local filter (the PE performs it).
+    void clearDstLabelFilter() {
+        dst_label_ids_.clear();
+    }
     /// Diagnostics: neighbour-cache hits across all Expand instances. Tests
     /// use this to prove the correlated-reuse path is actually taken.
     static uint64_t cacheHitCount() noexcept;

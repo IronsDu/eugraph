@@ -43,6 +43,8 @@ struct PlanContext {
     std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id;
     std::unordered_map<LabelId, LabelDef>& label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
+    /// Per-label vertex counts (planning heuristic; may be stale).
+    const std::unordered_map<LabelId, uint64_t>& label_vertex_counts;
     function::EvalContext eval_ctx;
     /// Per-slot requirements collected from downstream operators.
     /// Drives ProjectionExtractPhysicalOp spec generation.

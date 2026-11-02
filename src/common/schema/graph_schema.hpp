@@ -21,6 +21,12 @@ struct GraphSchema {
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_labels;
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
 
+    /// Approximate vertex count per label. Refreshed by GraphManager when a
+    /// graph is opened; later writes may make it stale. Used only as a
+    /// planning heuristic (e.g. whether a destination-label filter is worth
+    /// deferring to materialization), never for semantics.
+    std::unordered_map<LabelId, uint64_t> label_vertex_counts;
+
     // Tombstone — deleted labels/edge labels
     std::set<LabelId> deleted_labels;
     std::set<EdgeLabelId> deleted_edge_labels;

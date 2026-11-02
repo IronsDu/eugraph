@@ -111,6 +111,21 @@ public:
         co_return out;
     }
 
+    /// Labels + coalesced candidates in one batch. Default falls back to the
+    /// two existing batch calls; storage overrides with one prefix scan.
+    virtual folly::coro::Task<std::vector<ISyncGraphDataStore::CoalescedVertexData>>
+    batchGetVertexCoalesceData(const std::vector<VertexId>& vids,
+                               const std::vector<std::pair<LabelId, uint16_t>>& candidates) {
+        auto values = co_await batchGetVertexCoalesceProperties(vids, candidates);
+        auto labels = co_await getVertexLabelsBatch(vids);
+        std::vector<ISyncGraphDataStore::CoalescedVertexData> out(vids.size());
+        for (size_t i = 0; i < vids.size() && i < values.size() && i < labels.size(); ++i) {
+            out[i].values = std::move(values[i]);
+            out[i].labels = std::move(labels[i]);
+        }
+        co_return out;
+    }
+
     // Vertex Property Write
     virtual folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
                                                       const PropertyValue& value) = 0;

@@ -641,6 +641,81 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
     return out;
 }
 
+std::vector<ISyncGraphDataStore::CoalescedVertexData>
+SyncGraphDataStore::getVertexCoalesceDataBatch(GraphSession& gs, const std::vector<VertexId>& vids,
+                                               const std::vector<std::pair<LabelId, uint16_t>>& candidates) {
+    std::vector<CoalescedVertexData> out(vids.size());
+    if (vids.empty())
+        return out;
+
+    std::unordered_map<uint32_t, size_t> cand_index;
+    cand_index.reserve(candidates.size() * 2);
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        uint32_t key = (static_cast<uint32_t>(candidates[i].first) << 16) | candidates[i].second;
+        cand_index.emplace(key, i);
+    }
+
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_VERTEX_DATA);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "getVertexCoalesceDataBatch: cannot open cursor on table:vertex_data");
+        return out;
+    }
+    auto* c = cursor.get();
+    std::vector<size_t> order(vids.size());
+    std::iota(order.begin(), order.end(), size_t{0});
+    if (vids.size() > 64) {
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return vids[a] < vids[b]; });
+    }
+    std::vector<std::optional<PropertyValue>> found(candidates.size());
+    std::string prefix;
+    prefix.reserve(64);
+    for (size_t out_index : order) {
+        const VertexId vid = vids[out_index];
+        std::fill(found.begin(), found.end(), std::nullopt);
+        prefix = KeyCodec::encodeVertexDataVertexPrefix(vid);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
+        if (ret == WT_NOTFOUND)
+            continue;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "getVertexCoalesceDataBatch: search_near failed");
+            return out;
+        }
+        if (exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            std::string_view key = getKeyViewFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            const auto kind = KeyCodec::vertexDataKind(key);
+            if (kind == KeyCodec::VertexDataKind::LABEL) {
+                auto [_, label_id] = KeyCodec::decodeVertexDataLabelKey(key);
+                if (label_id != INVALID_LABEL_ID)
+                    out[out_index].labels.insert(label_id);
+            } else if (kind == KeyCodec::VertexDataKind::PROPERTY) {
+                auto [_, label_id, prop_id] = KeyCodec::decodeVertexDataPropKey(key);
+                const uint32_t key_id = (static_cast<uint32_t>(label_id) << 16) | prop_id;
+                auto it = cand_index.find(key_id);
+                if (it != cand_index.end() && !found[it->second].has_value())
+                    found[it->second] = ValueCodec::decode(getValueViewFromCursor(c));
+            } else {
+                break;
+            }
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "getVertexCoalesceDataBatch: next failed");
+            return out;
+        }
+        for (auto& v : found)
+            if (v)
+                out[out_index].values.push_back(std::move(*v));
+    }
+    return out;
+}
+
 bool SyncGraphDataStore::addVertexLabel(GraphSession& gs, VertexId vid, LabelId label_id) {
     WT_SESSION* session = gs.wt_session();
     if (!session)

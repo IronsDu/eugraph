@@ -35,6 +35,7 @@ Person(id) seek → KNOWS*1..2 (174 friends) → Expand HAS_CREATOR (53,192 mess
 - **标签成员判定**：`message:Message` 在 edges ≥ 4096 时走
   “扫整张 `label_fwd_Message` + 成员集合”的启发式；变体 A/B（去掉 `:Message`）
   实测该检查 **约 26 ms**。这不是计划选错，而是执行器用一次全表扫描换 53k 次点查。
+  2026-11-02 已通过“延迟到 PE 物化”消除（见 comparison §3.9，scanRows 339,936→53,192）。
 - **属性读**：coalesce 对每个 message `search_near{vid}{0x01}` 后逐属性行 `next`，
   单条约 1.2–1.3 µs；neo4j 的 node record 内联属性约 0.2 µs。
 - 去掉标签检查后 c9 仍约 92 ms，差距主体是 53k 次属性读的**存储布局**。
