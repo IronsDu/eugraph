@@ -59,6 +59,8 @@
 > **最新全量复跑（2026-11-01，干净同源数据，Release 8/4，id 两边均为 INTEGER）**：
 > complex-5 **180.9 ms** vs neo4j 84.5 ms（2.1×）、complex-9 **128.7 ms** vs 27.6 ms（4.7×）、
 > complex-12 **695.5 ms** vs 87.9 ms（7.9×）、complex-14 **144.1 ms** vs 15.95 ms（9.0×）。
+> **2026-11-02 VLE 优化后**：complex-12 同机 5 轮交错 A/B 为 **158.4 ms** vs 95.4 ms（1.7×），
+> 相对优化前基线的 min 735→152 ms；详见 §3.2。
 > **21/21 查询结果语义一致**；c14 仅 `ORDER BY pathWeight desc` 在权重 17.0 并列时
 > 输出顺序不同（同多重集，见 §4）。
 
@@ -90,12 +92,12 @@
 | complex-3 | 100.9 | 26.1 | 🟠 慢 3.9×（0 行） |
 | complex-9 | **128.7** | 27.6 | 🟠 慢 4.7× |
 | complex-10 | 52.6 | 9.49 | 🔴 慢 5.5× |
-| complex-12 | **695.5** | 87.9 | 🔴 慢 7.9× |
+| complex-12 | **158.4** | 95.4 | 🟡 慢 1.7×（VLE 优化后；优化前 695.5） |
 | complex-14 | **144.1** | 15.95 | 🔴 慢 9.0×（ORDER BY 并列，同多重集） |
 
 > 每轮两引擎各一次，15 轮取 min、3 轮 warmup；绝对值受 CPU 频率影响，跨轮次只看同轮比值。
-> c3/c4、short-7 两边都是 0 行，耗时只代表扫描/过滤成本。complex-12 的 48,577 次
-> `io_dispatches` 归因见 §3；c14 的顺序差异只是 `pathWeight=17.0` 并列，不是结果差异。
+> c3/c4、short-7 两边都是 0 行，耗时只代表扫描/过滤成本。complex-12 的 VLE 优化见 §3.2；
+> c14 的顺序差异只是 `pathWeight=17.0` 并列，不是结果差异。
 
 ### 2.3 Updates
 
@@ -139,17 +141,74 @@ person/target；每条语句执行 3 次取 min，eugraph/neo4j 按 E→N→N→
 | 优先级 | 查询/范围 | 差距 | 已定位原因 | 下一步思路 |
 |---|---|---|---|---|
 | P1 | 🔴 complex-14 | 144.1 ms vs 15.95 ms（约 9.0×） | allShortestPaths 后两路 PC 的实际 Comment/Post 展开；同数据 4 条路径，结果一致 | PC 去相关/展开批量化；见 [pattern-comprehension-anchor-label-scan.md](../query/pattern-comprehension-anchor-label-scan.md) |
-| P1 | 🔴 complex-12 | 695.5 ms vs 87.9 ms（约 7.9×） | **48,577 次 `io_dispatches`**：VLE `HAS_TYPE\|IS_SUBCLASS_OF*0..` 的 65,380 行 / 64 批逐跳 scan+游标流；按 ~10 µs/次估算约 0.49 s，占 0.71–0.79 s 的大部分 | 批量化/合并 VLE 逐跳扫描（减少 dispatch 次数），而不是继续调线程数 |
 | P1 | 🔴 complex-10 | 52.6 ms vs 9.49 ms（约 5.5×） | VLE 之后的 `IS_LOCATED_IN` / `HAS_CREATOR` 展开顺序 | 调整 join/expand 顺序，减少中间行 |
-| P1 | 🟠 complex-9 | 128.7 ms vs 27.6 ms（约 4.7×） | `message.id` 过滤前预取已由 Filter 边界消除；剩余是 53k 条 `HAS_CREATOR` 的 per-edge 成本 + creationDate coalesce | 展开侧共享 cursor / 目标属性过滤下推；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
+| P1 | 🟠 complex-9 | 125.2 ms vs 29.7 ms（约 4.2×） | 属性 coalesce 探测已按 id 排序；剩余是 53k 条 `HAS_CREATOR` 的 per-edge 成本 | 展开侧共享 cursor / 目标属性过滤下推；见 [c5-c9 计划分析](../query/ldbc-c5-c9-plan-analysis.md) |
 | P1 | 🟠 complex-1 | 23.2 ms vs 6.49 ms（约 3.6×） | shortestPath 后还有 OPTIONAL/collect 属性展开 | profile 后处理；绝对值 ~23 ms，收益有限 |
 | P1 | 🟡 complex-5 | 180.9 ms vs 84.5 ms（约 2.1×） | correlated `LeftJoin` 已按 512 行批处理；剩余是 89k posts/creator 的两次 Expand（per-edge 成本） | `dst IN list` 下推进 Expand，或从 174 个 friend 反向展开后与 forum 半连接 |
 | P2 | 🟠 complex-6 | 83.1 ms vs 27.0 ms（约 3.1×） | 已通过标签前向扫描从 ~9× 降到 ~3.1×；剩余是 post/tag 展开与属性读取 | 继续 profile 该路径 |
 | P2 | 🟡 complex-11 | 7.67 ms vs 3.95 ms（约 1.9×） | 多跳展开/属性读取，具体热点未拆 | profile 该路径 |
 | P2 | 🟡 complex-7 | 5.81 ms vs 3.05 ms（约 1.9×） | 大结果集的 LIKES/HAS_CREATOR 展开与 `head(collect(...))` 聚合 | 排序/聚合前裁剪；绝对值 ~6 ms |
+| P2 | 🟡 complex-12 | 158.4 ms vs 95.4 ms（约 1.7×） | VLE 逐跳 dispatch 已批量化（47,787→192）；剩余是 65,380 行 VLE 结果流 + 上层 4,086 行展开 | 后续可继续减少 VLE 结果到下游的中间行，见 §3.2 |
 
-优先级按“差距 + 下一步可执行性”综合。complex-12 与 complex-14 的绝对差距最大，且都能
-落到“减少逐跳/逐路径的存储访问”这一条主线上。
+优先级按“差距 + 下一步可执行性”综合。complex-14 的绝对差距最大；complex-12 已从 P1
+降到 P2，剩余优化空间是 VLE 结果到下游的中间行。
+
+### 3.2 complex-12 VLE 批量化（2026-11-02）
+
+`complex-12` 的 VLE `HAS_TYPE|IS_SUBCLASS_OF*0..` 在 65,380 行上产生了 47,787 次
+`ioDispatches`。优化分两层：
+
+1. **邻居标签批量解析**：原来 `hasDstLabels` 对每个邻居调用一次 `getVertexLabels`
+   （一次 storage dispatch）；改为先对当前邻接表的邻居调用
+   `getVertexLabelsBatch`，用 1,024 个一组填充 `dst_label_cache`。
+2. **frontier 邻接预取**：某个 DFS frame 的所有 child 顶点不再各调用一次
+   `scanEdges`，而是用 `scanEdgesBatch` 一次扫描并填充 `adjacency_cache`；DFS 顺序
+   和每源边顺序保持不变，只是把跨线程访问合并。
+
+同机交替 A/B（同一份 data copy、同一份 query、15 轮取 min）：
+
+```text
+baseline:  c12 min 735 ms   profile VLE 792 ms / ioDispatches 47,787
+optimized: c12 min 152 ms   profile VLE  80 ms / ioDispatches 192
+```
+
+端到端交错 A/B（5 轮）为 **158.4 ms vs neo4j 95.4 ms（1.7×）**，结果 3/3 行一致；
+`verify_ldbc_results.py` 全量 21/21 语义一致。VLE 相关 41 个单测和
+`query_executor_tests` 604/604 通过。
+
+neo4j profile 的对照：neo4j 的 `VarLengthExpand(All)` 约 65,689 行 / 131,307 dbHits，
+没有 EuGraph 的跨线程 dispatch 成本；优化后 EuGraph VLE 的 dbHits 仍较高，但 dispatch
+已不再是主瓶颈。
+
+### 3.3 complex-9 属性探测顺序（2026-11-02）
+
+GDB 采样显示 c9 的 `ProjectionExtract`/`Filter` 主要耗在
+`SyncGraphDataStore::getVertexCoalescePropertiesBatch`。该函数对 Expand 产出的
+message id 逐个 `search_near`；id 按 friend 分组，WT 页面访问跳跃。
+
+改动：批量探测前按 `VertexId` 排序探测顺序，并复用 prefix 缓冲区；结果仍按调用方
+输入下标回填，输出行序不变。新增 unsorted vids 的回归单测。
+
+同机 A/B：
+
+```text
+c9 baseline:  min 134.6 / 132.7 ms
+c9 sorted:    min 122.1 / 120.2 ms
+```
+
+端到端（5 轮）complex-9 约 **125 ms** vs neo4j 30 ms（4.2×），21/21 结果仍一致。
+complex-5 的 A/B 在噪声范围内（约 195–210 ms），不宣称收益。
+
+### 3.4 complex-14 采样结论（2026-11-02，未改代码）
+
+c14 当前约 166 ms（neo4j 18 ms）。PROFILE：`allShortestPaths` 约 16 ms；剩余主要是
+两个 `PatternComprehensionApply` 分支：每个分支把 4 条路径的 12 条关系展开成
+3,780–3,788 行，再做 `a.id/b.id` 端点过滤。GDB 采样热点是
+`ExpressionEvaluator`（PC 端点谓词/`reduce`）与 `ExpandPhysicalOp`，不是单点存储
+miss；没有低风险的单算子批量化可直接落地。
+
+下一步应做 **PC 去相关**：从 path 的端点 id 直接 index-probe `a`/`b`，或把两个 PC
+的公共路径展开合并；这需要 planner/算子层改动，不能靠局部阈值。当前 c14 未做修改。
 
 ### 3.1 通用方向
 
@@ -159,8 +218,8 @@ person/target；每条语句执行 3 次取 min，eugraph/neo4j 按 E→N→N→
    剩余是让端点 `id` 走运行时索引 seek、或对 PC 去相关。该方向对非 LDBC 查询同样适用。
 3. **属性批量/预取**：表达式求值已不在现场做 IO；裸顶点/`startNode` 等由算子边界
    `prefetch` 批量加载。path 元素继续按批预取，避免逐元素往返。
-4. **dispatch 批量化**：complex-12 的 VLE 仍有 48,577 次逐跳 dispatch；需要合并
-   游标扫描/邻接读取，减少跨线程次数，而不是继续增加线程。
+4. **dispatch 批量化**：complex-12 的 VLE 已把「逐邻居标签查询 + 逐 child 邻接扫描」
+   合并为 batch（47,787→192 dispatch）；后续可在更大 frontier 上继续复用此模式。
 5. **内存**：shortestPath/allShortestPaths 的 BFS 路径枚举有 100k 条上限，超过抛明确错误；
    sf0.1 未触发 OOM，4G cgroup 下无失控。
 
