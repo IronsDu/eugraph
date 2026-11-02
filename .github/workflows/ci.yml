@@ -9,6 +9,8 @@ on:
 env:
   # 原 code-quality.yml 的顶层 env
   BUILD_TYPE: Debug
+  # Keep the per-job ccache entries within the repository's 10 GB cache quota.
+  CCACHE_MAXSIZE: 2G
 
 jobs:
   # Ubuntu with GCC
@@ -31,6 +33,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           cmake \
+          ninja-build \
+          ccache \
           build-essential \
           git \
           pkg-config \
@@ -45,6 +49,13 @@ jobs:
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-gcc-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-gcc-
 
     - name: Cache vcpkg packages
       id: cache-vcpkg
@@ -89,7 +100,12 @@ jobs:
       # CI-only: strip final test/server binaries to keep runner disk usage
       # within GitHub's limits. Debug symbols are not needed for green/red
       # test results; local debug builds remain unchanged.
-      run: cmake --preset=release -DCMAKE_EXE_LINKER_FLAGS="-s"
+      #
+      # Build speed: this job only needs to compile-check the product, so skip
+      # the test targets (ASan/UBSan/Coverage already build them) and use
+      # Ninja + ccache. `cmake --build` on the default Makefiles generator is
+      # serial and used one core of the runner (41 min observed).
+      run: cmake --preset=release -G Ninja -DEUGRAPH_ENABLE_CCACHE=ON -DEUGRAPH_BUILD_TESTS=OFF -DCMAKE_EXE_LINKER_FLAGS="-s"
 
     - name: Verify vcpkg binary cache
       # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
@@ -108,12 +124,12 @@ jobs:
         fi
 
     - name: Build
-      run: cmake --build --preset=release
+      run: cmake --build --preset=release --parallel "$(nproc)"
 
     - name: Check library linking
       working-directory: build/release
       run: |
-        ldd eugraph_tests
+        ldd eugraph-server
         ldd libeugraph_lib.a || true
 
   # Code Coverage
@@ -135,6 +151,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           cmake \
+          ninja-build \
           build-essential \
           git \
           pkg-config \
@@ -180,7 +197,11 @@ jobs:
         ./vcpkg/vcpkg version
 
     - name: Configure CMake with Coverage
-      run: cmake --preset=coverage
+      # Ninja + parallel build: the serial Makefiles build took 45 min on the
+      # 4-vCPU runner. ccache is deliberately not enabled here: coverage
+      # instrumentation writes .gcno next to the objects and is not a good
+      # ccache candidate.
+      run: cmake --preset=coverage -G Ninja
 
     - name: Verify vcpkg binary cache
       # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
@@ -199,7 +220,7 @@ jobs:
         fi
 
     - name: Build
-      run: cmake --build --preset=coverage
+      run: cmake --build --preset=coverage --parallel "$(nproc)"
 
     - name: Run tests
       run: ctest --preset=coverage
@@ -260,6 +281,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           cmake \
+          ninja-build \
+          ccache \
           clang \
           build-essential \
           git \
@@ -275,6 +298,13 @@ jobs:
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-buildclang-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-buildclang-
 
     - name: Cache vcpkg packages
       id: cache-vcpkg
@@ -347,10 +377,12 @@ jobs:
         fi
 
     - name: Configure CMake with Clang
-      run: cmake --preset=clang-release -DVCPKG_MANIFEST_INSTALL=OFF
+      # Same reasoning as build-gcc: Ninja + ccache, and skip test targets this
+      # compile-only job never runs.
+      run: cmake --preset=clang-release -G Ninja -DEUGRAPH_ENABLE_CCACHE=ON -DEUGRAPH_BUILD_TESTS=OFF -DVCPKG_MANIFEST_INSTALL=OFF
 
     - name: Build
-      run: cmake --build --preset=clang-release
+      run: cmake --build --preset=clang-release --parallel "$(nproc)"
 
   # Format Check with clang-format
   format-check:
