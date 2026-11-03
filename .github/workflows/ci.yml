@@ -124,7 +124,10 @@ jobs:
         fi
 
     - name: Build
-      run: cmake --build --preset=release --parallel "$(nproc)"
+      # Explicit -j2 instead of -j$(nproc): on the 4-vCPU runner the heaviest
+      # phase (parallel compile + link) is where jobs get killed, so keep the
+      # concurrency modest rather than saturating every core.
+      run: cmake --build --preset=release --parallel 2
 
     - name: Check library linking
       working-directory: build/release
@@ -220,7 +223,9 @@ jobs:
         fi
 
     - name: Build
-      run: cmake --build --preset=coverage --parallel "$(nproc)"
+      # Same -j2 as build-gcc: this job builds every test binary with coverage
+      # instrumentation, so it has the heaviest link phase of all CI jobs.
+      run: cmake --build --preset=coverage --parallel 2
 
     - name: Run tests
       run: ctest --preset=coverage
@@ -382,7 +387,8 @@ jobs:
       run: cmake --preset=clang-release -G Ninja -DEUGRAPH_ENABLE_CCACHE=ON -DEUGRAPH_BUILD_TESTS=OFF -DVCPKG_MANIFEST_INSTALL=OFF
 
     - name: Build
-      run: cmake --build --preset=clang-release --parallel "$(nproc)"
+      # Same -j2 as build-gcc/coverage: see build-gcc for the rationale.
+      run: cmake --build --preset=clang-release --parallel 2
 
   # Format Check with clang-format
   format-check:
