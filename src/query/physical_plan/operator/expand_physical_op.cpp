@@ -1,7 +1,11 @@
 #include "query/physical_plan/operator/expand_physical_op.hpp"
 
 #include "common/types/graph_types.hpp"
+
+#include <algorithm>
+
 #include "query/dataset/row.hpp"
+#include <array>
 
 namespace eugraph {
 namespace compute {
@@ -254,15 +258,32 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 }
                 co_return;
             }
+            if (dst_bound_ && !edge_bound_ && !scan_filters.empty() &&
+                std::all_of(scan_filters.begin(), scan_filters.end(),
+                            [](const std::optional<EdgeLabelId>& f) { return f.has_value(); })) {
+                // Correlated chain endpoint: the destination is already known,
+                // so seek the exact `{src}{dir}{label}{neighbor}` entry instead
+                // of scanning every edge of the source and filtering it out.
+                const VertexId bound = vertexIdFromValue(chunk->columns[dst_col_idx_].getValue(src_row));
+                if (bound == INVALID_VERTEX_ID)
+                    co_return;
+                for (const auto& label_filter : scan_filters) {
+                    auto edge_gen =
+                        cancellable(store_.scanEdgesExact(src_id, scan_dir, *label_filter, bound, edge_scratch_));
+                    while (auto edge_batch = co_await edge_gen.next()) {
+                        for (const auto& entry : *edge_batch) {
+                            const bool phy_out = (scan_dir == Direction::OUT);
+                            edges.push_back(
+                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
+                        }
+                    }
+                }
+                co_return;
+            }
             for (const auto& label_filter : scan_filters) {
                 auto edge_gen = cancellable(store_.scanEdges(src_id, scan_dir, label_filter, edge_scratch_));
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
-                        if (dst_bound_) {
-                            const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
-                            if (vertexIdFromValue(bval) != entry.neighbor_id)
-                                continue;
-                        }
                         if (edge_bound_) {
                             const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
                             if (edgeIdFromValue(eval) != entry.edge_id)
@@ -279,7 +300,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
 
         bool batched = false;
         bool labels_pre_filtered = false;
-        if (!allowed_filter && !dst_bound_ && !edge_bound_ && !split_undirected) {
+        if (!allowed_filter && !dst_bound_ && !edge_bound_) {
             std::vector<VertexId> src_ids;
             std::unordered_map<VertexId, std::vector<size_t>> rows_of_src;
             std::unordered_set<VertexId> seen_src;
@@ -292,21 +313,39 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 }
             }
             if (!src_ids.empty()) {
-                const bool use_cache = neighbor_cache_enabled_ && !neighbor_cache_disabled_;
+                const bool use_cache = neighbor_cache_enabled_ && !neighbor_cache_disabled_ && !split_undirected;
                 if (!use_cache) {
                     for (const auto& label_filter : scan_filters) {
-                        auto batch_gen = cancellable(store_.scanEdgesBatch(src_ids, dir, label_filter));
-                        while (auto batch = co_await batch_gen.next()) {
-                            for (const auto& be : *batch) {
-                                auto row_it = rows_of_src.find(be.src_id);
-                                if (row_it == rows_of_src.end())
-                                    continue;
-                                bool phy_out = (dir == Direction::OUT);
-                                for (size_t src_row : row_it->second)
-                                    edges.push_back({src_row, be.entry.neighbor_id, be.entry.edge_id,
-                                                     be.entry.edge_label_id, be.entry.seq, phy_out});
+                        // UNDIRECTED scans OUT and IN separately so each EdgeKey
+                        // keeps the stored physical direction.  Batched, the two
+                        // passes interleave by source only after a stable sort.
+                        const std::array<Direction, 2> dirs =
+                            split_undirected ? std::array<Direction, 2>{Direction::OUT, Direction::IN}
+                                             : std::array<Direction, 2>{dir, dir};
+                        const size_t passes = split_undirected ? 2 : 1;
+                        for (size_t pass = 0; pass < passes; ++pass) {
+                            auto batch_gen = cancellable(store_.scanEdgesBatch(src_ids, dirs[pass], label_filter));
+                            while (auto batch = co_await batch_gen.next()) {
+                                for (const auto& be : *batch) {
+                                    auto row_it = rows_of_src.find(be.src_id);
+                                    if (row_it == rows_of_src.end())
+                                        continue;
+                                    const bool phy_out = (dirs[pass] == Direction::OUT);
+                                    // A self-loop appears in both the OUT and
+                                    // IN adjacency; the per-row path keeps one.
+                                    if (!phy_out && be.entry.neighbor_id == be.src_id)
+                                        continue;
+                                    for (size_t src_row : row_it->second)
+                                        edges.push_back({src_row, be.entry.neighbor_id, be.entry.edge_id,
+                                                         be.entry.edge_label_id, be.entry.seq, phy_out});
+                                }
                             }
                         }
+                    }
+                    if (split_undirected && edges.size() > 1) {
+                        std::stable_sort(
+                            edges.begin(), edges.end(),
+                            [](const EdgeEntryScratch& a, const EdgeEntryScratch& b) { return a.src_row < b.src_row; });
                     }
                 } else {
                     // Correlated (PC) re-execution expands the same anchor once

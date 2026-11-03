@@ -1,5 +1,9 @@
 # LDBC complex-5 / complex-9 计划分析
 
+> **2026-11-03 更新**：顶点摘要、批量 SemiJoin/无向 Expand、`dst_bound` 精确 seek 等已落地；
+> 最新同机全量数据见 [ldbc-snb-sf0.1-comparison.md](../benchmark/ldbc-snb-sf0.1-comparison.md) §2。
+> 本文保留当时的定位与推理，作为历史记录；绝对值不要按本文引用。
+
 > complex-14 的优化见 [pattern-comprehension-anchor-label-scan.md](pattern-comprehension-anchor-label-scan.md)。
 > 本文记录 complex-5/9 的瓶颈、实施结果与下一步方向；2026-10-25 已提交 c5/c9 的算子优化。
 >

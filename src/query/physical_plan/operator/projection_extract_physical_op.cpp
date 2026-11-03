@@ -397,6 +397,13 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         vid = static_cast<VertexId>(std::get<int64_t>(v));
                     if (vid == INVALID_VERTEX_ID)
                         continue;
+                    if (read_only_) {
+                        auto cached = persistent_ctor_cache_.find(vid);
+                        if (cached != persistent_ctor_cache_.end()) {
+                            vertex_ctor_cache[i][row] = cached->second;
+                            continue;
+                        }
+                    }
                     ref_vids.push_back(vid);
                     ref_rows.push_back(row);
                 }
@@ -433,6 +440,18 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     for (size_t j = 0; j < ids.size() && j < props.size(); ++j) {
                         if (props[j].has_value())
                             by_vid[ids[j]]->properties[lid] = std::move(*props[j]);
+                    }
+                }
+
+                if (read_only_) {
+                    // Bounded: a PC re-executes its sub-plan per row; caching the
+                    // constant correlated vertices here avoids rebuilding them
+                    // (and re-reading their properties) on every execution.
+                    constexpr size_t kPersistentCtorLimit = 8192;
+                    for (const auto& [vid, vv] : by_vid) {
+                        if (persistent_ctor_cache_.size() >= kPersistentCtorLimit)
+                            break;
+                        persistent_ctor_cache_.emplace(vid, vv);
                     }
                 }
 

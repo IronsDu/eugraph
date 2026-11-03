@@ -205,6 +205,10 @@ public:
     virtual void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
                                 std::optional<EdgeLabelId> label_filter,
                                 const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) = 0;
+    /// Exact `{src}{dir}{label}{neighbor}` lookup: one B-tree seek instead of
+    /// scanning every edge of `src` and filtering by neighbour.
+    virtual void scanEdgesExact(GraphSession& session, VertexId vid, Direction direction, EdgeLabelId label_id,
+                                VertexId neighbor_id, const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
     virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid,
                                                                   Direction direction,
                                                                   std::optional<EdgeLabelId> label_filter) = 0;

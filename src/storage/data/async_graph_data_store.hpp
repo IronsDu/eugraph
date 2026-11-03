@@ -329,6 +329,23 @@ public:
         }
     }
 
+    folly::coro::AsyncGenerator<std::span<const ISyncGraphDataStore::EdgeIndexEntry>>
+    scanEdgesExact(VertexId vid, Direction direction, EdgeLabelId label_id, VertexId neighbor_id,
+                   std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out) override {
+        auto entries = co_await dispatch([this, vid, direction, label_id, neighbor_id]() {
+            std::vector<ISyncGraphDataStore::EdgeIndexEntry> result;
+            store_.scanEdgesExact(session_, vid, direction, label_id, neighbor_id,
+                                  [&result](const ISyncGraphDataStore::EdgeIndexEntry& entry) {
+                                      result.push_back(entry);
+                                      return true;
+                                  });
+            recordWtScanRows(result.size());
+            return result;
+        });
+        out = std::move(entries);
+        co_yield std::span<const ISyncGraphDataStore::EdgeIndexEntry>(out);
+    }
+
     // ==================== Edge Type Scan ====================
 
     folly::coro::AsyncGenerator<std::span<const ISyncGraphDataStore::EdgeTypeIndexEntry>>

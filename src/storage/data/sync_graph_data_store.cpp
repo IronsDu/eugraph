@@ -20,6 +20,136 @@ namespace eugraph {
 
 namespace {
 
+namespace {
+
+// ==================== Vertex summary (read acceleration) ====================
+//
+// table:vertex_summary, keyed by {vid}, holds the vertex's labels plus every
+// property that encodes to at most kVertexSummaryInlineMax bytes, so a single
+// point read answers almost all `ProjectionExtract` candidate probes.  Larger
+// properties are still listed (as "present but omitted") so a reader can tell
+// "null" from "not inlined" and fall back to the per-property rows.
+//
+// The summary is a cache, not the source of truth: every mutation other than a
+// fresh insert removes it, and readers fall back to the canonical property rows
+// when it is missing or incomplete.
+
+constexpr uint32_t kVertexSummaryOmitted = 0xFFFFFFFFu;
+constexpr size_t kVertexSummaryInlineMax = 32;
+constexpr uint8_t kVertexSummaryVersion = 1;
+
+void appendU16(std::string& out, uint16_t v) {
+    out.push_back(static_cast<char>((v >> 8) & 0xFF));
+    out.push_back(static_cast<char>(v & 0xFF));
+}
+
+void appendU32(std::string& out, uint32_t v) {
+    out.push_back(static_cast<char>((v >> 24) & 0xFF));
+    out.push_back(static_cast<char>((v >> 16) & 0xFF));
+    out.push_back(static_cast<char>((v >> 8) & 0xFF));
+    out.push_back(static_cast<char>(v & 0xFF));
+}
+
+uint16_t readU16(std::string_view v, size_t off) {
+    return static_cast<uint16_t>((static_cast<uint16_t>(static_cast<uint8_t>(v[off])) << 8) |
+                                 static_cast<uint8_t>(v[off + 1]));
+}
+
+uint32_t readU32(std::string_view v, size_t off) {
+    return (static_cast<uint32_t>(static_cast<uint8_t>(v[off])) << 24) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(v[off + 1])) << 16) |
+           (static_cast<uint32_t>(static_cast<uint8_t>(v[off + 2])) << 8) |
+           static_cast<uint32_t>(static_cast<uint8_t>(v[off + 3]));
+}
+
+std::string encodeVertexSummary(std::span<const std::pair<LabelId, Properties>> label_props) {
+    std::string labels;
+    std::string entries;
+    uint16_t label_count = 0;
+    uint16_t entry_count = 0;
+    for (const auto& [label_id, props] : label_props) {
+        if (label_id == INVALID_LABEL_ID)
+            continue;
+        appendU16(labels, label_id);
+        ++label_count;
+        for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
+            if (!props[prop_id].has_value())
+                continue;
+            auto encoded = ValueCodec::encode(props[prop_id].value());
+            appendU16(entries, label_id);
+            appendU16(entries, prop_id);
+            if (encoded.size() <= kVertexSummaryInlineMax) {
+                appendU32(entries, static_cast<uint32_t>(encoded.size()));
+                entries.append(encoded);
+            } else {
+                appendU32(entries, kVertexSummaryOmitted);
+            }
+            ++entry_count;
+        }
+    }
+    if (label_count == 0 && entry_count == 0)
+        return {};
+    std::string out;
+    out.reserve(1 + 2 + labels.size() + 2 + entries.size());
+    out.push_back(static_cast<char>(kVertexSummaryVersion));
+    appendU16(out, label_count);
+    out.append(labels);
+    appendU16(out, entry_count);
+    out.append(entries);
+    return out;
+}
+
+struct DecodedVertexSummary {
+    std::vector<LabelId> labels;
+    // (prop_key, inlined bytes); empty view = present but not inlined.  A flat
+    // vector beats a hash map here: a vertex has a handful of entries and the
+    // structure is reused across tens of thousands of probes.
+    std::vector<std::pair<uint32_t, std::string_view>> props;
+
+    void reset() {
+        labels.clear();
+        props.clear();
+    }
+};
+
+bool decodeVertexSummary(std::string_view value, DecodedVertexSummary& out) {
+    out.reset();
+    if (value.size() < 3 || static_cast<uint8_t>(value[0]) != kVertexSummaryVersion)
+        return false;
+    size_t off = 1;
+    const uint16_t label_count = readU16(value, off);
+    off += 2;
+    if (off + static_cast<size_t>(label_count) * 2 > value.size())
+        return false;
+    for (uint16_t i = 0; i < label_count; ++i) {
+        out.labels.push_back(readU16(value, off));
+        off += 2;
+    }
+    if (off + 2 > value.size())
+        return false;
+    const uint16_t entry_count = readU16(value, off);
+    off += 2;
+    for (uint16_t i = 0; i < entry_count; ++i) {
+        if (off + 8 > value.size())
+            return false;
+        const uint16_t label_id = readU16(value, off);
+        const uint16_t prop_id = readU16(value, off + 2);
+        const uint32_t len = readU32(value, off + 4);
+        off += 8;
+        std::string_view bytes;
+        if (len != kVertexSummaryOmitted) {
+            if (off + len > value.size())
+                return false;
+            bytes = value.substr(off, len);
+            off += len;
+        }
+        out.props.emplace_back((static_cast<uint32_t>(label_id) << 16) | prop_id, bytes);
+    }
+    return true;
+}
+
+} // namespace
+
 void setItem(WT_CURSOR* cursor, std::string_view data) {
     WT_ITEM item;
     std::memset(&item, 0, sizeof(item));
@@ -75,7 +205,8 @@ bool SyncGraphDataStore::ensure_tables() {
         return false;
     }
     WtSession session = conn().make_session();
-    return schema_ddl_.ensure_tables(session, {TABLE_VERTEX_DATA, TABLE_EDGE_INDEX, TABLE_VERTEX_EXISTENCE});
+    return schema_ddl_.ensure_tables(
+        session, {TABLE_VERTEX_DATA, TABLE_EDGE_INDEX, TABLE_VERTEX_EXISTENCE, TABLE_VERTEX_SUMMARY});
 }
 
 bool SyncGraphDataStore::createLabel(LabelId label_id) {
@@ -108,6 +239,9 @@ bool SyncGraphDataStore::dropLabel(LabelId label_id) {
                        });
         for (const auto& key : prop_keys)
             wt::table_del(session.get(), TABLE_VERTEX_DATA, key);
+        // The summary caches this label/property group; DROP LABEL bypasses
+        // the per-vertex mutators, so invalidate it here explicitly.
+        wt::table_del(session.get(), TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
     }
     return schema_ddl_.drop_tables(session, {label_fwd}, SchemaDdl::DropMode::CheckpointFirst);
 }
@@ -191,6 +325,24 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
         }
     }
 
+    // Freshly inserted vertices need no further validation, so publish the
+    // summary that lets a single point read serve coalesce probes.  Mutations
+    // below remove it; readers then fall back to the canonical rows.
+    // A second insertVertex for the same vid adds labels/properties (the test
+    // and the multi-label CREATE path both do this).  The summary holds one
+    // label/property group, so a merge would be required to stay complete -
+    // cheaper and always correct: drop the cached summary and let readers fall
+    // back to the canonical rows.
+    auto summary_key = KeyCodec::encodeVertexSummaryKey(vid);
+    if (wt::table_get(gs, TABLE_VERTEX_SUMMARY, summary_key).has_value()) {
+        if (!wt::table_del(gs, TABLE_VERTEX_SUMMARY, summary_key))
+            return false;
+    } else {
+        auto summary = encodeVertexSummary(label_props);
+        if (!summary.empty() && !wt::table_put(gs, TABLE_VERTEX_SUMMARY, summary_key, summary))
+            return false;
+    }
+
     return true;
 }
 
@@ -222,6 +374,7 @@ bool SyncGraphDataStore::deleteVertex(GraphSession& gs, VertexId vid) {
         wt::table_del(gs, TABLE_VERTEX_DATA, key);
 
     wt::table_del(gs, TABLE_VERTEX_EXISTENCE, KeyCodec::encodeVertexExistenceKey(vid));
+    wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
 
     return true;
 }
@@ -330,7 +483,10 @@ bool SyncGraphDataStore::putVertexProperty(GraphSession& gs, VertexId vid, Label
         return false;
 
     auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
-    return wt::table_put(gs, TABLE_VERTEX_DATA, key, ValueCodec::encode(value));
+    if (!wt::table_put(gs, TABLE_VERTEX_DATA, key, ValueCodec::encode(value)))
+        return false;
+    // The cached summary is now stale; drop it (readers fall back).
+    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
 }
 
 bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, LabelId label_id,
@@ -346,7 +502,7 @@ bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, Lab
                 return false;
         }
     }
-    return true;
+    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
 }
 
 bool SyncGraphDataStore::deleteVertexProperty(GraphSession& gs, VertexId vid, LabelId label_id, uint16_t prop_id) {
@@ -355,7 +511,9 @@ bool SyncGraphDataStore::deleteVertexProperty(GraphSession& gs, VertexId vid, La
         return false;
 
     auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
-    return wt::table_del(gs, TABLE_VERTEX_DATA, key);
+    if (!wt::table_del(gs, TABLE_VERTEX_DATA, key))
+        return false;
+    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
 }
 
 // ==================== Vertex Labels ====================
@@ -402,9 +560,34 @@ std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphSession& g
         return out;
     }
     auto* c = cursor.get();
+    CursorHandle summary_cursor = gs.acquire_scan_cursor(TABLE_VERTEX_SUMMARY);
+    if (!summary_cursor) {
+        const int error = summary_cursor.error();
+        gs.fail_from_wt(error, "getVertexLabelsBatch: cannot open cursor on table:vertex_summary");
+        return out;
+    }
+    auto* sc = summary_cursor.get();
+    DecodedVertexSummary summary;
+    summary.labels.reserve(8);
+    summary.props.reserve(16);
     std::string prefix;
     for (size_t i = 0; i < unique.size(); ++i) {
         LabelIdSet& labels = all_unique ? out[i] : unique_out[i];
+        // Labels are part of the vertex summary, so a single point read answers
+        // the common case (Expand destination label filters, VLE neighbours).
+        setItem(sc, KeyCodec::encodeVertexSummaryKey(unique[i]));
+        int summary_exact = 0;
+        int summary_ret = (recordWtSearchNear(), sc->search_near(sc, &summary_exact));
+        if (summary_ret == 0 && summary_exact == 0) {
+            if (decodeVertexSummary(getValueViewFromCursor(sc), summary)) {
+                for (LabelId label_id : summary.labels)
+                    labels.insert(label_id);
+                continue;
+            }
+        } else if (summary_ret != 0 && summary_ret != WT_NOTFOUND) {
+            gs.fail_from_wt(summary_ret, "getVertexLabelsBatch: summary search_near failed");
+            return out;
+        }
         prefix = KeyCodec::encodeVertexDataLabelPrefix(unique[i]);
         setItem(c, prefix);
         int exact = 0;
@@ -592,6 +775,16 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
         return out;
     }
     auto* c = cursor.get();
+    // Separate compact table: the summary keys live in a ~20 MB tree, so a
+    // 53k-probe batch stays inside a shallow, fully cached B-tree instead of
+    // descending the much larger vertex_data tree.
+    CursorHandle summary_cursor = gs.acquire_scan_cursor(TABLE_VERTEX_SUMMARY);
+    if (!summary_cursor) {
+        const int error = summary_cursor.error();
+        gs.fail_from_wt(error, "getVertexCoalescePropertiesBatch: cannot open cursor on table:vertex_summary");
+        return out;
+    }
+    auto* sc = summary_cursor.get();
     // Sort the probe order, not the output: Expand produces message ids grouped
     // by friend, so the original order jumps around vertex_data. Reusing the
     // prefix buffer and probing in id order cuts allocations/page misses.
@@ -602,10 +795,63 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
     }
     // Reuse one candidate buffer across all vids: c9 calls this for 53k vertices.
     std::vector<std::optional<PropertyValue>> found(candidates.size());
+    DecodedVertexSummary summary;
+    summary.labels.reserve(8);
+    summary.props.reserve(16);
     std::string prefix;
     prefix.reserve(64);
     for (size_t out_index : order) {
         const VertexId vid = vids[out_index];
+        std::fill(found.begin(), found.end(), std::nullopt);
+
+        // Fast path: one point read of the vertex summary answers every
+        // candidate that is small enough to be inlined.  Only fall back to the
+        // per-property prefix scan when a requested property is large/omitted
+        // or the summary is absent (old data, or a vertex mutated after load).
+        bool resolved = true;
+        {
+            setItem(sc, KeyCodec::encodeVertexSummaryKey(vid));
+            int summary_exact = 0;
+            int summary_ret = (recordWtSearchNear(), sc->search_near(sc, &summary_exact));
+            if (summary_ret == 0 && summary_exact == 0) {
+                if (decodeVertexSummary(getValueViewFromCursor(sc), summary)) {
+                    for (size_t i = 0; i < candidates.size(); ++i) {
+                        const auto& cand = candidates[i];
+                        if (std::find(summary.labels.begin(), summary.labels.end(), cand.first) == summary.labels.end())
+                            continue; // label absent -> candidate is NULL
+                        uint32_t key_id = (static_cast<uint32_t>(cand.first) << 16) | cand.second;
+                        const std::string_view* bytes = nullptr;
+                        for (const auto& [k, v] : summary.props) {
+                            if (k == key_id) {
+                                bytes = &v;
+                                break;
+                            }
+                        }
+                        if (!bytes)
+                            continue; // property not set -> NULL
+                        if (bytes->empty()) {
+                            resolved = false; // present but not inlined: need the row
+                            break;
+                        }
+                        found[i] = ValueCodec::decode(*bytes);
+                    }
+                } else {
+                    resolved = false;
+                }
+            } else if (summary_ret != 0 && summary_ret != WT_NOTFOUND) {
+                gs.fail_from_wt(summary_ret, "getVertexCoalescePropertiesBatch: summary search_near failed");
+                return out;
+            } else {
+                resolved = false; // no summary
+            }
+        }
+        if (resolved) {
+            for (auto& v : found)
+                if (v)
+                    out[out_index].push_back(std::move(*v));
+            continue;
+        }
+
         std::fill(found.begin(), found.end(), std::nullopt);
         prefix = KeyCodec::encodeVertexDataPropPrefix(vid);
         setItem(c, prefix);
@@ -630,6 +876,7 @@ SyncGraphDataStore::getVertexCoalescePropertiesBatch(GraphSession& gs, const std
                 found[it->second] = ValueCodec::decode(getValueViewFromCursor(c));
             ret = c->next(c);
         }
+
         if (ret != 0 && ret != WT_NOTFOUND) {
             gs.fail_from_wt(ret, "getVertexCoalescePropertiesBatch: next failed");
             return out;
@@ -662,16 +909,69 @@ SyncGraphDataStore::getVertexCoalesceDataBatch(GraphSession& gs, const std::vect
         return out;
     }
     auto* c = cursor.get();
+    CursorHandle summary_cursor = gs.acquire_scan_cursor(TABLE_VERTEX_SUMMARY);
+    if (!summary_cursor) {
+        const int error = summary_cursor.error();
+        gs.fail_from_wt(error, "getVertexCoalesceDataBatch: cannot open cursor on table:vertex_summary");
+        return out;
+    }
+    auto* sc = summary_cursor.get();
     std::vector<size_t> order(vids.size());
     std::iota(order.begin(), order.end(), size_t{0});
     if (vids.size() > 64) {
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return vids[a] < vids[b]; });
     }
     std::vector<std::optional<PropertyValue>> found(candidates.size());
+    DecodedVertexSummary summary;
+    summary.labels.reserve(8);
+    summary.props.reserve(16);
     std::string prefix;
     prefix.reserve(64);
     for (size_t out_index : order) {
         const VertexId vid = vids[out_index];
+        std::fill(found.begin(), found.end(), std::nullopt);
+
+        // Fast path: summary row carries labels + inlined properties.
+        bool summary_resolved = false;
+        {
+            setItem(sc, KeyCodec::encodeVertexSummaryKey(vid));
+            int summary_exact = 0;
+            int summary_ret = (recordWtSearchNear(), sc->search_near(sc, &summary_exact));
+            if (summary_ret == 0 && summary_exact == 0 && decodeVertexSummary(getValueViewFromCursor(sc), summary)) {
+                summary_resolved = true;
+                for (LabelId label_id : summary.labels)
+                    out[out_index].labels.insert(label_id);
+                for (size_t i = 0; i < candidates.size(); ++i) {
+                    const auto& cand = candidates[i];
+                    if (std::find(summary.labels.begin(), summary.labels.end(), cand.first) == summary.labels.end())
+                        continue;
+                    uint32_t key_id = (static_cast<uint32_t>(cand.first) << 16) | cand.second;
+                    const std::string_view* bytes = nullptr;
+                    for (const auto& [k, v] : summary.props) {
+                        if (k == key_id) {
+                            bytes = &v;
+                            break;
+                        }
+                    }
+                    if (!bytes)
+                        continue;
+                    if (bytes->empty()) {
+                        summary_resolved = false; // large/omitted -> full scan
+                        break;
+                    }
+                    found[i] = ValueCodec::decode(*bytes);
+                }
+            } else if (summary_ret != 0 && summary_ret != WT_NOTFOUND) {
+                gs.fail_from_wt(summary_ret, "getVertexCoalesceDataBatch: summary search_near failed");
+                return out;
+            }
+        }
+        if (summary_resolved) {
+            for (auto& v : found)
+                if (v)
+                    out[out_index].values.push_back(std::move(*v));
+            continue;
+        }
         std::fill(found.begin(), found.end(), std::nullopt);
         prefix = KeyCodec::encodeVertexDataVertexPrefix(vid);
         setItem(c, prefix);
@@ -726,7 +1026,9 @@ bool SyncGraphDataStore::addVertexLabel(GraphSession& gs, VertexId vid, LabelId 
         return false;
 
     auto lf_key = KeyCodec::encodeLabelForwardKey(vid);
-    return wt::table_put(gs, labelFwdTable(label_id), lf_key, {});
+    if (!wt::table_put(gs, labelFwdTable(label_id), lf_key, {}))
+        return false;
+    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
 }
 
 bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, LabelId label_id) {
@@ -742,6 +1044,7 @@ bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, Label
         wt::table_del(gs, TABLE_VERTEX_DATA, key);
         return true;
     });
+    wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
 
     return true;
 }
@@ -1142,6 +1445,29 @@ void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<Vert
             return;
         }
     }
+}
+
+void SyncGraphDataStore::scanEdgesExact(GraphSession& gs, VertexId vid, Direction direction, EdgeLabelId label_id,
+                                        VertexId neighbor_id,
+                                        const std::function<bool(const EdgeIndexEntry&)>& callback) {
+    WT_SESSION* session = gs.wt_session();
+    if (!session)
+        return;
+    if (adjacency_cache_capacity_ > 0) {
+        // COMPLETE adjacency lives outside edge_index; keep the old scan.
+        scanEdges(gs, vid, direction, label_id, [&](const EdgeIndexEntry& e) {
+            if (e.neighbor_id != neighbor_id)
+                return true;
+            return callback(e);
+        });
+        return;
+    }
+    auto prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, label_id, neighbor_id);
+    wt::table_scan(gs, TABLE_EDGE_INDEX, prefix, [&](std::string_view key, std::string_view value) {
+        auto decoded = KeyCodec::decodeEdgeIndexKey(key);
+        EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(value)};
+        return callback(entry);
+    });
 }
 
 void SyncGraphDataStore::scanEdgesByType(GraphSession& gs, EdgeLabelId label_id, std::optional<VertexId> src_filter,

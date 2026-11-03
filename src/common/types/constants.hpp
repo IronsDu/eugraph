@@ -15,6 +15,8 @@ constexpr const char* TABLE_METADATA = "table:metadata";
 // 全局 vertex 主表：记录所有存活 vertex 的 vid（含无标签 vertex）。
 // 历史上由 TABLE_PK_REVERSE 担任，被 #34 移除后无标签 vertex 对 MATCH (n) 不可见。
 constexpr const char* TABLE_VERTEX_EXISTENCE = "table:vertex_existence";
+// 顶点摘要表：{vid} -> labels + 小属性（读加速，可变缓存）
+constexpr const char* TABLE_VERTEX_SUMMARY = "table:vertex_summary";
 
 // 按 label_id 分表（dropLabel 时 drop）
 inline std::string labelFwdTable(LabelId id) {

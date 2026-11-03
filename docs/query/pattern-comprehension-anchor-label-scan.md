@@ -1,5 +1,9 @@
 # PatternComprehension / EXISTS 锚点标签扫描
 
+> **2026-11-03 更新**：顶点摘要、批量 SemiJoin/无向 Expand、`dst_bound` 精确 seek 等已落地；
+> 最新同机全量数据见 [ldbc-snb-sf0.1-comparison.md](../benchmark/ldbc-snb-sf0.1-comparison.md) §2。
+> 本文保留当时的定位与推理，作为历史记录；绝对值不要按本文引用。
+
 ## 问题
 
 complex-14 的 pattern comprehension：

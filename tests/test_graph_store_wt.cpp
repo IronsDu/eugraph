@@ -982,6 +982,95 @@ TEST_F(WTGraphStoreTest, CoalescePropertiesBatchAcrossLabels) {
     EXPECT_TRUE(empty_vids.empty());
 }
 
+TEST_F(WTGraphStoreTest, SummaryIsInvalidatedByPropertyUpdate) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 940,
+        std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("A")}, {1, int64_t(1)}})},
+                                                    {2, makeProps({{0, std::string("B")}})}}));
+    commit(txn);
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}, {2, 0}, {1, 1}};
+    auto before = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {940}, candidates);
+    ASSERT_EQ(before.size(), 1u);
+    ASSERT_EQ(before[0].size(), 3u);
+    EXPECT_EQ(std::get<std::string>(before[0][0]), "A");
+
+    auto txn2 = writeTxn();
+    ASSERT_TRUE(store_->putVertexProperty(txn2, 940, 1, 0, PropertyValue(std::string("A2"))));
+    commit(txn2);
+
+    // The summary must be gone; the canonical row is the source of truth.
+    auto after = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {940}, candidates);
+    ASSERT_EQ(after.size(), 1u);
+    ASSERT_EQ(after[0].size(), 3u);
+    EXPECT_EQ(std::get<std::string>(after[0][0]), "A2");
+
+    auto labels = store_->getVertexLabelsBatch(store_->autoSession(), {940});
+    ASSERT_EQ(labels.size(), 1u);
+    EXPECT_TRUE(labels[0].contains(1));
+    EXPECT_TRUE(labels[0].contains(2));
+}
+
+TEST_F(WTGraphStoreTest, SummaryTreatsLaterDeclaredPropertyAsNull) {
+    // Models "label definition grows after data exists": the vertex was
+    // inserted with property 0 only; property 1 is declared later and has no
+    // value on this vertex.  The summary (written at insert) has no entry for
+    // property 1, which must read as NULL - the same as the canonical rows.
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, 942, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("A")}})}}));
+    commit(txn);
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}, {1, 1}};
+    auto before = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {942}, candidates);
+    ASSERT_EQ(before.size(), 1u);
+    ASSERT_EQ(before[0].size(), 1u) << "not-yet-set property must not materialize";
+    EXPECT_EQ(std::get<std::string>(before[0][0]), "A");
+
+    // Populating the newly declared property must invalidate the summary, so
+    // the next probe sees both values.
+    auto txn2 = writeTxn();
+    ASSERT_TRUE(store_->putVertexProperty(txn2, 942, 1, 1, PropertyValue(int64_t(7))));
+    commit(txn2);
+
+    auto after = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {942}, candidates);
+    ASSERT_EQ(after.size(), 1u);
+    ASSERT_EQ(after[0].size(), 2u);
+    EXPECT_EQ(std::get<std::string>(after[0][0]), "A");
+    EXPECT_EQ(std::get<int64_t>(after[0][1]), 7);
+}
+
+TEST_F(WTGraphStoreTest, SummaryIsInvalidatedByDropLabel) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(
+        store_->insertVertex(txn, 941,
+                             std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("A")}})},
+                                                                         {2, makeProps({{0, std::string("B")}})}}));
+    commit(txn);
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}, {2, 0}};
+    auto before = store_->getVertexCoalesceDataBatch(store_->autoSession(), {941}, candidates);
+    ASSERT_EQ(before.size(), 1u);
+    ASSERT_EQ(before[0].values.size(), 2u);
+    EXPECT_TRUE(before[0].labels.contains(2));
+
+    ASSERT_TRUE(store_->dropLabel(2));
+
+    // DROP LABEL bypasses the per-vertex mutators; the cached summary must not
+    // resurrect the dropped label or its property.
+    auto after = store_->getVertexCoalesceDataBatch(store_->autoSession(), {941}, candidates);
+    ASSERT_EQ(after.size(), 1u);
+    EXPECT_FALSE(after[0].labels.contains(2));
+    ASSERT_EQ(after[0].values.size(), 1u) << "dropped label's property came back from the summary";
+    EXPECT_EQ(std::get<std::string>(after[0].values[0]), "A");
+
+    auto labels = store_->getVertexLabelsBatch(store_->autoSession(), {941});
+    ASSERT_EQ(labels.size(), 1u);
+    EXPECT_TRUE(labels[0].contains(1));
+    EXPECT_FALSE(labels[0].contains(2));
+}
+
 TEST_F(WTGraphStoreTest, ScanEdgesBatchCoversSourcesAndDirections) {
     auto txn = writeTxn();
     ASSERT_TRUE(store_->insertEdge(txn, 13000, 960, 961, 1, 0, Properties{}));
