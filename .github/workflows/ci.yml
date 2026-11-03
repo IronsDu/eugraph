@@ -9,8 +9,13 @@ on:
 env:
   # 原 code-quality.yml 的顶层 env
   BUILD_TYPE: Debug
-  # Keep the per-job ccache entries within the repository's 10 GB cache quota.
-  CCACHE_MAXSIZE: 2G
+  # Quota math: the 10 GB repository cache holds 4 ccache entries (GCC, Clang,
+  # ASan, UBSan) plus 5 vcpkg archive entries (~1 GB each). At 2 GB per ccache
+  # entry that is ~13 GB, so the entries evicted each other and the cache went
+  # cold every couple of commits (ASan rebuild: 20m -> 35m). 1 GB + compression
+  # keeps the set at ~9 GB, so a warm cache survives.
+  CCACHE_MAXSIZE: 1G
+  CCACHE_COMPRESS: true
 
 jobs:
   # Ubuntu with GCC
@@ -128,6 +133,11 @@ jobs:
       # phase (parallel compile + link) is where jobs get killed, so keep the
       # concurrency modest rather than saturating every core.
       run: cmake --build --preset=release --parallel 2
+
+    - name: ccache stats
+      # Judgement for "is the cache actually warm": a hit rate near 0% or a tiny
+      # cache size means the entry was evicted by the quota, not a slow build.
+      run: ccache -s
 
     - name: Check library linking
       working-directory: build/release
@@ -390,6 +400,10 @@ jobs:
       # Same -j2 as build-gcc/coverage: see build-gcc for the rationale.
       run: cmake --build --preset=clang-release --parallel 2
 
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
+
   # Format Check with clang-format
   format-check:
     name: Format Check
@@ -550,6 +564,10 @@ jobs:
       run: |
         cd build
         ninja -j$(nproc)
+
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
 
     - name: Package ASan TCK binaries
       run: |
@@ -822,6 +840,10 @@ jobs:
       run: |
         cd build
         ninja -j$(nproc)
+
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
 
     - name: Run tests with UBSan
       working-directory: build
