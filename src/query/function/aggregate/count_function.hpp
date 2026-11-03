@@ -12,7 +12,7 @@ namespace aggregate {
 /// Running state for count aggregation.
 struct CountState : AggStateBase {
     int64_t value = 0;
-    void add(const Value& /*arg*/) {
+    void add() {
         ++value;
     }
     Value finalize() const {

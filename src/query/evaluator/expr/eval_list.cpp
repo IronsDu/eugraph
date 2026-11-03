@@ -7,13 +7,25 @@ namespace compute {
 
 ExpressionEvaluator::EvalResult ExpressionEvaluator::evalList(const binder::BoundList& list, const DataChunk& input) {
     size_t count = input.numRows();
+
+    // Evaluate each element expression once per chunk, not once per (row,
+    // element). The old shape called evaluateInternal() inside the row loop;
+    // for a literal list of N elements over R rows it performed R*N evaluations
+    // and appended R*N temp columns.
+    auto& s = scratch();
+    auto& entry_cols = s.entry_cols;
+    entry_cols.clear();
+    entry_cols.reserve(list.elements.size());
+    for (const auto& elem : list.elements)
+        entry_cols.push_back(evaluateInternal(elem, input).column);
+
     auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
     for (size_t i = 0; i < count; ++i) {
         ListValue lv;
-        for (const auto& elem : list.elements) {
-            auto elem_eval = evaluateInternal(elem, input);
-            if (elem_eval.column && !elem_eval.column->isNull(i)) {
-                lv.elements.push_back(ValueStorage{elem_eval.column->getValue(i)});
+        lv.elements.reserve(entry_cols.size());
+        for (const Column* entry : entry_cols) {
+            if (entry && !entry->isNull(i)) {
+                lv.elements.push_back(ValueStorage{entry->getValue(i)});
             } else {
                 lv.elements.push_back(ValueStorage{Value{}});
             }

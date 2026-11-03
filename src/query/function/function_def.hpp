@@ -4,9 +4,11 @@
 #include "query/dataset/row.hpp"
 #include "query/planner/bound_type.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -55,16 +57,28 @@ using ScalarFn = std::function<Value(const std::vector<Value>&, const EvalContex
 using FunctionFn =
     std::function<void(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&)>;
 
-/// Aggregate state factory.
-using AggInitFn = std::function<std::unique_ptr<AggStateBase>()>;
+/// One row's aggregate arguments, already evaluated into typed columns.
+///
+/// This is a call-scoped, non-owning view: `args` and the pointed-to Columns
+/// are owned by AggregatePhysicalOp for the duration of the update call. An
+/// aggregate state must never retain the span or the pointers.
+struct AggregateInput {
+    std::span<const Column* const> args;
+    size_t row = 0;
+};
+
+/// Aggregate state factory. Captureless function pointer, like DuckDB's
+/// aggregate callbacks; no std::function allocation per group.
+using AggInitFn = std::unique_ptr<AggStateBase> (*)();
 
 /// Accumulate one row's arguments into aggregate state. Multi-arg aggregates
-/// (e.g. percentileDisc(value, p)) receive all args; single-arg aggregates
-/// read args[0].
-using AggUpdateFn = std::function<void(AggStateBase&, const std::vector<Value>&)>;
+/// (e.g. percentileDisc(value, p)) read args[1]; count(*) receives one
+/// literal-NULL argument column and ignores it.
+/// Null / count(*) / DISTINCT filtering is centralized in AggregatePhysicalOp.
+using AggUpdateFn = void (*)(AggStateBase&, const AggregateInput&);
 
 /// Produce final aggregate result from state.
-using AggFinalizeFn = std::function<Value(const AggStateBase&)>;
+using AggFinalizeFn = Value (*)(const AggStateBase&);
 
 /// Describes a registered function (scalar or aggregate).
 struct FunctionDef {

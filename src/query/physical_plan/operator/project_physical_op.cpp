@@ -27,13 +27,14 @@ folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
     for (const auto& item : items_)
         prefetch_exprs.push_back(&item.expr);
 
+    ExpressionEvaluator evaluator(eval_ctx_);
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
 
         DataChunk output;
         output.columns.reserve(items_.size());
 
-        ExpressionEvaluator evaluator(eval_ctx_);
+        evaluator.resetForChunk();
         co_await evaluator.prefetch(prefetch_exprs, *chunk);
         for (const auto& item : items_) {
             auto col_kind = binder::getBoundExprType(item.expr).kind;

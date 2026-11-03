@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -66,9 +67,29 @@ public:
     static uint64_t missingPrefetchCount() noexcept;
     static void resetMissingPrefetchCount() noexcept;
 
+    /// Reset per-chunk state between two DataChunks when the evaluator is
+    /// reused by an operator. Does not free the scratch/temp-column pools.
+    void resetForChunk();
+
+    /// Diagnostics used by regression tests to prove temporary columns are
+    /// reused rather than appended once per expression/row.
+    size_t tempColumnCapacity() const noexcept {
+        return temp_columns_.size();
+    }
+    size_t tempColumnUsed() const noexcept {
+        return temp_used_;
+    }
+    size_t tempMark() const noexcept {
+        return temp_used_;
+    }
+    void resetToTempMark(size_t mark) noexcept {
+        temp_used_ = mark;
+    }
+
 private:
     // Temporary storage for recursive sub-expression evaluation.
     std::deque<Column> temp_columns_;
+    size_t temp_used_ = 0;
     function::EvalContext eval_ctx_;
     // Cache for LabelDefs loaded from meta store at runtime for dynamically
     // created labels (e.g. __anon__) that are not in the static snapshot.
@@ -101,6 +122,37 @@ private:
         const Column* column = nullptr;
         bool is_temp = false;
     };
+
+    /// Reentrant scratch owned by one evaluation depth. A function call, map,
+    /// case or comprehension evaluates nested expressions; a single shared
+    /// vector would be clobbered by that recursion, so each depth gets its own
+    /// reusable frame.
+    struct CaseBranchEval {
+        EvalResult when_col;
+        EvalResult then_col;
+    };
+    struct EvalScratch {
+        std::vector<EvalResult> arg_results;
+        std::vector<const Column*> arg_cols;
+        std::vector<CaseBranchEval> case_branches;
+        std::vector<const Column*> entry_cols;
+        std::vector<bool> predicate;
+        DataChunk single_row_chunk;
+    };
+    std::deque<EvalScratch> scratch_stack_;
+    size_t eval_depth_ = 0;
+
+    EvalScratch& scratch() {
+        // deque: growing must not invalidate references held by an outer
+        // comprehension/function call while a nested expression grows the stack.
+        while (eval_depth_ >= scratch_stack_.size())
+            scratch_stack_.emplace_back();
+        return scratch_stack_[eval_depth_];
+    }
+
+    void beginExpression();
+    Column& acquireTempSlot();
+    std::optional<bool> evaluatePredicateOne(const binder::BoundExpression& expr, const DataChunk& input);
 
     EvalResult evaluateInternal(const binder::BoundExpression& expr, const DataChunk& input);
 

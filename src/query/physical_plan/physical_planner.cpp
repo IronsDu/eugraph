@@ -3479,7 +3479,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         ae.arguments = std::move(ai.arguments);
                         ae.distinct = ai.distinct;
                         ae.is_internal = ai.is_internal;
-                        ae.keeps_nulls = ai.keeps_nulls;
+                        // The FunctionDef is the source of truth for null-keeping
+                        // aggregates (collect). Pattern/list-comprehension helpers
+                        // additionally set the binder flag; OR them so a normal
+                        // collect(x) also receives null elements.
+                        ae.keeps_nulls = ai.keeps_nulls || (ai.func_def && ai.func_def->keeps_nulls);
                         if (v.group_keys.size() + i < v.output_names.size())
                             ae.name = v.output_names[v.group_keys.size() + i];
                         aggregates.push_back(std::move(ae));

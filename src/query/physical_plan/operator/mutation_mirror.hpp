@@ -1,5 +1,6 @@
 #pragma once
 
+#include "query/dataset/cell_access.hpp"
 #include "query/dataset/data_chunk.hpp"
 
 #include <utility>
@@ -21,7 +22,7 @@ inline void ensureExclusiveBuffer(Column& col, size_t n) {
     auto materialize = [&]() {
         auto fresh = Column::flat(col.type, n);
         for (size_t i = 0; i < n; ++i)
-            fresh.setValue(i, col.getValue(i));
+            copyColumnCell(col, i, fresh, i);
         col = std::move(fresh);
     };
 

@@ -1,4 +1,5 @@
 #include "storage/data/sync_graph_data_store.hpp"
+#include <folly/Function.h>
 
 #include "storage/data/graph_session.hpp"
 #include "storage/wt_table_ops.hpp"
@@ -1052,7 +1053,7 @@ bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, Label
 // ==================== Label Index Scan ====================
 
 void SyncGraphDataStore::scanVerticesByLabel(GraphSession& gs, LabelId label_id,
-                                             const std::function<bool(VertexId)>& callback) {
+                                             folly::FunctionRef<bool(VertexId)> callback) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return;
@@ -1065,7 +1066,7 @@ void SyncGraphDataStore::scanVerticesByLabel(GraphSession& gs, LabelId label_id,
 
 // ==================== All-Vertex Scan ====================
 
-void SyncGraphDataStore::scanAllVertices(GraphSession& gs, const std::function<bool(VertexId)>& callback) {
+void SyncGraphDataStore::scanAllVertices(GraphSession& gs, folly::FunctionRef<bool(VertexId)> callback) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return;
@@ -1325,7 +1326,7 @@ bool SyncGraphDataStore::deleteEdgeProperty(GraphSession& gs, EdgeLabelId label_
 
 void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction direction,
                                    std::optional<EdgeLabelId> label_filter,
-                                   const std::function<bool(const EdgeIndexEntry&)>& callback) {
+                                   folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return;
@@ -1385,7 +1386,7 @@ SyncGraphDataStore::createEdgeIndexScanCursor(GraphSession& gs, VertexId vid, Di
 
 void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<VertexId>& src_ids, Direction direction,
                                         std::optional<EdgeLabelId> label_filter,
-                                        const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) {
+                                        folly::FunctionRef<bool(VertexId, const EdgeIndexEntry&)> callback) {
     WT_SESSION* session = gs.wt_session();
     if (!session || src_ids.empty())
         return;
@@ -1449,7 +1450,7 @@ void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<Vert
 
 void SyncGraphDataStore::scanEdgesExact(GraphSession& gs, VertexId vid, Direction direction, EdgeLabelId label_id,
                                         VertexId neighbor_id,
-                                        const std::function<bool(const EdgeIndexEntry&)>& callback) {
+                                        folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return;
@@ -1472,7 +1473,7 @@ void SyncGraphDataStore::scanEdgesExact(GraphSession& gs, VertexId vid, Directio
 
 void SyncGraphDataStore::scanEdgesByType(GraphSession& gs, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                          std::optional<VertexId> dst_filter,
-                                         const std::function<bool(const EdgeTypeIndexEntry&)>& callback) {
+                                         folly::FunctionRef<bool(const EdgeTypeIndexEntry&)> callback) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return;
@@ -2030,7 +2031,7 @@ bool SyncGraphDataStore::checkUniqueConstraint(GraphSession& gs, const std::stri
 // ==================== Index Scan ====================
 
 void SyncGraphDataStore::scanIndexEquality(GraphSession& gs, const std::string& table, const PropertyValue& value,
-                                           const std::function<bool(uint64_t)>& callback) {
+                                           folly::FunctionRef<bool(uint64_t)> callback) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
     wt::table_scan(gs, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         auto entity_id = IndexKeyCodec::decodeEntityId(key);
@@ -2040,7 +2041,7 @@ void SyncGraphDataStore::scanIndexEquality(GraphSession& gs, const std::string& 
 
 void SyncGraphDataStore::scanIndexEquality(GraphSession& gs, const std::string& table,
                                            const std::vector<PropertyValue>& values,
-                                           const std::function<bool(uint64_t)>& callback) {
+                                           folly::FunctionRef<bool(uint64_t)> callback) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(values);
     wt::table_scan(gs, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         auto entity_id = IndexKeyCodec::decodeEntityId(key);
@@ -2051,7 +2052,7 @@ void SyncGraphDataStore::scanIndexEquality(GraphSession& gs, const std::string& 
 void SyncGraphDataStore::scanIndexRange(GraphSession& gs, const std::string& table,
                                         const std::optional<PropertyValue>& start,
                                         const std::optional<PropertyValue>& end,
-                                        const std::function<bool(uint64_t)>& callback) {
+                                        folly::FunctionRef<bool(uint64_t)> callback) {
     std::string start_encoded;
     if (start.has_value()) {
         // Append max entity_id suffix so search_near skips past all entries
@@ -2080,7 +2081,7 @@ void SyncGraphDataStore::scanIndexRange(GraphSession& gs, const std::string& tab
 void SyncGraphDataStore::scanIndexRange(GraphSession& gs, const std::string& table,
                                         const std::optional<std::vector<PropertyValue>>& start,
                                         const std::optional<std::vector<PropertyValue>>& end,
-                                        const std::function<bool(uint64_t)>& callback) {
+                                        folly::FunctionRef<bool(uint64_t)> callback) {
     std::string start_encoded;
     if (start.has_value()) {
         start_encoded = IndexKeyCodec::encodeSortableValues(*start);
@@ -2106,7 +2107,7 @@ void SyncGraphDataStore::scanIndexRange(GraphSession& gs, const std::string& tab
 
 void SyncGraphDataStore::scanIndexEqualityWithValue(GraphSession& gs, const std::string& table,
                                                     const PropertyValue& value,
-                                                    const std::function<bool(uint64_t, std::string_view)>& callback) {
+                                                    folly::FunctionRef<bool(uint64_t, std::string_view)> callback) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
     wt::table_scan(gs, table, prefix, [&](std::string_view key, std::string_view val) {
         auto entity_id = IndexKeyCodec::decodeEntityId(key);
@@ -2116,7 +2117,7 @@ void SyncGraphDataStore::scanIndexEqualityWithValue(GraphSession& gs, const std:
 
 void SyncGraphDataStore::scanIndexEqualityWithValue(GraphSession& gs, const std::string& table,
                                                     const std::vector<PropertyValue>& values,
-                                                    const std::function<bool(uint64_t, std::string_view)>& callback) {
+                                                    folly::FunctionRef<bool(uint64_t, std::string_view)> callback) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(values);
     wt::table_scan(gs, table, prefix, [&](std::string_view key, std::string_view val) {
         auto entity_id = IndexKeyCodec::decodeEntityId(key);
@@ -2127,7 +2128,7 @@ void SyncGraphDataStore::scanIndexEqualityWithValue(GraphSession& gs, const std:
 void SyncGraphDataStore::scanIndexRangeWithValue(GraphSession& gs, const std::string& table,
                                                  const std::optional<PropertyValue>& start,
                                                  const std::optional<PropertyValue>& end,
-                                                 const std::function<bool(uint64_t, std::string_view)>& callback) {
+                                                 folly::FunctionRef<bool(uint64_t, std::string_view)> callback) {
     std::string start_encoded;
     if (start.has_value()) {
         start_encoded = IndexKeyCodec::encodeSortableValue(*start);
@@ -2155,7 +2156,7 @@ void SyncGraphDataStore::scanIndexRangeWithValue(GraphSession& gs, const std::st
 void SyncGraphDataStore::scanIndexRangeWithValue(GraphSession& gs, const std::string& table,
                                                  const std::optional<std::vector<PropertyValue>>& start,
                                                  const std::optional<std::vector<PropertyValue>>& end,
-                                                 const std::function<bool(uint64_t, std::string_view)>& callback) {
+                                                 folly::FunctionRef<bool(uint64_t, std::string_view)> callback) {
     std::string start_encoded;
     if (start.has_value()) {
         start_encoded = IndexKeyCodec::encodeSortableValues(*start);

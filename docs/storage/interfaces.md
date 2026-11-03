@@ -54,7 +54,7 @@ public:
                                                            uint16_t prop_id) = 0;
     virtual LabelIdSet getVertexLabels(GraphSession& session, VertexId vid) = 0;
     virtual void scanVerticesByLabel(GraphSession& session, LabelId label_id,
-                                     const std::function<bool(VertexId)>& callback) = 0;
+                                     folly::FunctionRef<bool(VertexId)> callback) = 0;
     virtual std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphSession& session, LabelId label_id) = 0;
     // …其余 Vertex/Edge/Index 操作同形（首个参数都是 GraphSession&）
 };
@@ -124,7 +124,7 @@ public:
     virtual std::optional<std::string> metadataGet(std::string_view key) = 0;
     virtual bool metadataDel(std::string_view key) = 0;
     virtual void metadataScan(std::string_view prefix,
-                              const std::function<bool(std::string_view, std::string_view)>& callback) = 0;
+                              folly::FunctionRef<bool(std::string_view, std::string_view)> callback) = 0;
 };
 ```
 
@@ -208,3 +208,4 @@ public:
 10. **批量邻接扫描**：`scanEdgesBatch(session, src_ids, dir, filter, cb)` 每 4,096 个 source 复用一个 `edge_index` cursor；邻接缓存启用时回退逐 source 的 `createEdgeScanCursor`。批量接口与 caller-owned 流式 `scanEdges` 都不把整个邻接集物化到共享状态里。
 11. **DROP 清理**：`dropLabel`/`dropEdgeLabel` 在 drop per-label 表之前，先按 `label_fwd`/`etype` 枚举并删除 `vertex_data` 标签/属性记录或 `edge_index`/缓存邻接记录；具体编码见 [kv-encoding.md](kv-encoding.md)。
 12. **邻接缓存容量**：`SyncGraphDataStore` 的构造参数 `adjacency_cache_capacity` 是每方向 COMPLETE 邻接上限；默认 0 表示关闭缓存、`edge_index` 保存全量边，测试可传小的 N 覆盖 COMPLETE/OVERFLOW 路径。
+13. **同步扫描回调是非拥有 view**：`scanVerticesByLabel` / `scanEdges` / `scanEdgesBatch` / index scan 的 callback 使用 `folly::FunctionRef`，只在调用期间有效；实现不得保存或异步投递。需要跨调用保存的工厂仍用拥有型 `std::function`。详见 [scan-callback-design.md](scan-callback-design.md)。

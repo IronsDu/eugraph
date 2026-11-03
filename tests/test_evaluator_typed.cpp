@@ -15,6 +15,7 @@
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
+#include "query/planner/bound_expression/bound_list.hpp"
 #include "query/planner/bound_expression/bound_unary_op.hpp"
 #include "query/planner/bound_type.hpp"
 
@@ -788,4 +789,138 @@ TEST(EvaluatorTypedKernelTest, DynamicPropertyOnDeletedVertexThrows) {
     ExpressionEvaluator evaluator(dynamicPropContext(defs));
     Column out = Column::flat(BoundTypeKind::ANY, 1);
     EXPECT_THROW(evaluator.evaluate(makeDynamicPropertyRef("name"), input, out), std::runtime_error);
+}
+
+TEST(EvaluatorScratchTest, ReusesTempColumnsAcrossEvaluations) {
+    constexpr size_t n = 64;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    input.columns[1].reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i);
+        input.columns[1].buffer->int64_data[i] = static_cast<int64_t>(i + 1);
+    }
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::INT64, n);
+    auto expr =
+        makeBinary(cypher::BinaryOperator::ADD, BoundTypeKind::INT64, BoundTypeKind::INT64, BoundTypeKind::INT64);
+    for (int round = 0; round < 32; ++round) {
+        evaluator.evaluate(expr, input, out);
+        ASSERT_EQ(out.getValue(0), Value(static_cast<int64_t>(1)));
+        ASSERT_EQ(out.getValue(n - 1), Value(static_cast<int64_t>(2 * n - 1)));
+    }
+    // One temp column for the binary result; the loop must reuse it rather than
+    // appending one per evaluation.
+    EXPECT_LE(evaluator.tempColumnCapacity(), 2u);
+    EXPECT_LE(evaluator.tempColumnUsed(), 1u);
+}
+
+TEST(EvaluatorScratchTest, CopyFromColumnRefPreservesNulls) {
+    constexpr size_t n = 4;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    for (size_t i = 0; i < n; ++i)
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i + 10);
+    input.columns[0].setNull(1);
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::INT64, n);
+    BoundExpression expr(BoundColumnRef(0, BoundType(BoundTypeKind::INT64, nullptr), "a"));
+    evaluator.evaluate(expr, input, out);
+
+    EXPECT_EQ(out.getValue(0), Value(static_cast<int64_t>(10)));
+    EXPECT_TRUE(out.isNull(1));
+    EXPECT_EQ(out.getValue(2), Value(static_cast<int64_t>(12)));
+    EXPECT_EQ(out.getValue(3), Value(static_cast<int64_t>(13)));
+}
+
+TEST(EvaluatorScratchTest, PredicateBoolFastPathPreservesNulls) {
+    constexpr size_t n = 4;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::BOOL);
+    input.columns[0].reserve(n);
+    input.columns[0].buffer->bool_data[0] = 1;
+    input.columns[0].buffer->bool_data[1] = 0;
+    input.columns[0].buffer->bool_data[2] = 1;
+    input.columns[0].buffer->bool_data[3] = 0;
+    input.columns[0].setNull(3);
+
+    ExpressionEvaluator evaluator;
+    BoundExpression expr(BoundColumnRef(0, BoundType(BoundTypeKind::BOOL, nullptr), "b"));
+    std::vector<bool> out;
+    evaluator.evaluatePredicate(expr, input, out);
+
+    ASSERT_EQ(out.size(), n);
+    EXPECT_TRUE(out[0]);
+    EXPECT_FALSE(out[1]);
+    EXPECT_TRUE(out[2]);
+    EXPECT_FALSE(out[3]);
+}
+
+TEST(EvaluatorScratchTest, ListLiteralEvaluatesElementsOncePerChunk) {
+    constexpr size_t n = 3;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    input.columns[1].reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i);
+        input.columns[1].buffer->int64_data[i] = static_cast<int64_t>(i * 10);
+    }
+
+    auto list = std::make_unique<BoundList>();
+    list->elements.push_back(BoundExpression(BoundColumnRef(0, BoundType(BoundTypeKind::INT64, nullptr), "a")));
+    list->elements.push_back(BoundExpression(BoundColumnRef(1, BoundType(BoundTypeKind::INT64, nullptr), "b")));
+    list->element_type = BoundType(BoundTypeKind::INT64, nullptr);
+    list->result_type = BoundType::List(BoundType(BoundTypeKind::INT64, nullptr));
+    BoundExpression expr(std::move(list));
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::LIST, n);
+    evaluator.evaluate(expr, input, out);
+
+    for (size_t i = 0; i < n; ++i) {
+        const Value v = out.getValue(i);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(v));
+        const auto& elements = std::get<ListValuePtr>(v)->elements;
+        ASSERT_EQ(elements.size(), 2u);
+        EXPECT_EQ(elements[0].value, Value(static_cast<int64_t>(i)));
+        EXPECT_EQ(elements[1].value, Value(static_cast<int64_t>(i * 10)));
+    }
+}
+
+TEST(EvaluatorScratchTest, ResetForChunkKeepsCapacityStable) {
+    constexpr size_t n = 32;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    input.columns[1].reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i);
+        input.columns[1].buffer->int64_data[i] = 1;
+    }
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::INT64, n);
+    auto expr =
+        makeBinary(cypher::BinaryOperator::ADD, BoundTypeKind::INT64, BoundTypeKind::INT64, BoundTypeKind::INT64);
+    evaluator.evaluate(expr, input, out);
+    const size_t capacity = evaluator.tempColumnCapacity();
+    for (int chunk = 0; chunk < 16; ++chunk) {
+        evaluator.resetForChunk();
+        evaluator.evaluate(expr, input, out);
+        ASSERT_EQ(out.getValue(0), Value(static_cast<int64_t>(1)));
+    }
+    EXPECT_EQ(evaluator.tempColumnCapacity(), capacity);
 }

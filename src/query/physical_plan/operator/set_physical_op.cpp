@@ -2,6 +2,7 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
+#include "query/dataset/cell_access.hpp"
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/edge_index_maintenance.hpp"
 #include "query/physical_plan/operator/mutation_mirror.hpp"
@@ -85,7 +86,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
             // Copy into a new FLAT column
             auto new_col = Column::flat(column.type, n);
             for (size_t i = 0; i < n; ++i)
-                new_col.setValue(i, column.getValue(i));
+                copyColumnCell(column, i, new_col, i);
             column = std::move(new_col);
         }
 

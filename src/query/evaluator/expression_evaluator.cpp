@@ -1,19 +1,67 @@
 #include "query/evaluator/expression_evaluator.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace eugraph {
 namespace compute {
 
+namespace {
+/// Track recursion depth so nested evaluations (function arguments, map
+/// entries, comprehension bodies) get their own scratch frame.
+struct EvalDepthGuard {
+    size_t& depth;
+    explicit EvalDepthGuard(size_t& d) : depth(d) {
+        ++depth;
+    }
+    ~EvalDepthGuard() {
+        --depth;
+    }
+    EvalDepthGuard(const EvalDepthGuard&) = delete;
+    EvalDepthGuard& operator=(const EvalDepthGuard&) = delete;
+};
+} // namespace
+
 // ==================== Public API ====================
 
+void ExpressionEvaluator::beginExpression() {
+    // Recycle temporary columns from the previous top-level expression. They
+    // are no longer referenced: evaluate()/evaluatePredicate() have already
+    // copied their result into the caller's column/bitmap.
+    temp_used_ = 0;
+}
+
+void ExpressionEvaluator::resetForChunk() {
+    temp_used_ = 0;
+    prefetched_vertex_data_.clear();
+    prefetch_pending_ids_.clear();
+    prefetching_ = false;
+    temp_column_overrides_.clear();
+    for (auto& scratch : scratch_stack_) {
+        scratch.arg_results.clear();
+        scratch.arg_cols.clear();
+        scratch.case_branches.clear();
+        scratch.entry_cols.clear();
+        scratch.predicate.clear();
+    }
+}
+
 void ExpressionEvaluator::evaluate(const binder::BoundExpression& expr, const DataChunk& input, Column& result) {
+    if (eval_depth_ == 0)
+        beginExpression();
+
     size_t count = input.numRows();
     result.reserve(count);
 
     auto eval_result = evaluateInternal(expr, input);
     if (eval_result.column && eval_result.column != &result) {
+        // Whole-column typed copy first: the common case is a typed expression
+        // result copied into a same-typed output column.
+        if (result.copyFrom(*eval_result.column, count))
+            return;
         for (size_t i = 0; i < count; ++i) {
+            if (result.copyValueFrom(*eval_result.column, i, i))
+                continue;
             if (eval_result.column->isNull(i)) {
                 result.setNull(i);
             } else {
@@ -25,6 +73,9 @@ void ExpressionEvaluator::evaluate(const binder::BoundExpression& expr, const Da
 
 void ExpressionEvaluator::evaluatePredicate(const binder::BoundExpression& expr, const DataChunk& input,
                                             std::vector<bool>& result) {
+    if (eval_depth_ == 0)
+        beginExpression();
+
     size_t count = input.numRows();
     result.resize(count, false);
 
@@ -32,9 +83,23 @@ void ExpressionEvaluator::evaluatePredicate(const binder::BoundExpression& expr,
     if (!eval_result.column)
         return;
 
+    const Column& col = *eval_result.column;
+    if (col.type == binder::BoundTypeKind::BOOL) {
+        if (col.isConstant()) {
+            const bool v = !col.isNull(0) && col.getBool(0);
+            std::fill(result.begin(), result.end(), v);
+            return;
+        }
+        if (col.form == VectorForm::FLAT) {
+            for (size_t i = 0; i < count; ++i)
+                result[i] = !col.isNull(i) && col.getBool(i);
+            return;
+        }
+    }
+
     for (size_t i = 0; i < count; ++i) {
-        if (!eval_result.column->isNull(i)) {
-            Value v = eval_result.column->getValue(i);
+        if (!col.isNull(i)) {
+            Value v = col.getValue(i);
             if (std::holds_alternative<bool>(v)) {
                 result[i] = std::get<bool>(v);
             }
@@ -42,21 +107,44 @@ void ExpressionEvaluator::evaluatePredicate(const binder::BoundExpression& expr,
     }
 }
 
+std::optional<bool> ExpressionEvaluator::evaluatePredicateOne(const binder::BoundExpression& expr,
+                                                              const DataChunk& input) {
+    auto eval_result = evaluateInternal(expr, input);
+    if (!eval_result.column || eval_result.column->isNull(0))
+        return std::nullopt;
+    if (eval_result.column->type == binder::BoundTypeKind::BOOL)
+        return eval_result.column->getBool(0);
+    Value v = eval_result.column->getValue(0);
+    if (std::holds_alternative<bool>(v))
+        return std::get<bool>(v);
+    return std::nullopt;
+}
+
 // ==================== Internal ====================
 
-Column& ExpressionEvaluator::acquireTempColumn(binder::BoundTypeKind type, size_t capacity) {
-    temp_columns_.push_back(Column::flat(type, capacity));
+Column& ExpressionEvaluator::acquireTempSlot() {
+    if (temp_used_ < temp_columns_.size())
+        return temp_columns_[temp_used_++];
+    temp_columns_.emplace_back();
+    ++temp_used_;
     return temp_columns_.back();
 }
 
+Column& ExpressionEvaluator::acquireTempColumn(binder::BoundTypeKind type, size_t capacity) {
+    Column& col = acquireTempSlot();
+    col.resetFlat(type, capacity);
+    return col;
+}
+
 Column& ExpressionEvaluator::acquireTempConstant(binder::BoundTypeKind type, Value value) {
-    temp_columns_.push_back(Column::constant(std::move(value)));
-    temp_columns_.back().type = type;
-    return temp_columns_.back();
+    Column& col = acquireTempSlot();
+    col.resetConstant(type, std::move(value));
+    return col;
 }
 
 ExpressionEvaluator::EvalResult ExpressionEvaluator::evaluateInternal(const binder::BoundExpression& expr,
                                                                       const DataChunk& input) {
+    EvalDepthGuard guard(eval_depth_);
     return std::visit(
         [this, &input](const auto& val) -> EvalResult {
             using T = std::decay_t<decltype(val)>;

@@ -1,3 +1,4 @@
+#include "query/dataset/cell_access.hpp"
 #include "query/evaluator/columnar_kernels.hpp"
 #include "query/evaluator/expression_evaluator.hpp"
 
@@ -18,6 +19,15 @@ void ExpressionEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
     using BO = cypher::BinaryOperator;
 
     if (op.op == BO::XOR) {
+        if (left.column->type == binder::BoundTypeKind::BOOL && right.column->type == binder::BoundTypeKind::BOOL) {
+            for (size_t i = 0; i < count; ++i) {
+                if (left.column->isNull(i) || right.column->isNull(i))
+                    result.setNull(i);
+                else
+                    result.setValue(i, Value(left.column->getBool(i) != right.column->getBool(i)));
+            }
+            return;
+        }
         for (size_t i = 0; i < count; ++i) {
             Value lv = left.column->getValue(i);
             Value rv = right.column->getValue(i);
@@ -53,12 +63,32 @@ void ExpressionEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
                 }
                 continue;
             }
-            Value lv = left.column->getValue(i);
+            // For scalar/string left operands the membership test can use the
+            // typed cell helper; only materialise the left Value when the column
+            // is a generic/heavy form.
+            const bool scalar_left = left.column->type == binder::BoundTypeKind::BOOL ||
+                                     left.column->type == binder::BoundTypeKind::INT64 ||
+                                     left.column->type == binder::BoundTypeKind::DOUBLE ||
+                                     left.column->type == binder::BoundTypeKind::STRING;
+            Value lv;
+            if (!scalar_left)
+                lv = left.column->getValue(i);
             bool found = false;
             bool saw_null = false;
             for (const auto& elem : list.elements) {
+                if (isNull(elem.value)) {
+                    saw_null = true;
+                    continue;
+                }
                 // Three-valued equality: nested nulls (e.g. `[null] IN [[null]]`)
                 // must propagate to unknown, not collapse to a definitive answer.
+                if (scalar_left) {
+                    if (columnCellEqualsValue(*left.column, i, elem.value)) {
+                        found = true;
+                        break;
+                    }
+                    continue;
+                }
                 auto cmp = valueEquals(elem.value, lv);
                 if (!cmp) {
                     saw_null = true;

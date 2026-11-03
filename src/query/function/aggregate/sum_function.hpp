@@ -12,9 +12,8 @@ namespace aggregate {
 /// Running state for sum aggregation (int64).
 struct Int64SumState : AggStateBase {
     int64_t value = 0;
-    void add(const Value& arg) {
-        if (std::holds_alternative<int64_t>(arg))
-            value += std::get<int64_t>(arg);
+    void add(int64_t arg) {
+        value += arg;
     }
     Value finalize() const {
         return Value(value);
@@ -27,11 +26,8 @@ struct Int64SumState : AggStateBase {
 /// Running state for sum aggregation (double).
 struct DoubleSumState : AggStateBase {
     double value = 0.0;
-    void add(const Value& arg) {
-        if (std::holds_alternative<double>(arg))
-            value += std::get<double>(arg);
-        else if (std::holds_alternative<int64_t>(arg))
-            value += static_cast<double>(std::get<int64_t>(arg));
+    void add(double arg) {
+        value += arg;
     }
     Value finalize() const {
         return Value(value);

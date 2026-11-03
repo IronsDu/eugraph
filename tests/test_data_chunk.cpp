@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "query/dataset/cell_access.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 
@@ -484,4 +485,53 @@ TEST(ValueEquality, EntityReferenceEqualsMaterializedEntity) {
 
     // Null still propagates as unknown rather than turning into "not equal".
     EXPECT_FALSE(valueEquals(ref, Value{}).has_value());
+}
+
+TEST(CellAccess, ScalarAndStringEqualityPreserveSemantics) {
+    Column strings = Column::flat(BoundTypeKind::STRING, 2);
+    strings.setValue(0, Value(std::string("alpha")));
+    strings.setValue(1, Value(std::string("beta")));
+
+    Column same = Column::flat(BoundTypeKind::STRING, 1);
+    same.setValue(0, Value(std::string("alpha")));
+    EXPECT_TRUE(columnCellEquals(strings, 0, same, 0));
+    EXPECT_FALSE(columnCellEquals(strings, 1, same, 0));
+    EXPECT_TRUE(columnCellEqualsValue(strings, 0, Value(std::string("alpha"))));
+    EXPECT_FALSE(columnCellEqualsValue(strings, 1, Value(std::string("alpha"))));
+
+    Column ints = Column::flat(BoundTypeKind::INT64, 1);
+    ints.setValue(0, Value(int64_t{7}));
+    EXPECT_TRUE(columnCellEqualsValue(ints, 0, Value(double{7.0})));
+    EXPECT_FALSE(columnCellEqualsValue(ints, 0, Value(true)));
+
+    Column any = Column::flat(BoundTypeKind::ANY, 1);
+    any.setValue(0, Value(int64_t{7}));
+    EXPECT_TRUE(columnCellEqualsValue(any, 0, Value(int64_t{7})));
+}
+
+TEST(CellAccess, NullNeverEqualsAndNullCopyStaysNull) {
+    Column lhs = Column::flat(BoundTypeKind::STRING, 1);
+    lhs.setNull(0);
+    Column rhs = Column::flat(BoundTypeKind::STRING, 1);
+    rhs.setValue(0, Value(std::string("x")));
+
+    EXPECT_FALSE(columnCellEquals(lhs, 0, rhs, 0));
+    EXPECT_FALSE(columnCellEqualsValue(lhs, 0, Value(std::string("x"))));
+
+    Column dst = Column::flat(BoundTypeKind::STRING, 1);
+    copyColumnCell(lhs, 0, dst, 0);
+    EXPECT_TRUE(dst.isNull(0));
+}
+
+TEST(CellAccess, CopyColumnCellKeepsStringBytesAndValidity) {
+    Column src = Column::flat(BoundTypeKind::STRING, 2);
+    src.setValue(0, Value(std::string("first")));
+    src.setValue(1, Value(std::string("second")));
+    src.setNull(1);
+
+    Column dst = Column::flat(BoundTypeKind::STRING, 2);
+    copyColumnCell(src, 0, dst, 1);
+    EXPECT_EQ(columnStringView(dst, 1), "first");
+    copyColumnCell(src, 1, dst, 0);
+    EXPECT_TRUE(dst.isNull(0));
 }

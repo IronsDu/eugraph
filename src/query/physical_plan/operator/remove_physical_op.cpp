@@ -1,5 +1,6 @@
 #include "query/physical_plan/operator/remove_physical_op.hpp"
 #include "common/types/graph_types.hpp"
+#include "query/dataset/cell_access.hpp"
 #include "query/physical_plan/operator/edge_index_maintenance.hpp"
 #include "query/physical_plan/operator/vertex_index_maintenance.hpp"
 
@@ -38,7 +39,7 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
             // Copy DICTIONARY / CONSTANT column into a new FLAT column
             auto new_col = Column::flat(column.type, n);
             for (size_t i = 0; i < n; ++i)
-                new_col.setValue(i, column.getValue(i));
+                copyColumnCell(column, i, new_col, i);
             column = std::move(new_col);
         }
 
