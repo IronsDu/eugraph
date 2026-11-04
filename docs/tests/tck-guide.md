@@ -4,7 +4,9 @@
 
 EuGraph 使用 [openCypher TCK](https://github.com/opencypher/openCypher/tree/master/tck)（Technology Compatibility Kit）作为 Cypher 查询语言的兼容性测试套件。TCK 基于 Cucumber BDD 框架，使用 `.feature` 文件描述测试场景。EuGraph 自己的扩展场景放在 `tests/tck/features-eugraph/`：`multi-label-strong-mode.feature`
 覆盖多标签 scoped cast 与强属性访问；`vertex-summary.feature` 覆盖顶点摘要缓存的正确性
-（CREATE 写入、SET/REMOVE/标签增删/DELETE 失效、大属性回退、MERGE、多行重复顶点、null）。
+（CREATE 写入、SET/REMOVE/标签增删/DELETE 失效、大属性回退、MERGE、多行重复顶点、null）；
+`path/self-loop-path.feature` 覆盖自环路径的节点/关系序列（`length`/`nodes`/`relationships`
+以及 Bolt 路径结构）。
 
 ## 构建
 

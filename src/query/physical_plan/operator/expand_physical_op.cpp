@@ -331,9 +331,12 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                     if (row_it == rows_of_src.end())
                                         continue;
                                     const bool phy_out = (dirs[pass] == Direction::OUT);
-                                    // A self-loop appears in both the OUT and
-                                    // IN adjacency; the per-row path keeps one.
-                                    if (!phy_out && be.entry.neighbor_id == be.src_id)
+                                    // Undirected OUT+IN dual pass: the same
+                                    // self-loop appears in both adjacency
+                                    // lists, so keep only the OUT one.  A
+                                    // directed IN scan must keep it, otherwise
+                                    // `(:A)<--()` misses an A->A edge.
+                                    if (split_undirected && !phy_out && be.entry.neighbor_id == be.src_id)
                                         continue;
                                     for (size_t src_row : row_it->second)
                                         edges.push_back({src_row, be.entry.neighbor_id, be.entry.edge_id,
