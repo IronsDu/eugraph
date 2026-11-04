@@ -67,26 +67,6 @@ std::string truncateUtf8(const std::string& text, std::size_t max_bytes) {
     return text.substr(0, cut);
 }
 
-/// 可见列数：CSI 转义序列与 UTF-8 续字节都不占列（用于校验/截断带颜色的行）。
-std::size_t visibleColumns(std::string_view text) {
-    std::size_t columns = 0;
-    for (std::size_t i = 0; i < text.size();) {
-        const unsigned char c = static_cast<unsigned char>(text[i]);
-        if (c == 0x1b && i + 1 < text.size() && text[i + 1] == '[') {
-            i += 2;
-            while (i < text.size() && !(text[i] >= 0x40 && text[i] <= 0x7e))
-                ++i;
-            if (i < text.size())
-                ++i; // 终止字节
-            continue;
-        }
-        ++i;
-        if ((c & 0xC0U) != 0x80U)
-            ++columns;
-    }
-    return columns;
-}
-
 /// 按**可见列数**截断：绝不切开发送序列或 UTF-8 字符；真的截断了就补一个复位，
 /// 避免颜色渗到下一行。按字节截断会把带颜色的进度条砍成半个 CSI，终端随后吞掉整行。
 std::string truncateVisible(const std::string& text, std::size_t max_columns) {
