@@ -602,6 +602,23 @@ jobs:
       # See build-gcc for the judgement.
       run: ccache -s
 
+    - name: Verify ASan is linked
+      # Judgement: every binary must link the ASan runtime, otherwise the unit
+      # tests below would still run and pass with no instrumentation at all
+      # (a warm ccache hides a misconfigured configure/link step). The binaries
+      # are stripped (-s), so check the dynamic dependencies, not symbols.
+      working-directory: build
+      run: |
+        found=0
+        for bin in eugraph-server tests/tck/tck_tests ./*_tests; do
+          if ! ldd "$bin" | grep -q libasan; then
+            echo "::error::$bin is not linked against libasan"
+            exit 1
+          fi
+          found=$((found + 1))
+        done
+        echo "verified $found ASan binaries"
+
     - name: Package ASan TCK binaries
       run: |
         tar -czf asan-tck-binaries.tar.gz build/eugraph-server build/tests/tck/tck_tests
