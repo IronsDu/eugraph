@@ -166,7 +166,12 @@ std::unordered_map<PropKey, std::vector<IndexId>, PropKeyHash> prop_pair_to_inde
    - 任一 accessor 缺值：跳过该实体；
    - 全部有值：插入索引条目。
 7. 唯一索引回填检查重复，冲突置 ERROR。
-8. state = PUBLIC。
+8. **分批提交**：回填按 `EUGRAPH_INDEX_BACKFILL_BATCH`（默认 20000 行）切批，
+   每批在独立写事务中提交；扫描游标用单独的 session、自动提交，不长期持有读快照。
+   不得把整表回填放进一个事务：sf1（3,055,774 条 Message）实测单事务在 1GB WT cache
+   下会被 WT 以 `WT_ROLLBACK`（-31800）回滚，索引留在 ERROR。
+9. 只有全部分批成功后才 state = PUBLIC；任一批 begin/commit 失败或唯一性冲突：
+   state = ERROR，已提交的前序批次可能保留部分条目，必须 `DROP INDEX` 后重建。
 
 ## 9. 写入路径索引维护
 
