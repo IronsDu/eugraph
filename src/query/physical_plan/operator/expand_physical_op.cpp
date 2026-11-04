@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "query/dataset/cell_access.hpp"
 #include "query/dataset/row.hpp"
@@ -32,6 +33,63 @@ EdgeId edgeIdFromValue(const Value& val) {
 }
 
 } // anonymous namespace
+
+namespace {
+
+constexpr size_t kDefaultExpandInputRows = 128;
+
+/// Bound how many input rows one Expand call may process at once. This is the
+/// main defence against a single wildly expanding hop materialising tens of
+/// millions of rows inside one DataChunk; it is tunable for experiments.
+size_t expandInputRows() {
+    const char* env = std::getenv("EUGRAPH_EXPAND_INPUT_ROWS");
+    if (env == nullptr || *env == '\0')
+        return kDefaultExpandInputRows;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0' || parsed == 0)
+        return kDefaultExpandInputRows;
+    return static_cast<size_t>(std::min<unsigned long>(parsed, 4096));
+}
+
+/// Copy a logical row range into a standalone flat chunk. This deliberately
+/// materialises only the bounded input slice; it preserves values and NULLs
+/// without depending on the source chunk's selection vector.
+DataChunk sliceChunk(const DataChunk& chunk, size_t offset, size_t count) {
+    DataChunk out;
+    out.count = count;
+    out.columns.reserve(chunk.columns.size());
+    for (const auto& src : chunk.columns) {
+        Column dst = Column::flat(src.type, count);
+        for (size_t i = 0; i < count; ++i) {
+            if (src.isNull(offset + i))
+                dst.setNull(i);
+            else
+                dst.setValue(i, src.getValue(offset + i));
+        }
+        out.columns.push_back(std::move(dst));
+    }
+    out.sel = SelectionVector::identity(count);
+    return out;
+}
+
+} // namespace
+
+folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::slicedChild() {
+    auto gen = child_->executeChunkTraced();
+    const size_t batch_rows = expandInputRows();
+    while (auto chunk = co_await gen.next()) {
+        const size_t rows = chunk->numRows();
+        if (rows == 0)
+            continue;
+        if (rows <= batch_rows) {
+            co_yield std::move(*chunk);
+            continue;
+        }
+        for (size_t offset = 0; offset < rows; offset += batch_rows)
+            co_yield sliceChunk(*chunk, offset, std::min(batch_rows, rows - offset));
+    }
+}
 
 std::string ExpandPhysicalOp::toString() const {
     std::string dir;
@@ -163,7 +221,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         }
     }
 
-    auto child_gen = cancellable(child_->executeChunkTraced());
+    auto child_gen = cancellable(slicedChild());
 
     auto dir = Direction::OUT;
     if (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT) {

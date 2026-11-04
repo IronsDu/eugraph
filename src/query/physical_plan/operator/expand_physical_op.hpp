@@ -64,6 +64,12 @@ public:
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
 
+    /// Split child chunks into bounded input batches before expanding. A single
+    /// input chunk can otherwise turn into millions of output rows, which both
+    /// defeats LIMIT (a chunk is materialised before it is consumed) and can
+    /// exhaust memory on unbounded multi-hop walks.
+    folly::coro::AsyncGenerator<DataChunk> slicedChild();
+
     /// Configure an allowed-destination filter. Instead of scanning every
     /// edge neighbour, Expand probes edges for the destination vertex ids
     /// resolved from `allowed values` via `index_id`.
