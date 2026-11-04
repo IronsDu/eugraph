@@ -28,6 +28,7 @@ std::function<...> callback;                   // 热路径类型擦除
 
 ```cpp
 std::string_view columnStringView(const Column&, size_t row);
+VertexId columnVertexId(const Column&, size_t row);
 bool columnCellEquals(const Column&, size_t, const Column&, size_t);
 bool columnCellEqualsValue(const Column&, size_t, const Value&);
 bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_t dst_row);
@@ -51,6 +52,8 @@ bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_t dst_r
 | `ExpressionEvaluator::evaluate` | 逐行 `getValue/setValue` | 整列 `copyFrom` / 单行 `copyValueFrom` 快路径 |
 | `mutation_mirror` 物化 | `fresh.setValue(i, col.getValue(i))` | `copyColumnCell` |
 | `REMOVE`/`SET` 的 COW 物化 | 同上 | `copyColumnCell` |
+| `Expand` 精确邻接 seek / 普通 dst 过滤 | 每行 `getValue` 再取 vertex id | `columnVertexId` 直接读 VERTEX_REF/VERTEX/INT64 列 |
+| `SemiJoin` 批量右键 | 每个右行一个 `vector<VertexId>` | 扁平 `right_flat` + `span` 视图；右侧扫描用 `columnVertexId` |
 
 ## 4. 仍然必须拥有的拷贝（不是 bug）
 
@@ -78,7 +81,9 @@ bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_t dst_r
 ## 6. 验证结果（2026-11-03）
 
 - `data_chunk_tests` 20/20，其中新增 `CellAccess` 3/3（string/scalar/NULL/ANY/typed copy）；
-- `query_executor_tests` 614/614（含 CASE/IN/XOR/SET/REMOVE 与全部 aggregate 回归）；
+- `query_executor_tests` **614/614**（含 CASE/IN/XOR/SET/REMOVE 与全部 aggregate 回归）；
+- TCK **3924/3977**；唯一失败是 temporal `Temporal2 [6]`（与本轮改动无关的既有日期时区用例），
+  另有 52 个 TCK undefined step；受影响 aggregate/mutation/precedence 子集 **178/178**；
 - storage callback 相关：`wt_tests` 7/7、`index_store_tests` 13/13、
   `metadata_tests` 20/20、`index_e2e_tests` 56/56；
 - 性能 A/B 尚未执行；本审计只证明语义与分配形态，不把“少了 Value”当成倍数。

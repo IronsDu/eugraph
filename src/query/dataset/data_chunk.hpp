@@ -730,10 +730,16 @@ struct Column {
             const auto* v = std::get_if<int64_t>(&constant_value);
             return v != nullptr ? *v : 0;
         }
-        if (!buffer || buffer->type != binder::BoundTypeKind::INT64)
+        if (!buffer)
             return 0;
         const size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
-        return physical < buffer->int64_data.size() ? buffer->int64_data[physical] : 0;
+        if (buffer->type == binder::BoundTypeKind::INT64)
+            return physical < buffer->int64_data.size() ? buffer->int64_data[physical] : 0;
+        if (buffer->type == binder::BoundTypeKind::ANY) {
+            const Value v = buffer->getValue(physical);
+            return std::get_if<int64_t>(&v) != nullptr ? std::get<int64_t>(v) : 0;
+        }
+        return 0;
     }
 
     double getDouble(size_t i) const {

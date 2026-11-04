@@ -4,6 +4,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -58,6 +59,23 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                                     isNull(std::get<binder::BoundLiteral>(agg.arguments[0]).value);
     }
 
+    // Only sum/avg may safely coerce numeric arguments into a typed buffer:
+    // their arithmetic is numeric anyway. min/max/collect/percentile/count must
+    // preserve the runtime Value variant (mixed int/double, NULL, entity kinds),
+    // otherwise e.g. max([1, 2.0, 5]) returns 5.0 instead of 5.
+    std::vector<bool> typed_numeric_args(aggregates_.size(), false);
+    for (size_t i = 0; i < aggregates_.size(); ++i) {
+        const auto& agg = aggregates_[i];
+        if (!agg.func_def)
+            continue;
+        if (agg.func_def->name != "sum" && agg.func_def->name != "avg")
+            continue;
+        typed_numeric_args[i] = std::all_of(agg.arguments.begin(), agg.arguments.end(), [](const auto& arg) {
+            const auto kind = binder::getBoundExprType(arg).kind;
+            return kind == binder::BoundTypeKind::INT64 || kind == binder::BoundTypeKind::DOUBLE;
+        });
+    }
+
     while (auto chunk = co_await child_gen.next()) {
         const size_t n = chunk->numRows();
         if (n == 0)
@@ -94,11 +112,10 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 // ANY keeps the old, representation-agnostic semantics for those
                 // kinds while numeric/string aggregates still get typed buffers.
                 const auto arg_kind = binder::getBoundExprType(arg).kind;
-                const auto storage_kind =
-                    (arg_kind == binder::BoundTypeKind::BOOL || arg_kind == binder::BoundTypeKind::INT64 ||
-                     arg_kind == binder::BoundTypeKind::DOUBLE || arg_kind == binder::BoundTypeKind::STRING)
-                        ? arg_kind
-                        : binder::BoundTypeKind::ANY;
+                const auto storage_kind = (typed_numeric_args[a] && (arg_kind == binder::BoundTypeKind::INT64 ||
+                                                                     arg_kind == binder::BoundTypeKind::DOUBLE))
+                                              ? arg_kind
+                                              : binder::BoundTypeKind::ANY;
                 Column col = Column::flat(storage_kind, n);
                 evaluator.evaluate(arg, *chunk, col);
                 plan.args.push_back(std::move(col));

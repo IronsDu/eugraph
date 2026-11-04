@@ -2423,7 +2423,7 @@ TEST_F(QueryExecutorAggTest, TypedAggregateDoubleAcrossChunks) {
     EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][1]), 750.25);
 }
 
-TEST_F(QueryExecutorAggTest, TypedAggregateNullsAndCollect) {
+TEST_F(QueryExecutorAggTest, TypedAggregateNullsAndCollectFiltersNulls) {
     auto result = execSync(*executor_, "UNWIND [1, null, 3] AS x "
                                        "RETURN sum(x) AS s, count(x) AS c, count(*) AS ca, collect(x) AS xs");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -2433,10 +2433,9 @@ TEST_F(QueryExecutorAggTest, TypedAggregateNullsAndCollect) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][2]), 3);
     ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][3]));
     const auto& list = *std::get<ListValuePtr>(result.rows[0][3]);
-    ASSERT_EQ(list.elements.size(), 3);
+    ASSERT_EQ(list.elements.size(), 2);
     EXPECT_EQ(std::get<int64_t>(list.elements[0].value), 1);
-    EXPECT_TRUE(isNull(list.elements[1].value));
-    EXPECT_EQ(std::get<int64_t>(list.elements[2].value), 3);
+    EXPECT_EQ(std::get<int64_t>(list.elements[1].value), 3);
 }
 
 TEST_F(QueryExecutorAggTest, TypedAggregateGroupedAcrossChunks) {

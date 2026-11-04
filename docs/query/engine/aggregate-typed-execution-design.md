@@ -35,8 +35,9 @@ LDBC/profile 中 `AggregatePhysicalOp` 在 complex-10/14 一类查询里占比�
 
 - 聚合参数在 chunk 级只求值一次，按列持有；行循环不再构造参数容器。
 - 聚合回调不再使用 `std::function`；聚合函数是 captureless 函数指针。
-- 常见聚合（count/sum/avg）走 typed payload；通用聚合（min/max/collect/
-  percentile）保留 `Value` 语义，但不再经过参数 `vector<Value>`。
+- `sum`/`avg` 的数值参数走 typed payload；`count`/`min`/`max`/`collect`/
+  `percentile` 保留 `Value` 语义（混合 int/double、实体表示不能被 typed 列归一化），
+  但不再经过参数 `vector<Value>`。
 - null / `count(*)` / DISTINCT / 复杂聚合替换的语义保持原样。
 
 **非目标（本轮不做）**
@@ -134,8 +135,9 @@ double  getDouble(size_t i) const;
 
 - `count(*)`：`has_variadic_args && arguments[0]` 是 null literal；不建参数列，
   不跳过 null，每行 `++count`。
-- 其他聚合：`args[0]` 为 null 时跳过；例外是 `keeps_nulls && !distinct`
-  （collect 非 DISTINCT），它保留 null。
+- 其他聚合：`args[0]` 为 null 时跳过；例外是 binder 显式设置
+  `keeps_nulls && !distinct` 的内部 collect（pattern/list comprehension 需要保留
+  null 投影）。普通 `collect(x)` 过滤 null（TCK Aggregation5）。
 - `DISTINCT` 永远跳过 null（即使 `keeps_nulls`）；去重键是 `args[0]`。
 - 空输入 + 无 group key：仍输出一行 `agg_init` + `agg_finalize` 的默认值。
 - 复杂聚合：内部 aggregate 先 finalize，再作为 substitution 求值外层表达式。
@@ -169,11 +171,15 @@ double  getDouble(size_t i) const;
 
 - `query_executor_tests` **614/614**，包含新增的跨 chunk / double / null+collect /
   多 group / 复杂聚合用例；`count(DISTINCT m)` 与 `WITH DISTINCT m` 的一致性回归通过。
+- TCK **3924/3977**；唯一失败是既有 temporal `Temporal2 [6]` 时区用例，52 个 undefined
+  step；受影响 aggregate/mutation/precedence 子集 178/178。
 - `data_chunk_tests` 20/20（`CellAccess` 3/3）。
-- 关键坑：聚合参数不能一律按 `getBoundExprType` 建 typed 列。图实体在拓扑阶段是
-  `VERTEX_REF`、语义阶段是 `VERTEX`；强制 typed 列会让表示不匹配的写入只置 validity
-  位而 payload 为空，`count(DISTINCT m)` 因此退化成 1。现在只对 BOOL/INT64/DOUBLE/
-  STRING 建 typed 列，其他类型一律 ANY。
+- 关键坑 1：图实体在拓扑阶段是 `VERTEX_REF`、语义阶段是 `VERTEX`；强制 typed 列会让
+  表示不匹配的写入只置 validity 位而 payload 为空，`count(DISTINCT m)` 因此退化成 1。
+  现在 `count/min/max/collect/percentile` 一律 ANY。
+- 关键坑 2：`UNWIND [1, 2.0, 5]` 的静态元素类型可能是 DOUBLE，但运行时仍是 int/double
+  混合；给 `max` 建 DOUBLE 列会把 5 归一化成 5.0（TCK Aggregation2 [5]）。只有
+  `sum`/`avg` 的数值参数允许 typed 列，因为它们的算术语义本来就做数值提升。
 - 尚未做：per-group batch update（selection vector）、typed group key hashing、性能 A/B。
 
 ## 10. 风险

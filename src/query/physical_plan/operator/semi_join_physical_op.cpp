@@ -1,7 +1,10 @@
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 
+#include "query/dataset/cell_access.hpp"
+
 #include <algorithm>
 #include <cstdlib>
+#include <span>
 #include <unordered_set>
 
 namespace eugraph {
@@ -156,39 +159,63 @@ folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeBatch(std::vec
     }
     correlated_source_->setRows(std::move(corr_rows));
 
-    auto key_of = [](const Row& row, const std::vector<uint32_t>& cols) {
-        std::vector<VertexId> key;
-        key.reserve(cols.size());
-        for (uint32_t c : cols)
-            key.push_back(sjVertexId(row[c]));
-        return key;
-    };
+    const size_t corr_n = right_correlation_cols_.size();
 
-    std::vector<std::vector<VertexId>> right_keys;
+    // Flatten the right-side correlation keys instead of allocating one
+    // vector<VertexId> per right row. The spans below point into right_flat and
+    // are built only after the generator is exhausted, so reallocation cannot
+    // invalidate them.
+    std::vector<VertexId> right_flat;
     auto right_gen = cancellable(right_->executeChunkTraced());
     while (auto right_chunk = co_await right_gen.next()) {
         for (size_t r = 0; r < right_chunk->count; ++r) {
-            std::vector<VertexId> key;
-            key.reserve(right_correlation_cols_.size());
-            for (uint32_t c : right_correlation_cols_)
-                key.push_back(sjVertexId(right_chunk->columns[c].getValue(r)));
-            if (std::find(key.begin(), key.end(), INVALID_VERTEX_ID) != key.end())
-                continue;
-            right_keys.push_back(std::move(key));
+            const size_t base = right_flat.size();
+            bool valid = true;
+            for (uint32_t c : right_correlation_cols_) {
+                const VertexId vid = columnVertexId(right_chunk->columns[c], r);
+                if (vid == INVALID_VERTEX_ID) {
+                    valid = false;
+                    break;
+                }
+                right_flat.push_back(vid);
+            }
+            if (!valid)
+                right_flat.resize(base);
         }
     }
-    std::sort(right_keys.begin(), right_keys.end());
-    right_keys.erase(std::unique(right_keys.begin(), right_keys.end()), right_keys.end());
+
+    std::vector<std::span<const VertexId>> right_keys;
+    right_keys.reserve(corr_n == 0 ? 0 : right_flat.size() / corr_n);
+    for (size_t off = 0; off + corr_n <= right_flat.size(); off += corr_n)
+        right_keys.emplace_back(right_flat.data() + off, corr_n);
+
+    auto key_less = [](std::span<const VertexId> a, std::span<const VertexId> b) {
+        return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end());
+    };
+    std::sort(right_keys.begin(), right_keys.end(), key_less);
+    right_keys.erase(std::unique(right_keys.begin(), right_keys.end(),
+                                 [](std::span<const VertexId> a, std::span<const VertexId> b) {
+                                     return std::equal(a.begin(), a.end(), b.begin(), b.end());
+                                 }),
+                     right_keys.end());
 
     DataChunk out;
     out.columns.reserve(left_kinds.size());
     for (auto kind : left_kinds)
         out.columns.push_back(Column::flat(kind));
     out.reserve(left_rows.size());
+    std::vector<VertexId> left_key(corr_n, INVALID_VERTEX_ID);
     for (const auto& row : left_rows) {
-        auto key = key_of(row, left_correlation_cols_);
-        bool present = !key.empty() && std::find(key.begin(), key.end(), INVALID_VERTEX_ID) == key.end() &&
-                       std::binary_search(right_keys.begin(), right_keys.end(), key);
+        bool valid = true;
+        for (size_t i = 0; i < corr_n; ++i) {
+            left_key[i] = sjVertexId(row[left_correlation_cols_[i]]);
+            if (left_key[i] == INVALID_VERTEX_ID) {
+                valid = false;
+                break;
+            }
+        }
+        const std::span<const VertexId> key(left_key.data(), corr_n);
+        bool present = valid && corr_n != 0 && std::binary_search(right_keys.begin(), right_keys.end(), key, key_less);
         if (anti_ ? present : !present)
             continue;
         for (size_t c = 0; c < left_kinds.size(); ++c)

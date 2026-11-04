@@ -557,8 +557,24 @@ VLE 约 80 ms，上层 4,086 行展开；剩余是结果流，不是 dispatch。
   - storage callback：`wt_tests` 7/7、`index_store_tests` 13/13、
     `metadata_tests` 20/20、`index_e2e_tests` 56/56；
   - 全量 ctest/TCK 尚未在本轮执行（构建/数据成本高），提交前需按 AGENTS 补跑。
+### A.7 Rebase main #288 后的增量优化
+
+- `ab93482` 引入 vertex summary cache、`scanEdgesExact`、SemiJoin/AntiSemiJoin 批量右子计划、
+  ProjectionExtract persistent ctor cache；本分支 rebase 后：
+  - `scanEdgesExact` 的同步 callback 也统一为 `folly::FunctionRef`；
+  - Expand 的 exact seek 和普通 dst 过滤改用 `columnVertexId`，避免每行 Value；
+  - SemiJoin 批量右键从 `vector<vector<VertexId>>` 改为扁平 `VertexId` 数组 + `span` 视图，
+    右侧扫描使用 `columnVertexId`；
+  - aggregate 参数 typed 策略收紧为仅 `sum`/`avg` 的数值参数；`count/min/max/collect/
+    percentile` 保持 ANY，避免 `max([1,2.0,5])` 被归一化成 5.0、`collect(x)` 被强转。
+- 这轮同时修正了两个由 typed 化引出的 TCK 回归：ANY 列 `getInt64` 回退、普通 collect
+  不保留 null（内部 pattern/list comprehension 仍显式保留）。
 - 注意：调试构建目录曾出现 `libeugraph_compute.a` 被中断构建截断（8 字节），
   导致 query_executor_tests 链接缺 `CypherQueryParser` 符号；删除该归档并重建
   `eugraph_compute` 后恢复。这不是源码问题，但复现构建失败时先检查静态库大小。
+- TCK（2026-11-04，rebase main ab93482 后）：**3924/3977**，唯一失败为
+  `Temporal2 [6]` 的既有日期时区用例（与本轮改动无关），52 个 undefined step；
+  受影响 aggregate/mutation/precedence 子集 178/178。
 - 尚未做：性能 A/B、per-group batch aggregate、typed GROUP BY key、手写 SIMD、
-  intra-query 并行；全量 ctest/TCK 待补。
+  intra-query 并行；全量 ctest 中的 loader/integration 目标仍受基线
+  `loader_progress.cpp` unused-function `-Werror` 影响。

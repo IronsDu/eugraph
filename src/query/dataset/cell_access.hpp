@@ -98,4 +98,46 @@ inline bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_
     return true;
 }
 
+/// Resolve a vertex-id cell without materialising a Value. Handles the two
+/// graph representations (VERTEX_REF / VERTEX), the integer id form used by
+/// internal slots, and falls back to Value for ANY/other forms.
+inline VertexId columnVertexId(const Column& col, size_t row) {
+    if (col.isNull(row))
+        return INVALID_VERTEX_ID;
+    if (col.form == VectorForm::CONSTANT) {
+        if (const auto* r = std::get_if<VertexRef>(&col.constant_value))
+            return r->id;
+        if (const auto* v = std::get_if<VertexValuePtr>(&col.constant_value))
+            return v && *v ? (*v)->id : INVALID_VERTEX_ID;
+        if (const auto* i = std::get_if<int64_t>(&col.constant_value))
+            return static_cast<VertexId>(*i);
+        return INVALID_VERTEX_ID;
+    }
+    if (!col.buffer)
+        return INVALID_VERTEX_ID;
+    const size_t physical = (col.form == VectorForm::DICTIONARY) ? col.dict_sel[row] : row;
+    switch (col.buffer->type) {
+    case binder::BoundTypeKind::VERTEX_REF:
+        return physical < col.buffer->vertex_ref_data.size() ? col.buffer->vertex_ref_data[physical].id
+                                                             : INVALID_VERTEX_ID;
+    case binder::BoundTypeKind::VERTEX:
+        if (physical < col.buffer->vertex_data.size() && col.buffer->vertex_data[physical])
+            return col.buffer->vertex_data[physical]->id;
+        return INVALID_VERTEX_ID;
+    case binder::BoundTypeKind::INT64:
+        return physical < col.buffer->int64_data.size() ? static_cast<VertexId>(col.buffer->int64_data[physical])
+                                                        : INVALID_VERTEX_ID;
+    default:
+        break;
+    }
+    const Value value = col.getValue(row);
+    if (const auto* r = std::get_if<VertexRef>(&value))
+        return r->id;
+    if (const auto* v = std::get_if<VertexValuePtr>(&value))
+        return v && *v ? (*v)->id : INVALID_VERTEX_ID;
+    if (const auto* i = std::get_if<int64_t>(&value))
+        return static_cast<VertexId>(*i);
+    return INVALID_VERTEX_ID;
+}
+
 } // namespace eugraph

@@ -1066,7 +1066,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
 
     add("min", {}, BoundType::Any(), true, false, &initMinState, &updateMinState, &finalizeMinState);
     add("max", {}, BoundType::Any(), true, false, &initMaxState, &updateMaxState, &finalizeMaxState);
-    add("collect", {}, BoundType::List(BoundType::Any()), true, true, &initCollectState, &updateCollectState,
+    add("collect", {}, BoundType::List(BoundType::Any()), true, false, &initCollectState, &updateCollectState,
         &finalizeCollectState);
 
     add("percentileDisc", {BoundType::Double(), BoundType::Double()}, BoundType::Double(), false, false,
