@@ -491,12 +491,6 @@ short-2         4.14       3.93     0.950
   **3930/3983**（唯一失败为既有 `Temporal2 [6]`）。**全量 TCK 本轮未重跑**。
 - **测量口径**：第一轮不是同二进制 A/B；第二轮有同二进制 A/B（§2.5）。跨轮次绝对值和
   短查询胜负受 CPU 频率/neo4j 预热影响，只在同轮比值与 A/B 内解释。
-- **原始数据**：`baseline/ldbc-bench-20261104-first.json`（首轮）、
-  `baseline/ldbc-bench-20261104-steady.json`（第一轮稳态）、
-  `baseline/ldbc-bench-20261104-final.json`（第二轮主表）、
-  `baseline/eugraph-ab-opt-vs-base.txt` / `baseline/eugraph-ab-focus.txt`（同二进制 A/B）、
-  `baseline/verify-ldbc-20261104.log`（21/21 校验）、
-  `baseline/eugraph-profiles-20261104.txt`（PROFILE 摘要）。
 
 ## 5. 2026-11-03 / 11-04 改动与归因
 
