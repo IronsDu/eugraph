@@ -16,6 +16,7 @@
 |---------|------|----------|
 | `vertex_data` | 顶点标签 + 属性 + 可选邻接缓存（单表，按顶点前缀聚簇） | `{vertex_id:u64BE}{kind:u8}{...}` |
 | `vertex_existence` | 顶点存在表（含无标签 vertex，`MATCH (n)` 的全图扫描来源） | `{vertex_id:u64BE}` |
+| `vertex_summary` | 顶点摘要缓存：labels + 小属性（可丢弃，读加速） | `{vertex_id:u64BE}` |
 | `label_fwd_{id}` | 标签→顶点正向索引（每标签一表） | `{vertex_id:u64BE}` |
 | `edge_index` | 边邻接索引；邻接缓存启用时只保存 OVERFLOW 方向的边 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` |
 | `etype_{id}` | 边类型索引（每关系类型一表） | `{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}` |
@@ -143,6 +144,115 @@ enum class AdjacencyCacheState : uint8_t { COMPLETE = 0, OVERFLOW = 1 };
 5. `DELETE` / `DROP EDGE LABEL` 清理（已完成）；loader 后置批量构建（待补）；
 6. LDBC 重新导入 + 基准/TCK（已完成）；
 7. 查询/优化器接入：PE 融合读取已完成；degree 估计、目标属性下推、PC 直读仍待后续。
+
+### 顶点摘要（vertex_summary）
+
+#### 动机
+
+`vertex_data` 的属性是**每个属性一行**（`{vid}{0x01}{label}{prop}`）。LDBC sf0.1 的
+message 顶点平均有约 6.6 条属性记录，因此 `ProjectionExtract` 的一次 coalesce 探测实际是
+`1 次 search_near + ~6 次 cursor next`；c3/c9 各要探测 5.2 万/5.3 万个 message，这是主要成本。
+摘要把 labels 与小属性合并成**一个顶点一行**，把这次探测压成一次点查。
+
+#### 布局
+
+独立 WT 表 `table:vertex_summary`，key 只有 vid：
+
+```text
+key:   {vid:u64BE}
+value: u8  version = 1
+       u16 label_count, u16 labels[]
+       u16 entry_count, entry[]:
+           u16 label, u16 prop, u32 len, bytes[len]
+```
+
+- 只有 `ValueCodec` 编码后 **≤ 32 字节**的属性内联。判断依据是编码后字节数（含类型 tag、
+  长度前缀），不是字符串长度：`int64`/`double` 是 9B；27 字符 string 是 32B（内联），
+  28 字符是 33B（omitted）。
+- 大属性（`content`/`imageFile`/`email[]`/`speaks[]` 等）只记
+  `len = 0xFFFFFFFF`（**present but omitted**），不复制值。读方据此区分几种情况：
+  - label 不在摘要里 → 该属性为 **null**；
+  - label 在、但 entry 列表里没有该 `(label, prop)` → **null**（插入时未设置）；
+  - entry 存在且 `len == 0xFFFFFFFF` → **有值但未内联**，必须回退；
+  - entry 存在且有 bytes → 直接解码。
+- null 属性不产生 entry；多个标签各自列 entry（同名属性按 label 区分）。
+- 没有任何 label、也没有任何属性时 `encodeVertexSummary` 返回空串，**不写行**。
+- 目前没有 entry 数量上限，只有单值 32B 上限；极宽 vertex 会得到较大的单行（仍是一次点查）。
+
+#### 为什么是独立小表
+
+不把摘要塞进 `vertex_data` 的某个新 kind：`vertex_data` 有数百 MB、数百万行，一次点查要下降
+多层的 B-tree；摘要是约 45 MB 的浅表（sf0.1，约 140 B/顶点），5 万次点查基本都在热页里。独立表也不干扰
+`{vid}` 前缀扫描、`deleteVertex` 的前缀删除和 label/property 的既有编码。
+
+#### 写路径与失效
+
+摘要**不是第二份真相**，是“可丢弃缓存”。写路径：
+
+| 路径 | 处理 |
+|---|---|
+| 新建 `insertVertex` | 写摘要 |
+| 同一 vid 的第二次 `insertVertex`（补标签/属性） | **删**摘要（不合并） |
+| `putVertexProperty` / `putVertexProperties` / `deleteVertexProperty` | 删摘要 |
+| `addVertexLabel` / `removeVertexLabel` | 删摘要 |
+| `deleteVertex` | 删摘要 |
+| `dropLabel`（DDL，直连本地 session） | **显式删摘要** |
+| 事务回滚 | 摘要删除与属性写同事务，一起回滚 |
+
+- 更新路径不做 RMW：只删除整行，下一次读取回退 canonical 行。副作用是“被修改过的顶点
+  永久失去加速”，但正确性不依赖摘要。
+- 所有摘要写/删都在 `SyncGraphDataStore` 内；外部代码没有直接写 `vertex_data` 的路径。
+- **旧图兼容**：`ensure_tables()` 会为旧库建出空表；没有摘要行时读路径行为与之前完全一致。
+  不会自动回填；要让已有图获得加速需要重新导入（loader 的 `insertVertex` 会写摘要）。
+
+#### 读路径
+
+- `getVertexCoalescePropertiesBatch` / `getVertexCoalesceDataBatch`：先按 vid 点查摘要；
+  候选属性全部可解析（内联或确定不存在）时一次读完成；否则回退
+  `{vid}{0x01}` 前缀扫描（一次回退会读出该顶点的 canonical 属性行）。
+- `getVertexLabelsBatch`：摘要命中时直接取 labels；未命中/解码失败回退
+  `{vid}{0x00}` 前缀扫描。受益者是 Expand 的 `dst_label_ids_` 过滤、VLE 邻居标签、
+  pattern comprehension 的目标标签判定。
+- 解码失败（版本不认识、长度越界、空值）一律视为“摘要不可用”，走回退，不返回部分结果。
+
+#### 正确性不变量
+
+> 任何对 `vertex_data` 中某顶点 label/property 的写入或删除，都必须在**同一事务**内
+> 删除该顶点的 `vertex_summary` 行；读者遇到缺行/解码失败/候选未内联时一律回退
+> canonical 行。
+
+- 失败模式是**静默的错误结果**，不是崩溃：摘要若残留了已删除的 label/属性，读方会把它当成
+  “确定存在”返回。因此每条写路径都要有回归测试：
+  - `SummaryIsInvalidatedByPropertyUpdate`：`SET` 后 coalesce 必须拿到新值；
+  - `SummaryIsInvalidatedByDropLabel`：`DROP LABEL` 后该 label 及其属性不得“复活”；
+  - `VarLenExpandMixedLabelChainReturnsDstProperty`：同一 vid 第二次 `insertVertex`
+    不得用新的一组 label/props 覆盖旧摘要（当前实现是删摘要）。
+- **解码边界**：`decodeVertexSummary` 对 label_count/entry_count/len 都做长度检查；
+  `len == 0` 的空编码只会被当成 omitted 而回退，不会误读。
+- **读一致性**：摘要点查与 canonical 回退都在语句的同一 WT snapshot 内；写者提交前
+  读者看不到摘要删除，提交后两者一起可见。
+- **无界增长**：每顶点至多一行；写路径只有 insert 时一次写、变更时一次删除。
+
+#### 标签定义事后增加属性
+
+`AsyncGraphMetaStore::createLabel(..., merge_properties=true)`（loader 多文件/增量 schema）
+**只改元数据、不回填顶点值**；新属性按 `prop_id = properties.size()` 追加、永不复用。因此：
+
+- 旧顶点在 canonical 行里没有新属性的值 → 摘要里也没有该 entry → 读作 **null**，
+  与权威行一致；
+- 之后 `SET n.newProp = ...` 走 `putVertexProperty` → 删摘要 → 回退读新值；
+- 属性**重命名**只改元数据、`prop_id` 不变，摘要键 `(label, prop_id)` 不受影响；
+- 属性**删除**当前未实现；若未来实现为“删除属性行”，必须像 `DROP LABEL` 一样显式删摘要；
+  若只是元数据删除，摘要与 canonical 行都保留旧值，行为与现状一致；
+- 未来的 `ADD PROPERTY ... DEFAULT` / 回填如果直接写属性行，必须同时删摘要。
+
+已用 `SummaryTreatsLaterDeclaredPropertyAsNull` 固化“事后声明属性读作 null、写入后读到新值”。
+
+#### 已知限制
+
+- 被更新过的顶点失去快路径（直到重新创建/重新导入）；这是“正确性优先”的取舍。
+- 没有自动 backfill；旧数据目录要重新导入才有加速。
+- 大属性永远走回退，`coalesce(content, imageFile)` 这类候选集不会从摘要获益。
 
 ### 标签正向索引（label_fwd_{id}）
 

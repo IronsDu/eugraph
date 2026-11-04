@@ -407,6 +407,8 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
     // result. A braced-init-list evaluates left-to-right, so passing
     // makeSlotLayout(output_schema) after std::move(output_schema) would read
     // a moved-from (empty) schema.
+    if (auto* pe = dynamic_cast<ProjectionExtractPhysicalOp*>(op.get()))
+        pe->setReadOnly(ctx.read_only);
     TupleSlotLayout pe_layout = makeSlotLayout(output_schema, ctx);
     return PlanOperatorResult{std::move(op), std::move(output_schema), std::move(output_types), std::move(pe_layout)};
 }
@@ -4124,8 +4126,27 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         left_corr_cols.push_back(static_cast<uint32_t>(pos));
                     }
 
-                    auto result = std::make_unique<SemiJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), correlated,
-                                                                       std::move(left_corr_cols), v.anti);
+                    // Batch the correlated right sub-plan for vertex-typed
+                    // correlations (one execution per chunk instead of per
+                    // left row).  Requires the right schema to carry the
+                    // correlation columns back from CorrelatedSource.
+                    ensureSlotLayout(rr, ctx);
+                    std::vector<uint32_t> right_corr_cols;
+                    std::vector<binder::BoundType> right_corr_types;
+                    for (const auto& [left_slot, right_slot] : v.correlation) {
+                        (void)left_slot;
+                        int pos = rr.slot_layout.getColumnIndex(right_slot);
+                        if (pos < 0 || static_cast<size_t>(pos) >= rr.output_types.size()) {
+                            right_corr_cols.clear();
+                            right_corr_types.clear();
+                            break;
+                        }
+                        right_corr_cols.push_back(static_cast<uint32_t>(pos));
+                        right_corr_types.push_back(rr.output_types[static_cast<size_t>(pos)]);
+                    }
+                    auto result = std::make_unique<SemiJoinPhysicalOp>(
+                        std::move(lr.op), std::move(rr.op), correlated, std::move(left_corr_cols),
+                        std::move(right_corr_cols), std::move(right_corr_types), v.anti);
                     return PlanOperatorResult{std::move(result), std::move(lr.output_schema),
                                               std::move(lr.output_types), std::move(lr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundLeftJoinOp>) {

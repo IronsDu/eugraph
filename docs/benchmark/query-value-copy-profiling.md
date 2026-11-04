@@ -1,5 +1,9 @@
 # 变长展开（VLE）性能剖析：瓶颈定位
 
+> **2026-11-03 更新**：顶点摘要、批量 SemiJoin/无向 Expand、`dst_bound` 精确 seek 等已落地；
+> 最新同机全量数据见 [ldbc-snb-sf0.1-comparison.md](ldbc-snb-sf0.1-comparison.md) §2。
+> 本文保留当时的定位与推理，作为历史记录；绝对值不要按本文引用。
+
 > 相关：complex-3 的后续复盘见
 > [查询性能排查与优化笔记](query-performance-optimization-notes.md)，
 > 其中补充了 GDB 原生 `bt` 采样、batch 去重、空查询裁剪与存储布局差距。

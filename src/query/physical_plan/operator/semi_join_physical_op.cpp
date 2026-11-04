@@ -1,9 +1,31 @@
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <unordered_set>
+
 namespace eugraph {
 namespace compute {
 
-folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
+namespace {
+
+VertexId sjVertexId(const Value& v) {
+    if (std::holds_alternative<VertexRef>(v))
+        return std::get<VertexRef>(v).id;
+    if (std::holds_alternative<VertexValuePtr>(v)) {
+        const auto& p = std::get<VertexValuePtr>(v);
+        return p ? p->id : INVALID_VERTEX_ID;
+    }
+    return INVALID_VERTEX_ID;
+}
+
+bool sjVertexLike(binder::BoundTypeKind kind) {
+    return kind == binder::BoundTypeKind::VERTEX || kind == binder::BoundTypeKind::VERTEX_REF;
+}
+
+} // namespace
+
+folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executePerRow() {
     auto left_gen = cancellable(left_->executeChunkTraced());
 
     while (auto left_chunk = co_await left_gen.next()) {
@@ -68,6 +90,114 @@ folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
         }
         output.count = filtered.count;
         co_yield std::move(output);
+    }
+}
+
+folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
+    const char* env = std::getenv("EUGRAPH_SJ_BATCH");
+    const size_t batch_limit = env ? std::strtoul(env, nullptr, 10) : 512;
+    bool can_batch = batch_limit > 0 && correlated_source_ && !right_correlation_cols_.empty() &&
+                     right_correlation_cols_.size() == left_correlation_cols_.size() &&
+                     right_corr_types_.size() == right_correlation_cols_.size();
+    for (const auto& t : right_corr_types_) {
+        if (!sjVertexLike(t.kind)) {
+            can_batch = false;
+            break;
+        }
+    }
+    if (!can_batch) {
+        auto gen = executePerRow();
+        while (auto chunk = co_await gen.next())
+            co_yield std::move(*chunk);
+        co_return;
+    }
+
+    std::vector<Row> batch;
+    batch.reserve(batch_limit);
+    std::vector<binder::BoundTypeKind> left_kinds;
+    auto left_gen = cancellable(left_->executeChunkTraced());
+    while (auto left_chunk = co_await left_gen.next()) {
+        if (left_chunk->count == 0)
+            continue;
+        if (left_kinds.empty())
+            for (const auto& col : left_chunk->columns)
+                left_kinds.push_back(col.type);
+        for (size_t r = 0; r < left_chunk->count; ++r) {
+            Row row;
+            row.reserve(left_chunk->columns.size());
+            for (size_t c = 0; c < left_chunk->columns.size(); ++c)
+                row.push_back(left_chunk->getValue(c, r));
+            batch.push_back(std::move(row));
+            if (batch.size() >= batch_limit) {
+                auto gen = executeBatch(std::move(batch), left_kinds);
+                while (auto chunk = co_await gen.next())
+                    co_yield std::move(*chunk);
+                batch.clear();
+            }
+        }
+    }
+    if (!batch.empty()) {
+        auto gen = executeBatch(std::move(batch), left_kinds);
+        while (auto chunk = co_await gen.next())
+            co_yield std::move(*chunk);
+    }
+}
+
+folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeBatch(std::vector<Row> left_rows,
+                                                                        std::vector<binder::BoundTypeKind> left_kinds) {
+    std::vector<std::vector<Value>> corr_rows;
+    corr_rows.reserve(left_rows.size());
+    for (const auto& row : left_rows) {
+        std::vector<Value> values;
+        values.reserve(left_correlation_cols_.size());
+        for (uint32_t col : left_correlation_cols_)
+            values.push_back(row[col]);
+        corr_rows.push_back(std::move(values));
+    }
+    correlated_source_->setRows(std::move(corr_rows));
+
+    auto key_of = [](const Row& row, const std::vector<uint32_t>& cols) {
+        std::vector<VertexId> key;
+        key.reserve(cols.size());
+        for (uint32_t c : cols)
+            key.push_back(sjVertexId(row[c]));
+        return key;
+    };
+
+    std::vector<std::vector<VertexId>> right_keys;
+    auto right_gen = cancellable(right_->executeChunkTraced());
+    while (auto right_chunk = co_await right_gen.next()) {
+        for (size_t r = 0; r < right_chunk->count; ++r) {
+            std::vector<VertexId> key;
+            key.reserve(right_correlation_cols_.size());
+            for (uint32_t c : right_correlation_cols_)
+                key.push_back(sjVertexId(right_chunk->columns[c].getValue(r)));
+            if (std::find(key.begin(), key.end(), INVALID_VERTEX_ID) != key.end())
+                continue;
+            right_keys.push_back(std::move(key));
+        }
+    }
+    std::sort(right_keys.begin(), right_keys.end());
+    right_keys.erase(std::unique(right_keys.begin(), right_keys.end()), right_keys.end());
+
+    DataChunk out;
+    out.columns.reserve(left_kinds.size());
+    for (auto kind : left_kinds)
+        out.columns.push_back(Column::flat(kind));
+    out.reserve(left_rows.size());
+    for (const auto& row : left_rows) {
+        auto key = key_of(row, left_correlation_cols_);
+        bool present = !key.empty() && std::find(key.begin(), key.end(), INVALID_VERTEX_ID) == key.end() &&
+                       std::binary_search(right_keys.begin(), right_keys.end(), key);
+        if (anti_ ? present : !present)
+            continue;
+        for (size_t c = 0; c < left_kinds.size(); ++c)
+            out.columns[c].setValue(out.count, row[c]);
+        ++out.count;
+    }
+    if (out.count > 0) {
+        out.sel = SelectionVector::identity(out.count);
+        co_yield std::move(out);
     }
 }
 

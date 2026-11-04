@@ -71,6 +71,10 @@ public:
     static std::string encodeVertexExistenceKey(VertexId vertex_id);
     static VertexId decodeVertexExistenceKey(std::string_view key);
 
+    // ==================== Vertex Summary (table:vertex_summary) ====================
+    // Key: {vertex_id:uint64 BE} -> packed labels + small properties
+    static std::string encodeVertexSummaryKey(VertexId vertex_id);
+
     // ==================== Edge Index (table:edge_index) ====================
     // Key: {vertex_id:uint64 BE}{direction:uint8}{edge_label_id:uint16 BE}{neighbor_id:uint64 BE}{seq:uint64 BE}
     struct EdgeIndexKey {

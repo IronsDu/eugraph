@@ -44,6 +44,12 @@ VertexId KeyCodec::decodeLabelForwardKey(std::string_view key) {
 
 // ==================== Vertex Existence ====================
 
+std::string KeyCodec::encodeVertexSummaryKey(VertexId vertex_id) {
+    std::string key;
+    encodeU64BE(key, vertex_id);
+    return key;
+}
+
 std::string KeyCodec::encodeVertexExistenceKey(VertexId vertex_id) {
     std::string key;
     key.reserve(8);

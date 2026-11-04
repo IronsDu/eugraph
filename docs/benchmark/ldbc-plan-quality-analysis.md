@@ -1,5 +1,9 @@
 # LDBC sf0.1 计划质量对照与剩余瓶颈（2026-11-02）
 
+> **2026-11-03 更新**：顶点摘要、批量 SemiJoin/无向 Expand、`dst_bound` 精确 seek 等已落地；
+> 最新同机全量数据见 [ldbc-snb-sf0.1-comparison.md](ldbc-snb-sf0.1-comparison.md) §2。
+> 本文保留当时的定位与推理，作为历史记录；绝对值不要按本文引用。
+
 > 目的：回答“慢是不是因为计划选得不好”。同一份数据、同一参数，EuGraph `PROFILE`
 > 与 neo4j `PROFILE` 逐算子对照 rows / dbHits / 访问次数，再用 GDB 采样与查询变体
 > A/B 交叉验证。结论：**c5/c6/c9 的计划形状与 neo4j 基本一致，差距在每次访问的

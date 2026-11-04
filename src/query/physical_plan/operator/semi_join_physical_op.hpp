@@ -23,9 +23,12 @@ class SemiJoinPhysicalOp : public PhysicalOperator {
 public:
     SemiJoinPhysicalOp(std::unique_ptr<PhysicalOperator> left, std::unique_ptr<PhysicalOperator> right,
                        CorrelatedSourcePhysicalOp* correlated_source, std::vector<uint32_t> left_correlation_cols,
+                       std::vector<uint32_t> right_correlation_cols, std::vector<binder::BoundType> right_corr_types,
                        bool anti = false)
         : left_(std::move(left)), right_(std::move(right)), correlated_source_(correlated_source),
-          left_correlation_cols_(std::move(left_correlation_cols)), anti_(anti) {}
+          left_correlation_cols_(std::move(left_correlation_cols)),
+          right_correlation_cols_(std::move(right_correlation_cols)), right_corr_types_(std::move(right_corr_types)),
+          anti_(anti) {}
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
@@ -41,10 +44,16 @@ public:
     }
 
 private:
+    folly::coro::AsyncGenerator<DataChunk> executePerRow();
+    folly::coro::AsyncGenerator<DataChunk> executeBatch(std::vector<Row> left_rows,
+                                                        std::vector<binder::BoundTypeKind> left_kinds);
+
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;
     CorrelatedSourcePhysicalOp* correlated_source_;
     std::vector<uint32_t> left_correlation_cols_;
+    std::vector<uint32_t> right_correlation_cols_;
+    std::vector<binder::BoundType> right_corr_types_;
     bool anti_ = false;
 };
 

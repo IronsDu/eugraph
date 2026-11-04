@@ -118,6 +118,13 @@ public:
     /// clears Expand's own filter and the operator drops matching rows).
     bool setRequiredLabels(size_t source_col, const std::vector<LabelId>& labels);
 
+    /// Read-only statements may reuse a constructed VertexValue across
+    /// executeChunk() calls (a correlated Apply re-executes the same sub-plan
+    /// for many rows).  Write statements keep the per-chunk cache only.
+    void setReadOnly(bool read_only) {
+        read_only_ = read_only;
+    }
+
     /// Diagnostics: number of deferred destination-label filters attached.
     static uint64_t deferredLabelFilterCount() noexcept;
     static void resetDeferredLabelFilterCount() noexcept;
@@ -131,6 +138,10 @@ private:
     Schema input_schema_;
     std::vector<binder::BoundType> output_types_;
     std::unique_ptr<PhysicalOperator> child_;
+    bool read_only_ = false;
+    /// vid -> materialized vertex, reused across executeChunk() calls on
+    /// read-only statements (bounded; see executeChunk).
+    std::unordered_map<VertexId, VertexValuePtr> persistent_ctor_cache_;
     /// __anon__ label id — properties migrated here by REMOVE n:L must be
     /// polled even when the vertex no longer carries __anon__ in its label
     /// set (REMOVE only severs the label association; it does not erase the

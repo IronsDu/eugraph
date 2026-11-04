@@ -32,7 +32,10 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
             PathTopology pt;
             VertexId last_vertex = INVALID_VERTEX_ID;
 
-            auto append_vertex = [&](VertexId vid) {
+            // A vertex element names a position in the pattern.  Consecutive
+            // vertex elements can refer to the same node (the closing node of
+            // a chain follows the edge's endpoint), so dedup against the tail.
+            auto append_vertex_element = [&](VertexId vid) {
                 if (pt.vertex_ids.empty() || pt.vertex_ids.back() != vid) {
                     pt.vertex_ids.push_back(vid);
                 }
@@ -45,7 +48,13 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                 pt.edge_src_ids.push_back(src);
                 pt.edge_dst_ids.push_back(dst);
                 VertexId neighbor = (last_vertex == INVALID_VERTEX_ID || src == last_vertex) ? dst : src;
-                append_vertex(neighbor);
+                // The edge always adds its far endpoint.  For a self-loop that
+                // endpoint equals the current tail, but the path still has two
+                // vertex positions (A -[e]-> A); deduping here would make
+                // length(p) = 0 and drop the closing node from nodes(p) and
+                // Bolt path serialization.
+                pt.vertex_ids.push_back(neighbor);
+                last_vertex = neighbor;
             };
             auto append_edge_value = [&](const Value& edge_value) {
                 if (std::holds_alternative<EdgeKey>(edge_value)) {
@@ -63,9 +72,9 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                     continue;
                 const Value& val = chunk->columns[col].getValue(row_idx);
                 if (std::holds_alternative<VertexRef>(val)) {
-                    append_vertex(std::get<VertexRef>(val).id);
+                    append_vertex_element(std::get<VertexRef>(val).id);
                 } else if (std::holds_alternative<VertexValuePtr>(val)) {
-                    append_vertex((*std::get<VertexValuePtr>(val)).id);
+                    append_vertex_element((*std::get<VertexValuePtr>(val)).id);
                 } else if (std::holds_alternative<ListValuePtr>(val)) {
                     for (const auto& elem : (*std::get<ListValuePtr>(val)).elements)
                         append_edge_value(elem.value);
