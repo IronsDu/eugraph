@@ -82,8 +82,9 @@ bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_t dst_r
 
 - `data_chunk_tests` 20/20，其中新增 `CellAccess` 3/3（string/scalar/NULL/ANY/typed copy）；
 - `query_executor_tests` **614/614**（含 CASE/IN/XOR/SET/REMOVE 与全部 aggregate 回归）；
-- TCK **3924/3977**；唯一失败是 temporal `Temporal2 [6]`（与本轮改动无关的既有日期时区用例），
+- TCK **3930/3983**；唯一失败是 temporal `Temporal2 [6]`（与本轮改动无关的既有日期时区用例），
   另有 52 个 TCK undefined step；受影响 aggregate/mutation/precedence 子集 **178/178**；
+  新增 aggregate-typed-regressions 6/6；
 - storage callback 相关：`wt_tests` 7/7、`index_store_tests` 13/13、
   `metadata_tests` 20/20、`index_e2e_tests` 56/56；
 - 性能 A/B 尚未执行；本审计只证明语义与分配形态，不把“少了 Value”当成倍数。

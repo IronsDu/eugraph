@@ -171,8 +171,11 @@ double  getDouble(size_t i) const;
 
 - `query_executor_tests` **614/614**，包含新增的跨 chunk / double / null+collect /
   多 group / 复杂聚合用例；`count(DISTINCT m)` 与 `WITH DISTINCT m` 的一致性回归通过。
-- TCK **3924/3977**；唯一失败是既有 temporal `Temporal2 [6]` 时区用例，52 个 undefined
+- TCK **3930/3983**；唯一失败是既有 temporal `Temporal2 [6]` 时区用例，52 个 undefined
   step；受影响 aggregate/mutation/precedence 子集 178/178。
+- 新增 `tests/tck/features-eugraph/aggregate-typed-regressions.feature`（6/6）：
+  `count(DISTINCT vertex)` vs `WITH DISTINCT`、动态属性 sum、混合数值 max/min、
+  普通 collect 过滤 NULL、list/pattern comprehension 保留 NULL 投影。
 - `data_chunk_tests` 20/20（`CellAccess` 3/3）。
 - 关键坑 1：图实体在拓扑阶段是 `VERTEX_REF`、语义阶段是 `VERTEX`；强制 typed 列会让
   表示不匹配的写入只置 validity 位而 payload 为空，`count(DISTINCT m)` 因此退化成 1。

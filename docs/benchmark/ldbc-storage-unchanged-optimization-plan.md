@@ -572,9 +572,11 @@ VLE 约 80 ms，上层 4,086 行展开；剩余是结果流，不是 dispatch。
 - 注意：调试构建目录曾出现 `libeugraph_compute.a` 被中断构建截断（8 字节），
   导致 query_executor_tests 链接缺 `CypherQueryParser` 符号；删除该归档并重建
   `eugraph_compute` 后恢复。这不是源码问题，但复现构建失败时先检查静态库大小。
-- TCK（2026-11-04，rebase main ab93482 后）：**3924/3977**，唯一失败为
+- TCK（2026-11-04，rebase main ab93482 后）：**3930/3983**，唯一失败为
   `Temporal2 [6]` 的既有日期时区用例（与本轮改动无关），52 个 undefined step；
-  受影响 aggregate/mutation/precedence 子集 178/178。
+  受影响 aggregate/mutation/precedence 子集 178/178；新增 aggregate-typed-regressions 6/6。
+- loader 基线 `loader_progress.cpp` 的 unused-function `-Werror` 已修复；
+  `loader_progress_tests` 8/8、`loader_integration_tests` 42/42。
 - 尚未做：性能 A/B、per-group batch aggregate、typed GROUP BY key、手写 SIMD、
   intra-query 并行；全量 ctest 中的 loader/integration 目标仍受基线
   `loader_progress.cpp` unused-function `-Werror` 影响。
