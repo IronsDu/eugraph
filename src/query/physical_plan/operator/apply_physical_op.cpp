@@ -22,16 +22,16 @@ folly::coro::AsyncGenerator<DataChunk> ApplyPhysicalOp::executeChunk() {
         output.reserve(DataChunk::DEFAULT_CAPACITY);
 
         for (size_t row = 0; row < left_chunk->count; ++row) {
-            std::vector<Value> corr_values;
-            corr_values.reserve(left_correlation_cols_.size());
-            for (uint32_t col_idx : left_correlation_cols_) {
-                if (col_idx < left_cols)
-                    corr_values.push_back(left_chunk->getValue(col_idx, row));
-            }
-            if (correlated_source_)
-                correlated_source_->setValues(std::move(corr_values));
+            if (correlated_source_ && !left_correlation_cols_.empty())
+                correlated_source_->setRowFromChunk(*left_chunk, row, left_correlation_cols_);
 
             if (value_sink_) {
+                std::vector<Value> corr_values;
+                corr_values.reserve(left_correlation_cols_.size());
+                for (uint32_t col_idx : left_correlation_cols_) {
+                    if (col_idx < left_cols)
+                        corr_values.push_back(left_chunk->getValue(col_idx, row));
+                }
                 auto allowed = std::make_shared<std::vector<PropertyValue>>();
                 if (scalar_correlation_) {
                     // One index probe per left row: the correlation column is
@@ -60,10 +60,14 @@ folly::coro::AsyncGenerator<DataChunk> ApplyPhysicalOp::executeChunk() {
                     continue;
 
                 for (size_t rr = 0; rr < right_chunk->count; ++rr) {
-                    for (size_t lc = 0; lc < left_cols; ++lc)
-                        output.columns[lc].setValue(output.count, left_chunk->getValue(lc, row));
-                    for (size_t rc = 0; rc < right_cols && rc < right_chunk->numColumns(); ++rc)
-                        output.columns[left_cols + rc].setValue(output.count, right_chunk->getValue(rc, rr));
+                    for (size_t lc = 0; lc < left_cols; ++lc) {
+                        if (!output.columns[lc].copyValueFrom(left_chunk->columns[lc], row, output.count))
+                            output.columns[lc].setValue(output.count, left_chunk->getValue(lc, row));
+                    }
+                    for (size_t rc = 0; rc < right_cols && rc < right_chunk->numColumns(); ++rc) {
+                        if (!output.columns[left_cols + rc].copyValueFrom(right_chunk->columns[rc], rr, output.count))
+                            output.columns[left_cols + rc].setValue(output.count, right_chunk->getValue(rc, rr));
+                    }
                     output.count++;
 
                     if (output.count >= DataChunk::DEFAULT_CAPACITY) {

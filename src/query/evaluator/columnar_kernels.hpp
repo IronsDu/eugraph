@@ -282,6 +282,18 @@ struct MulOp {
     }
 };
 
+struct EqOp {
+    template <typename T> static uint8_t apply(T lhs, T rhs) {
+        return lhs == rhs ? 1 : 0;
+    }
+};
+
+struct NeqOp {
+    template <typename T> static uint8_t apply(T lhs, T rhs) {
+        return lhs != rhs ? 1 : 0;
+    }
+};
+
 struct LtOp {
     template <typename T> static uint8_t apply(T lhs, T rhs) {
         return lhs < rhs ? 1 : 0;
@@ -621,11 +633,9 @@ inline bool typedBinaryEval(const Column& lhs_src, const Column& rhs_src, const 
     }
     if (lhs_const) {
         const T scalar = *constantAs<T>(lhs);
-        const T* vec =
-            rhs.buffer->int64_data.data() ? reinterpret_cast<const T*>(rhs.buffer->int64_data.data()) : nullptr;
-        if constexpr (std::is_same_v<T, double>) {
-            vec = reinterpret_cast<const T*>(rhs.buffer->double_data.data());
-        }
+        const T* vec = columnDataPtr<T>(rhs);
+        if (!vec)
+            return false;
         if (nullable && rows.sel)
             scalarVectorNullableIndirect<T, O, Op>(scalar, vec, rows.sel, rhs, lhs.isNull(0), result, out, n);
         else if (nullable)
@@ -638,11 +648,9 @@ inline bool typedBinaryEval(const Column& lhs_src, const Column& rhs_src, const 
     }
     if (rhs_const) {
         const T scalar = *constantAs<T>(rhs);
-        const T* vec =
-            lhs.buffer->int64_data.data() ? reinterpret_cast<const T*>(lhs.buffer->int64_data.data()) : nullptr;
-        if constexpr (std::is_same_v<T, double>) {
-            vec = reinterpret_cast<const T*>(lhs.buffer->double_data.data());
-        }
+        const T* vec = columnDataPtr<T>(lhs);
+        if (!vec)
+            return false;
         if (nullable && rows.sel)
             vectorScalarNullableIndirect<T, O, Op>(vec, rows.sel, scalar, lhs, rhs.isNull(0), result, out, n);
         else if (nullable)

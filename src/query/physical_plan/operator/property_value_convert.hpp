@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "common/types/query_error.hpp"
+#include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 
 namespace eugraph {
@@ -49,6 +50,37 @@ inline Value propertyValueToValue(const PropertyValue& pv) {
                 return Value(mk<ListValue>(std::move(lv)));
             } else
                 return Value(arg);
+        },
+        pv);
+}
+
+/// Write a PropertyValue directly into a same-typed Column, avoiding the
+/// intermediate Value (and its string copy) for the common scalar/string
+/// property loads. Returns false when the output column type or the variant
+/// does not match; callers then fall back to propertyValueToValue().
+inline bool setColumnFromPropertyValue(Column& col, size_t row, const PropertyValue& pv) {
+    return std::visit(
+        [&](const auto& arg) -> bool {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, bool>) {
+                if (col.type != binder::BoundTypeKind::BOOL)
+                    return false;
+                return col.setBool(row, arg);
+            } else if constexpr (std::is_same_v<T, int64_t>) {
+                if (col.type != binder::BoundTypeKind::INT64)
+                    return false;
+                return col.setInt64(row, arg);
+            } else if constexpr (std::is_same_v<T, double>) {
+                if (col.type != binder::BoundTypeKind::DOUBLE)
+                    return false;
+                return col.setDouble(row, arg);
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                if (col.type != binder::BoundTypeKind::STRING)
+                    return false;
+                return col.setString(row, arg);
+            } else {
+                return false;
+            }
         },
         pv);
 }

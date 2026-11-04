@@ -39,12 +39,7 @@ folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executePerRow() {
         std::vector<bool> matched(n_left, false);
 
         for (size_t i = 0; i < n_left; ++i) {
-            std::vector<Value> corr_values;
-            corr_values.reserve(left_correlation_cols_.size());
-            for (uint32_t col_idx : left_correlation_cols_) {
-                corr_values.push_back(left_chunk->getValue(col_idx, i));
-            }
-            correlated_source_->setValues(std::move(corr_values));
+            correlated_source_->setRowFromChunk(*left_chunk, i, left_correlation_cols_);
 
             auto right_gen = cancellable(right_->executeChunkTraced());
             auto right_chunk = co_await right_gen.next();

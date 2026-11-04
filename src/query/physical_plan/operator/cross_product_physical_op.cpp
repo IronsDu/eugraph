@@ -35,10 +35,12 @@ folly::coro::AsyncGenerator<DataChunk> CrossProductPhysicalOp::executeChunk() {
             for (size_t li = 0; li < n_left; ++li) {
                 for (size_t ri = 0; ri < n_right; ++ri) {
                     for (size_t lc = 0; lc < left_cols; ++lc) {
-                        output.setValue(lc, output.count, left_chunk->getValue(lc, li));
+                        if (!output.columns[lc].copyValueFrom(left_chunk->columns[lc], li, output.count))
+                            output.setValue(lc, output.count, left_chunk->getValue(lc, li));
                     }
                     for (size_t rc = 0; rc < right_cols; ++rc) {
-                        output.setValue(left_cols + rc, output.count, right_chunk->getValue(rc, ri));
+                        if (!output.columns[left_cols + rc].copyValueFrom(right_chunk->columns[rc], ri, output.count))
+                            output.setValue(left_cols + rc, output.count, right_chunk->getValue(rc, ri));
                     }
                     output.count++;
 

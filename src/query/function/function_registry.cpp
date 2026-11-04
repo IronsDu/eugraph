@@ -38,7 +38,6 @@ void FunctionRegistry::registerBuiltins() {
 }
 
 namespace {
-Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext& ctx);
 
 function::FunctionFn scalarToBatch(function::ScalarFn scalar) {
     return [scalar = std::move(scalar)](const std::vector<const Column*>& args, Column& result, size_t count,
@@ -54,6 +53,8 @@ function::FunctionFn scalarToBatch(function::ScalarFn scalar) {
         }
     };
 }
+
+void edgeUniqueBatch(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext& ctx);
 } // namespace
 
 void FunctionRegistry::registerScalarBuiltins() {
@@ -928,7 +929,7 @@ void FunctionRegistry::registerScalarBuiltins() {
     edge_unique.name = "__edge_unique";
     edge_unique.return_type = BoundType::Bool();
     edge_unique.has_variadic_args = true;
-    edge_unique.fn = scalarToBatch(edgeUniqueScalar);
+    edge_unique.fn = edgeUniqueBatch;
     functions_["__edge_unique"].push_back(std::move(edge_unique));
 }
 
@@ -1090,46 +1091,85 @@ std::string lowerAscii(std::string s) {
     return s;
 }
 
-Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext&) {
-    std::unordered_set<uint64_t> seen;
-    auto check_edge = [&](const Value& value) {
+void edgeUniqueBatch(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
+    result.reserve(count);
+    // Reused across rows: the old scalar adapter allocated a fresh set for
+    // every row; clearing a warmed set keeps the buckets instead.
+    std::unordered_set<EdgeId> seen;
+    seen.reserve(16);
+
+    auto add_edge = [&](const Value& value) -> bool {
         if (isNull(value))
-            return;
-        uint64_t edge_id = 0;
-        if (std::holds_alternative<EdgeValuePtr>(value))
-            edge_id = (*std::get<EdgeValuePtr>(value)).id;
-        else if (std::holds_alternative<EdgeKey>(value))
-            edge_id = std::get<EdgeKey>(value).id;
-        else
-            return;
-        if (edge_id != INVALID_EDGE_ID)
-            seen.insert(edge_id);
+            return true;
+        if (std::holds_alternative<EdgeValuePtr>(value)) {
+            const auto& e = std::get<EdgeValuePtr>(value);
+            if (!e || e->id == INVALID_EDGE_ID)
+                return true;
+            return seen.insert(e->id).second;
+        }
+        if (std::holds_alternative<EdgeKey>(value)) {
+            const EdgeId id = std::get<EdgeKey>(value).id;
+            if (id == INVALID_EDGE_ID)
+                return true;
+            return seen.insert(id).second;
+        }
+        return true;
     };
-    for (const auto& arg : args) {
-        if (std::holds_alternative<ListValuePtr>(arg)) {
-            for (const auto& elem : (*std::get<ListValuePtr>(arg)).elements)
-                check_edge(elem.value);
-        } else {
-            check_edge(arg);
-        }
-    }
-    // The same edge id appearing twice in one MATCH path is a uniqueness
-    // violation; return false so the row is filtered out.
-    // Recompute the number of valid edges actually checked, because null /
-    // non-edge values should not be counted against uniqueness.
-    size_t valid = 0;
-    for (const auto& arg : args) {
-        if (std::holds_alternative<ListValuePtr>(arg)) {
-            for (const auto& elem : (*std::get<ListValuePtr>(arg)).elements) {
-                if (std::holds_alternative<EdgeValuePtr>(elem.value) || std::holds_alternative<EdgeKey>(elem.value)) {
-                    ++valid;
-                }
+
+    auto check_value = [&](const Value& value) -> bool {
+        if (std::holds_alternative<ListValuePtr>(value)) {
+            const auto& list = std::get<ListValuePtr>(value);
+            if (!list)
+                return true;
+            for (const auto& elem : list->elements) {
+                if (!add_edge(elem.value))
+                    return false;
             }
-        } else if (std::holds_alternative<EdgeValuePtr>(arg) || std::holds_alternative<EdgeKey>(arg)) {
-            ++valid;
+            return true;
         }
+        return add_edge(value);
+    };
+
+    for (size_t row = 0; row < count; ++row) {
+        seen.clear();
+        bool unique = true;
+        for (const auto* col : args) {
+            if (!col)
+                continue;
+            // Columnar fast path for the common multi-edge MATCH columns.
+            if (col->type == binder::BoundTypeKind::EDGE_KEY && col->form == VectorForm::FLAT && col->buffer &&
+                row < col->buffer->edge_key_data.size()) {
+                if (col->buffer->isNull(row))
+                    continue;
+                const EdgeId id = col->buffer->edge_key_data[row].id;
+                if (id == INVALID_EDGE_ID)
+                    continue;
+                if (!seen.insert(id).second) {
+                    unique = false;
+                    break;
+                }
+                continue;
+            }
+            if (col->type == binder::BoundTypeKind::EDGE && col->form == VectorForm::FLAT && col->buffer &&
+                row < col->buffer->edge_data.size()) {
+                if (col->buffer->isNull(row))
+                    continue;
+                const auto& e = col->buffer->edge_data[row];
+                if (!e || e->id == INVALID_EDGE_ID)
+                    continue;
+                if (!seen.insert(e->id).second) {
+                    unique = false;
+                    break;
+                }
+                continue;
+            }
+            if (!check_value(col->getValue(row))) {
+                unique = false;
+                break;
+            }
+        }
+        result.setBool(row, unique);
     }
-    return Value(seen.size() == valid);
 }
 } // namespace
 

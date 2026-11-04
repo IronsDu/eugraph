@@ -19,15 +19,9 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executePerRow() {
         DataChunk output;
 
         for (size_t i = 0; i < n_left; ++i) {
-            // Extract correlated values from the left row
-            if (correlated_source_ && !left_correlation_cols_.empty()) {
-                std::vector<Value> corr_values;
-                corr_values.reserve(left_correlation_cols_.size());
-                for (uint32_t col_idx : left_correlation_cols_) {
-                    corr_values.push_back(left_chunk->getValue(col_idx, i));
-                }
-                correlated_source_->setValues(std::move(corr_values));
-            }
+            // Inject the left row directly (no per-row vector<Value>).
+            if (correlated_source_ && !left_correlation_cols_.empty())
+                correlated_source_->setRowFromChunk(*left_chunk, i, left_correlation_cols_);
 
             // Execute the right sub-plan
             auto right_gen = cancellable(right_->executeChunkTraced());
@@ -55,7 +49,8 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executePerRow() {
                 // Emit left_row × right_rows
                 for (size_t ri = 0; ri < n_right; ++ri) {
                     for (size_t lc = 0; lc < left_cols; ++lc) {
-                        output.columns[lc].setValue(output.count, left_chunk->getValue(lc, i));
+                        if (!output.columns[lc].copyValueFrom(left_chunk->columns[lc], i, output.count))
+                            output.columns[lc].setValue(output.count, left_chunk->getValue(lc, i));
                     }
                     for (size_t rc = 0; rc < right_cols; ++rc) {
                         // Same shape as the ProjectionExtract pass-through: the value is
@@ -95,7 +90,8 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executePerRow() {
                 }
 
                 for (size_t lc = 0; lc < left_cols; ++lc) {
-                    output.columns[lc].setValue(output.count, left_chunk->getValue(lc, i));
+                    if (!output.columns[lc].copyValueFrom(left_chunk->columns[lc], i, output.count))
+                        output.columns[lc].setValue(output.count, left_chunk->getValue(lc, i));
                 }
                 for (size_t rc = 0; rc < right_cols; ++rc) {
                     output.columns[left_cols + rc].setNull(output.count);
