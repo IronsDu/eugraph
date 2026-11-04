@@ -439,7 +439,7 @@ public:
     bool metadataDel(std::string_view) override {
         return false;
     }
-    void metadataScan(std::string_view, const std::function<bool(std::string_view, std::string_view)>&) override {}
+    void metadataScan(std::string_view, folly::FunctionRef<bool(std::string_view, std::string_view)>) override {}
 };
 
 } // namespace

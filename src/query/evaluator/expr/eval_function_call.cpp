@@ -21,20 +21,22 @@ void ExpressionEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, 
         }
     }
 
-    // Evaluate all arguments first
-    std::vector<EvalResult> arg_results;
-    arg_results.reserve(fc.args.size());
+    // Evaluate all arguments first. Scratch vectors are per evaluation depth so
+    // a nested function call cannot clobber this call's argument list.
+    auto& s = scratch();
+    s.arg_results.clear();
+    s.arg_results.reserve(fc.args.size());
     for (const auto& arg : fc.args) {
-        arg_results.push_back(evaluateInternal(arg, input));
+        s.arg_results.push_back(evaluateInternal(arg, input));
     }
 
-    std::vector<const Column*> arg_cols;
-    arg_cols.reserve(arg_results.size());
-    for (const auto& ar : arg_results)
-        arg_cols.push_back(ar.column);
+    s.arg_cols.clear();
+    s.arg_cols.reserve(s.arg_results.size());
+    for (const auto& ar : s.arg_results)
+        s.arg_cols.push_back(ar.column);
 
     if (fc.func_def->fn)
-        fc.func_def->fn(arg_cols, result, count, eval_ctx_);
+        fc.func_def->fn(s.arg_cols, result, count, eval_ctx_);
 }
 
 } // namespace compute

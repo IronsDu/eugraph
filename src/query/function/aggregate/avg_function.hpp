@@ -14,14 +14,9 @@ namespace aggregate {
 struct AvgState : AggStateBase {
     double sum = 0.0;
     int64_t count = 0;
-    void add(const Value& arg) {
-        if (std::holds_alternative<double>(arg)) {
-            sum += std::get<double>(arg);
-            ++count;
-        } else if (std::holds_alternative<int64_t>(arg)) {
-            sum += static_cast<double>(std::get<int64_t>(arg));
-            ++count;
-        }
+    void add(double arg) {
+        sum += arg;
+        ++count;
     }
     Value finalize() const {
         if (count == 0)

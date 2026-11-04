@@ -9,6 +9,8 @@
 #include "storage/wt_connection_store.hpp"
 #include "storage/wt_cursor.hpp"
 
+#include <folly/Function.h>
+
 #include <cassert>
 #include <memory>
 #include <mutex>
@@ -101,12 +103,12 @@ public:
 
     // Label Index Scan
     void scanVerticesByLabel(GraphSession& session, LabelId label_id,
-                             const std::function<bool(VertexId)>& callback) override;
+                             folly::FunctionRef<bool(VertexId)> callback) override;
     std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphSession& session, LabelId label_id) override;
     std::unique_ptr<IVertexScanCursor> createAllVertexScanCursor(GraphSession& session) override;
 
     // All-Vertex Scan (含无标签 vertex)
-    void scanAllVertices(GraphSession& session, const std::function<bool(VertexId)>& callback) override;
+    void scanAllVertices(GraphSession& session, folly::FunctionRef<bool(VertexId)> callback) override;
 
     // Edge
     bool insertEdge(GraphSession& session, EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
@@ -127,17 +129,17 @@ public:
 
     // Edge Traversal
     void scanEdges(GraphSession& session, VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
-                   const std::function<bool(const EdgeIndexEntry&)>& callback) override;
+                   folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) override;
     void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
                         std::optional<EdgeLabelId> label_filter,
-                        const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) override;
+                        folly::FunctionRef<bool(VertexId, const EdgeIndexEntry&)> callback) override;
     void scanEdgesExact(GraphSession& session, VertexId vid, Direction direction, EdgeLabelId label_id,
-                        VertexId neighbor_id, const std::function<bool(const EdgeIndexEntry&)>& callback) override;
+                        VertexId neighbor_id, folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) override;
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid, Direction direction,
                                                           std::optional<EdgeLabelId> label_filter) override;
     void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                          std::optional<VertexId> dst_filter,
-                         const std::function<bool(const EdgeTypeIndexEntry&)>& callback) override;
+                         folly::FunctionRef<bool(const EdgeTypeIndexEntry&)> callback) override;
     std::unique_ptr<IEdgeTypeScanCursor> createEdgeTypeScanCursor(GraphSession& session, EdgeLabelId label_id,
                                                                   std::optional<VertexId> src_filter,
                                                                   std::optional<VertexId> dst_filter) override;
@@ -170,28 +172,27 @@ public:
 
     // Index Scan
     void scanIndexEquality(GraphSession& session, const std::string& table, const PropertyValue& value,
-                           const std::function<bool(uint64_t)>& callback) override;
+                           folly::FunctionRef<bool(uint64_t)> callback) override;
     void scanIndexEquality(GraphSession& session, const std::string& table, const std::vector<PropertyValue>& values,
-                           const std::function<bool(uint64_t)>& callback) override;
+                           folly::FunctionRef<bool(uint64_t)> callback) override;
     void scanIndexRange(GraphSession& session, const std::string& table, const std::optional<PropertyValue>& start,
-                        const std::optional<PropertyValue>& end,
-                        const std::function<bool(uint64_t)>& callback) override;
+                        const std::optional<PropertyValue>& end, folly::FunctionRef<bool(uint64_t)> callback) override;
     void scanIndexRange(GraphSession& session, const std::string& table,
                         const std::optional<std::vector<PropertyValue>>& start,
                         const std::optional<std::vector<PropertyValue>>& end,
-                        const std::function<bool(uint64_t)>& callback) override;
+                        folly::FunctionRef<bool(uint64_t)> callback) override;
     void scanIndexEqualityWithValue(GraphSession& session, const std::string& table, const PropertyValue& value,
-                                    const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                    folly::FunctionRef<bool(uint64_t, std::string_view)> callback) override;
     void scanIndexEqualityWithValue(GraphSession& session, const std::string& table,
                                     const std::vector<PropertyValue>& values,
-                                    const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                    folly::FunctionRef<bool(uint64_t, std::string_view)> callback) override;
     void scanIndexRangeWithValue(GraphSession& session, const std::string& table,
                                  const std::optional<PropertyValue>& start, const std::optional<PropertyValue>& end,
-                                 const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                 folly::FunctionRef<bool(uint64_t, std::string_view)> callback) override;
     void scanIndexRangeWithValue(GraphSession& session, const std::string& table,
                                  const std::optional<std::vector<PropertyValue>>& start,
                                  const std::optional<std::vector<PropertyValue>>& end,
-                                 const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                 folly::FunctionRef<bool(uint64_t, std::string_view)> callback) override;
 
     // 可恢复的索引扫描 cursor（async 层流式消费 ✓）
     std::unique_ptr<IIndexScanCursor> createIndexEqualityCursor(GraphSession& session, const std::string& table,

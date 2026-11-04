@@ -2401,6 +2401,60 @@ TEST_F(QueryExecutorAggTest, AggregateWithSkipLimit) {
     EXPECT_EQ(result.rows.size(), 1);
 }
 
+// Aggregate inputs are evaluated once per chunk and read as typed columns.
+// range(1, 3000) crosses the DataChunk boundary, so this also covers state
+// accumulation across multiple child chunks and multiple aggregate arguments.
+TEST_F(QueryExecutorAggTest, TypedAggregateAcrossChunks) {
+    auto result = execSync(*executor_, "UNWIND range(1, 3000) AS x "
+                                       "RETURN sum(x) AS s, avg(x) AS a, count(*) AS c, count(x) AS cx");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4'501'500);
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][1]), 1500.5);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][2]), 3000);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][3]), 3000);
+}
+
+TEST_F(QueryExecutorAggTest, TypedAggregateDoubleAcrossChunks) {
+    auto result = execSync(*executor_, "UNWIND range(1, 3000) AS x RETURN sum(x * 0.5) AS s, avg(x * 0.5) AS a");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 2'250'750.0);
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][1]), 750.25);
+}
+
+TEST_F(QueryExecutorAggTest, TypedAggregateNullsAndCollectFiltersNulls) {
+    auto result = execSync(*executor_, "UNWIND [1, null, 3] AS x "
+                                       "RETURN sum(x) AS s, count(x) AS c, count(*) AS ca, collect(x) AS xs");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 2);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][2]), 3);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][3]));
+    const auto& list = *std::get<ListValuePtr>(result.rows[0][3]);
+    ASSERT_EQ(list.elements.size(), 2);
+    EXPECT_EQ(std::get<int64_t>(list.elements[0].value), 1);
+    EXPECT_EQ(std::get<int64_t>(list.elements[1].value), 3);
+}
+
+TEST_F(QueryExecutorAggTest, TypedAggregateGroupedAcrossChunks) {
+    auto result = execSync(*executor_, "UNWIND range(1, 3000) AS x RETURN x % 3 AS g, count(*) AS c ORDER BY g");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3);
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][0]), static_cast<int64_t>(i));
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][1]), 1000);
+    }
+}
+
+TEST_F(QueryExecutorAggTest, TypedComplexAggregateAcrossChunks) {
+    auto result = execSync(*executor_, "UNWIND range(1, 2000) AS x RETURN size(collect(x)) AS n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2000);
+}
+
 // ==================== M6: Multi-Label Tests ====================
 
 class QueryExecutorMultiLabelTest : public ::testing::Test {

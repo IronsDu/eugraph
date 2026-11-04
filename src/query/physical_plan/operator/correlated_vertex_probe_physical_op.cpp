@@ -100,10 +100,16 @@ folly::coro::AsyncGenerator<DataChunk> CorrelatedVertexProbePhysicalOp::executeC
                             out = makeChunk(output_types_);
                             reserveChunk(out);
                         }
-                        for (size_t lc = 0; lc < left_schema_.size(); ++lc)
-                            out.columns[lc].setValue(out.count, left_chunk->getValue(lc, r));
-                        for (size_t rc = 0; rc < right_schema_.size(); ++rc)
-                            out.columns[left_schema_.size() + rc].setValue(out.count, right_chunk->getValue(rc, rr));
+                        for (size_t lc = 0; lc < left_schema_.size(); ++lc) {
+                            if (!out.columns[lc].copyValueFrom(left_chunk->columns[lc], r, out.count))
+                                out.columns[lc].setValue(out.count, left_chunk->getValue(lc, r));
+                        }
+                        for (size_t rc = 0; rc < right_schema_.size(); ++rc) {
+                            if (!out.columns[left_schema_.size() + rc].copyValueFrom(right_chunk->columns[rc], rr,
+                                                                                     out.count))
+                                out.columns[left_schema_.size() + rc].setValue(out.count,
+                                                                               right_chunk->getValue(rc, rr));
+                        }
                         ++out.count;
                     }
                 }
@@ -130,8 +136,10 @@ folly::coro::AsyncGenerator<DataChunk> CorrelatedVertexProbePhysicalOp::executeC
                         out = makeChunk(output_types_);
                         reserveChunk(out);
                     }
-                    for (size_t lc = 0; lc < left_schema_.size(); ++lc)
-                        out.columns[lc].setValue(out.count, left_chunk->getValue(lc, r));
+                    for (size_t lc = 0; lc < left_schema_.size(); ++lc) {
+                        if (!out.columns[lc].copyValueFrom(left_chunk->columns[lc], r, out.count))
+                            out.columns[lc].setValue(out.count, left_chunk->getValue(lc, r));
+                    }
                     for (size_t rc = 0; rc < right_schema_.size(); ++rc)
                         out.columns[left_schema_.size() + rc].setValue(out.count, rr[rc]);
                     ++out.count;

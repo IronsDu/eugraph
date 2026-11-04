@@ -17,9 +17,12 @@ void ExpressionEvaluator::evalMap(const binder::BoundMap& map, const DataChunk& 
     // allocations per query versus 1.7M for the same map holding a plain column
     // reference — 16x more work for the same result.
     //
-    // Lifetime: acquireTempColumn appends to a std::deque that is never cleared
-    // during a query, so the pointers stay valid for as long as we hold them.
-    std::vector<const Column*> entry_cols;
+    // Lifetime: the temp column lives in the evaluator's per-expression pool.
+    // We only read it during this call; the pool is recycled at the next
+    // top-level expression/element boundary, never while this pointer is held.
+    auto& s = scratch();
+    auto& entry_cols = s.entry_cols;
+    entry_cols.clear();
     entry_cols.reserve(map.entries.size());
     for (const auto& [key, expr] : map.entries) {
         (void)key;

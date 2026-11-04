@@ -15,6 +15,7 @@
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
+#include "query/planner/bound_expression/bound_list.hpp"
 #include "query/planner/bound_expression/bound_unary_op.hpp"
 #include "query/planner/bound_type.hpp"
 
@@ -788,4 +789,285 @@ TEST(EvaluatorTypedKernelTest, DynamicPropertyOnDeletedVertexThrows) {
     ExpressionEvaluator evaluator(dynamicPropContext(defs));
     Column out = Column::flat(BoundTypeKind::ANY, 1);
     EXPECT_THROW(evaluator.evaluate(makeDynamicPropertyRef("name"), input, out), std::runtime_error);
+}
+
+TEST(EvaluatorScratchTest, ReusesTempColumnsAcrossEvaluations) {
+    constexpr size_t n = 64;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    input.columns[1].reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i);
+        input.columns[1].buffer->int64_data[i] = static_cast<int64_t>(i + 1);
+    }
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::INT64, n);
+    auto expr =
+        makeBinary(cypher::BinaryOperator::ADD, BoundTypeKind::INT64, BoundTypeKind::INT64, BoundTypeKind::INT64);
+    for (int round = 0; round < 32; ++round) {
+        evaluator.evaluate(expr, input, out);
+        ASSERT_EQ(out.getValue(0), Value(static_cast<int64_t>(1)));
+        ASSERT_EQ(out.getValue(n - 1), Value(static_cast<int64_t>(2 * n - 1)));
+    }
+    // One temp column for the binary result; the loop must reuse it rather than
+    // appending one per evaluation.
+    EXPECT_LE(evaluator.tempColumnCapacity(), 2u);
+    EXPECT_LE(evaluator.tempColumnUsed(), 1u);
+}
+
+TEST(EvaluatorScratchTest, CopyFromColumnRefPreservesNulls) {
+    constexpr size_t n = 4;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    for (size_t i = 0; i < n; ++i)
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i + 10);
+    input.columns[0].setNull(1);
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::INT64, n);
+    BoundExpression expr(BoundColumnRef(0, BoundType(BoundTypeKind::INT64, nullptr), "a"));
+    evaluator.evaluate(expr, input, out);
+
+    EXPECT_EQ(out.getValue(0), Value(static_cast<int64_t>(10)));
+    EXPECT_TRUE(out.isNull(1));
+    EXPECT_EQ(out.getValue(2), Value(static_cast<int64_t>(12)));
+    EXPECT_EQ(out.getValue(3), Value(static_cast<int64_t>(13)));
+}
+
+TEST(EvaluatorScratchTest, PredicateBoolFastPathPreservesNulls) {
+    constexpr size_t n = 4;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::BOOL);
+    input.columns[0].reserve(n);
+    input.columns[0].buffer->bool_data[0] = 1;
+    input.columns[0].buffer->bool_data[1] = 0;
+    input.columns[0].buffer->bool_data[2] = 1;
+    input.columns[0].buffer->bool_data[3] = 0;
+    input.columns[0].setNull(3);
+
+    ExpressionEvaluator evaluator;
+    BoundExpression expr(BoundColumnRef(0, BoundType(BoundTypeKind::BOOL, nullptr), "b"));
+    std::vector<bool> out;
+    evaluator.evaluatePredicate(expr, input, out);
+
+    ASSERT_EQ(out.size(), n);
+    EXPECT_TRUE(out[0]);
+    EXPECT_FALSE(out[1]);
+    EXPECT_TRUE(out[2]);
+    EXPECT_FALSE(out[3]);
+}
+
+TEST(EvaluatorScratchTest, ListLiteralEvaluatesElementsOncePerChunk) {
+    constexpr size_t n = 3;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    input.columns[1].reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i);
+        input.columns[1].buffer->int64_data[i] = static_cast<int64_t>(i * 10);
+    }
+
+    auto list = std::make_unique<BoundList>();
+    list->elements.push_back(BoundExpression(BoundColumnRef(0, BoundType(BoundTypeKind::INT64, nullptr), "a")));
+    list->elements.push_back(BoundExpression(BoundColumnRef(1, BoundType(BoundTypeKind::INT64, nullptr), "b")));
+    list->element_type = BoundType(BoundTypeKind::INT64, nullptr);
+    list->result_type = BoundType::List(BoundType(BoundTypeKind::INT64, nullptr));
+    BoundExpression expr(std::move(list));
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::LIST, n);
+    evaluator.evaluate(expr, input, out);
+
+    for (size_t i = 0; i < n; ++i) {
+        const Value v = out.getValue(i);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(v));
+        const auto& elements = std::get<ListValuePtr>(v)->elements;
+        ASSERT_EQ(elements.size(), 2u);
+        EXPECT_EQ(elements[0].value, Value(static_cast<int64_t>(i)));
+        EXPECT_EQ(elements[1].value, Value(static_cast<int64_t>(i * 10)));
+    }
+}
+
+TEST(EvaluatorScratchTest, ResetForChunkKeepsCapacityStable) {
+    constexpr size_t n = 32;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.addColumn(BoundTypeKind::INT64);
+    input.columns[0].reserve(n);
+    input.columns[1].reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        input.columns[0].buffer->int64_data[i] = static_cast<int64_t>(i);
+        input.columns[1].buffer->int64_data[i] = 1;
+    }
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::INT64, n);
+    auto expr =
+        makeBinary(cypher::BinaryOperator::ADD, BoundTypeKind::INT64, BoundTypeKind::INT64, BoundTypeKind::INT64);
+    evaluator.evaluate(expr, input, out);
+    const size_t capacity = evaluator.tempColumnCapacity();
+    for (int chunk = 0; chunk < 16; ++chunk) {
+        evaluator.resetForChunk();
+        evaluator.evaluate(expr, input, out);
+        ASSERT_EQ(out.getValue(0), Value(static_cast<int64_t>(1)));
+    }
+    EXPECT_EQ(evaluator.tempColumnCapacity(), capacity);
+}
+
+TEST(EvaluatorTypedKernelTest, Int64EqualityMatchesValueSemantics) {
+    constexpr size_t n = 5;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::INT64);
+    input.addColumn(BoundTypeKind::INT64);
+    auto& l = input.columns[0];
+    auto& r = input.columns[1];
+    l.reserve(n);
+    r.reserve(n);
+    const int64_t left_vals[n] = {1, 2, 3, 4, 5};
+    const int64_t right_vals[n] = {1, 0, 3, 4, 5};
+    for (size_t i = 0; i < n; ++i) {
+        l.buffer->int64_data[i] = left_vals[i];
+        r.buffer->int64_data[i] = right_vals[i];
+    }
+    l.setNull(2);
+
+    ExpressionEvaluator evaluator;
+    Column eq = Column::flat(BoundTypeKind::BOOL, n);
+    evaluator.evaluate(
+        makeBinary(cypher::BinaryOperator::EQ, BoundTypeKind::INT64, BoundTypeKind::INT64, BoundTypeKind::BOOL), input,
+        eq);
+    Column neq = Column::flat(BoundTypeKind::BOOL, n);
+    evaluator.evaluate(
+        makeBinary(cypher::BinaryOperator::NEQ, BoundTypeKind::INT64, BoundTypeKind::INT64, BoundTypeKind::BOOL), input,
+        neq);
+
+    EXPECT_FALSE(eq.isNull(0));
+    EXPECT_TRUE(eq.buffer->bool_data[0] != 0);
+    EXPECT_FALSE(eq.buffer->bool_data[1] != 0);
+    EXPECT_TRUE(eq.isNull(2));
+    EXPECT_TRUE(eq.buffer->bool_data[3] != 0);
+    EXPECT_TRUE(eq.buffer->bool_data[4] != 0);
+    EXPECT_FALSE(neq.buffer->bool_data[0] != 0);
+    EXPECT_TRUE(neq.buffer->bool_data[1] != 0);
+    EXPECT_TRUE(neq.isNull(2));
+}
+
+TEST(EvaluatorTypedKernelTest, StringEqualityHandlesConstantsAndNulls) {
+    constexpr size_t n = 5;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::STRING);
+    auto& l = input.columns[0];
+    l.reserve(n);
+    const char* values[n] = {"a", "b", "x", "d", "x"};
+    for (size_t i = 0; i < n; ++i)
+        l.buffer->string_data[i] = values[i];
+    l.setNull(3);
+    Column constant = Column::constant(Value(std::string("x")));
+    constant.type = BoundTypeKind::STRING;
+    input.columns.push_back(std::move(constant));
+
+    ExpressionEvaluator evaluator;
+    Column eq = Column::flat(BoundTypeKind::BOOL, n);
+    evaluator.evaluate(
+        makeBinary(cypher::BinaryOperator::EQ, BoundTypeKind::STRING, BoundTypeKind::STRING, BoundTypeKind::BOOL),
+        input, eq);
+    Column neq = Column::flat(BoundTypeKind::BOOL, n);
+    evaluator.evaluate(
+        makeBinary(cypher::BinaryOperator::NEQ, BoundTypeKind::STRING, BoundTypeKind::STRING, BoundTypeKind::BOOL),
+        input, neq);
+
+    EXPECT_FALSE(eq.buffer->bool_data[0] != 0);
+    EXPECT_FALSE(eq.buffer->bool_data[1] != 0);
+    EXPECT_TRUE(eq.buffer->bool_data[2] != 0);
+    EXPECT_TRUE(eq.isNull(3));
+    EXPECT_TRUE(eq.buffer->bool_data[4] != 0);
+    EXPECT_TRUE(neq.buffer->bool_data[0] != 0);
+    EXPECT_TRUE(neq.isNull(3));
+}
+
+TEST(EvaluatorTypedKernelTest, BoolAndOrUsesThreeValuedLogic) {
+    constexpr size_t n = 9;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::BOOL);
+    input.addColumn(BoundTypeKind::BOOL);
+    auto& l = input.columns[0];
+    auto& r = input.columns[1];
+    l.reserve(n);
+    r.reserve(n);
+    // true/false combos plus NULLs on either side.
+    const int lv[n] = {1, 1, 0, 0, 1, -1, 0, -1, -1};
+    const int rv[n] = {1, 0, 1, 0, -1, 1, -1, 0, -1};
+    for (size_t i = 0; i < n; ++i) {
+        if (lv[i] >= 0)
+            l.buffer->bool_data[i] = lv[i] ? 1 : 0;
+        else
+            l.setNull(i);
+        if (rv[i] >= 0)
+            r.buffer->bool_data[i] = rv[i] ? 1 : 0;
+        else
+            r.setNull(i);
+    }
+
+    auto check = [&](cypher::BinaryOperator op, auto expected) {
+        ExpressionEvaluator evaluator;
+        Column out = Column::flat(BoundTypeKind::BOOL, n);
+        evaluator.evaluate(makeBinary(op, BoundTypeKind::BOOL, BoundTypeKind::BOOL, BoundTypeKind::BOOL), input, out);
+        for (size_t i = 0; i < n; ++i) {
+            const int exp = expected[i];
+            if (exp < 0) {
+                EXPECT_TRUE(out.isNull(i)) << "row " << i;
+            } else {
+                EXPECT_FALSE(out.isNull(i)) << "row " << i;
+                EXPECT_EQ(out.buffer->bool_data[i] != 0, exp != 0) << "row " << i;
+            }
+        }
+    };
+    const int and_expected[n] = {1, 0, 0, 0, -1, -1, 0, 0, -1};
+    const int or_expected[n] = {1, 1, 1, 0, 1, 1, -1, -1, -1};
+    const int xor_expected[n] = {0, 1, 1, 0, -1, -1, -1, -1, -1};
+    check(cypher::BinaryOperator::AND, and_expected);
+    check(cypher::BinaryOperator::OR, or_expected);
+    check(cypher::BinaryOperator::XOR, xor_expected);
+}
+
+TEST(EdgeUniqueBatchTest, DetectsDuplicateEdgesAndIgnoresNulls) {
+    function::FunctionRegistry registry;
+    const auto* def = registry.lookup("__edge_unique", {});
+    ASSERT_NE(def, nullptr);
+    ASSERT_TRUE(static_cast<bool>(def->fn));
+
+    constexpr size_t n = 4;
+    Column a = Column::flat(BoundTypeKind::EDGE_KEY, n);
+    Column b = Column::flat(BoundTypeKind::EDGE_KEY, n);
+    const EdgeId a_ids[n] = {10, 10, 11, 12};
+    const EdgeId b_ids[n] = {20, 10, 21, 22};
+    for (size_t i = 0; i < n; ++i) {
+        a.buffer->edge_key_data[i] = EdgeKey(a_ids[i], 1, 2, 3, 0);
+        b.buffer->edge_key_data[i] = EdgeKey(b_ids[i], 1, 2, 3, 0);
+    }
+    b.setNull(3);
+
+    Column out = Column::flat(BoundTypeKind::BOOL, n);
+    std::vector<const Column*> args{&a, &b};
+    function::EvalContext ctx;
+    def->fn(args, out, n, ctx);
+
+    EXPECT_TRUE(out.buffer->bool_data[0] != 0);  // 10, 20
+    EXPECT_FALSE(out.buffer->bool_data[1] != 0); // 10, 10 -> duplicate
+    EXPECT_TRUE(out.buffer->bool_data[2] != 0);  // 11, 21
+    EXPECT_TRUE(out.buffer->bool_data[3] != 0);  // 12, NULL
 }

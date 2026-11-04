@@ -67,12 +67,13 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加查询算子 | [query/engine/query-engine-design.md] | `src/query/physical_plan/`, `executor/` |
 | 实现 PROFILE / 查询诊断 | [query/engine/profile-design.md] | `src/query/physical_plan/`, `src/query/executor/`, `src/service/bolt/` |
 | 添加优化规则 | [query/optimizer/cascades-optimizer.md] | `src/query/optimizer/` |
-| 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md] | `src/query/function/`, `binder/` |
+| 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md], [query/engine/aggregate-typed-execution-design.md](query/engine/aggregate-typed-execution-design.md) | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
 | 顶点标签/属性/邻接存储（vertex_data） | [storage/kv-encoding.md](storage/kv-encoding.md) | `src/storage/kv/key_codec.*`, `src/storage/data/sync_graph_data_store.*` |
 | Expand 目标标签过滤优化 | [query/expand-label-filter-optimization.md](query/expand-label-filter-optimization.md) | `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | PatternComprehension 锚点标签扫描 | [query/pattern-comprehension-anchor-label-scan.md](query/pattern-comprehension-anchor-label-scan.md) | `src/query/planner/binder/bind_match.cpp` |
 | LDBC c5/c9 计划分析 | [query/ldbc-c5-c9-plan-analysis.md](query/ldbc-c5-c9-plan-analysis.md) | `src/query/physical_plan/` |
+| LDBC 慢查询执行层优化（不改存储） | [benchmark/ldbc-storage-unchanged-optimization-plan.md](benchmark/ldbc-storage-unchanged-optimization-plan.md), [benchmark/ldbc-plan-quality-analysis.md](benchmark/ldbc-plan-quality-analysis.md) | `src/query/physical_plan/`, `src/query/planner/`, `src/storage/data/` |
 | 添加 DDL 操作 | [storage/ddl.md], [storage/metadata-service-design.md], [storage/session-cursor-pool-design.md] | `src/storage/schema_ddl.*`, `src/storage/meta/`, `src/storage/data/` |
 | 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/graph/graph_manager.hpp` |
 | 修改类型系统 | [architecture/type-definitions.md], [storage/kv-encoding.md] | `src/common/types/` |
@@ -87,6 +88,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md], [storage/session-cursor-pool-design.md] | `src/storage/` |
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
 | 表达式求值/懒加载属性 | [query/engine/evaluator-prefetch-design.md](query/engine/evaluator-prefetch-design.md) | `src/query/evaluator/`, `src/query/physical_plan/operator/` |
+| 表达式临时对象/分配优化 | [query/engine/evaluator-scratch-reuse-design.md](query/engine/evaluator-scratch-reuse-design.md) | `src/query/evaluator/`, `src/query/dataset/data_chunk.hpp` |
 | 性能剖析 / 指标与 trace | [debugging/metrics-and-tracing.md] | `src/query/physical_plan/`, `src/query/executor/`, `src/storage/data/async_graph_data_store.hpp` |
 | 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/common/schema/graph_schema.hpp` |
 | 表达式求值相关 | [query/syntax/cypher-syntax.md], [query/engine/query-engine-design.md] | `executor/vectorized_evaluator.cpp`, `binder/` |
@@ -108,9 +110,14 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 |------|------|
 | [LDBC c5/c9/c14 neo4j 计划对比](query/ldbc-neo4j-plan-comparison.md) | PROFILE 形状/dbHits、eugraph 对应计划与下一步优化方向 |
 | [LDBC 计划质量与剩余瓶颈](benchmark/ldbc-plan-quality-analysis.md) | c5/c6/c9/c14 的 EuGraph vs neo4j 逐算子 rows/dbHits 对照：计划形状是否一致、标签扫描/per-edge seek/PC 冗余的实测成本与优先级 |
-| [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同源数据同机交错 A/B 耗时对比、21/21 结果一致性验证（`scripts/verify_ldbc_results.py`）、并发 QPS（`scripts/bench_bolt_qps.py`）、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`）；§5 记录 2026-11-03 的存储/算子改动归因与下一步 |
+| [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同源数据同机交错 A/B 耗时对比（最新 2026-11-04 稳态基准）、21/21 结果一致性验证（`scripts/verify_ldbc_results.py`）、并发 QPS（`scripts/bench_bolt_qps.py`）、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`）；§5 记录 2026-11-03/11-04 的存储/算子/evaluator 改动归因与下一步 |
+| [同步扫描回调设计](storage/scan-callback-design.md) | `std::function` → `folly::FunctionRef` 的同步 callback 边界、生命周期契约与不变量 |
+| [存储结构不变前提下的 LDBC 执行层优化计划](benchmark/ldbc-storage-unchanged-optimization-plan.md) | 不改 KV 布局、不加二级索引（与 neo4j 公平对比）前提下，c14/c5/c10/c6/c12 的可执行优化、预期收益、风险与验证判据 |
 | [双调度器 hop 并发吞吐](benchmark/scheduler-hop-throughput.md) | 两个单 worker executor 下 compute→IO→compute 的吞吐/延迟曲线，区分并发流水线与 batch 摊薄 |
 | [Storage 操作成本](benchmark/storage-operation-costs.md) | WT `search`/`search_near` 与 IO dispatch 的单次成本、语句级计数与归因方法 |
+| [Value 拷贝审计](query/engine/value-copy-audit.md) | 查询热路径中不必要的 Value 物化、统一 cell 访问入口、仍必须拥有的拷贝清单与后续候选 |
+| [Aggregate typed execution 设计](query/engine/aggregate-typed-execution-design.md) | 聚合参数 chunk 级 typed 列视图、函数指针回调、null/count(*)/DISTINCT 不变量与 DuckDB 对照 |
+| [Evaluator 临时对象复用设计](query/engine/evaluator-scratch-reuse-design.md) | 表达式求值的 scratch/temp column 复用、typed copy、list comprehension/quantifier/reduce 单行 chunk 复用与分配热点 |
 | [查询值拷贝性能剖析](benchmark/query-value-copy-profiling.md) | 定位 complex-10 的真实瓶颈（值拷贝而非 VLE/推导本身）、消除深拷贝的四处改动与交替顺序 A/B 判据 |
 | [查询性能排查与优化笔记](benchmark/query-performance-optimization-notes.md) | complex-3 复盘：GDB 协程采样方法、逐行重复物化/空查询的检查清单、neo4j 计划对照、存储布局级后续优化思路 |
 | [列表推导内模式推导：发现与待修缺陷](query/deferred-pattern-comprehension-findings.md) | complex-10 的根因证据、被证伪的方向、探针规范与验收口径 |

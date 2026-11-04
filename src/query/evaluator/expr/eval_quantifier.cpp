@@ -8,8 +8,18 @@ void ExpressionEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
                                              const std::optional<binder::BoundExpression>& where_pred,
                                              const DataChunk& input, Column& result, size_t count) {
     auto list_eval = evaluateInternal(list_expr, input);
+    const size_t temp_mark = tempMark();
 
     size_t total_cols = std::max(static_cast<size_t>(loop_column_index) + 1, input.columns.size() + 1);
+
+    // Reuse one 1-row chunk per evaluation depth; only the loop column changes
+    // between elements of the same outer row.
+    auto& s = scratch();
+    DataChunk& temp_chunk = s.single_row_chunk;
+    if (temp_chunk.columns.size() < total_cols)
+        temp_chunk.columns.resize(total_cols);
+    temp_chunk.count = 1;
+    temp_chunk.sel = SelectionVector::identity(1);
 
     for (size_t i = 0; i < count; ++i) {
         // Initialised to the "empty input" answer for this kind, so the
@@ -58,40 +68,31 @@ void ExpressionEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             continue;
         }
 
+        // Input columns are constant for the whole outer row; set them once.
+        for (size_t c = 0; c < input.columns.size(); ++c)
+            temp_chunk.columns[c].resetConstant(binder::BoundTypeKind::NULL_TYPE, input.columns[c].getValue(i));
+        for (size_t c = input.columns.size(); c < total_cols; ++c)
+            temp_chunk.columns[c].resetConstant(binder::BoundTypeKind::NULL_TYPE, Value{});
+
         bool saw_inconclusive = false;
         for (const auto& elem_storage : lv.elements) {
+            resetToTempMark(temp_mark);
             Value elem_val = elem_storage.value;
-
-            DataChunk temp_chunk;
-            temp_chunk.columns.resize(total_cols);
-            temp_chunk.count = 1;
-            temp_chunk.sel = SelectionVector::identity(1);
-
-            for (size_t c = 0; c < input.columns.size(); ++c) {
-                temp_chunk.columns[c] = Column::constant(input.columns[c].getValue(i));
-            }
-            for (size_t c = input.columns.size(); c < total_cols; ++c) {
-                temp_chunk.columns[c] = Column::constant(Value{});
-            }
-            temp_chunk.columns[loop_column_index] = Column::constant(elem_val);
+            temp_chunk.columns[loop_column_index].resetConstant(binder::BoundTypeKind::NULL_TYPE, elem_val);
 
             bool elem_passes = true;
             if (where_pred) {
+                auto pred = evaluatePredicateOne(*where_pred, temp_chunk);
                 if (isNull(elem_val)) {
-                    size_t col_count_before = temp_columns_.size();
-                    evaluateInternal(*where_pred, temp_chunk);
-                    if (temp_columns_.size() > col_count_before && !temp_columns_[col_count_before].isNull(0)) {
-                        Value v = temp_columns_[col_count_before].getValue(0);
-                        if (std::holds_alternative<bool>(v))
-                            elem_passes = std::get<bool>(v);
-                    } else {
+                    // A NULL element with an unknown predicate is inconclusive;
+                    // a known bool still participates normally (old behaviour).
+                    if (!pred) {
                         saw_inconclusive = true;
                         continue;
                     }
+                    elem_passes = *pred;
                 } else {
-                    std::vector<bool> pred_result;
-                    evaluatePredicate(*where_pred, temp_chunk, pred_result);
-                    elem_passes = !pred_result.empty() && pred_result[0];
+                    elem_passes = pred.value_or(false);
                 }
             }
 

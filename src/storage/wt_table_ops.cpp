@@ -1,4 +1,5 @@
 #include "storage/wt_table_ops.hpp"
+#include <folly/Function.h>
 
 #include "storage/data/graph_session.hpp"
 
@@ -16,7 +17,7 @@ namespace eugraph {
 
 namespace {
 
-using ScanCallback = std::function<bool(std::string_view, std::string_view)>;
+using ScanCallback = folly::FunctionRef<bool(std::string_view, std::string_view)>;
 
 void setItem(WT_CURSOR* cursor, std::string_view data) {
     WT_ITEM item;
@@ -85,8 +86,7 @@ int delWithCursor(WT_CURSOR* cursor, const std::string& table, std::string_view 
 /// 区间/前缀迭代的**唯一原语** ✓（tableScan 与 index range scan 共用）
 /// 返回 0 = 正常结束（含 WT_NOTFOUND）；其他 = 错误码 ✓
 int scanRangeWithCursor(WT_CURSOR* c, std::string_view start_key, bool exclusive_start, std::string_view end_key,
-                        const std::function<std::string_view(std::string_view)>& end_key_view,
-                        const ScanCallback& callback) {
+                        folly::FunctionRef<std::string_view(std::string_view)> end_key_view, ScanCallback callback) {
     if (c == nullptr)
         return EINVAL;
     int ret = 0;
@@ -139,7 +139,7 @@ int scanRangeWithCursor(WT_CURSOR* c, std::string_view start_key, bool exclusive
 }
 
 /// 前缀扫描（table_scan）建立在同一原语之上 ✓
-int scanWithCursor(WT_CURSOR* c, std::string_view prefix, const ScanCallback& callback) {
+int scanWithCursor(WT_CURSOR* c, std::string_view prefix, ScanCallback callback) {
     if (prefix.empty())
         return scanRangeWithCursor(c, {}, false, {}, {}, callback);
     return scanRangeWithCursor(c, prefix, false, {}, {}, [&](std::string_view key, std::string_view value) {
@@ -188,7 +188,7 @@ bool wt::table_del(WT_SESSION* session, const std::string& table, std::string_vi
 }
 
 void wt::table_scan(WT_SESSION* session, const std::string& table, std::string_view prefix,
-                    const std::function<bool(std::string_view, std::string_view)>& callback) {
+                    folly::FunctionRef<bool(std::string_view, std::string_view)> callback) {
     if (session == nullptr) {
         spdlog::error("table_scan: null session");
         return;
@@ -252,7 +252,7 @@ bool wt::table_del(GraphSession& session, const std::string& table, std::string_
 }
 
 void wt::table_scan(GraphSession& session, const std::string& table, std::string_view prefix,
-                    const std::function<bool(std::string_view, std::string_view)>& callback) {
+                    folly::FunctionRef<bool(std::string_view, std::string_view)> callback) {
     // 扫描用独立 cursor（同表嵌套扫描/边扫边删是真实路径 ✓，共享缓存 cursor 会互相破坏 ✗）
     CursorHandle cursor = session.acquire_scan_cursor(table);
     if (!cursor) {
@@ -265,8 +265,8 @@ void wt::table_scan(GraphSession& session, const std::string& table, std::string
 }
 
 int wt::scan_range(WT_CURSOR* cursor, std::string_view start_key, bool exclusive_start, std::string_view end_key,
-                   const std::function<std::string_view(std::string_view)>& end_key_view,
-                   const std::function<bool(std::string_view, std::string_view)>& callback) {
+                   folly::FunctionRef<std::string_view(std::string_view)> end_key_view,
+                   folly::FunctionRef<bool(std::string_view, std::string_view)> callback) {
     return scanRangeWithCursor(cursor, start_key, exclusive_start, end_key, end_key_view, callback);
 }
 

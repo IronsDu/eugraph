@@ -1,5 +1,6 @@
 #pragma once
 
+#include "query/dataset/cell_access.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 
@@ -83,13 +84,47 @@ inline uint64_t cellDigest(const Value& v, uint8_t& is_entity) {
     return static_cast<uint64_t>(ValueHash{}(v));
 }
 
+/// Fast digest for typed scalar columns: avoids constructing a Value per cell
+/// while preserving entity-id folding for vertex/edge columns.
+inline uint64_t cellDigestColumn(const Column& col, size_t row, uint8_t& is_entity) {
+    if (col.isNull(row)) {
+        is_entity = 0;
+        return 0;
+    }
+    switch (col.type) {
+    case binder::BoundTypeKind::BOOL:
+        is_entity = 0;
+        return std::hash<bool>{}(col.getBool(row));
+    case binder::BoundTypeKind::INT64:
+        is_entity = 0;
+        return std::hash<int64_t>{}(col.getInt64(row));
+    case binder::BoundTypeKind::DOUBLE:
+        is_entity = 0;
+        return std::hash<double>{}(col.getDouble(row));
+    case binder::BoundTypeKind::STRING:
+        is_entity = 0;
+        return std::hash<std::string_view>{}(columnStringView(col, row));
+    case binder::BoundTypeKind::VERTEX_REF:
+    case binder::BoundTypeKind::VERTEX: {
+        const VertexId id = columnVertexId(col, row);
+        if (id == INVALID_VERTEX_ID)
+            return cellDigest(col.getValue(row), is_entity);
+        is_entity = 1;
+        return static_cast<uint64_t>(id);
+    }
+    default:
+        break;
+    }
+    return cellDigest(col.getValue(row), is_entity);
+}
+
 /// Snapshot one row of `chunk` into `out` (resized as needed).
 inline void digestChunkRow(const DataChunk& chunk, size_t row, RowDigest& out) {
     const size_t cols = chunk.numColumns();
     out.cells.resize(cols);
     out.is_entity.resize(cols);
     for (size_t c = 0; c < cols; ++c)
-        out.cells[c] = cellDigest(chunk.columns[c].getValue(row), out.is_entity[c]);
+        out.cells[c] = cellDigestColumn(chunk.columns[c], row, out.is_entity[c]);
 }
 
 } // namespace eugraph

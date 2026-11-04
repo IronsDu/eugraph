@@ -252,12 +252,13 @@ folly::coro::AsyncGenerator<DataChunk> FilterPhysicalOp::executeChunk() {
     }
 
     auto child_gen = cancellable(child_->executeChunkTraced());
+    ExpressionEvaluator evaluator(eval_ctx_);
+    std::vector<const binder::BoundExpression*> prefetch_exprs{&predicate_};
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
 
-        ExpressionEvaluator evaluator(eval_ctx_);
-        std::vector<const binder::BoundExpression*> prefetch_exprs{&predicate_};
+        evaluator.resetForChunk();
         co_await evaluator.prefetch(prefetch_exprs, *chunk);
         std::vector<bool> predicate(n);
         evaluator.evaluatePredicate(predicate_, *chunk, predicate);

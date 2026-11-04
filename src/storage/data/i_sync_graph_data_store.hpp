@@ -2,8 +2,9 @@
 
 #include "common/types/graph_types.hpp"
 
+#include <folly/Function.h>
+
 #include <algorithm>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
@@ -169,13 +170,13 @@ public:
     // ==================== Label Index Scan ====================
 
     virtual void scanVerticesByLabel(GraphSession& session, LabelId label_id,
-                                     const std::function<bool(VertexId)>& callback) = 0;
+                                     folly::FunctionRef<bool(VertexId)> callback) = 0;
     virtual std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphSession& session, LabelId label_id) = 0;
     /// 全顶点游标（vid 升序、每个点一次）。scanAllVertices() 的回调式接口无法跨批次续扫，
     /// 需要流式输出的算子（AllNodeScan）用它，避免把全图 vid 先收进内存。
     virtual std::unique_ptr<IVertexScanCursor> createAllVertexScanCursor(GraphSession& session) = 0;
 
-    virtual void scanAllVertices(GraphSession& session, const std::function<bool(VertexId)>& callback) = 0;
+    virtual void scanAllVertices(GraphSession& session, folly::FunctionRef<bool(VertexId)> callback) = 0;
 
     // ==================== Edge ====================
 
@@ -200,21 +201,21 @@ public:
 
     virtual void scanEdges(GraphSession& session, VertexId vid, Direction direction,
                            std::optional<EdgeLabelId> label_filter,
-                           const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
+                           folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) = 0;
     /// One cursor for a whole batch of sources instead of one per vid.
     virtual void scanEdgesBatch(GraphSession& session, const std::vector<VertexId>& src_ids, Direction direction,
                                 std::optional<EdgeLabelId> label_filter,
-                                const std::function<bool(VertexId, const EdgeIndexEntry&)>& callback) = 0;
+                                folly::FunctionRef<bool(VertexId, const EdgeIndexEntry&)> callback) = 0;
     /// Exact `{src}{dir}{label}{neighbor}` lookup: one B-tree seek instead of
     /// scanning every edge of `src` and filtering by neighbour.
     virtual void scanEdgesExact(GraphSession& session, VertexId vid, Direction direction, EdgeLabelId label_id,
-                                VertexId neighbor_id, const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
+                                VertexId neighbor_id, folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) = 0;
     virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid,
                                                                   Direction direction,
                                                                   std::optional<EdgeLabelId> label_filter) = 0;
     virtual void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                  std::optional<VertexId> dst_filter,
-                                 const std::function<bool(const EdgeTypeIndexEntry&)>& callback) = 0;
+                                 folly::FunctionRef<bool(const EdgeTypeIndexEntry&)> callback) = 0;
     virtual std::unique_ptr<IEdgeTypeScanCursor> createEdgeTypeScanCursor(GraphSession& session, EdgeLabelId label_id,
                                                                           std::optional<VertexId> src_filter,
                                                                           std::optional<VertexId> dst_filter) = 0;
@@ -255,17 +256,17 @@ public:
     // ==================== Index Scan ====================
 
     virtual void scanIndexEquality(GraphSession& session, const std::string& table, const PropertyValue& value,
-                                   const std::function<bool(uint64_t)>& callback) = 0;
+                                   folly::FunctionRef<bool(uint64_t)> callback) = 0;
     virtual void scanIndexEquality(GraphSession& session, const std::string& table,
                                    const std::vector<PropertyValue>& values,
-                                   const std::function<bool(uint64_t)>& callback) = 0;
+                                   folly::FunctionRef<bool(uint64_t)> callback) = 0;
     virtual void scanIndexRange(GraphSession& session, const std::string& table,
                                 const std::optional<PropertyValue>& start, const std::optional<PropertyValue>& end,
-                                const std::function<bool(uint64_t)>& callback) = 0;
+                                folly::FunctionRef<bool(uint64_t)> callback) = 0;
     virtual void scanIndexRange(GraphSession& session, const std::string& table,
                                 const std::optional<std::vector<PropertyValue>>& start,
                                 const std::optional<std::vector<PropertyValue>>& end,
-                                const std::function<bool(uint64_t)>& callback) = 0;
+                                folly::FunctionRef<bool(uint64_t)> callback) = 0;
 
     // ==================== 可恢复的索引扫描 cursor ====================
     // 索引扫描可能命中大量条目；callback 式接口无法跨批次续扫 ⇒ async 层只能先物化全集 ✗。
@@ -295,18 +296,18 @@ public:
 
     // Index scan that also returns the stored value (for edge indexes with adjacency info)
     virtual void scanIndexEqualityWithValue(GraphSession& session, const std::string& table, const PropertyValue& value,
-                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                            folly::FunctionRef<bool(uint64_t, std::string_view)> callback) = 0;
     virtual void scanIndexEqualityWithValue(GraphSession& session, const std::string& table,
                                             const std::vector<PropertyValue>& values,
-                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                            folly::FunctionRef<bool(uint64_t, std::string_view)> callback) = 0;
     virtual void scanIndexRangeWithValue(GraphSession& session, const std::string& table,
                                          const std::optional<PropertyValue>& start,
                                          const std::optional<PropertyValue>& end,
-                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         folly::FunctionRef<bool(uint64_t, std::string_view)> callback) = 0;
     virtual void scanIndexRangeWithValue(GraphSession& session, const std::string& table,
                                          const std::optional<std::vector<PropertyValue>>& start,
                                          const std::optional<std::vector<PropertyValue>>& end,
-                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         folly::FunctionRef<bool(uint64_t, std::string_view)> callback) = 0;
 
     // ==================== Index Cleanup ====================
 };

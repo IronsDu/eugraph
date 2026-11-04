@@ -601,9 +601,14 @@ class PhysicalOperator {
 
 `AggregatePhysicalOp` 通过 `FunctionDef` 聚合回调执行：
 
-1. `agg_init()` → 为每个分组创建独立状态对象（继承 `AggStateBase`）
-2. 每行 `agg_update(state, value)` → 累积
-3. `agg_finalize(state)` → 输出最终结果
+1. 每个 child chunk 求值 group key 和每个 aggregate 的参数表达式，参数落到 typed `Column`
+   （图实体等可能跨拓扑/语义阶段的类型用 ANY，避免表示变化丢失）；
+2. `agg_init()` → 为每个分组创建独立状态对象（继承 `AggStateBase`）；
+3. 每行构造 `AggregateInput{args, row}`（非拥有列视图）→ `agg_update(state, input)` 累积；
+4. `agg_finalize(state)` → 输出最终结果。
+
+回调是 captureless 函数指针，不是 `std::function`；null/count(*)/DISTINCT 策略集中在算子中。
+详见 [aggregate-typed-execution-design.md](aggregate-typed-execution-design.md)。
 
 ---
 

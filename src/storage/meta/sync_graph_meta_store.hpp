@@ -1,3 +1,4 @@
+#include <folly/Function.h>
 #pragma once
 
 #include "common/types/constants.hpp"
@@ -45,7 +46,7 @@ public:
     std::optional<std::string> metadataGet(std::string_view key) override;
     bool metadataDel(std::string_view key) override;
     void metadataScan(std::string_view prefix,
-                      const std::function<bool(std::string_view, std::string_view)>& callback) override;
+                      folly::FunctionRef<bool(std::string_view, std::string_view)> callback) override;
 
 private:
     WtConnectionStore* conn_ = nullptr;

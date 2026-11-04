@@ -2,7 +2,8 @@
 
 #include "common/types/graph_types.hpp"
 
-#include <functional>
+#include <folly/Function.h>
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,7 +25,7 @@ public:
     virtual std::optional<std::string> metadataGet(std::string_view key) = 0;
     virtual bool metadataDel(std::string_view key) = 0;
     virtual void metadataScan(std::string_view prefix,
-                              const std::function<bool(std::string_view, std::string_view)>& callback) = 0;
+                              folly::FunctionRef<bool(std::string_view, std::string_view)> callback) = 0;
 };
 
 } // namespace eugraph

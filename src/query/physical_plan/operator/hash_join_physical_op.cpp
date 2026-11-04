@@ -105,8 +105,10 @@ folly::coro::AsyncGenerator<DataChunk> HashJoinPhysicalOp::executeChunk() {
             if (it == hash_table.end())
                 continue;
             for (const auto& right_vals : it->second) {
-                for (size_t c = 0; c < left_cols; ++c)
-                    output.columns[c].setValue(output.count, left_chunk->getValue(c, row));
+                for (size_t c = 0; c < left_cols; ++c) {
+                    if (!output.columns[c].copyValueFrom(left_chunk->columns[c], row, output.count))
+                        output.columns[c].setValue(output.count, left_chunk->getValue(c, row));
+                }
                 for (size_t c = 0; c < right_cols; ++c)
                     output.columns[left_cols + c].setValue(output.count, right_vals[c]);
                 output.count++;

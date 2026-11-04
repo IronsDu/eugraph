@@ -3479,6 +3479,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         ae.arguments = std::move(ai.arguments);
                         ae.distinct = ai.distinct;
                         ae.is_internal = ai.is_internal;
+                        // keeps_nulls is a binder/stage decision: normal collect(x)
+                        // filters nulls (TCK Aggregation5), while the internal
+                        // collect used by pattern/list comprehension sets this flag
+                        // explicitly to preserve null projections.
                         ae.keeps_nulls = ai.keeps_nulls;
                         if (v.group_keys.size() + i < v.output_names.size())
                             ae.name = v.output_names[v.group_keys.size() + i];

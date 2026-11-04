@@ -1,5 +1,7 @@
 #include "query/evaluator/expression_evaluator.hpp"
 
+#include <optional>
+
 #include "storage/storage_op_metrics.hpp"
 
 #include "query/catalog/catalog.hpp"
@@ -98,20 +100,30 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     recordPrefetchMiss();
                 }
             }
-            std::vector<Value> found;
+            // Most vertices have exactly one matching candidate. Keep the
+            // common case on the stack and only allocate the extra vector when
+            // a vertex really defines the property under more than one label.
+            std::optional<Value> first_found;
+            std::vector<Value> extra_found;
+            auto add_found = [&](Value v) {
+                if (!first_found)
+                    first_found = std::move(v);
+                else
+                    extra_found.push_back(std::move(v));
+            };
             for (const auto& candidate : ref.candidates) {
                 auto lit = props->find(candidate.label_id);
                 if (lit != props->end()) {
                     const auto& candidate_props = lit->second;
                     if (candidate.prop_id < candidate_props.size() && candidate_props[candidate.prop_id].has_value()) {
-                        found.push_back(pvToValue(*candidate_props[candidate.prop_id]));
+                        add_found(pvToValue(*candidate_props[candidate.prop_id]));
                     }
                 }
             }
             // Fallback: a property may be registered on __anon__ in the
             // catalog but physically stored under the vertex's concrete
             // label. Search all loaded labels by name.
-            if (found.empty() && !ref.property_name.empty()) {
+            if (!first_found && !ref.property_name.empty()) {
                 for (const auto& [lid, props_vec] : *props) {
                     const LabelDef* ldef = findLabelDef(lid);
                     if (!ldef)
@@ -120,20 +132,22 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                         if (pd.name == ref.property_name && pd.id < props_vec.size()) {
                             const auto& pv = props_vec[pd.id];
                             if (pv.has_value()) {
-                                found.push_back(pvToValue(*pv));
+                                add_found(pvToValue(*pv));
                                 break;
                             }
                         }
                     }
-                    if (!found.empty())
+                    if (first_found)
                         break;
                 }
             }
-            if (found.size() == 1) {
-                r = std::move(found[0]);
-            } else if (found.size() > 1) {
+            if (first_found && extra_found.empty()) {
+                r = std::move(*first_found);
+            } else if (first_found) {
                 ListValue lv;
-                for (auto& v : found)
+                lv.elements.reserve(1 + extra_found.size());
+                lv.elements.push_back(ValueStorage{std::move(*first_found)});
+                for (auto& v : extra_found)
                     lv.elements.push_back(ValueStorage{std::move(v)});
                 r = Value(mk<ListValue>(std::move(lv)));
             }

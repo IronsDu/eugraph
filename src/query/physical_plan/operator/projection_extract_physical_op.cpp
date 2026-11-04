@@ -586,10 +586,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexProp: {
-                    if (row < vertex_prop_cache[i].size() && vertex_prop_cache[i][row].has_value())
-                        output.columns[i].setValue(dst_row, propertyValueToValue(*vertex_prop_cache[i][row]));
-                    else
+                    if (row < vertex_prop_cache[i].size() && vertex_prop_cache[i][row].has_value()) {
+                        if (!setColumnFromPropertyValue(output.columns[i], dst_row, *vertex_prop_cache[i][row]))
+                            output.columns[i].setValue(dst_row, propertyValueToValue(*vertex_prop_cache[i][row]));
+                    } else {
                         output.columns[i].setNull(dst_row);
+                    }
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
@@ -607,7 +609,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                             // Fast path: the common single-label case must not pay
                             // for a per-row dedup vector (complex-3 reads 52k
                             // creationDate values through this path).
-                            output.columns[i].setValue(dst_row, propertyValueToValue(values[0]));
+                            if (!setColumnFromPropertyValue(output.columns[i], dst_row, values[0]))
+                                output.columns[i].setValue(dst_row, propertyValueToValue(values[0]));
                         } else {
                             std::vector<PropertyValue> unique_values;
                             unique_values.reserve(values.size());
@@ -623,7 +626,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                                     unique_values.push_back(pv);
                             }
                             if (unique_values.size() == 1) {
-                                output.columns[i].setValue(dst_row, propertyValueToValue(unique_values[0]));
+                                if (!setColumnFromPropertyValue(output.columns[i], dst_row, unique_values[0]))
+                                    output.columns[i].setValue(dst_row, propertyValueToValue(unique_values[0]));
                             } else {
                                 ListValue lv;
                                 lv.elements.reserve(unique_values.size());
@@ -642,10 +646,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         const auto& pv = edge_prop_cache[i][row];
                         if (!pv.has_value()) {
                             output.columns[i].setNull(dst_row);
-                        } else if (output.columns[i].type == binder::BoundTypeKind::INT64 &&
-                                   std::holds_alternative<int64_t>(*pv)) {
-                            output.columns[i].buffer->int64_data[dst_row] = std::get<int64_t>(*pv);
-                        } else {
+                        } else if (!setColumnFromPropertyValue(output.columns[i], dst_row, *pv)) {
                             output.columns[i].setValue(dst_row, propertyValueToValue(*pv));
                         }
                     } else {

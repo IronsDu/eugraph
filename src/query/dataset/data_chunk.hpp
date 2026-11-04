@@ -103,57 +103,200 @@ struct ColumnBuffer {
     // Validity bitmap: byte array, bit i = row i is non-NULL.
     std::vector<uint8_t> validity;
 
-    /// Allocate capacity for the active typed vector and validity.
-    void reserve(size_t n) {
-        if (n <= capacity)
-            return;
-        capacity = n;
-        validity.resize((n + 7) / 8, 0xFF); // all valid by default
+    /// Ensure the active typed vector has at least `n` elements.
+    void resizeActive(size_t n) {
         switch (type) {
         case binder::BoundTypeKind::BOOL:
-            bool_data.resize(n, 0);
+            if (bool_data.size() < n)
+                bool_data.resize(n, 0);
             break;
         case binder::BoundTypeKind::INT64:
-            int64_data.resize(n, 0);
+            if (int64_data.size() < n)
+                int64_data.resize(n, 0);
             break;
         case binder::BoundTypeKind::DOUBLE:
-            double_data.resize(n, 0.0);
+            if (double_data.size() < n)
+                double_data.resize(n, 0.0);
             break;
         case binder::BoundTypeKind::STRING:
-            string_data.resize(n);
+            if (string_data.size() < n)
+                string_data.resize(n);
             break;
         case binder::BoundTypeKind::VERTEX_REF:
-            vertex_ref_data.resize(n);
+            if (vertex_ref_data.size() < n)
+                vertex_ref_data.resize(n);
             break;
         case binder::BoundTypeKind::EDGE_KEY:
-            edge_key_data.resize(n);
+            if (edge_key_data.size() < n)
+                edge_key_data.resize(n);
             break;
         case binder::BoundTypeKind::PATH_TOPOLOGY:
-            path_topology_data.resize(n);
+            if (path_topology_data.size() < n)
+                path_topology_data.resize(n);
             break;
         case binder::BoundTypeKind::VERTEX:
-            vertex_data.resize(n);
+            if (vertex_data.size() < n)
+                vertex_data.resize(n);
             break;
         case binder::BoundTypeKind::EDGE:
-            edge_data.resize(n);
+            if (edge_data.size() < n)
+                edge_data.resize(n);
             break;
         case binder::BoundTypeKind::PATH:
-            path_data.resize(n);
+            if (path_data.size() < n)
+                path_data.resize(n);
             break;
         case binder::BoundTypeKind::LIST:
-            list_data.resize(n);
+            if (list_data.size() < n)
+                list_data.resize(n);
             break;
         case binder::BoundTypeKind::MAP:
-            map_data.resize(n);
+            if (map_data.size() < n)
+                map_data.resize(n);
             break;
         case binder::BoundTypeKind::DATETIME:
         case binder::BoundTypeKind::TIME:
         case binder::BoundTypeKind::DURATION:
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:
-            any_data.resize(n);
+            if (any_data.size() < n)
+                any_data.resize(n);
             break;
         }
+    }
+
+    /// Reset the active typed vector's first `n` rows to their default value.
+    void clearActive(size_t n) {
+        switch (type) {
+        case binder::BoundTypeKind::BOOL:
+            std::fill_n(bool_data.begin(), std::min(n, bool_data.size()), uint8_t{0});
+            break;
+        case binder::BoundTypeKind::INT64:
+            std::fill_n(int64_data.begin(), std::min(n, int64_data.size()), int64_t{0});
+            break;
+        case binder::BoundTypeKind::DOUBLE:
+            std::fill_n(double_data.begin(), std::min(n, double_data.size()), double{0});
+            break;
+        case binder::BoundTypeKind::STRING:
+            std::fill_n(string_data.begin(), std::min(n, string_data.size()), std::string{});
+            break;
+        case binder::BoundTypeKind::VERTEX_REF:
+            std::fill_n(vertex_ref_data.begin(), std::min(n, vertex_ref_data.size()), VertexRef{});
+            break;
+        case binder::BoundTypeKind::EDGE_KEY:
+            std::fill_n(edge_key_data.begin(), std::min(n, edge_key_data.size()), EdgeKey{});
+            break;
+        case binder::BoundTypeKind::PATH_TOPOLOGY:
+            std::fill_n(path_topology_data.begin(), std::min(n, path_topology_data.size()), PathTopologyPtr{});
+            break;
+        case binder::BoundTypeKind::VERTEX:
+            std::fill_n(vertex_data.begin(), std::min(n, vertex_data.size()), VertexValuePtr{});
+            break;
+        case binder::BoundTypeKind::EDGE:
+            std::fill_n(edge_data.begin(), std::min(n, edge_data.size()), EdgeValuePtr{});
+            break;
+        case binder::BoundTypeKind::PATH:
+            std::fill_n(path_data.begin(), std::min(n, path_data.size()), PathValuePtr{});
+            break;
+        case binder::BoundTypeKind::LIST:
+            std::fill_n(list_data.begin(), std::min(n, list_data.size()), ListValuePtr{});
+            break;
+        case binder::BoundTypeKind::MAP:
+            std::fill_n(map_data.begin(), std::min(n, map_data.size()), MapValuePtr{});
+            break;
+        case binder::BoundTypeKind::DATETIME:
+        case binder::BoundTypeKind::TIME:
+        case binder::BoundTypeKind::DURATION:
+        case binder::BoundTypeKind::ANY:
+        case binder::BoundTypeKind::NULL_TYPE:
+            std::fill_n(any_data.begin(), std::min(n, any_data.size()), Value{});
+            break;
+        }
+    }
+
+    /// Allocate capacity for the active typed vector and validity.
+    void reserve(size_t n) {
+        if (n <= capacity)
+            return;
+        capacity = n;
+        validity.resize((n + 7) / 8, 0xFF); // all valid by default
+        resizeActive(n);
+    }
+
+    /// Reuse this buffer for a new type/capacity, keeping the allocated vectors.
+    /// The first `n` rows are zeroed and marked valid, matching Column::flat().
+    void reset(binder::BoundTypeKind new_type, size_t n) {
+        type = new_type;
+        if (n > capacity) {
+            capacity = n;
+            validity.resize((n + 7) / 8, 0xFF);
+        }
+        resizeActive(n);
+        clearActive(n);
+        if (!validity.empty())
+            std::fill(validity.begin(), validity.end(), 0xFF);
+    }
+
+    /// Copy the first `count` rows of `src` (same type) into this buffer.
+    /// Used by ExpressionEvaluator to avoid per-row Value round-trips.
+    bool copyFrom(const ColumnBuffer& src, size_t count) {
+        if (type != src.type || count > src.capacity)
+            return false;
+        if (count > capacity) {
+            capacity = count;
+            validity.resize((count + 7) / 8, 0xFF);
+        }
+        resizeActive(count);
+        const size_t bytes = (count + 7) / 8;
+        if (validity.size() < bytes || src.validity.size() < bytes)
+            return false;
+        std::copy_n(src.validity.begin(), bytes, validity.begin());
+        switch (type) {
+        case binder::BoundTypeKind::BOOL:
+            std::copy_n(src.bool_data.begin(), count, bool_data.begin());
+            break;
+        case binder::BoundTypeKind::INT64:
+            std::copy_n(src.int64_data.begin(), count, int64_data.begin());
+            break;
+        case binder::BoundTypeKind::DOUBLE:
+            std::copy_n(src.double_data.begin(), count, double_data.begin());
+            break;
+        case binder::BoundTypeKind::STRING:
+            std::copy_n(src.string_data.begin(), count, string_data.begin());
+            break;
+        case binder::BoundTypeKind::VERTEX_REF:
+            std::copy_n(src.vertex_ref_data.begin(), count, vertex_ref_data.begin());
+            break;
+        case binder::BoundTypeKind::EDGE_KEY:
+            std::copy_n(src.edge_key_data.begin(), count, edge_key_data.begin());
+            break;
+        case binder::BoundTypeKind::PATH_TOPOLOGY:
+            std::copy_n(src.path_topology_data.begin(), count, path_topology_data.begin());
+            break;
+        case binder::BoundTypeKind::VERTEX:
+            std::copy_n(src.vertex_data.begin(), count, vertex_data.begin());
+            break;
+        case binder::BoundTypeKind::EDGE:
+            std::copy_n(src.edge_data.begin(), count, edge_data.begin());
+            break;
+        case binder::BoundTypeKind::PATH:
+            std::copy_n(src.path_data.begin(), count, path_data.begin());
+            break;
+        case binder::BoundTypeKind::LIST:
+            std::copy_n(src.list_data.begin(), count, list_data.begin());
+            break;
+        case binder::BoundTypeKind::MAP:
+            std::copy_n(src.map_data.begin(), count, map_data.begin());
+            break;
+        case binder::BoundTypeKind::DATETIME:
+        case binder::BoundTypeKind::TIME:
+        case binder::BoundTypeKind::DURATION:
+        case binder::BoundTypeKind::ANY:
+        case binder::BoundTypeKind::NULL_TYPE:
+            std::copy_n(src.any_data.begin(), count, any_data.begin());
+            break;
+        }
+        return true;
     }
 
     bool isNull(size_t i) const {
@@ -481,6 +624,28 @@ struct Column {
         buffer->reserve(n);
     }
 
+    /// Reuse this Column as a FLAT column, keeping its buffer when possible.
+    /// Used by ExpressionEvaluator's temporary-column pool; the buffer is only
+    /// mutated when it is not shared with a DICTIONARY view.
+    void resetFlat(binder::BoundTypeKind t, size_t n) {
+        type = t;
+        form = VectorForm::FLAT;
+        constant_value = Value{};
+        if (!buffer || buffer.use_count() != 1) {
+            buffer = std::make_shared<ColumnBuffer>();
+            buffer->type = t;
+        }
+        buffer->reset(t, n);
+    }
+
+    /// Reuse this Column as a CONSTANT column. The buffer (if any) is kept for
+    /// a later resetFlat(); constant reads ignore it.
+    void resetConstant(binder::BoundTypeKind t, Value v) {
+        type = t;
+        form = VectorForm::CONSTANT;
+        constant_value = std::move(v);
+    }
+
     // ── Validity ──
 
     /// Set row i to NULL.
@@ -538,6 +703,85 @@ struct Column {
             return Value{};
         size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
         return buffer->getValue(physical);
+    }
+
+    /// Read a BOOL payload without constructing a Value. Returns false for
+    /// NULL, a non-BOOL column, or an out-of-range row.
+    bool getBool(size_t i) const {
+        if (form == VectorForm::CONSTANT) {
+            const auto* b = std::get_if<bool>(&constant_value);
+            return b != nullptr && *b;
+        }
+        if (!buffer || buffer->type != binder::BoundTypeKind::BOOL)
+            return false;
+        const size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
+        return physical < buffer->bool_data.size() && buffer->bool_data[physical] != 0;
+    }
+
+    /// Read a numeric payload without constructing a Value.
+    ///
+    /// getInt64 intentionally accepts only the INT64 alternative. The old
+    /// Int64SumState::add(Value) ignored a double variant; keeping that rule
+    /// avoids silently changing sum(int) when a runtime value is a double.
+    /// NULL / non-matching rows yield 0; the aggregate operator owns the
+    /// centralized null-skip decision.
+    int64_t getInt64(size_t i) const {
+        if (form == VectorForm::CONSTANT) {
+            const auto* v = std::get_if<int64_t>(&constant_value);
+            return v != nullptr ? *v : 0;
+        }
+        if (!buffer)
+            return 0;
+        const size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
+        if (buffer->type == binder::BoundTypeKind::INT64)
+            return physical < buffer->int64_data.size() ? buffer->int64_data[physical] : 0;
+        if (buffer->type == binder::BoundTypeKind::ANY) {
+            const Value v = buffer->getValue(physical);
+            return std::get_if<int64_t>(&v) != nullptr ? std::get<int64_t>(v) : 0;
+        }
+        return 0;
+    }
+
+    double getDouble(size_t i) const {
+        if (form == VectorForm::CONSTANT) {
+            if (const auto* d = std::get_if<double>(&constant_value))
+                return *d;
+            if (const auto* v = std::get_if<int64_t>(&constant_value))
+                return static_cast<double>(*v);
+            return 0.0;
+        }
+        if (!buffer)
+            return 0.0;
+        const size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
+        switch (buffer->type) {
+        case binder::BoundTypeKind::DOUBLE:
+            return physical < buffer->double_data.size() ? buffer->double_data[physical] : 0.0;
+        case binder::BoundTypeKind::INT64:
+            return physical < buffer->int64_data.size() ? static_cast<double>(buffer->int64_data[physical]) : 0.0;
+        case binder::BoundTypeKind::ANY: {
+            const Value v = buffer->getValue(physical);
+            if (const auto* dv = std::get_if<double>(&v))
+                return *dv;
+            if (const auto* iv = std::get_if<int64_t>(&v))
+                return static_cast<double>(*iv);
+            return 0.0;
+        }
+        default:
+            return 0.0;
+        }
+    }
+
+    /// Copy a whole FLAT column of the same type. Avoids a per-row Value
+    /// round-trip in ExpressionEvaluator when the expression result is already
+    /// a typed column.
+    bool copyFrom(const Column& src, size_t count) {
+        if (form != VectorForm::FLAT || src.form != VectorForm::FLAT)
+            return false;
+        if (type != src.type || !buffer || !src.buffer)
+            return false;
+        if (buffer == src.buffer)
+            return true;
+        return buffer->copyFrom(*src.buffer, count);
     }
 
     /// Set the value at logical row i from a runtime Value.

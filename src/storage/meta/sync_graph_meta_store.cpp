@@ -41,7 +41,7 @@ bool SyncGraphMetaStore::metadataDel(std::string_view key) {
 }
 
 void SyncGraphMetaStore::metadataScan(std::string_view prefix,
-                                      const std::function<bool(std::string_view, std::string_view)>& callback) {
+                                      folly::FunctionRef<bool(std::string_view, std::string_view)> callback) {
     WtSession session = conn().make_session();
     if (!session)
         return;

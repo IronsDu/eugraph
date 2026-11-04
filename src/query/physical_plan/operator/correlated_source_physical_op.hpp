@@ -6,7 +6,9 @@
 
 #include <folly/coro/AsyncGenerator.h>
 
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -28,11 +30,32 @@ public:
 
     /// Set the correlated values for the next execution.
     void setValues(const std::vector<Value>& values) {
+        view_chunk_ = nullptr;
+        view_cols_.clear();
         rows_.clear();
         rows_.push_back(values);
     }
     void setRows(std::vector<std::vector<Value>> rows) {
+        view_chunk_ = nullptr;
+        view_cols_.clear();
         rows_ = std::move(rows);
+    }
+
+    /// Inject one row from an already-evaluated chunk without materialising a
+    /// vector<Value> per left row. The chunk and row must stay alive until the
+    /// next setValues()/setRows()/setRowFromChunk() or until executeChunk()
+    /// has consumed the row (Apply/PCApply/LeftJoin/SemiJoin all guarantee
+    /// this by draining the right side before advancing the left row).
+    void setRowFromChunk(const DataChunk& chunk, size_t row, std::span<const uint32_t> columns) {
+        rows_.clear();
+        view_chunk_ = &chunk;
+        view_row_ = row;
+        view_cols_.clear();
+        view_cols_.reserve(columns.size());
+        for (uint32_t col : columns) {
+            if (col < chunk.columns.size())
+                view_cols_.push_back(col);
+        }
     }
 
     /// Expose the number of correlated columns.
@@ -44,6 +67,10 @@ private:
     std::vector<std::string> variables_;
     std::vector<binder::BoundType> types_;
     std::vector<std::vector<Value>> rows_;
+    const DataChunk* view_chunk_ = nullptr;
+    size_t view_row_ = 0;
+    std::vector<uint32_t> view_cols_;
+    std::vector<Value> view_values_;
 };
 
 } // namespace compute

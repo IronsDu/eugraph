@@ -30,13 +30,9 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
         }
 
         for (size_t i = 0; i < n_left; ++i) {
-            // Inject correlation values from left row i.
-            std::vector<Value> corr_values;
-            corr_values.reserve(left_correlation_cols_.size());
-            for (uint32_t col_idx : left_correlation_cols_) {
-                corr_values.push_back(in_chunk.getValue(col_idx, i));
-            }
-            correlated_source_->setValues(std::move(corr_values));
+            // Inject the left row directly; the chunk stays alive while the
+            // right sub-plan drains, so no per-row vector<Value> is needed.
+            correlated_source_->setRowFromChunk(in_chunk, i, left_correlation_cols_);
 
             // Drain the right sub-plan. The right sub-plan ends with
             // Aggregate(collect(...)) emitting one row per group; with no

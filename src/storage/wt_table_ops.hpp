@@ -12,9 +12,10 @@
 // 会话由调用方创建并传入：不再有 `WtTableOps` 对象 / `open_admin_session` 概念 ✓。
 
 #include "storage/wt_cursor.hpp"
-#include "storage/wt_session.hpp"
 
-#include <functional>
+#include "storage/wt_session.hpp"
+#include <folly/Function.h>
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -35,7 +36,7 @@ bool table_put(WT_SESSION* session, const std::string& table, std::string_view k
 [[nodiscard]] std::optional<std::string> table_get(WT_SESSION* session, const std::string& table, std::string_view key);
 bool table_del(WT_SESSION* session, const std::string& table, std::string_view key);
 void table_scan(WT_SESSION* session, const std::string& table, std::string_view prefix,
-                const std::function<bool(std::string_view, std::string_view)>& callback);
+                folly::FunctionRef<bool(std::string_view, std::string_view)> callback);
 
 // ==================== GraphSession 路径（用户事务）========================
 /// point 操作用**会话级 cursor 缓存** ✓（§7：无 cursor 池，cursor 按会话缓存 ✓）
@@ -45,15 +46,15 @@ bool table_put(GraphSession& session, const std::string& table, std::string_view
 bool table_del(GraphSession& session, const std::string& table, std::string_view key);
 /// 扫描用独立 cursor（同表嵌套扫描/边扫边删是真实路径 ✓，共享缓存 cursor 会互相破坏 ✗）
 void table_scan(GraphSession& session, const std::string& table, std::string_view prefix,
-                const std::function<bool(std::string_view, std::string_view)>& callback);
+                folly::FunctionRef<bool(std::string_view, std::string_view)> callback);
 
 /// 区间/前缀迭代的**统一原语** ✓（tableScan 与 index range scan 共用）
 ///  - start_key 空 ⇒ 从头开始；exclusive_start ⇒ 跳过与 start_key 相等的键 ✓
 ///  - end_key_view 把完整 key 转成与 end_key 可比的视图（索引区间需剥掉 entity_id 后缀）✓
 /// 返回 0 = 正常结束；非 0 = WT 错误码（会话路径必须 `session.fail_from_wt()` ✓）。
 int scan_range(WT_CURSOR* cursor, std::string_view start_key, bool exclusive_start, std::string_view end_key,
-               const std::function<std::string_view(std::string_view)>& end_key_view,
-               const std::function<bool(std::string_view, std::string_view)>& callback);
+               folly::FunctionRef<std::string_view(std::string_view)> end_key_view,
+               folly::FunctionRef<bool(std::string_view, std::string_view)> callback);
 
 } // namespace wt
 

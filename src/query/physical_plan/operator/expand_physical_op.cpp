@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "query/dataset/cell_access.hpp"
 #include "query/dataset/row.hpp"
 #include <array>
 
@@ -21,16 +22,6 @@ void ExpandPhysicalOp::resetCacheHitCount() noexcept {
 }
 
 namespace {
-
-VertexId vertexIdFromValue(const Value& val) {
-    if (std::holds_alternative<VertexValuePtr>(val))
-        return (*std::get<VertexValuePtr>(val)).id;
-    if (std::holds_alternative<VertexRef>(val))
-        return std::get<VertexRef>(val).id;
-    if (std::holds_alternative<int64_t>(val))
-        return static_cast<VertexId>(std::get<int64_t>(val));
-    return INVALID_VERTEX_ID;
-}
 
 EdgeId edgeIdFromValue(const Value& val) {
     if (std::holds_alternative<EdgeValuePtr>(val))
@@ -264,7 +255,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 // Correlated chain endpoint: the destination is already known,
                 // so seek the exact `{src}{dir}{label}{neighbor}` entry instead
                 // of scanning every edge of the source and filtering it out.
-                const VertexId bound = vertexIdFromValue(chunk->columns[dst_col_idx_].getValue(src_row));
+                const VertexId bound = columnVertexId(chunk->columns[dst_col_idx_], src_row);
                 if (bound == INVALID_VERTEX_ID)
                     co_return;
                 for (const auto& label_filter : scan_filters) {
@@ -510,8 +501,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         while (auto edge_batch = co_await edge_gen.next()) {
                             for (const auto& entry : *edge_batch) {
                                 if (dst_bound_) {
-                                    const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
-                                    if (vertexIdFromValue(bval) != entry.neighbor_id)
+                                    if (columnVertexId(chunk->columns[dst_col_idx_], src_row) != entry.neighbor_id)
                                         continue;
                                 }
                                 if (edge_bound_) {

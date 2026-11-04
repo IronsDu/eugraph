@@ -58,6 +58,7 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
             continue;
         num_cols = chunk->numColumns();
 
+        evaluator.resetForChunk();
         co_await evaluator.prefetch(prefetch_exprs, *chunk);
         std::vector<Column> key_cols(n_keys);
         for (size_t k = 0; k < n_keys; ++k) {

@@ -4,6 +4,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -18,13 +19,21 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
         std::vector<std::unordered_set<Value, ValueHash, ValueContentEqual>> distinct_sets;
     };
 
+    // Aggregate arguments are evaluated once per chunk into typed Columns.
+    // arg_views is the stable pointer view handed to AggUpdateFn; it is built
+    // after args is complete and never mutated again.
+    struct EvaluatedAggregate {
+        std::vector<Column> args;
+        std::vector<const Column*> arg_views;
+    };
+
     std::unordered_map<Row, GroupState, RowHash, RowEqual> groups;
     std::vector<Row> group_order;
     // Pointers into the node-based unordered_map stay valid across rehash;
     // output does not need to re-hash/re-compare nested list/path keys.
     std::vector<GroupState*> group_states;
 
-    bool has_aggregates = !aggregates_.empty();
+    const bool has_aggregates = !aggregates_.empty();
 
     auto child_gen = cancellable(child_->executeChunkTraced());
     ExpressionEvaluator evaluator(eval_ctx_);
@@ -38,47 +47,88 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
             prefetch_exprs.push_back(&arg);
     }
 
+    // A variadic aggregate with a literal NULL first argument (count(*),
+    // collect(null), ...) must not have that null filtered out. The aggregate
+    // still receives the literal-null column; this flag only controls the
+    // operator's null-skipping policy, exactly as in the old implementation.
+    std::vector<bool> literal_null_first_arg(aggregates_.size(), false);
+    for (size_t i = 0; i < aggregates_.size(); ++i) {
+        const auto& agg = aggregates_[i];
+        literal_null_first_arg[i] = agg.func_def && agg.func_def->has_variadic_args && !agg.arguments.empty() &&
+                                    std::holds_alternative<binder::BoundLiteral>(agg.arguments[0]) &&
+                                    isNull(std::get<binder::BoundLiteral>(agg.arguments[0]).value);
+    }
+
+    // Only sum/avg may safely coerce numeric arguments into a typed buffer:
+    // their arithmetic is numeric anyway. min/max/collect/percentile/count must
+    // preserve the runtime Value variant (mixed int/double, NULL, entity kinds),
+    // otherwise e.g. max([1, 2.0, 5]) returns 5.0 instead of 5.
+    std::vector<bool> typed_numeric_args(aggregates_.size(), false);
+    for (size_t i = 0; i < aggregates_.size(); ++i) {
+        const auto& agg = aggregates_[i];
+        if (!agg.func_def)
+            continue;
+        if (agg.func_def->name != "sum" && agg.func_def->name != "avg")
+            continue;
+        typed_numeric_args[i] = std::all_of(agg.arguments.begin(), agg.arguments.end(), [](const auto& arg) {
+            const auto kind = binder::getBoundExprType(arg).kind;
+            return kind == binder::BoundTypeKind::INT64 || kind == binder::BoundTypeKind::DOUBLE;
+        });
+    }
+
     while (auto chunk = co_await child_gen.next()) {
-        size_t n = chunk->numRows();
+        const size_t n = chunk->numRows();
         if (n == 0)
             continue;
 
+        evaluator.resetForChunk();
         co_await evaluator.prefetch(prefetch_exprs, *chunk);
-        // Evaluate group key expressions vectorized.
-        std::vector<std::vector<Value>> chunk_gk_vals(group_keys_.size());
-        for (size_t k = 0; k < group_keys_.size(); ++k) {
-            auto col = Column::flat(binder::BoundTypeKind::ANY, n);
-            evaluator.evaluate(group_keys_[k].expr, *chunk, col);
-            chunk_gk_vals[k].reserve(n);
-            for (size_t r = 0; r < n; ++r)
-                chunk_gk_vals[k].push_back(col.getValue(r));
+
+        // Group keys keep the old ANY storage: Row still owns the Value used by
+        // the hash map, so this step does not need a typed representation.
+        std::vector<Column> key_columns;
+        key_columns.reserve(group_keys_.size());
+        for (const auto& key : group_keys_) {
+            Column col = Column::flat(binder::BoundTypeKind::ANY, n);
+            evaluator.evaluate(key.expr, *chunk, col);
+            key_columns.push_back(std::move(col));
         }
 
-        // Evaluate aggregate argument expressions vectorized.
-        // Skip complex aggregates (func_def==null && !is_internal):
-        // they are evaluated during output with substitution.
-        // chunk_arg_vals[a] = per-row vector of evaluated arguments.
-        std::vector<std::vector<std::vector<Value>>> chunk_arg_vals(aggregates_.size());
+        std::vector<EvaluatedAggregate> evaluated(aggregates_.size());
         for (size_t a = 0; a < aggregates_.size(); ++a) {
-            if (!aggregates_[a].func_def && !aggregates_[a].is_internal) {
-                chunk_arg_vals[a].resize(n); // placeholder
-                continue;
+            const auto& agg = aggregates_[a];
+            if (!agg.func_def)
+                continue; // Complex aggregate: handled during output substitution.
+
+            auto& plan = evaluated[a];
+            plan.args.reserve(agg.arguments.size());
+            plan.arg_views.reserve(agg.arguments.size());
+            for (const auto& arg : agg.arguments) {
+                // Only use a typed column when the expression's stage cannot
+                // change representation. Graph entities can arrive as VERTEX_REF
+                // at the topology stage or VERTEX after enrichment; forcing a
+                // VERTEX column would silently drop a VERTEX_REF value (validity
+                // bit set, payload null), which breaks count(DISTINCT m).
+                // ANY keeps the old, representation-agnostic semantics for those
+                // kinds while numeric/string aggregates still get typed buffers.
+                const auto arg_kind = binder::getBoundExprType(arg).kind;
+                const auto storage_kind = (typed_numeric_args[a] && (arg_kind == binder::BoundTypeKind::INT64 ||
+                                                                     arg_kind == binder::BoundTypeKind::DOUBLE))
+                                              ? arg_kind
+                                              : binder::BoundTypeKind::ANY;
+                Column col = Column::flat(storage_kind, n);
+                evaluator.evaluate(arg, *chunk, col);
+                plan.args.push_back(std::move(col));
             }
-            chunk_arg_vals[a].assign(n, std::vector<Value>(aggregates_[a].arguments.size()));
-            for (size_t ai = 0; ai < aggregates_[a].arguments.size(); ++ai) {
-                auto col = Column::flat(binder::BoundTypeKind::ANY, n);
-                evaluator.evaluate(aggregates_[a].arguments[ai], *chunk, col);
-                for (size_t r = 0; r < n; ++r)
-                    chunk_arg_vals[a][r][ai] = col.getValue(r);
-            }
+            for (const auto& col : plan.args)
+                plan.arg_views.push_back(&col);
         }
 
-        // Aggregate each row.
         for (size_t r = 0; r < n; ++r) {
             Row key;
-            for (size_t k = 0; k < group_keys_.size(); ++k) {
-                key.push_back(std::move(chunk_gk_vals[k][r]));
-            }
+            key.reserve(group_keys_.size());
+            for (const auto& col : key_columns)
+                key.push_back(col.getValue(r));
 
             auto it = groups.find(key);
             if (it == groups.end()) {
@@ -86,11 +136,10 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 gs.agg_states.reserve(aggregates_.size());
                 gs.distinct_sets.resize(aggregates_.size());
                 for (const auto& agg : aggregates_) {
-                    if (agg.func_def && agg.func_def->agg_init) {
+                    if (agg.func_def && agg.func_def->agg_init)
                         gs.agg_states.push_back(agg.func_def->agg_init());
-                    } else {
+                    else
                         gs.agg_states.push_back(nullptr);
-                    }
                 }
                 it = groups.emplace(std::move(key), std::move(gs)).first;
                 group_order.push_back(it->first);
@@ -98,32 +147,32 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
             }
 
             auto& state = it->second;
-
             for (size_t i = 0; i < aggregates_.size(); ++i) {
                 const auto& agg = aggregates_[i];
                 if (!agg.func_def || !agg.func_def->agg_update || !state.agg_states[i])
                     continue;
 
-                std::vector<Value> vals = std::move(chunk_arg_vals[i][r]);
-
-                // count(*) accepts monostate (null) literal; skip nulls for other aggregates.
-                // count(*) is detected by variadic flag + literal null in arguments[0].
-                // DISTINCT always skips nulls (Aggregation8 [3][4]) regardless
-                // of the keeps_nulls flag.
-                bool is_count_star = (agg.func_def->has_variadic_args && !agg.arguments.empty() &&
-                                      std::holds_alternative<binder::BoundLiteral>(agg.arguments[0]) &&
-                                      isNull(std::get<binder::BoundLiteral>(agg.arguments[0]).value));
-                if (!is_count_star && !vals.empty() && isNull(vals[0]) && !(agg.keeps_nulls && !agg.distinct))
+                const auto& plan = evaluated[i];
+                // Null policy is exactly the old one: count(*) / a variadic
+                // literal-null argument never skips; collect keeps nulls; all
+                // other aggregates skip a null first argument. DISTINCT always
+                // skips nulls because the skip condition is evaluated first.
+                if (!literal_null_first_arg[i] && !plan.args.empty() && plan.args[0].isNull(r) &&
+                    !(agg.keeps_nulls && !agg.distinct))
                     continue;
 
-                // DISTINCT dedup before update: keyed on the first argument (the value).
+                // DISTINCT dedup is keyed on the first argument. This is the
+                // only place that still needs a Value for the argument; the
+                // aggregate update itself receives the typed column view.
                 if (agg.distinct) {
-                    Value dedup_key = vals.empty() ? Value{} : vals[0];
-                    if (!state.distinct_sets[i].insert(dedup_key).second)
+                    Value dedup_key = plan.args.empty() ? Value{} : plan.args[0].getValue(r);
+                    if (!state.distinct_sets[i].insert(std::move(dedup_key)).second)
                         continue;
                 }
 
-                agg.func_def->agg_update(*state.agg_states[i], vals);
+                function::AggregateInput input{
+                    std::span<const Column* const>(plan.arg_views.data(), plan.arg_views.size()), r};
+                agg.func_def->agg_update(*state.agg_states[i], input);
             }
         }
     }

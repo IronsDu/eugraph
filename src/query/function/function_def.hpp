@@ -4,9 +4,11 @@
 #include "query/dataset/row.hpp"
 #include "query/planner/bound_type.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -55,16 +57,28 @@ using ScalarFn = std::function<Value(const std::vector<Value>&, const EvalContex
 using FunctionFn =
     std::function<void(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&)>;
 
-/// Aggregate state factory.
-using AggInitFn = std::function<std::unique_ptr<AggStateBase>()>;
+/// One row's aggregate arguments, already evaluated into typed columns.
+///
+/// This is a call-scoped, non-owning view: `args` and the pointed-to Columns
+/// are owned by AggregatePhysicalOp for the duration of the update call. An
+/// aggregate state must never retain the span or the pointers.
+struct AggregateInput {
+    std::span<const Column* const> args;
+    size_t row = 0;
+};
+
+/// Aggregate state factory. Captureless function pointer, like DuckDB's
+/// aggregate callbacks; no std::function allocation per group.
+using AggInitFn = std::unique_ptr<AggStateBase> (*)();
 
 /// Accumulate one row's arguments into aggregate state. Multi-arg aggregates
-/// (e.g. percentileDisc(value, p)) receive all args; single-arg aggregates
-/// read args[0].
-using AggUpdateFn = std::function<void(AggStateBase&, const std::vector<Value>&)>;
+/// (e.g. percentileDisc(value, p)) read args[1]; count(*) receives one
+/// literal-NULL argument column and ignores it.
+/// Null / count(*) / DISTINCT filtering is centralized in AggregatePhysicalOp.
+using AggUpdateFn = void (*)(AggStateBase&, const AggregateInput&);
 
 /// Produce final aggregate result from state.
-using AggFinalizeFn = std::function<Value(const AggStateBase&)>;
+using AggFinalizeFn = Value (*)(const AggStateBase&);
 
 /// Describes a registered function (scalar or aggregate).
 struct FunctionDef {
@@ -85,11 +99,9 @@ struct FunctionDef {
 
     /// True if this aggregate should receive null values instead of having
     /// them filtered out by the physical operator before agg_update is called.
-    /// collect() is the canonical example: per openCypher TCK (Pattern2 [4]),
-    /// collect must include nulls so that [(n)-->() | m.prop] produces [null]
-    /// when a matched element lacks the projected property. Aggregates that
-    /// compute over values (count, sum, avg, min, max) leave this false so
-    /// the standard null-skipping path applies. DISTINCT always filters
+    /// Normal collect(x) filters nulls (openCypher TCK Aggregation5); the
+    /// internal collect used by pattern/list comprehension sets the binder
+    /// flag to keep a null projection (Pattern2 [4]). DISTINCT always filters
     /// nulls regardless of this flag (Aggregation8 [3][4]).
     bool keeps_nulls = false;
 
