@@ -9,6 +9,13 @@ on:
 env:
   # 原 code-quality.yml 的顶层 env
   BUILD_TYPE: Debug
+  # Quota math: the 10 GB repository cache holds 4 ccache entries (GCC, Clang,
+  # ASan, UBSan) plus 5 vcpkg archive entries (~1 GB each). At 2 GB per ccache
+  # entry that is ~13 GB, so the entries evicted each other and the cache went
+  # cold every couple of commits (ASan rebuild: 20m -> 35m). 1 GB + compression
+  # keeps the set at ~9 GB, so a warm cache survives.
+  CCACHE_MAXSIZE: 1G
+  CCACHE_COMPRESS: true
 
 jobs:
   # Ubuntu with GCC
@@ -31,6 +38,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           cmake \
+          ninja-build \
+          ccache \
           build-essential \
           git \
           pkg-config \
@@ -45,6 +54,13 @@ jobs:
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-gcc-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-gcc-
 
     - name: Cache vcpkg packages
       id: cache-vcpkg
@@ -89,7 +105,12 @@ jobs:
       # CI-only: strip final test/server binaries to keep runner disk usage
       # within GitHub's limits. Debug symbols are not needed for green/red
       # test results; local debug builds remain unchanged.
-      run: cmake --preset=release -DCMAKE_EXE_LINKER_FLAGS="-s"
+      #
+      # Build speed: this job only needs to compile-check the product, so skip
+      # the test targets (ASan/UBSan/Coverage already build them) and use
+      # Ninja + ccache. `cmake --build` on the default Makefiles generator is
+      # serial and used one core of the runner (41 min observed).
+      run: cmake --preset=release -G Ninja -DEUGRAPH_ENABLE_CCACHE=ON -DEUGRAPH_BUILD_TESTS=OFF -DCMAKE_EXE_LINKER_FLAGS="-s"
 
     - name: Verify vcpkg binary cache
       # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
@@ -108,18 +129,30 @@ jobs:
         fi
 
     - name: Build
-      run: cmake --build --preset=release
+      # Explicit -j2 instead of -j$(nproc): on the 4-vCPU runner the heaviest
+      # phase (parallel compile + link) is where jobs get killed, so keep the
+      # concurrency modest rather than saturating every core.
+      run: cmake --build --preset=release --parallel 2
+
+    - name: ccache stats
+      # Judgement for "is the cache actually warm": a hit rate near 0% or a tiny
+      # cache size means the entry was evicted by the quota, not a slow build.
+      run: ccache -s
 
     - name: Check library linking
       working-directory: build/release
       run: |
-        ldd eugraph_tests
+        ldd eugraph-server
         ldd libeugraph_lib.a || true
 
   # Code Coverage
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    # Smaller than the workflow-wide 1G: this is the 5th ccache entry and the
+    # quota has to hold it together with the vcpkg archives.
+    env:
+      CCACHE_MAXSIZE: 600M
     permissions:
       contents: read
       pull-requests: write
@@ -135,6 +168,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           cmake \
+          ninja-build \
+          ccache \
           build-essential \
           git \
           pkg-config \
@@ -150,6 +185,18 @@ jobs:
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
+
+    - name: Cache ccache
+      # ccache does cache the .gcno produced by -fprofile-arcs/--coverage and
+      # restores it on a hit, so instrumentation survives a cache hit (verified
+      # locally: gcov counters from a hit-built object are identical to a
+      # from-scratch build). Without this entry the job rebuilt all 250+ targets
+      # with instrumentation on every commit (~24 min).
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-coverage-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-coverage-
 
     - name: Cache vcpkg packages
       id: cache-vcpkg
@@ -180,7 +227,10 @@ jobs:
         ./vcpkg/vcpkg version
 
     - name: Configure CMake with Coverage
-      run: cmake --preset=coverage
+      # Ninja + parallel build: the serial Makefiles build took 45 min on the
+      # 4-vCPU runner. ccache is enabled: the earlier assumption that coverage
+      # instrumentation rules ccache out was wrong (see the "Cache ccache" step).
+      run: cmake --preset=coverage -G Ninja -DEUGRAPH_ENABLE_CCACHE=ON
 
     - name: Verify vcpkg binary cache
       # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
@@ -199,7 +249,26 @@ jobs:
         fi
 
     - name: Build
-      run: cmake --build --preset=coverage
+      # Same -j2 as build-gcc: this job builds every test binary with coverage
+      # instrumentation, so it has the heaviest link phase of all CI jobs.
+      run: cmake --build --preset=coverage --parallel 2
+
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
+
+    - name: Verify coverage instrumentation
+      # Judgement: a ccache hit must restore the .gcno together with the object,
+      # otherwise gcovr would silently report less (or 0%) coverage while the
+      # build stays green.
+      run: |
+        objs=$(find build/coverage -name '*.o' | wc -l)
+        gcnos=$(find build/coverage -name '*.gcno' | wc -l)
+        echo "objects: $objs, gcno files: $gcnos"
+        if [ "$gcnos" -eq 0 ]; then
+          echo "::error::no .gcno files were produced - coverage instrumentation was lost"
+          exit 1
+        fi
 
     - name: Run tests
       run: ctest --preset=coverage
@@ -260,6 +329,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           cmake \
+          ninja-build \
+          ccache \
           clang \
           build-essential \
           git \
@@ -275,6 +346,13 @@ jobs:
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-buildclang-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-buildclang-
 
     - name: Cache vcpkg packages
       id: cache-vcpkg
@@ -347,10 +425,17 @@ jobs:
         fi
 
     - name: Configure CMake with Clang
-      run: cmake --preset=clang-release -DVCPKG_MANIFEST_INSTALL=OFF
+      # Same reasoning as build-gcc: Ninja + ccache, and skip test targets this
+      # compile-only job never runs.
+      run: cmake --preset=clang-release -G Ninja -DEUGRAPH_ENABLE_CCACHE=ON -DEUGRAPH_BUILD_TESTS=OFF -DVCPKG_MANIFEST_INSTALL=OFF
 
     - name: Build
-      run: cmake --build --preset=clang-release
+      # Same -j2 as build-gcc/coverage: see build-gcc for the rationale.
+      run: cmake --build --preset=clang-release --parallel 2
+
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
 
   # Format Check with clang-format
   format-check:
@@ -512,6 +597,27 @@ jobs:
       run: |
         cd build
         ninja -j$(nproc)
+
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
+
+    - name: Verify ASan is linked
+      # Judgement: every binary must link the ASan runtime, otherwise the unit
+      # tests below would still run and pass with no instrumentation at all
+      # (a warm ccache hides a misconfigured configure/link step). The binaries
+      # are stripped (-s), so check the dynamic dependencies, not symbols.
+      working-directory: build
+      run: |
+        found=0
+        for bin in eugraph-server tests/tck/tck_tests ./*_tests; do
+          if ! ldd "$bin" | grep -q libasan; then
+            echo "::error::$bin is not linked against libasan"
+            exit 1
+          fi
+          found=$((found + 1))
+        done
+        echo "verified $found ASan binaries"
 
     - name: Package ASan TCK binaries
       run: |
@@ -784,6 +890,10 @@ jobs:
       run: |
         cd build
         ninja -j$(nproc)
+
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
 
     - name: Run tests with UBSan
       working-directory: build
