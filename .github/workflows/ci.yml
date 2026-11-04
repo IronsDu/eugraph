@@ -149,6 +149,10 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    # Smaller than the workflow-wide 1G: this is the 5th ccache entry and the
+    # quota has to hold it together with the vcpkg archives.
+    env:
+      CCACHE_MAXSIZE: 600M
     permissions:
       contents: read
       pull-requests: write
@@ -165,6 +169,7 @@ jobs:
         sudo apt-get install -y \
           cmake \
           ninja-build \
+          ccache \
           build-essential \
           git \
           pkg-config \
@@ -180,6 +185,18 @@ jobs:
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
+
+    - name: Cache ccache
+      # ccache does cache the .gcno produced by -fprofile-arcs/--coverage and
+      # restores it on a hit, so instrumentation survives a cache hit (verified
+      # locally: gcov counters from a hit-built object are identical to a
+      # from-scratch build). Without this entry the job rebuilt all 250+ targets
+      # with instrumentation on every commit (~24 min).
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-coverage-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-coverage-
 
     - name: Cache vcpkg packages
       id: cache-vcpkg
@@ -211,10 +228,9 @@ jobs:
 
     - name: Configure CMake with Coverage
       # Ninja + parallel build: the serial Makefiles build took 45 min on the
-      # 4-vCPU runner. ccache is deliberately not enabled here: coverage
-      # instrumentation writes .gcno next to the objects and is not a good
-      # ccache candidate.
-      run: cmake --preset=coverage -G Ninja
+      # 4-vCPU runner. ccache is enabled: the earlier assumption that coverage
+      # instrumentation rules ccache out was wrong (see the "Cache ccache" step).
+      run: cmake --preset=coverage -G Ninja -DEUGRAPH_ENABLE_CCACHE=ON
 
     - name: Verify vcpkg binary cache
       # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
@@ -236,6 +252,23 @@ jobs:
       # Same -j2 as build-gcc: this job builds every test binary with coverage
       # instrumentation, so it has the heaviest link phase of all CI jobs.
       run: cmake --build --preset=coverage --parallel 2
+
+    - name: ccache stats
+      # See build-gcc for the judgement.
+      run: ccache -s
+
+    - name: Verify coverage instrumentation
+      # Judgement: a ccache hit must restore the .gcno together with the object,
+      # otherwise gcovr would silently report less (or 0%) coverage while the
+      # build stays green.
+      run: |
+        objs=$(find build/coverage -name '*.o' | wc -l)
+        gcnos=$(find build/coverage -name '*.gcno' | wc -l)
+        echo "objects: $objs, gcno files: $gcnos"
+        if [ "$gcnos" -eq 0 ]; then
+          echo "::error::no .gcno files were produced - coverage instrumentation was lost"
+          exit 1
+        fi
 
     - name: Run tests
       run: ctest --preset=coverage
