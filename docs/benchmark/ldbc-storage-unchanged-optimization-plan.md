@@ -1,6 +1,8 @@
 # 存储结构不变前提下的 LDBC 执行层优化计划
 
 > **状态**：第 1 步方案（未改代码）。
+> **2026-11-04 更新**：执行层第一批（evaluator/aggregate/scan callback）已落地；最新读基准
+> 与同族剩余候选见 [comparison §2/§3.10](ldbc-snb-sf0.1-comparison.md) 与本文 §A.8。
 > **日期**：2026-11-03。
 > **范围**：LDBC SNB Interactive sf0.1 的 complex/short 读查询，目标是缩小与 neo4j 的
 > 同轮耗时比值。
@@ -577,6 +579,26 @@ VLE 约 80 ms，上层 4,086 行展开；剩余是结果流，不是 dispatch。
   受影响 aggregate/mutation/precedence 子集 178/178；新增 aggregate-typed-regressions 6/6。
 - loader 基线 `loader_progress.cpp` 的 unused-function `-Werror` 已修复；
   `loader_progress_tests` 8/8、`loader_integration_tests` 42/42。
-- 尚未做：性能 A/B、per-group batch aggregate、typed GROUP BY key、手写 SIMD、
+- 尚未做：同二进制性能 A/B、per-group batch aggregate、typed GROUP BY key、手写 SIMD、
   intra-query 并行；全量 ctest 中的 loader/integration 目标仍受基线
   `loader_progress.cpp` unused-function `-Werror` 影响。
+
+### A.8 2026-11-04 Release 复测与同族剩余点
+
+- 分支 `perf/evaluator-scratch-reuse` @ `9dd10b24`，Release 重新构建，LDBC sf0.1 读基准：
+  complex 合计 **637.0 ms vs neo4j 269.8 ms（2.36×，全量预热稳态）**；启动后首轮为
+  633.5 vs 299.9（2.11×）。eugraph 总量相对 2026-11-03 的 702.2 ms 下降约 **9.3%**；
+  c10/c14/c5/c12/c9/c3/c1 分别下降 10.2/8.4/9.8/14.2/6.9/5.0/12.8%（跨轮，非同二进制 A/B）。
+  短查询的绝对值也下降，但“谁更快”受 neo4j 预热影响，见 comparison §2.4。
+- 21/21 结果一致；详细表、口径与 PROFILE 归因见 comparison §2/§4/§5.8。
+- 2026-11-04 第二轮把审计中的低风险项落地：typed EQ/NEQ + BOOL AND/OR、
+  `__edge_unique` 原生 kernel、`CorrelatedSource` chunk-row view、join/apply 结果列
+  `copyValueFrom`、DISTINCT typed digest、PE 属性 typed 写入。
+- 同二进制 A/B（40 轮，`opt/base` min）：complex-5 **0.957**、complex-10 **0.961**、
+  complex-7 **0.966**、complex-14 0.993、complex-1 1.027、complex-12 1.011；其余在
+  ±8% 噪声内。稳定收益 3–4%，不是数量级。
+- 仍未做：Sort/Materialize/HashJoin 的整行 `Row` 物化（HashJoin 仅输出列 typed copy）、
+  typed GROUP BY key、per-group batch aggregate、短查询固定开销。这些需要独立的
+  列式缓冲/group map 设计，不能靠局部补丁。
+- 本轮未重跑全量 ctest/TCK；`query_executor_tests` 614/614、
+  `evaluator_typed_tests` 34/34、`data_chunk_tests` 20/20 已重跑。

@@ -1,0 +1,6 @@
+complex-1    base min=  14.73 p50=  16.72 | opt min=  15.13 p50=  16.72 | ratio_min=1.027 ratio_p50=1.000
+complex-5    base min= 190.02 p50= 204.10 | opt min= 181.85 p50= 196.84 | ratio_min=0.957 ratio_p50=0.964
+complex-7    base min=   4.97 p50=   6.37 | opt min=   4.80 p50=   6.26 | ratio_min=0.966 ratio_p50=0.983
+complex-10   base min=  40.16 p50=  42.90 | opt min=  38.61 p50=  41.28 | ratio_min=0.961 ratio_p50=0.962
+complex-12   base min= 128.56 p50= 135.43 | opt min= 129.97 p50= 140.03 | ratio_min=1.011 ratio_p50=1.034
+complex-14   base min=  74.32 p50=  78.50 | opt min=  73.83 p50=  77.72 | ratio_min=0.993 ratio_p50=0.990

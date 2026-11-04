@@ -46,7 +46,7 @@ bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_t dst_r
 | 位置 | 旧形状 | 现在 |
 |------|--------|------|
 | `ExpressionEvaluator::evalCase` 简单 CASE | 每 branch/row 复制 subject + when + then/else | `columnCellEquals` + `copyColumnCell`；BOOL WHEN 直接 `getBool` |
-| `evalBinaryOp` XOR | 每行两个 `Value` | 两侧 BOOL 时 `getBool`，无 Value |
+| `evalBinaryOp` XOR | 每行两个 `Value` | BOOL 三值逻辑 typed kernel，无 Value |
 | `evalBinaryOp` IN | 每行复制左侧 Value | 标量/字符串左侧用 `columnCellEqualsValue`；仅通用类型回退 Value |
 | Aggregate 参数 | `vector<vector<vector<Value>>>` + 每行 `vector<Value>` | chunk 级 typed 参数列 + `AggregateInput` 行视图（见 aggregate-typed-execution-design.md） |
 | `ExpressionEvaluator::evaluate` | 逐行 `getValue/setValue` | 整列 `copyFrom` / 单行 `copyValueFrom` 快路径 |
@@ -54,6 +54,12 @@ bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_t dst_r
 | `REMOVE`/`SET` 的 COW 物化 | 同上 | `copyColumnCell` |
 | `Expand` 精确邻接 seek / 普通 dst 过滤 | 每行 `getValue` 再取 vertex id | `columnVertexId` 直接读 VERTEX_REF/VERTEX/INT64 列 |
 | `SemiJoin` 批量右键 | 每个右行一个 `vector<VertexId>` | 扁平 `right_flat` + `span` 视图；右侧扫描用 `columnVertexId` |
+| `evalBinaryOp` EQ/NEQ/AND/OR | 逐行 `getValue`（`genericEqBatch`/`boolAndBatch`） | INT64/DOUBLE typed `EqOp`/`NeqOp`；BOOL 三值 AND/OR/XOR typed；STRING EQ 的 FLAT/CONSTANT 快路径 |
+| `__edge_unique` | `scalarToBatch` 每行 `vector<Value>` + 新 `unordered_set` | captureless `edgeUniqueBatch`，typed EDGE/EDGE_KEY 列 + 复用 set |
+| `CorrelatedSource` 注入 | 每左行 `vector<Value>` + `rows_` 复制 | `setRowFromChunk` view + 复用 `view_values_`；四种相关算子接入 |
+| CrossProduct/Apply/HashJoin/CVP/LeftJoin 输出 | 逐列 `getValue`+`setValue` | `copyValueFrom` 优先，失败回退 |
+| `Distinct` digest | 逐列 `getValue` 后哈希 | `cellDigestColumn` 直接读 typed 列/顶点 id |
+| PE 属性写入 | `propertyValueToValue` 构造 Value 再 `setValue` | `setColumnFromPropertyValue` 标量/字符串直写 |
 
 ## 4. 仍然必须拥有的拷贝（不是 bug）
 
@@ -66,28 +72,34 @@ bool copyColumnCell(const Column& src, size_t src_row, Column& dst, size_t dst_r
 这些点如果后续要改，需要先改数据模型（例如 list 元素借用/arena、typed group key），
 不能靠局部 `const&` 掩盖。
 
-## 5. 后续候选（按收益/风险排序）
+## 5. 后续候选（2026-11-04 第二轮后）
 
-1. **typed GROUP BY key**：当前 `Row` 每行仍构造 key Value；可为 1–2 个定长 key 做
-   typed hash/equal，避免 Value 中转。
-2. **字符串属性读取**：`BoundPropertyRef` 的结果若是 STRING，可增加 string_view
-   borrow API，避免属性字符串复制；需要保证属性存储生命周期覆盖表达式求值。
-3. **Aggregate batch update**：把 `AggregateInput` 的 row 视图升级为 per-group
-   selection vector（DuckDB `aggregate_update_t` 形态），一次更新一组行。
-4. **投影/提取算子的 dynamic path**：`ProjectionExtractPhysicalOp` 仍有
-   `getValue` 分支；定长/同类型列可走 `copyColumnCell`。
-5. **标量函数边界**：逐步把高频标量函数从 `ScalarFn` 迁到 columnar fn（本审计不展开）。
+1. **Sort/Materialize/HashJoin 的整行 `Row` 物化**：HashJoin 输出列已 typed copy，但
+   Sort 全量路径、Materialize 缓存、HashJoin 的 `Key=vector<Value>`/右行仍是 `vector<Value>`；
+   top-N 比较器也逐次 `getValue`。需要独立的列式缓冲/排序键设计。
+2. **typed GROUP BY key**：Aggregate 仍每行构造 `Row` key；本轮只做了 DISTINCT 的 typed
+   digest，未改 group map。
+3. **per-group batch aggregate update**：`AggregateInput` 仍是单行视图；selection vector/
+   批量 update 未做。
+4. **属性字符串借用**：本轮用 `setColumnFromPropertyValue` 去掉 Value 中转，但
+   `setString` 仍复制一次；真正的 string_view borrow 需要属性存储生命周期契约。
+5. **`FunctionFn` / `fallback_fn` 的 `std::function`**：每次表达式求值一次，非逐行，
+   优先级最低。
+6. **短查询固定开销**：Bolt/执行器启动/线程切换约 0.3–0.5 ms/查，不属于本优化族。
 
-## 6. 验证结果（2026-11-03）
+## 6. 验证结果（2026-11-04）
 
-- `data_chunk_tests` 20/20，其中新增 `CellAccess` 3/3（string/scalar/NULL/ANY/typed copy）；
-- `query_executor_tests` **614/614**（含 CASE/IN/XOR/SET/REMOVE 与全部 aggregate 回归）；
-- TCK **3930/3983**；唯一失败是 temporal `Temporal2 [6]`（与本轮改动无关的既有日期时区用例），
-  另有 52 个 TCK undefined step；受影响 aggregate/mutation/precedence 子集 **178/178**；
-  新增 aggregate-typed-regressions 6/6；
-- storage callback 相关：`wt_tests` 7/7、`index_store_tests` 13/13、
-  `metadata_tests` 20/20、`index_e2e_tests` 56/56；
-- 性能 A/B 尚未执行；本审计只证明语义与分配形态，不把“少了 Value”当成倍数。
+- 单元/回归：`data_chunk_tests` 20/20（`CellAccess` 3/3）、`query_executor_tests`
+  **614/614**、`evaluator_typed_tests` **34/34**；TCK **3930/3983**（唯一失败为既有
+  `Temporal2 [6]`），新增 aggregate-typed-regressions 6/6；storage callback 相关
+  `wt_tests` 7/7、`index_store_tests` 13/13、`metadata_tests` 20/20、
+  `index_e2e_tests` 56/56。
+- LDBC 对照（2026-11-04，Release）：21/21 结果一致。第二轮稳态 complex 696.1 ms vs
+  neo4j 304.1 ms（2.29×）；第一轮（增量前）为 637.0 vs 269.8（2.36×），两者受 CPU
+  频率影响，只在同轮内比较。机制与完整表见
+  [comparison §2/§5.9](../../benchmark/ldbc-snb-sf0.1-comparison.md)。
+- 同二进制 A/B（第二轮，40 轮）：c5 0.957、c10 0.961、c7 0.966、c14 0.993、c1 1.027、
+  c12 1.011（opt/base min）；其余在 ±8% 噪声内。稳定收益 3–4%，不是数量级。
 
 ## 7. 验证
 

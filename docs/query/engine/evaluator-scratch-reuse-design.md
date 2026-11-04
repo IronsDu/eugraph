@@ -201,12 +201,22 @@ DuckDB 的向量化执行里，以下模式和本设计同构（本次核对了
 
 ---
 
-## 8. 后续（不在本批）
+## 8. 后续
 
-1. **Aggregate typed 路径**：去掉 `vector<vector<vector<Value>>>`，按 typed key/arg 列哈希，
-   每 chunk 复用 buffer；这是 compute-heavy 聚合的最大剩余项。
-2. **存储 scan callback 去 `std::function`**：`folly::FunctionRef`/模板 callback，减少每边
-   间接调用；属于存储 API 面，单独评审。
-3. **编译器自动 SIMD**：在 typed path 和分配问题解决后，用连续内存/简单循环让 `-O3`
+1. ~~Aggregate typed 路径~~：已落地（chunk 级 typed 参数列 + `AggregateInput` 行视图 +
+   captureless 回调），见 [aggregate-typed-execution-design.md](aggregate-typed-execution-design.md)。
+2. ~~存储 scan callback 去 `std::function`~~：已落地（`folly::FunctionRef`），见
+   [scan-callback-design.md](../../storage/scan-callback-design.md)。
+3. ~~typed 比较 kernel 补全~~：已落地（INT64/DOUBLE EQ/NEQ、BOOL 三值 AND/OR/XOR、
+   STRING EQ/NEQ 快路径、`__edge_unique` 原生 kernel），见
+   [value-copy-audit.md](value-copy-audit.md)。
+4. ~~join/apply 的 typed 相关列与结果平移~~：已落地（`CorrelatedSource::setRowFromChunk`
+   + 结果列 `copyValueFrom`）。
+5. **typed GROUP BY key / Sort/Materialize 的 Row 物化**：Aggregate 每行构造 `Row` key；
+   Sort 全量路径与 Materialize 缓存整行 `Value`；属于下一步的批量/列式化。
+6. **编译器自动 SIMD**：在 typed path 和分配问题解决后，用连续内存/简单循环让 `-O3`
    自动向量化；不写 intrinsics。
-4. **intra-query 并行**：morsel-driven；高风险，另行设计。
+7. **intra-query 并行**：morsel-driven；高风险，另行设计。
+
+完整审计、代码位置与 LDBC 证据见 [value-copy-audit.md](value-copy-audit.md) 与
+[comparison §3.10](../../benchmark/ldbc-snb-sf0.1-comparison.md)。

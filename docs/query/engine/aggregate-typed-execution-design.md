@@ -183,7 +183,10 @@ double  getDouble(size_t i) const;
 - 关键坑 2：`UNWIND [1, 2.0, 5]` 的静态元素类型可能是 DOUBLE，但运行时仍是 int/double
   混合；给 `max` 建 DOUBLE 列会把 5 归一化成 5.0（TCK Aggregation2 [5]）。只有
   `sum`/`avg` 的数值参数允许 typed 列，因为它们的算术语义本来就做数值提升。
-- 尚未做：per-group batch update（selection vector）、typed group key hashing、性能 A/B。
+- 尚未做：per-group batch update（selection vector）、typed group key hashing、同二进制性能 A/B。
+- 2026-11-04 LDBC 读基准（Release，全量预热稳态）：complex 合计 637.0 ms vs neo4j
+  269.8 ms；本分支改动的绝对值/剩余候选见
+  [comparison §5.8](../../benchmark/ldbc-snb-sf0.1-comparison.md) 与 §3.10。
 
 ## 10. 风险
 
