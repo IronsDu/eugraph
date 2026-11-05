@@ -1101,27 +1101,32 @@ void edgeUniqueBatch(const std::vector<const Column*>& args, Column& result, siz
     // handful of ids a stack array + pairwise comparison is both allocation
     // free and faster.
     std::array<EdgeId, 8> fast_ids{};
-    bool all_flat_edges = !args.empty() && args.size() <= fast_ids.size();
+    bool all_edge_columns = !args.empty() && args.size() <= fast_ids.size();
     for (const auto* col : args) {
-        if (!col || col->form != VectorForm::FLAT || !col->buffer ||
+        const bool flat_or_dict = col && (col->form == VectorForm::FLAT || col->form == VectorForm::DICTIONARY);
+        if (!flat_or_dict || !col->buffer ||
             (col->type != binder::BoundTypeKind::EDGE_KEY && col->type != binder::BoundTypeKind::EDGE)) {
-            all_flat_edges = false;
+            all_edge_columns = false;
             break;
         }
     }
-    if (all_flat_edges) {
+    if (all_edge_columns) {
         for (size_t row = 0; row < count; ++row) {
             size_t n = 0;
             bool unique = true;
             for (const auto* col : args) {
-                if (col->buffer->isNull(row))
+                if (col->isNull(row))
                     continue;
+                // Filter outputs DICTIONARY columns; Expand's newly appended
+                // edge column is FLAT. Resolve the physical index here so the
+                // fast path also covers per-hop uniqueness filters.
+                const size_t physical = col->form == VectorForm::DICTIONARY ? col->dict_sel[row] : row;
                 EdgeId id = INVALID_EDGE_ID;
                 if (col->type == binder::BoundTypeKind::EDGE_KEY) {
-                    if (row < col->buffer->edge_key_data.size())
-                        id = col->buffer->edge_key_data[row].id;
-                } else if (row < col->buffer->edge_data.size()) {
-                    const auto& edge = col->buffer->edge_data[row];
+                    if (physical < col->buffer->edge_key_data.size())
+                        id = col->buffer->edge_key_data[physical].id;
+                } else if (physical < col->buffer->edge_data.size()) {
+                    const auto& edge = col->buffer->edge_data[physical];
                     if (edge)
                         id = edge->id;
                 }

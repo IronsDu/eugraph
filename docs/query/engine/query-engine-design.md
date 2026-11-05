@@ -852,9 +852,20 @@ Filter edge_unique(e0, e1, e2)
 单 pattern、全 fixed-length 的链不再追加一个重复的全局 filter；包含 varlen 或多 pattern
 的查询仍保留最终全局 `__edge_unique`，覆盖 varlen edge list 和跨 pattern 的复用。
 
-`edgeUniqueBatch` 对 ≤ 8 个 flat `EDGE_KEY` / `EDGE` 参数使用栈数组 + 两两比较，
-不再为每行建立/清空 `unordered_set`。这消除了 85M 行、每行 3 个 edge 时约 2.5 亿次
-哈希节点分配/释放；谓词结果与旧实现逐行一致。
+`edgeUniqueBatch` 对 ≤ 8 个 flat/dictionary `EDGE_KEY` / `EDGE` 参数使用栈数组 +
+两两比较，不再为每行建立/清空 `unordered_set`。这消除了 85M 行、每行 3 个 edge 时约
+2.5 亿次哈希节点分配/释放；谓词结果与旧实现逐行一致。Filter 的输出是 DICTIONARY，
+Expand 追加的 edge 列是 FLAT，fast path 必须同时解析两种物理索引，否则第三跳 filter
+会退回哈希路径。
+
+远端 SF0.1 Release 实测（85,350,462 行）：
+
+| 版本 | 耗时 |
+|---|---:|
+| 优化前 | 109.3–110.8s |
+| 逐跳唯一性 + 零分配 kernel | **69.9–72.0s** |
+
+同一查询 neo4j 约 50s；剩余差距主要来自三跳邻接扫描的存储/逐行物化开销。
 
 ### 延迟槽必须按 canonical slot 识别
 
