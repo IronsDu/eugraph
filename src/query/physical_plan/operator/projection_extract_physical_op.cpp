@@ -134,6 +134,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
     // Reused across chunks/specs: ConstructVertex's vid->VertexValue maps.
     std::unordered_map<VertexId, VertexValuePtr> ctor_by_vid;
     std::unordered_map<VertexId, VertexValuePtr> ctor_anon_ptrs;
+    if (read_only_ && persistent_vertex_prop_cache_.size() != specs_.size())
+        persistent_vertex_prop_cache_.resize(specs_.size());
 
     while (auto chunk = co_await child_gen.next()) {
         const size_t row_count = chunk->numRows();
@@ -278,16 +280,51 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 continue;
 
             if (spec.kind == ColumnSpec::Kind::LoadVertexProp) {
-                auto values =
-                    co_await store_.batchGetVertexProperties(ids, spec.label_id, std::vector<uint16_t>{spec.prop_id});
                 vertex_prop_cache[i].resize(row_count);
-                for (size_t row = 0; row < row_count; ++row) {
-                    const size_t idx = value_for_row[row];
-                    if (idx == SIZE_MAX || idx >= values.size() || !values[idx].has_value())
-                        continue;
-                    const auto& props = *values[idx];
-                    if (props.size() > spec.prop_id && props[spec.prop_id].has_value())
-                        vertex_prop_cache[i][row] = props[spec.prop_id];
+                if (read_only_) {
+                    auto& cache = persistent_vertex_prop_cache_[i];
+                    std::vector<VertexId> miss_ids;
+                    std::vector<size_t> miss_idx;
+                    for (size_t idx = 0; idx < ids.size(); ++idx) {
+                        if (cache.find(ids[idx]) == cache.end()) {
+                            miss_ids.push_back(ids[idx]);
+                            miss_idx.push_back(idx);
+                        }
+                    }
+                    if (!miss_ids.empty()) {
+                        auto values = co_await store_.batchGetVertexProperties(miss_ids, spec.label_id,
+                                                                               std::vector<uint16_t>{spec.prop_id});
+                        for (size_t m = 0; m < miss_ids.size(); ++m) {
+                            std::optional<PropertyValue> pv;
+                            if (m < values.size() && values[m].has_value()) {
+                                const auto& props = *values[m];
+                                if (props.size() > spec.prop_id && props[spec.prop_id].has_value())
+                                    pv = props[spec.prop_id];
+                            }
+                            cache.emplace(miss_ids[m], std::move(pv));
+                        }
+                    }
+                    for (size_t row = 0; row < row_count; ++row) {
+                        const size_t idx = value_for_row[row];
+                        if (idx == SIZE_MAX)
+                            continue;
+                        auto it = cache.find(ids[idx]);
+                        if (it != cache.end() && it->second.has_value())
+                            vertex_prop_cache[i][row] = it->second;
+                    }
+                    if (cache.size() > kMaxPersistentPropCacheEntries)
+                        cache.clear();
+                } else {
+                    auto values = co_await store_.batchGetVertexProperties(ids, spec.label_id,
+                                                                           std::vector<uint16_t>{spec.prop_id});
+                    for (size_t row = 0; row < row_count; ++row) {
+                        const size_t idx = value_for_row[row];
+                        if (idx == SIZE_MAX || idx >= values.size() || !values[idx].has_value())
+                            continue;
+                        const auto& props = *values[idx];
+                        if (props.size() > spec.prop_id && props[spec.prop_id].has_value())
+                            vertex_prop_cache[i][row] = props[spec.prop_id];
+                    }
                 }
             } else {
                 auto labels = co_await store_.getVertexLabelsBatch(ids);

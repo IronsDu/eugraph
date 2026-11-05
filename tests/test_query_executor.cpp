@@ -1775,6 +1775,91 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+TEST_F(QueryExecutorTest, ChainedExpandUsesNeighborCache) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (h:Hub {name: 'h'})-[:KNOWS]->(:Person {name: 'm'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "UNWIND range(1, 200) AS i MATCH (h:Hub {name: 'h'}) "
+                                     "CREATE (:Person {name: 'p'})-[:KNOWS]->(h)")
+                    .error.empty());
+
+    ExpandPhysicalOp::resetCacheHitCount();
+    auto result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 200);
+    EXPECT_GT(ExpandPhysicalOp::cacheHitCount(), 0u)
+        << "the second Expand should reuse the shared Hub adjacency across input chunks";
+}
+
+TEST_F(QueryExecutorTest, SupernodeBypassesNeighborCacheAndStaysCorrect) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:Person {name: 'start'})-[:KNOWS]->(h:Hub {name: 'h'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "UNWIND range(1, 200) AS i MATCH (h:Hub {name: 'h'}) "
+                                     "CREATE (h)-[:KNOWS]->(:Person {name: 'p'})")
+                    .error.empty());
+
+    // Keep the test graph small; lowering the per-source ceiling exercises the
+    // same overflow/fallback path as a real supernode without inserting 16k+
+    // edges into the test database.
+    struct EnvGuard {
+        ~EnvGuard() {
+            unsetenv("EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE");
+        }
+    } env_guard;
+    ASSERT_EQ(setenv("EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE", "64", 1), 0);
+
+    ExpandPhysicalOp::resetCacheHitCount();
+    auto result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 200);
+    EXPECT_EQ(ExpandPhysicalOp::cacheHitCount(), 0u)
+        << "a source above the per-source ceiling must not populate the cache";
+}
+
+TEST_F(QueryExecutorTest, ExplainPerHopEdgeUniqueness) {
+    const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
+    ASSERT_FALSE(plan.empty());
+    size_t filters = 0;
+    for (size_t pos = plan.find("Filter"); pos != std::string::npos; pos = plan.find("Filter", pos + 1))
+        ++filters;
+    // Three hops must insert e1 != e0 after hop 2 and e2 != e0/e1 after hop 3;
+    // the old single post-expansion filter produced only one Filter.
+    EXPECT_EQ(filters, 2u) << plan;
+}
+
+TEST_F(QueryExecutorTest, RelationshipUniquenessRejectsReusedEdgeBeforeThirdHop) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(a)").error.empty());
+    auto result = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->(m) RETURN count(m)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+}
+
+TEST_F(QueryExecutorTest, ExplainUntypedExpandAndCountWithoutProperties) {
+    // An untyped `[]` is bound as "all edge labels"; execution collapses those
+    // prefixes into one untyped adjacency scan, so the plan should render the
+    // equivalent `<any>` instead of an unstable list of catalog ids.
+    const std::string untyped = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->(m) RETURN count(m)");
+    ASSERT_FALSE(untyped.empty());
+    EXPECT_NE(untyped.find("labels=<any>"), std::string::npos) << untyped;
+    EXPECT_EQ(untyped.find("labels=["), std::string::npos) << untyped;
+
+    // count(m) only checks non-nullness; it must not create a PE to load
+    // labels or properties of m.
+    EXPECT_EQ(untyped.find("ProjectionExtract"), std::string::npos) << untyped;
+
+    // A typed relationship keeps its label list (sorted for stable output).
+    const std::string typed = getExplainPlanText(*executor_, "MATCH (n:Person)-[:KNOWS]->(m) RETURN count(m)");
+    ASSERT_FALSE(typed.empty());
+    EXPECT_EQ(typed.find("labels=<any>"), std::string::npos) << typed;
+    EXPECT_NE(typed.find("labels=["), std::string::npos) << typed;
+
+    // count(m.name) does need one property load; this is the contrast that
+    // proves count(m) is not silently materializing the vertex.
+    const std::string property = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->(m) RETURN count(m.name)");
+    ASSERT_FALSE(property.empty());
+    EXPECT_NE(property.find("ProjectionExtract"), std::string::npos) << property;
+}
+
 /// `UNWIND list AS key MATCH (v:Label {prop: key})` 不能退化成
 /// CrossProduct + LabelScan（LDBC update 的 Tag 循环会为每个 tag 扫 16k 行），
 /// 应改写成 Apply + IndexScanValues 的逐行索引探测。
@@ -4216,6 +4301,26 @@ TEST_F(QueryExecutorTest, VarLenExpandIsolatedNode) {
     auto result = execSync(*executor_, "MATCH (a:Person)-[*1..3]->(b) RETURN a, b");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, BoundSameVariableUndirectedSelfLoopKeepsOnlySelfLoop) {
+    insertTestVertices();
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'loop'}), (b:Person {name: 'other'}), "
+                                     "(a)-[:KNOWS]->(a), (b)-[:KNOWS]->(a)")
+                    .error.empty());
+
+    // Both endpoints of `(a)-[r]-(a)` are the same bound vertex. Only the
+    // self-loop may match; the incoming edge from another vertex must not.
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'loop'}) MATCH (a)-[r]-(a) RETURN count(r) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+
+    auto optional =
+        execSync(*executor_, "MATCH (a:Person {name: 'loop'}) OPTIONAL MATCH (a)-[r]-(a) RETURN count(r) AS c");
+    ASSERT_TRUE(optional.error.empty()) << optional.error;
+    ASSERT_EQ(optional.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(optional.rows[0][0]), 1);
 }
 
 TEST_F(QueryExecutorTest, VarLenExpandSelfLoop) {

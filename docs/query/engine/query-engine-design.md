@@ -835,6 +835,45 @@ Cypher 的节点/关系相等是**身份相等**。`valueEquals` 现在把
 两者都只改变“从哪一列读”，不改变谓词结果；c5 的右子计划因此从
 “89,415 行先构造 friend/forum/edge”变成“Expand + Filter，262 行再物化”。
 
+### 关系唯一性逐跳下推与零分配 kernel（2026-11-05，已落地）
+
+固定长度模式的三跳/多跳匹配不能只在全部 Expand 完成后放一个
+`__edge_unique`：那会先把所有路径展开出来，再过滤复用边的路径。Binder 现在在每个
+fixed-length `Expand` 之后对**当前 pattern part 的前缀**插入唯一性 filter：
+
+```text
+Expand e0
+Expand e1
+Filter edge_unique(e0, e1)
+Expand e2
+Filter edge_unique(e0, e1, e2)
+```
+
+单 pattern、全 fixed-length 的链不再追加一个重复的全局 filter；包含 varlen 或多 pattern
+的查询仍保留最终全局 `__edge_unique`，覆盖 varlen edge list 和跨 pattern 的复用。
+
+`edgeUniqueBatch` 对 ≤ 8 个 flat/dictionary `EDGE_KEY` / `EDGE` 参数使用栈数组 +
+两两比较，不再为每行建立/清空 `unordered_set`。这消除了 85M 行、每行 3 个 edge 时约
+2.5 亿次哈希节点分配/释放；谓词结果与旧实现逐行一致。Filter 的输出是 DICTIONARY，
+Expand 追加的 edge 列是 FLAT，fast path 必须同时解析两种物理索引，否则第三跳 filter
+会退回哈希路径。
+
+远端 SF0.1 Release 实测（85,350,462 行）：
+
+| 版本 | 耗时 |
+|---|---:|
+| 优化前 | 109.3–110.8s |
+| 逐跳唯一性 + 零分配 kernel | 69.9–72.0s |
+| + 链式 Expand 邻接缓存 | 32.5–32.7s |
+| + 超级节点保护（单源 16,384 上限） | **30.3–30.8s** |
+
+同一查询 neo4j 约 50s。链式 Expand 缓存只对 read-only 子计划启用：First-hop 的
+源点通常各出现一次，不缓存；后续 Expand 若下方（可能隔着 Filter/PE）还有 Expand，
+则复用中间顶点已经过滤过的邻接列表。缓存上限 1,000,000 条边/算子，单源上限
+16,384 条边；任一上限在构建过程中命中时，当前 chunk 立即放弃缓存并回退到直接
+邻接扫描，同时对该算子关闭后续缓存。这样超级节点不会先生成超大的 `fresh` 向量
+再被全局 cap 拒绝；缓存命中与否不改变谓词/输出顺序语义。
+
 ### 延迟槽必须按 canonical slot 识别
 
 `computeDeferredSlots` 从 RETURN Project 收集的是 canonical slot，而 `PEPlan` 里

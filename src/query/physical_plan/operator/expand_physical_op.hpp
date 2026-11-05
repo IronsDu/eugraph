@@ -29,14 +29,14 @@ public:
                      std::vector<uint16_t> edge_prop_ids = {}, std::vector<LabelId> dst_label_ids = {},
                      bool dst_bound = false, bool edge_bound = false, int dst_col_idx = -1, int edge_col_idx = -1,
                      std::vector<EdgeLabelId> full_scan_labels = {}, bool full_edge_scan = false,
-                     bool neighbor_cache = false)
+                     bool neighbor_cache = false, bool all_edge_labels = false)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
           label_filters_(std::move(label_filters)), direction_(direction), store_(store),
           input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)),
           dst_label_prop_ids_(std::move(dst_label_prop_ids)), edge_prop_ids_(std::move(edge_prop_ids)),
           dst_label_ids_(std::move(dst_label_ids)), dst_bound_(dst_bound), edge_bound_(edge_bound),
           dst_col_idx_(dst_col_idx), edge_col_idx_(edge_col_idx), full_scan_labels_(std::move(full_scan_labels)),
-          full_edge_scan_(full_edge_scan), neighbor_cache_enabled_(neighbor_cache) {
+          full_edge_scan_(full_edge_scan), all_edge_labels_(all_edge_labels), neighbor_cache_enabled_(neighbor_cache) {
         for (size_t i = 0; i < input_schema_.size(); ++i) {
             if (input_schema_[i] == src_var_) {
                 src_col_idx_ = static_cast<int>(i);
@@ -64,6 +64,12 @@ public:
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
 
+    /// Split child chunks into bounded input batches before expanding. A single
+    /// input chunk can otherwise turn into millions of output rows, which both
+    /// defeats LIMIT (a chunk is materialised before it is consumed) and can
+    /// exhaust memory on unbounded multi-hop walks.
+    folly::coro::AsyncGenerator<DataChunk> slicedChild();
+
     /// Configure an allowed-destination filter. Instead of scanning every
     /// edge neighbour, Expand probes edges for the destination vertex ids
     /// resolved from `allowed values` via `index_id`.
@@ -81,6 +87,11 @@ public:
     void clearDstLabelFilter() {
         dst_label_ids_.clear();
     }
+    /// Per-source cache admission ceiling. Defaults to
+    /// kMaxCachedEdgesPerSource; EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE allows
+    /// tests to exercise the overflow fallback with a small graph.
+    static size_t maxCachedEdgesPerSource();
+
     /// Diagnostics: neighbour-cache hits across all Expand instances. Tests
     /// use this to prove the correlated-reuse path is actually taken.
     static uint64_t cacheHitCount() noexcept;
@@ -130,6 +141,11 @@ private:
     int edge_col_idx_ = -1;
     std::vector<EdgeLabelId> full_scan_labels_;
     bool full_edge_scan_ = false;
+    /// The bound pattern had no relationship type and the planner expanded it
+    /// to every catalog edge label. Execution collapses these prefixes into one
+    /// untyped adjacency scan; toString renders the equivalent `<any>` instead
+    /// of dumping the whole label set.
+    bool all_edge_labels_ = false;
 
     uint32_t allowed_dst_index_id_ = 0;
     EdgeLabelId allowed_edge_label_ = INVALID_EDGE_LABEL_ID;
@@ -150,8 +166,12 @@ private:
         uint64_t seq;
         bool physical_out;
     };
-    static constexpr size_t kMaxCachedEdges = 65536;
+    static constexpr size_t kMaxCachedEdges = 1'000'000;
     static constexpr size_t kMaxCachedSources = 65536;
+    /// A single supernode must not make the cache build a multi-megabyte
+    /// vector before the global cap can reject it. Sources above this degree
+    /// are not cached at all; the current chunk falls back to a direct scan.
+    static constexpr size_t kMaxCachedEdgesPerSource = 16'384;
     bool neighbor_cache_enabled_ = false;
     bool neighbor_cache_disabled_ = false;
     size_t cached_edge_count_ = 0;

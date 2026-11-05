@@ -409,6 +409,37 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
 
     std::optional<BoundLogicalOperator> current;
     std::vector<std::string> match_edge_vars;
+    bool match_has_varlen = false;
+
+    // Wrap a sub-plan in the internal relationship-uniqueness predicate for a
+    // prefix of the pattern's relationship variables. Inserting these filters
+    // immediately after each fixed-length Expand lets the executor discard
+    // reused-edge paths before the next hop expands them (Neo4j does the same
+    // with `e1 <> e0` / `e2 <> e0 AND e2 <> e1`).
+    auto appendEdgeUniqueFilter = [&](BoundLogicalOperator child,
+                                      const std::vector<std::string>& edge_vars) -> BoundLogicalOperator {
+        if (edge_vars.size() < 2)
+            return child;
+        const function::FunctionDef* unique_fn = func_registry_.lookup("__edge_unique", {});
+        if (!unique_fn)
+            return child;
+        auto unique_call = std::make_unique<binder::BoundFunctionCall>();
+        unique_call->func_def = unique_fn;
+        unique_call->return_type = BoundType::Bool();
+        for (const auto& edge_var : edge_vars) {
+            const ColumnInfo* edge_col = ctx_.lookup(edge_var);
+            if (!edge_col)
+                continue;
+            unique_call->args.push_back(BoundColumnRef(edge_col->column_index, edge_col->type, edge_var,
+                                                       edge_col->slot_id, edge_col->scope_id));
+        }
+        if (unique_call->args.size() < 2)
+            return child;
+        BoundFilterOp unique_filter;
+        unique_filter.predicate = BoundExpression(std::move(unique_call));
+        unique_filter.child = std::move(child);
+        return BoundLogicalOperator(std::make_unique<BoundFilterOp>(std::move(unique_filter)));
+    };
 
     auto bindConstantHops = [&](const cypher::Expression& expr, int64_t& out) -> bool {
         auto bound = bindExpression(expr);
@@ -505,6 +536,10 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     for (size_t pi = 0; pi < match.patterns.size(); ++pi) {
         const auto& pp = match.patterns[pi];
         const auto& element = pp.element;
+
+        // Relationship variables of the current pattern part, in written
+        // order. Prefix uniqueness filters are inserted after each fixed hop.
+        std::vector<std::string> pattern_fixed_edges;
 
         // For patterns after the first, join with previous via cross product
         std::optional<BoundLogicalOperator> previous = std::move(current);
@@ -880,6 +915,10 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     path_element_vars.push_back(*edge_var);
                 path_element_vars.push_back(dst_var);
 
+                match_has_varlen = true;
+                // A fixed suffix after a varlen hop is a new local prefix; the
+                // final global filter still covers the varlen edges.
+                pattern_fixed_edges.clear();
                 prev_edge_var = edge_var.value_or("");
                 start_var = dst_var;
                 start_col = dst_col;
@@ -931,6 +970,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             expand->direction = rel_pat.direction;
             expand->child = std::move(*current);
             current = std::move(expand);
+
+            pattern_fixed_edges.push_back(edge_var);
+            current = appendEdgeUniqueFilter(std::move(*current), pattern_fixed_edges);
 
             // Inline properties on the relationship
             if (!defer_inline_filters && rel_pat.properties && current) {
@@ -1057,27 +1099,13 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     }
 
     // Bind WHERE predicate
-    // Enforce Cypher relationship uniqueness within this MATCH clause.
-    // The predicate is evaluated row-by-row and keeps rows where every
-    // traversed relationship id appears at most once.
-    if (current && match_edge_vars.size() > 1) {
-        const function::FunctionDef* unique_fn = func_registry_.lookup("__edge_unique", {});
-        if (unique_fn) {
-            auto unique_call = std::make_unique<binder::BoundFunctionCall>();
-            unique_call->func_def = unique_fn;
-            unique_call->return_type = BoundType::Bool();
-            for (const auto& edge_var : match_edge_vars) {
-                const ColumnInfo* edge_col = ctx_.lookup(edge_var);
-                if (!edge_col)
-                    continue;
-                unique_call->args.push_back(BoundColumnRef(edge_col->column_index, edge_col->type, edge_var,
-                                                           edge_col->slot_id, edge_col->scope_id));
-            }
-            BoundFilterOp unique_filter;
-            unique_filter.predicate = BoundExpression(std::move(unique_call));
-            unique_filter.child = std::move(*current);
-            current = std::make_unique<BoundFilterOp>(std::move(unique_filter));
-        }
+    // Enforce Cypher relationship uniqueness within this MATCH clause. A
+    // single fixed-length chain was already covered by the per-hop prefix
+    // filters; multi-pattern / varlen plans still need the global predicate
+    // for relationships across pattern parts.
+    const bool prefix_filters_cover_all = match.patterns.size() == 1 && !match_has_varlen && match_edge_vars.size() > 1;
+    if (current && match_edge_vars.size() > 1 && !prefix_filters_cover_all) {
+        current = appendEdgeUniqueFilter(std::move(*current), match_edge_vars);
     }
 
     if (match.where_pred && current && !skip_where) {

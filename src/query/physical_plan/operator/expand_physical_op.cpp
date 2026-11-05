@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "query/dataset/cell_access.hpp"
 #include "query/dataset/row.hpp"
@@ -15,6 +16,17 @@ std::atomic<uint64_t> ExpandPhysicalOp::cache_hit_count_{0};
 
 uint64_t ExpandPhysicalOp::cacheHitCount() noexcept {
     return cache_hit_count_.load(std::memory_order_relaxed);
+}
+
+size_t ExpandPhysicalOp::maxCachedEdgesPerSource() {
+    const char* env = std::getenv("EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE");
+    if (env == nullptr || *env == '\0')
+        return kMaxCachedEdgesPerSource;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0' || parsed == 0)
+        return kMaxCachedEdgesPerSource;
+    return static_cast<size_t>(parsed);
 }
 
 void ExpandPhysicalOp::resetCacheHitCount() noexcept {
@@ -33,6 +45,63 @@ EdgeId edgeIdFromValue(const Value& val) {
 
 } // anonymous namespace
 
+namespace {
+
+constexpr size_t kDefaultExpandInputRows = 128;
+
+/// Bound how many input rows one Expand call may process at once. This is the
+/// main defence against a single wildly expanding hop materialising tens of
+/// millions of rows inside one DataChunk; it is tunable for experiments.
+size_t expandInputRows() {
+    const char* env = std::getenv("EUGRAPH_EXPAND_INPUT_ROWS");
+    if (env == nullptr || *env == '\0')
+        return kDefaultExpandInputRows;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0' || parsed == 0)
+        return kDefaultExpandInputRows;
+    return static_cast<size_t>(std::min<unsigned long>(parsed, 4096));
+}
+
+/// Copy a logical row range into a standalone flat chunk. This deliberately
+/// materialises only the bounded input slice; it preserves values and NULLs
+/// without depending on the source chunk's selection vector.
+DataChunk sliceChunk(const DataChunk& chunk, size_t offset, size_t count) {
+    DataChunk out;
+    out.count = count;
+    out.columns.reserve(chunk.columns.size());
+    for (const auto& src : chunk.columns) {
+        Column dst = Column::flat(src.type, count);
+        for (size_t i = 0; i < count; ++i) {
+            if (src.isNull(offset + i))
+                dst.setNull(i);
+            else
+                dst.setValue(i, src.getValue(offset + i));
+        }
+        out.columns.push_back(std::move(dst));
+    }
+    out.sel = SelectionVector::identity(count);
+    return out;
+}
+
+} // namespace
+
+folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::slicedChild() {
+    auto gen = child_->executeChunkTraced();
+    const size_t batch_rows = expandInputRows();
+    while (auto chunk = co_await gen.next()) {
+        const size_t rows = chunk->numRows();
+        if (rows == 0)
+            continue;
+        if (rows <= batch_rows) {
+            co_yield std::move(*chunk);
+            continue;
+        }
+        for (size_t offset = 0; offset < rows; offset += batch_rows)
+            co_yield sliceChunk(*chunk, offset, std::min(batch_rows, rows - offset));
+    }
+}
+
 std::string ExpandPhysicalOp::toString() const {
     std::string dir;
     switch (direction_) {
@@ -49,12 +118,21 @@ std::string ExpandPhysicalOp::toString() const {
     auto s = "Expand(src=" + src_var_ + ", dst=" + dst_var_;
     if (!edge_var_.empty())
         s += ", edge=" + edge_var_;
-    if (label_filters_ && !label_filters_->empty()) {
+    if (all_edge_labels_ || !label_filters_.has_value()) {
+        // Untyped `[]` (or a type set covering every edge label) is one
+        // untyped adjacency scan at runtime; do not print an unstable list of
+        // 15 catalog ids in the plan.
+        s += ", labels=<any>";
+    } else if (label_filters_->empty()) {
+        s += ", labels=[]";
+    } else {
+        std::vector<EdgeLabelId> sorted_labels = *label_filters_;
+        std::sort(sorted_labels.begin(), sorted_labels.end());
         s += ", labels=[";
-        for (size_t i = 0; i < label_filters_->size(); ++i) {
+        for (size_t i = 0; i < sorted_labels.size(); ++i) {
             if (i > 0)
                 s += ",";
-            s += std::to_string((*label_filters_)[i]);
+            s += std::to_string(sorted_labels[i]);
         }
         s += "]";
     }
@@ -163,7 +241,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         }
     }
 
-    auto child_gen = cancellable(child_->executeChunkTraced());
+    auto child_gen = cancellable(slicedChild());
 
     auto dir = Direction::OUT;
     if (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
@@ -179,13 +257,33 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
     bool split_undirected = (dir == Direction::BOTH);
 
     std::vector<std::optional<EdgeLabelId>> scan_filters;
+    bool collapse_label_scans = false;
+    std::unordered_set<EdgeLabelId> collapsed_labels;
     if (!label_filters_.has_value()) {
         scan_filters.push_back(std::nullopt);
     } else {
-        for (auto lid : *label_filters_) {
-            scan_filters.push_back(lid);
+        // Multiple edge-label prefixes cost one search_near per label per
+        // source. For an anonymous `[]` (or a multi-label pattern) that is
+        // 15x the necessary storage calls: one unprefixed prefix scans the
+        // same adjacency range once. Collapse to a single scan and filter the
+        // returned entries by the allowed-label set in memory.
+        // Keep the per-label form when the destination is bound: the exact
+        // {src}{dir}{label}{neighbor} seek below is the only path that filters
+        // a same-variable endpoint correctly. Collapsing to an unprefixed scan
+        // would bypass it.
+        if (label_filters_->size() >= 2 && !dst_bound_) {
+            collapse_label_scans = true;
+            for (auto lid : *label_filters_)
+                collapsed_labels.insert(lid);
+            scan_filters.push_back(std::nullopt);
+        } else {
+            for (auto lid : *label_filters_)
+                scan_filters.push_back(lid);
         }
     }
+    auto edge_label_allowed = [&](EdgeLabelId lid) {
+        return !collapse_label_scans || collapsed_labels.find(lid) != collapsed_labels.end();
+    };
 
     // Reused across chunks: clearing keeps the capacity, so the per-chunk heap
     // traffic for edge accumulation drops to (near) zero. `edges` grows to the
@@ -275,6 +373,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 auto edge_gen = cancellable(store_.scanEdges(src_id, scan_dir, label_filter, edge_scratch_));
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
+                        if (!edge_label_allowed(entry.edge_label_id))
+                            continue;
                         if (edge_bound_) {
                             const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
                             if (edgeIdFromValue(eval) != entry.edge_id)
@@ -304,8 +404,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 }
             }
             if (!src_ids.empty()) {
-                const bool use_cache = neighbor_cache_enabled_ && !neighbor_cache_disabled_ && !split_undirected;
-                if (!use_cache) {
+                // Direct adjacency scan shared by the uncached path and by the
+                // cache-overflow fallback. Keeping one implementation avoids
+                // divergent row ordering / undirected handling.
+                auto scan_without_cache = [&](const std::vector<VertexId>& sources) -> folly::coro::Task<void> {
                     for (const auto& label_filter : scan_filters) {
                         // UNDIRECTED scans OUT and IN separately so each EdgeKey
                         // keeps the stored physical direction.  Batched, the two
@@ -315,9 +417,11 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                              : std::array<Direction, 2>{dir, dir};
                         const size_t passes = split_undirected ? 2 : 1;
                         for (size_t pass = 0; pass < passes; ++pass) {
-                            auto batch_gen = cancellable(store_.scanEdgesBatch(src_ids, dirs[pass], label_filter));
+                            auto batch_gen = cancellable(store_.scanEdgesBatch(sources, dirs[pass], label_filter));
                             while (auto batch = co_await batch_gen.next()) {
                                 for (const auto& be : *batch) {
+                                    if (!edge_label_allowed(be.entry.edge_label_id))
+                                        continue;
                                     auto row_it = rows_of_src.find(be.src_id);
                                     if (row_it == rows_of_src.end())
                                         continue;
@@ -341,6 +445,12 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             edges.begin(), edges.end(),
                             [](const EdgeEntryScratch& a, const EdgeEntryScratch& b) { return a.src_row < b.src_row; });
                     }
+                    co_return;
+                };
+
+                const bool use_cache = neighbor_cache_enabled_ && !neighbor_cache_disabled_ && !split_undirected;
+                if (!use_cache) {
+                    co_await scan_without_cache(src_ids);
                 } else {
                     // Correlated (PC) re-execution expands the same anchor once
                     // per path relationship. Scan only sources not yet cached
@@ -359,6 +469,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     for (VertexId src_id : miss_ids)
                         fresh.emplace(src_id, std::vector<CachedNeighbor>{});
 
+                    bool cache_build_overflow = false;
                     if (!miss_ids.empty()) {
                         std::unordered_map<VertexId, size_t> miss_index;
                         miss_index.reserve(miss_ids.size() * 2);
@@ -366,64 +477,95 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             miss_index.emplace(miss_ids[i], i);
 
                         std::vector<EdgeEntryScratch> miss_edges;
+                        std::vector<size_t> miss_edge_counts(miss_ids.size(), 0);
+                        const size_t per_source_cache_limit = maxCachedEdgesPerSource();
                         for (const auto& label_filter : scan_filters) {
                             auto batch_gen = cancellable(store_.scanEdgesBatch(miss_ids, dir, label_filter));
                             while (auto batch = co_await batch_gen.next()) {
                                 for (const auto& be : *batch) {
+                                    if (!edge_label_allowed(be.entry.edge_label_id))
+                                        continue;
                                     auto it = miss_index.find(be.src_id);
                                     if (it == miss_index.end())
                                         continue;
-                                    miss_edges.push_back({it->second, be.entry.neighbor_id, be.entry.edge_id,
+                                    // Stop building the cache before a supernode
+                                    // can create a multi-GB fresh vector. The
+                                    // chunk then falls back to a direct scan;
+                                    // correctness does not depend on cache hits.
+                                    const size_t source_index = it->second;
+                                    if (miss_edges.size() >= kMaxCachedEdges ||
+                                        ++miss_edge_counts[source_index] > per_source_cache_limit) {
+                                        cache_build_overflow = true;
+                                        break;
+                                    }
+                                    miss_edges.push_back({source_index, be.entry.neighbor_id, be.entry.edge_id,
                                                           be.entry.edge_label_id, be.entry.seq, dir == Direction::OUT});
                                 }
+                                if (cache_build_overflow)
+                                    break;
+                            }
+                            if (cache_build_overflow)
+                                break;
+                        }
+
+                        if (cache_build_overflow) {
+                            neighbor_cache_disabled_ = true;
+                            miss_edges.clear();
+                            fresh.clear();
+                            co_await scan_without_cache(src_ids);
+                        } else {
+                            if (!dst_label_ids_.empty() && !miss_edges.empty())
+                                co_await filterDstLabels(miss_edges);
+
+                            for (const auto& e : miss_edges) {
+                                VertexId src_id = miss_ids[e.src_row];
+                                fresh[src_id].push_back({e.dst_id, e.edge_id, e.edge_label_id, e.seq, e.physical_out});
+                            }
+
+                            size_t fresh_edges = 0;
+                            for (const auto& [_, list] : fresh)
+                                fresh_edges += list.size();
+                            if (neighbor_cache_.size() + fresh.size() > kMaxCachedSources ||
+                                cached_edge_count_ + fresh_edges > kMaxCachedEdges) {
+                                // Stop adding entries once the bound is reached,
+                                // but keep what is already cached for later hits.
+                                neighbor_cache_disabled_ = true;
+                            } else {
+                                cached_edge_count_ += fresh_edges;
+                                for (auto& [src_id, list] : fresh)
+                                    neighbor_cache_.emplace(src_id, std::move(list));
                             }
                         }
-                        if (!dst_label_ids_.empty() && !miss_edges.empty())
-                            co_await filterDstLabels(miss_edges);
-
-                        for (const auto& e : miss_edges) {
-                            VertexId src_id = miss_ids[e.src_row];
-                            fresh[src_id].push_back({e.dst_id, e.edge_id, e.edge_label_id, e.seq, e.physical_out});
-                        }
-
-                        size_t fresh_edges = 0;
-                        for (const auto& [_, list] : fresh)
-                            fresh_edges += list.size();
-                        if (neighbor_cache_.size() + fresh.size() > kMaxCachedSources ||
-                            cached_edge_count_ + fresh_edges > kMaxCachedEdges) {
-                            // Stop adding entries once the bound is reached, but
-                            // keep what is already cached for later hits.
-                            neighbor_cache_disabled_ = true;
-                        } else {
-                            cached_edge_count_ += fresh_edges;
-                            for (auto& [src_id, list] : fresh)
-                                neighbor_cache_.emplace(src_id, std::move(list));
-                        }
                     }
 
-                    // Reassemble in the same order as the uncached batched path:
-                    // input source order, then per-source scan order, then rows.
-                    for (VertexId src_id : src_ids) {
-                        auto row_it = rows_of_src.find(src_id);
-                        if (row_it == rows_of_src.end())
-                            continue;
-                        const std::vector<CachedNeighbor>* cached = nullptr;
-                        auto hit = neighbor_cache_.find(src_id);
-                        if (hit != neighbor_cache_.end()) {
-                            cached = &hit->second;
-                            cache_hit_count_.fetch_add(1, std::memory_order_relaxed);
-                        } else {
-                            auto f = fresh.find(src_id);
-                            if (f != fresh.end())
-                                cached = &f->second;
+                    if (!cache_build_overflow) {
+                        // Reassemble in the same order as the uncached batched
+                        // path: input source order, then per-source scan order,
+                        // then rows. This also handles a chunk whose sources are
+                        // all cache hits (miss_ids empty).
+                        for (VertexId src_id : src_ids) {
+                            auto row_it = rows_of_src.find(src_id);
+                            if (row_it == rows_of_src.end())
+                                continue;
+                            const std::vector<CachedNeighbor>* cached = nullptr;
+                            auto hit = neighbor_cache_.find(src_id);
+                            if (hit != neighbor_cache_.end()) {
+                                cached = &hit->second;
+                                cache_hit_count_.fetch_add(1, std::memory_order_relaxed);
+                            } else {
+                                auto f = fresh.find(src_id);
+                                if (f != fresh.end())
+                                    cached = &f->second;
+                            }
+                            if (!cached)
+                                continue;
+                            for (const auto& e : *cached)
+                                for (size_t src_row : row_it->second)
+                                    edges.push_back(
+                                        {src_row, e.dst_id, e.edge_id, e.edge_label_id, e.seq, e.physical_out});
                         }
-                        if (!cached)
-                            continue;
-                        for (const auto& e : *cached)
-                            for (size_t src_row : row_it->second)
-                                edges.push_back({src_row, e.dst_id, e.edge_id, e.edge_label_id, e.seq, e.physical_out});
+                        labels_pre_filtered = true;
                     }
-                    labels_pre_filtered = true;
                 }
             }
             batched = true;
@@ -500,6 +642,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         auto edge_gen = cancellable(store_.scanEdges(src_id, dir, label_filter, edge_scratch_));
                         while (auto edge_batch = co_await edge_gen.next()) {
                             for (const auto& entry : *edge_batch) {
+                                if (!edge_label_allowed(entry.edge_label_id))
+                                    continue;
                                 if (dst_bound_) {
                                     if (columnVertexId(chunk->columns[dst_col_idx_], src_row) != entry.neighbor_id)
                                         continue;

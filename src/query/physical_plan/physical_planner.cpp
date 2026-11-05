@@ -39,6 +39,25 @@
 namespace eugraph {
 namespace compute {
 
+namespace {
+
+/// True when the physical sub-plan below contains another Expand. Filters and
+/// ProjectionExtract nodes may sit between chained Expands, so checking only
+/// the direct child misses the third hop of a fixed-length chain.
+bool hasExpandDescendant(const PhysicalOperator* op) {
+    if (!op)
+        return false;
+    if (dynamic_cast<const ExpandPhysicalOp*>(op))
+        return true;
+    for (const PhysicalOperator* child : op->children()) {
+        if (hasExpandDescendant(child))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 // ==================== Helpers ====================
 
 static binder::BoundType propertyTypeToBoundType(PropertyType pt) {
@@ -3138,12 +3157,20 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         }
                     }
 
+                    const bool all_edge_labels =
+                        !v.edge_label_ids.empty() && v.edge_label_ids.size() == ctx.edge_label_defs.size();
+                    // Chained Expands revisit the same intermediate vertices
+                    // across chunks; cache their filtered adjacency. First-hop
+                    // expands have unique sources and would only pay cache
+                    // bookkeeping, so they stay uncached.
+                    const bool cache_neighbors =
+                        ctx.read_only && (ctx.correlated_subplan_depth > 0 || hasExpandDescendant(child_op.get()));
                     auto result = std::make_unique<ExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
                         std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids,
                         dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels), full_edge_scan,
-                        ctx.read_only && ctx.correlated_subplan_depth > 0);
+                        cache_neighbors, all_edge_labels);
                     if (ctx.expand_allowed_filter && ctx.expand_allowed_filter->dst_var == v.dst_variable &&
                         v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT) {
                         result->setAllowedDstFilter(ctx.expand_allowed_filter->index_id,
