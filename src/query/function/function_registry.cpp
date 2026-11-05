@@ -22,6 +22,7 @@
 #include "query/function/scalar/type_function.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <unordered_set>
 
@@ -1093,6 +1094,53 @@ std::string lowerAscii(std::string s) {
 
 void edgeUniqueBatch(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     result.reserve(count);
+
+    // Fast path for the common fixed-length MATCH case: every argument is a
+    // flat EDGE_KEY / EDGE column. A per-row unordered_set here is extremely
+    // expensive (85M rows * 3 edges => ~256M node allocations/frees); for a
+    // handful of ids a stack array + pairwise comparison is both allocation
+    // free and faster.
+    std::array<EdgeId, 8> fast_ids{};
+    bool all_flat_edges = !args.empty() && args.size() <= fast_ids.size();
+    for (const auto* col : args) {
+        if (!col || col->form != VectorForm::FLAT || !col->buffer ||
+            (col->type != binder::BoundTypeKind::EDGE_KEY && col->type != binder::BoundTypeKind::EDGE)) {
+            all_flat_edges = false;
+            break;
+        }
+    }
+    if (all_flat_edges) {
+        for (size_t row = 0; row < count; ++row) {
+            size_t n = 0;
+            bool unique = true;
+            for (const auto* col : args) {
+                if (col->buffer->isNull(row))
+                    continue;
+                EdgeId id = INVALID_EDGE_ID;
+                if (col->type == binder::BoundTypeKind::EDGE_KEY) {
+                    if (row < col->buffer->edge_key_data.size())
+                        id = col->buffer->edge_key_data[row].id;
+                } else if (row < col->buffer->edge_data.size()) {
+                    const auto& edge = col->buffer->edge_data[row];
+                    if (edge)
+                        id = edge->id;
+                }
+                if (id == INVALID_EDGE_ID)
+                    continue;
+                for (size_t j = 0; j < n; ++j) {
+                    if (fast_ids[j] == id) {
+                        unique = false;
+                        break;
+                    }
+                }
+                if (!unique)
+                    break;
+                fast_ids[n++] = id;
+            }
+            result.setBool(row, unique);
+        }
+        return;
+    }
     // Reused across rows: the old scalar adapter allocated a fresh set for
     // every row; clearing a warmed set keeps the buckets instead.
     std::unordered_set<EdgeId> seen;

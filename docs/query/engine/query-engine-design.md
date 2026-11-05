@@ -835,6 +835,27 @@ Cypher 的节点/关系相等是**身份相等**。`valueEquals` 现在把
 两者都只改变“从哪一列读”，不改变谓词结果；c5 的右子计划因此从
 “89,415 行先构造 friend/forum/edge”变成“Expand + Filter，262 行再物化”。
 
+### 关系唯一性逐跳下推与零分配 kernel（2026-11-05，已落地）
+
+固定长度模式的三跳/多跳匹配不能只在全部 Expand 完成后放一个
+`__edge_unique`：那会先把所有路径展开出来，再过滤复用边的路径。Binder 现在在每个
+fixed-length `Expand` 之后对**当前 pattern part 的前缀**插入唯一性 filter：
+
+```text
+Expand e0
+Expand e1
+Filter edge_unique(e0, e1)
+Expand e2
+Filter edge_unique(e0, e1, e2)
+```
+
+单 pattern、全 fixed-length 的链不再追加一个重复的全局 filter；包含 varlen 或多 pattern
+的查询仍保留最终全局 `__edge_unique`，覆盖 varlen edge list 和跨 pattern 的复用。
+
+`edgeUniqueBatch` 对 ≤ 8 个 flat `EDGE_KEY` / `EDGE` 参数使用栈数组 + 两两比较，
+不再为每行建立/清空 `unordered_set`。这消除了 85M 行、每行 3 个 edge 时约 2.5 亿次
+哈希节点分配/释放；谓词结果与旧实现逐行一致。
+
 ### 延迟槽必须按 canonical slot 识别
 
 `computeDeferredSlots` 从 RETURN Project 收集的是 canonical slot，而 `PEPlan` 里

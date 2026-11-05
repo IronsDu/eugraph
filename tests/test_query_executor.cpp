@@ -1775,6 +1775,25 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+TEST_F(QueryExecutorTest, ExplainPerHopEdgeUniqueness) {
+    const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
+    ASSERT_FALSE(plan.empty());
+    size_t filters = 0;
+    for (size_t pos = plan.find("Filter"); pos != std::string::npos; pos = plan.find("Filter", pos + 1))
+        ++filters;
+    // Three hops must insert e1 != e0 after hop 2 and e2 != e0/e1 after hop 3;
+    // the old single post-expansion filter produced only one Filter.
+    EXPECT_EQ(filters, 2u) << plan;
+}
+
+TEST_F(QueryExecutorTest, RelationshipUniquenessRejectsReusedEdgeBeforeThirdHop) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(a)").error.empty());
+    auto result = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->(m) RETURN count(m)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+}
+
 TEST_F(QueryExecutorTest, ExplainUntypedExpandAndCountWithoutProperties) {
     // An untyped `[]` is bound as "all edge labels"; execution collapses those
     // prefixes into one untyped adjacency scan, so the plan should render the
