@@ -13,9 +13,11 @@
 #include "test_chunk_helpers.hpp"
 #include "test_sync_store.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
+#include <string>
 
 using namespace eugraph;
 using namespace eugraph::compute;
@@ -69,6 +71,32 @@ struct TestEnv {
     }
 };
 } // namespace
+
+/// Temporarily set an environment variable for a test and restore it on exit.
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* name, const char* value) : name_(name) {
+        const char* old = std::getenv(name);
+        if (old != nullptr) {
+            had_old_ = true;
+            old_ = old;
+        }
+        setenv(name, value, 1);
+    }
+    ~ScopedEnvVar() {
+        if (had_old_)
+            setenv(name_.c_str(), old_.c_str(), 1);
+        else
+            unsetenv(name_.c_str());
+    }
+    ScopedEnvVar(const ScopedEnvVar&) = delete;
+    ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+private:
+    std::string name_;
+    std::string old_;
+    bool had_old_ = false;
+};
 
 class IndexE2ETest : public ::testing::Test {
 protected:
@@ -427,6 +455,57 @@ TEST_F(IndexE2ETest, DdlCreateIndexViaExecutor) {
 
     // Verify index is in PUBLIC state via meta store
     auto info = blockingWait(env.async_meta->getIndex("idx_age"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+}
+
+TEST_F(IndexE2ETest, DdlVertexIndexBackfillCommitsInBatches) {
+    createLabel(env, "Person",
+                {
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    for (int i = 0; i < 25; ++i) {
+        auto created = execSync(executor, "CREATE (n:Person {age: " + std::to_string(i) + "})");
+        ASSERT_TRUE(created.error.empty()) << created.error;
+    }
+
+    // Force one row per transaction so the test exercises the multi-batch
+    // path (the old implementation used a single transaction for all rows).
+    ScopedEnvVar batch_size("EUGRAPH_INDEX_BACKFILL_BATCH", "1");
+    auto ddl = execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto info = blockingWait(env.async_meta->getIndex("idx_age"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+
+    auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 7 RETURN n");
+    ASSERT_EQ(rows.size(), 1u);
+}
+
+TEST_F(IndexE2ETest, DdlEdgeIndexBackfillCommitsInBatches) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    for (int i = 0; i < 5; ++i) {
+        auto created =
+            execSync(executor, "CREATE (a:Person {name: 'a" + std::to_string(i) + "'}), (b:Person {name: 'b" +
+                                   std::to_string(i) + "'}), (a)-[:KNOWS {since: " + std::to_string(i) + "}]->(b)");
+        ASSERT_TRUE(created.error.empty()) << created.error;
+    }
+
+    ScopedEnvVar batch_size("EUGRAPH_INDEX_BACKFILL_BATCH", "1");
+    auto ddl = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto info = blockingWait(env.async_meta->getIndex("idx_knows_since"));
     ASSERT_TRUE(info.has_value());
     EXPECT_EQ(info->state, IndexState::PUBLIC);
 }
