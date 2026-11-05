@@ -87,6 +87,11 @@ public:
     void clearDstLabelFilter() {
         dst_label_ids_.clear();
     }
+    /// Per-source cache admission ceiling. Defaults to
+    /// kMaxCachedEdgesPerSource; EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE allows
+    /// tests to exercise the overflow fallback with a small graph.
+    static size_t maxCachedEdgesPerSource();
+
     /// Diagnostics: neighbour-cache hits across all Expand instances. Tests
     /// use this to prove the correlated-reuse path is actually taken.
     static uint64_t cacheHitCount() noexcept;
@@ -163,6 +168,10 @@ private:
     };
     static constexpr size_t kMaxCachedEdges = 1'000'000;
     static constexpr size_t kMaxCachedSources = 65536;
+    /// A single supernode must not make the cache build a multi-megabyte
+    /// vector before the global cap can reject it. Sources above this degree
+    /// are not cached at all; the current chunk falls back to a direct scan.
+    static constexpr size_t kMaxCachedEdgesPerSource = 16'384;
     bool neighbor_cache_enabled_ = false;
     bool neighbor_cache_disabled_ = false;
     size_t cached_edge_count_ = 0;

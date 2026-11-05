@@ -1790,6 +1790,31 @@ TEST_F(QueryExecutorTest, ChainedExpandUsesNeighborCache) {
         << "the second Expand should reuse the shared Hub adjacency across input chunks";
 }
 
+TEST_F(QueryExecutorTest, SupernodeBypassesNeighborCacheAndStaysCorrect) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:Person {name: 'start'})-[:KNOWS]->(h:Hub {name: 'h'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "UNWIND range(1, 200) AS i MATCH (h:Hub {name: 'h'}) "
+                                     "CREATE (h)-[:KNOWS]->(:Person {name: 'p'})")
+                    .error.empty());
+
+    // Keep the test graph small; lowering the per-source ceiling exercises the
+    // same overflow/fallback path as a real supernode without inserting 16k+
+    // edges into the test database.
+    struct EnvGuard {
+        ~EnvGuard() {
+            unsetenv("EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE");
+        }
+    } env_guard;
+    ASSERT_EQ(setenv("EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE", "64", 1), 0);
+
+    ExpandPhysicalOp::resetCacheHitCount();
+    auto result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 200);
+    EXPECT_EQ(ExpandPhysicalOp::cacheHitCount(), 0u)
+        << "a source above the per-source ceiling must not populate the cache";
+}
+
 TEST_F(QueryExecutorTest, ExplainPerHopEdgeUniqueness) {
     const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
     ASSERT_FALSE(plan.empty());
