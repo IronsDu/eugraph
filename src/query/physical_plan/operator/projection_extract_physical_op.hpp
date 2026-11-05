@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -139,6 +140,13 @@ private:
     std::vector<binder::BoundType> output_types_;
     std::unique_ptr<PhysicalOperator> child_;
     bool read_only_ = false;
+    /// Query-lifetime cache for LoadVertexProp (read-only statements only).
+    /// The per-chunk batch already dedups within a chunk, but the same vertex
+    /// recurs across chunks (a 3-hop walk probes the same destinations many
+    /// times). Caching the decoded property turns ~50M vertex_data searches
+    /// into ~#distinct vertices.
+    std::vector<std::unordered_map<VertexId, std::optional<PropertyValue>>> persistent_vertex_prop_cache_;
+    static constexpr size_t kMaxPersistentPropCacheEntries = 1'000'000;
     /// vid -> materialized vertex, reused across executeChunk() calls on
     /// read-only statements (bounded; see executeChunk).
     std::unordered_map<VertexId, VertexValuePtr> persistent_ctor_cache_;

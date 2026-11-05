@@ -237,13 +237,29 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
     bool split_undirected = (dir == Direction::BOTH);
 
     std::vector<std::optional<EdgeLabelId>> scan_filters;
+    bool collapse_label_scans = false;
+    std::unordered_set<EdgeLabelId> collapsed_labels;
     if (!label_filters_.has_value()) {
         scan_filters.push_back(std::nullopt);
     } else {
-        for (auto lid : *label_filters_) {
-            scan_filters.push_back(lid);
+        // Multiple edge-label prefixes cost one search_near per label per
+        // source. For an anonymous `[]` (or a multi-label pattern) that is
+        // 15x the necessary storage calls: one unprefixed prefix scans the
+        // same adjacency range once. Collapse to a single scan and filter the
+        // returned entries by the allowed-label set in memory.
+        if (label_filters_->size() >= 2) {
+            collapse_label_scans = true;
+            for (auto lid : *label_filters_)
+                collapsed_labels.insert(lid);
+            scan_filters.push_back(std::nullopt);
+        } else {
+            for (auto lid : *label_filters_)
+                scan_filters.push_back(lid);
         }
     }
+    auto edge_label_allowed = [&](EdgeLabelId lid) {
+        return !collapse_label_scans || collapsed_labels.find(lid) != collapsed_labels.end();
+    };
 
     // Reused across chunks: clearing keeps the capacity, so the per-chunk heap
     // traffic for edge accumulation drops to (near) zero. `edges` grows to the
@@ -333,6 +349,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 auto edge_gen = cancellable(store_.scanEdges(src_id, scan_dir, label_filter, edge_scratch_));
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
+                        if (!edge_label_allowed(entry.edge_label_id))
+                            continue;
                         if (edge_bound_) {
                             const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
                             if (edgeIdFromValue(eval) != entry.edge_id)
@@ -376,6 +394,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             auto batch_gen = cancellable(store_.scanEdgesBatch(src_ids, dirs[pass], label_filter));
                             while (auto batch = co_await batch_gen.next()) {
                                 for (const auto& be : *batch) {
+                                    if (!edge_label_allowed(be.entry.edge_label_id))
+                                        continue;
                                     auto row_it = rows_of_src.find(be.src_id);
                                     if (row_it == rows_of_src.end())
                                         continue;
@@ -428,6 +448,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             auto batch_gen = cancellable(store_.scanEdgesBatch(miss_ids, dir, label_filter));
                             while (auto batch = co_await batch_gen.next()) {
                                 for (const auto& be : *batch) {
+                                    if (!edge_label_allowed(be.entry.edge_label_id))
+                                        continue;
                                     auto it = miss_index.find(be.src_id);
                                     if (it == miss_index.end())
                                         continue;
@@ -558,6 +580,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         auto edge_gen = cancellable(store_.scanEdges(src_id, dir, label_filter, edge_scratch_));
                         while (auto edge_batch = co_await edge_gen.next()) {
                             for (const auto& entry : *edge_batch) {
+                                if (!edge_label_allowed(entry.edge_label_id))
+                                    continue;
                                 if (dst_bound_) {
                                     if (columnVertexId(chunk->columns[dst_col_idx_], src_row) != entry.neighbor_id)
                                         continue;
