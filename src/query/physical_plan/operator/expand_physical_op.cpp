@@ -267,7 +267,11 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         // 15x the necessary storage calls: one unprefixed prefix scans the
         // same adjacency range once. Collapse to a single scan and filter the
         // returned entries by the allowed-label set in memory.
-        if (label_filters_->size() >= 2) {
+        // Keep the per-label form when the destination is bound: the exact
+        // {src}{dir}{label}{neighbor} seek below is the only path that filters
+        // a same-variable endpoint correctly. Collapsing to an unprefixed scan
+        // would bypass it.
+        if (label_filters_->size() >= 2 && !dst_bound_) {
             collapse_label_scans = true;
             for (auto lid : *label_filters_)
                 collapsed_labels.insert(lid);

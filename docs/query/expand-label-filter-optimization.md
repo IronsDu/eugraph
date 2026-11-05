@@ -146,7 +146,11 @@ loader: --batch-size 5000 --rpc-connections 4 --parallel-files 4
 
 - `ExpandPhysicalOp::executeChunk()` 对含多个 label 的过滤集合折叠成一次无类型前缀扫描
   （`scan_filters = {nullopt}`），再在内存里按允许的 label 集合过滤返回的邻接项；
-- 单个 label 仍走带 label 的前缀扫描，避免为少量边做全邻接扫描。
+- 单个 label 仍走带 label 的前缀扫描，避免为少量边做全邻接扫描；
+- **目标顶点已绑定时不折叠**：`scanEdgesExact` 的 `{src}{dir}{label}{neighbor}` 精确 seek 是
+  同变量端点（`(a)-[r]-(a)`）过滤非自环边的唯一路径。折叠成无 label 扫描会绕过它，导致
+  `(a)-[r]-(a)` 保留来自其它顶点的入边，并让无向自环出现两次。回归见 TCK Match7 [24] /
+  Match8 [2] 和 `BoundSameVariableUndirectedSelfLoopKeepsOnlySelfLoop`。
 
 计划文本同步反映这一语义：
 

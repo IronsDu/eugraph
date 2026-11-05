@@ -4303,6 +4303,26 @@ TEST_F(QueryExecutorTest, VarLenExpandIsolatedNode) {
     EXPECT_EQ(result.rows.size(), 0u);
 }
 
+TEST_F(QueryExecutorTest, BoundSameVariableUndirectedSelfLoopKeepsOnlySelfLoop) {
+    insertTestVertices();
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'loop'}), (b:Person {name: 'other'}), "
+                                     "(a)-[:KNOWS]->(a), (b)-[:KNOWS]->(a)")
+                    .error.empty());
+
+    // Both endpoints of `(a)-[r]-(a)` are the same bound vertex. Only the
+    // self-loop may match; the incoming edge from another vertex must not.
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'loop'}) MATCH (a)-[r]-(a) RETURN count(r) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+
+    auto optional =
+        execSync(*executor_, "MATCH (a:Person {name: 'loop'}) OPTIONAL MATCH (a)-[r]-(a) RETURN count(r) AS c");
+    ASSERT_TRUE(optional.error.empty()) << optional.error;
+    ASSERT_EQ(optional.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(optional.rows[0][0]), 1);
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandSelfLoop) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
