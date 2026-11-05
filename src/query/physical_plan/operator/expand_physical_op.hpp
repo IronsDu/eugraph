@@ -161,7 +161,7 @@ private:
         uint64_t seq;
         bool physical_out;
     };
-    static constexpr size_t kMaxCachedEdges = 65536;
+    static constexpr size_t kMaxCachedEdges = 1'000'000;
     static constexpr size_t kMaxCachedSources = 65536;
     bool neighbor_cache_enabled_ = false;
     bool neighbor_cache_disabled_ = false;

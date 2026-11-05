@@ -1775,6 +1775,21 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+TEST_F(QueryExecutorTest, ChainedExpandUsesNeighborCache) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (h:Hub {name: 'h'})-[:KNOWS]->(:Person {name: 'm'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "UNWIND range(1, 200) AS i MATCH (h:Hub {name: 'h'}) "
+                                     "CREATE (:Person {name: 'p'})-[:KNOWS]->(h)")
+                    .error.empty());
+
+    ExpandPhysicalOp::resetCacheHitCount();
+    auto result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 200);
+    EXPECT_GT(ExpandPhysicalOp::cacheHitCount(), 0u)
+        << "the second Expand should reuse the shared Hub adjacency across input chunks";
+}
+
 TEST_F(QueryExecutorTest, ExplainPerHopEdgeUniqueness) {
     const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
     ASSERT_FALSE(plan.empty());
