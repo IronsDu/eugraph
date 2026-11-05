@@ -107,12 +107,21 @@ std::string ExpandPhysicalOp::toString() const {
     auto s = "Expand(src=" + src_var_ + ", dst=" + dst_var_;
     if (!edge_var_.empty())
         s += ", edge=" + edge_var_;
-    if (label_filters_ && !label_filters_->empty()) {
+    if (all_edge_labels_ || !label_filters_.has_value()) {
+        // Untyped `[]` (or a type set covering every edge label) is one
+        // untyped adjacency scan at runtime; do not print an unstable list of
+        // 15 catalog ids in the plan.
+        s += ", labels=<any>";
+    } else if (label_filters_->empty()) {
+        s += ", labels=[]";
+    } else {
+        std::vector<EdgeLabelId> sorted_labels = *label_filters_;
+        std::sort(sorted_labels.begin(), sorted_labels.end());
         s += ", labels=[";
-        for (size_t i = 0; i < label_filters_->size(); ++i) {
+        for (size_t i = 0; i < sorted_labels.size(); ++i) {
             if (i > 0)
                 s += ",";
-            s += std::to_string((*label_filters_)[i]);
+            s += std::to_string(sorted_labels[i]);
         }
         s += "]";
     }

@@ -138,3 +138,24 @@ loader: --batch-size 5000 --rpc-connections 4 --parallel-files 4
 - 阈值可按实际标签基数自适应：例如 `label_count / neighbor_count` 决定扫描或点查；
 - IN/OUT 邻接缓存已在 `feat/storage-vertex-data` 中实现，但默认关闭（N=0，`edge_index` 全量）；编码与实测见 [kv-encoding.md](../storage/kv-encoding.md)。本文的分析范围仍只限标签过滤；
 - 本分支只提交标签过滤优化及本分析文档。
+
+## 5. 无类型 Expand 的单次邻接扫描与计划显示
+
+无类型的 `-[]->` 在 binder 阶段仍会把所有 edge label 放入 `BoundExpandOp.edge_label_ids`，
+但执行层不应按每个 label 各做一次 `search_near`：
+
+- `ExpandPhysicalOp::executeChunk()` 对含多个 label 的过滤集合折叠成一次无类型前缀扫描
+  （`scan_filters = {nullopt}`），再在内存里按允许的 label 集合过滤返回的邻接项；
+- 单个 label 仍走带 label 的前缀扫描，避免为少量边做全邻接扫描。
+
+计划文本同步反映这一语义：
+
+- label 集合覆盖全部 edge label，或 operator 没有 label filter：显示 `labels=<any>`；
+- 显式指定少量 label：按 id 排序后显示 `labels=[...]`，避免 catalog 遍历顺序带来的不稳定 diff；
+- 显式空集合（不存在的类型）：显示 `labels=[]`。
+
+回归测试 `QueryExecutorTest.ExplainUntypedExpandAndCountWithoutProperties` 覆盖：
+
+- 无类型 Expand 显示 `labels=<any>`，不再输出 15 个 catalog id；
+- `count(m)` 不生成只用于属性/标签物化的 `ProjectionExtract`；
+- `count(m.name)` 才生成属性加载的 `ProjectionExtract`。

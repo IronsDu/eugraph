@@ -1775,6 +1775,32 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+TEST_F(QueryExecutorTest, ExplainUntypedExpandAndCountWithoutProperties) {
+    // An untyped `[]` is bound as "all edge labels"; execution collapses those
+    // prefixes into one untyped adjacency scan, so the plan should render the
+    // equivalent `<any>` instead of an unstable list of catalog ids.
+    const std::string untyped = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->(m) RETURN count(m)");
+    ASSERT_FALSE(untyped.empty());
+    EXPECT_NE(untyped.find("labels=<any>"), std::string::npos) << untyped;
+    EXPECT_EQ(untyped.find("labels=["), std::string::npos) << untyped;
+
+    // count(m) only checks non-nullness; it must not create a PE to load
+    // labels or properties of m.
+    EXPECT_EQ(untyped.find("ProjectionExtract"), std::string::npos) << untyped;
+
+    // A typed relationship keeps its label list (sorted for stable output).
+    const std::string typed = getExplainPlanText(*executor_, "MATCH (n:Person)-[:KNOWS]->(m) RETURN count(m)");
+    ASSERT_FALSE(typed.empty());
+    EXPECT_EQ(typed.find("labels=<any>"), std::string::npos) << typed;
+    EXPECT_NE(typed.find("labels=["), std::string::npos) << typed;
+
+    // count(m.name) does need one property load; this is the contrast that
+    // proves count(m) is not silently materializing the vertex.
+    const std::string property = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->(m) RETURN count(m.name)");
+    ASSERT_FALSE(property.empty());
+    EXPECT_NE(property.find("ProjectionExtract"), std::string::npos) << property;
+}
+
 /// `UNWIND list AS key MATCH (v:Label {prop: key})` 不能退化成
 /// CrossProduct + LabelScan（LDBC update 的 Tag 循环会为每个 tag 扫 16k 行），
 /// 应改写成 Apply + IndexScanValues 的逐行索引探测。

@@ -29,14 +29,14 @@ public:
                      std::vector<uint16_t> edge_prop_ids = {}, std::vector<LabelId> dst_label_ids = {},
                      bool dst_bound = false, bool edge_bound = false, int dst_col_idx = -1, int edge_col_idx = -1,
                      std::vector<EdgeLabelId> full_scan_labels = {}, bool full_edge_scan = false,
-                     bool neighbor_cache = false)
+                     bool neighbor_cache = false, bool all_edge_labels = false)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
           label_filters_(std::move(label_filters)), direction_(direction), store_(store),
           input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)),
           dst_label_prop_ids_(std::move(dst_label_prop_ids)), edge_prop_ids_(std::move(edge_prop_ids)),
           dst_label_ids_(std::move(dst_label_ids)), dst_bound_(dst_bound), edge_bound_(edge_bound),
           dst_col_idx_(dst_col_idx), edge_col_idx_(edge_col_idx), full_scan_labels_(std::move(full_scan_labels)),
-          full_edge_scan_(full_edge_scan), neighbor_cache_enabled_(neighbor_cache) {
+          full_edge_scan_(full_edge_scan), all_edge_labels_(all_edge_labels), neighbor_cache_enabled_(neighbor_cache) {
         for (size_t i = 0; i < input_schema_.size(); ++i) {
             if (input_schema_[i] == src_var_) {
                 src_col_idx_ = static_cast<int>(i);
@@ -136,6 +136,11 @@ private:
     int edge_col_idx_ = -1;
     std::vector<EdgeLabelId> full_scan_labels_;
     bool full_edge_scan_ = false;
+    /// The bound pattern had no relationship type and the planner expanded it
+    /// to every catalog edge label. Execution collapses these prefixes into one
+    /// untyped adjacency scan; toString renders the equivalent `<any>` instead
+    /// of dumping the whole label set.
+    bool all_edge_labels_ = false;
 
     uint32_t allowed_dst_index_id_ = 0;
     EdgeLabelId allowed_edge_label_ = INVALID_EDGE_LABEL_ID;
