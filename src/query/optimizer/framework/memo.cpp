@@ -838,6 +838,14 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                     c->targets.push_back(std::move(ct));
                 }
                 return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
+                auto c = std::make_unique<binder::BoundPathCountOp>();
+                c->source_variable = val->source_variable;
+                c->dst_variable = val->dst_variable;
+                c->previous_edge_variables = val->previous_edge_variables;
+                c->edge_label_ids = val->edge_label_ids;
+                c->output_name = val->output_name;
+                return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 auto c = std::make_unique<binder::BoundPathBuildOp>();
                 c->path_variable = val->path_variable;

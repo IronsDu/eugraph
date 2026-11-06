@@ -1851,6 +1851,20 @@ TEST_F(QueryExecutorTest, PathCountMatchesUnfusedAggregate) {
     ASSERT_TRUE(fused2.error.empty()) << fused2.error;
     ASSERT_TRUE(normal2.error.empty()) << normal2.error;
     EXPECT_EQ(std::get<int64_t>(fused2.rows[0][0]), std::get<int64_t>(normal2.rows[0][0]));
+
+    auto fused_star = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(*)");
+    auto normal_star =
+        execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(*) AS c1, count(*) AS c2");
+    ASSERT_TRUE(fused_star.error.empty()) << fused_star.error;
+    ASSERT_TRUE(normal_star.error.empty()) << normal_star.error;
+    EXPECT_EQ(std::get<int64_t>(fused_star.rows[0][0]), std::get<int64_t>(normal_star.rows[0][0]));
+
+    auto fused_one = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(1)");
+    auto normal_one =
+        execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(1) AS c1, count(1) AS c2");
+    ASSERT_TRUE(fused_one.error.empty()) << fused_one.error;
+    ASSERT_TRUE(normal_one.error.empty()) << normal_one.error;
+    EXPECT_EQ(std::get<int64_t>(fused_one.rows[0][0]), std::get<int64_t>(normal_one.rows[0][0]));
 }
 
 TEST_F(QueryExecutorTest, ExplainFinalHopCountFusion) {
@@ -1859,6 +1873,11 @@ TEST_F(QueryExecutorTest, ExplainFinalHopCountFusion) {
     EXPECT_NE(plan.find("PathCount"), std::string::npos) << plan;
     // The final Expand is fused; only the prefix uniqueness Filter remains.
     EXPECT_NE(plan.find("Filter"), std::string::npos) << plan;
+
+    const std::string star = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(*)");
+    EXPECT_NE(star.find("PathCount"), std::string::npos) << star;
+    const std::string one = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(1)");
+    EXPECT_NE(one.find("PathCount"), std::string::npos) << one;
 }
 
 TEST_F(QueryExecutorTest, RelationshipUniquenessRejectsReusedEdgeBeforeThirdHop) {

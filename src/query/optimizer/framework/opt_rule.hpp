@@ -39,6 +39,7 @@ enum class OptNodeType {
     PatternComprehensionApply, // 25
     Call,                      // 26
     Foreach,                   // 27
+    PathCount,                 // 28
     Unknown                    // out-of-range / future operator
 };
 

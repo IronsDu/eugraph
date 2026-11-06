@@ -16,6 +16,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
@@ -78,6 +79,16 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
                 return deriveUnwind(*val, input_lps.at(0));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 return deriveCall(*val);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
+                LogProp lp;
+                lp.cardinality = 1.0;
+                ColumnInfo column;
+                column.variable = val->output_name;
+                column.column_index = 0;
+                column.type_kind = binder::BoundTypeKind::INT64;
+                lp.columns.push_back(std::move(column));
+                lp.valid = true;
+                return lp;
             }
             // Binary operators
             else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {

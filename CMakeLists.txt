@@ -286,6 +286,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/analysis/requirement_collector.cpp
     src/query/optimizer/rules/logical/filter_pushdown.cpp
     src/query/optimizer/rules/logical/edge_uniqueness_pushdown.cpp
+    src/query/optimizer/rules/logical/path_count_fusion.cpp
     src/query/optimizer/rules/physical/impl_rules.cpp
 )
 

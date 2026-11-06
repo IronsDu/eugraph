@@ -137,6 +137,13 @@ std::vector<std::unique_ptr<GroupExpr>> ImplAggregateRule::substitute(GroupExpr&
     return makePhysicalExpr(expr, memo, PhysicalOpTag::Aggregate);
 }
 
+PatternNode ImplPathCountRule::pattern() const {
+    return {OptNodeType::PathCount, {{}}};
+}
+std::vector<std::unique_ptr<GroupExpr>> ImplPathCountRule::substitute(GroupExpr& expr, Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::PathCount);
+}
+
 PatternNode ImplPathBuildRule::pattern() const {
     return {OptNodeType::PathBuild, {{}}};
 }

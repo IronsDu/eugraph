@@ -1,7 +1,8 @@
 # Fixed-path count fusion (`PathCountPhysicalOp`)
 
-> Status: implemented in the physical planner. Scope: fixed-length OUT
-> expansions whose final vertex is only consumed by a non-DISTINCT `count`.
+> Status: implemented as a logical rewrite plus a CBO implementation
+> alternative. Scope: fixed-length OUT expansions whose final vertex is only
+> consumed by a non-DISTINCT `count`.
 
 ## 1. Motivation
 
@@ -52,9 +53,10 @@ duration of the operator.
 
 No final `m`/edge columns are materialised.
 
-## 3. Planner recognition
+## 3. Optimizer recognition
 
-`PhysicalPlanner` fuses only when all of these hold:
+`PathCountFusionRule` rewrites the logical aggregate into `BoundPathCountOp`
+when all of these hold:
 
 - aggregate has no group keys and exactly one non-DISTINCT, non-internal
   `count`;
@@ -69,8 +71,15 @@ No final `m`/edge columns are materialised.
 - the final edge-label set, if any, is supported by filtering the counted
   adjacency.
 
-Everything else keeps the regular Expand/Filter/Aggregate plan. The fusion is
-a physical optimization; it does not change logical semantics.
+The rewrite is a Memo candidate: `ImplPathCountRule` produces the
+`PhysicalOpTag::PathCount` alternative, so CBO compares it with the regular
+Expand/Filter/Aggregate alternative. `PathCountPhysicalOp` only implements the
+chosen logical operator; there is no Aggregate-branch special case in the
+physical planner.
+
+`count(*)`, `count(1)` and other non-NULL constant arguments are accepted in
+addition to `count(m)`. `count(NULL)` and `count(DISTINCT ...)` are not.
+Everything else keeps the regular Expand/Filter/Aggregate plan.
 
 ## 4. Correctness
 
@@ -82,15 +91,16 @@ a physical optimization; it does not change logical semantics.
 - Multi-edges: each physical edge contributes one to outdegree.
 - Edge-label restriction: only matching outgoing entries are counted.
 - `count(m)` vs `count(*)`: for a mandatory MATCH, `m` is a non-null vertex
-  binding, so they are equivalent. The fusion currently keys on `count(m)`; no
-  rewrite is required. OPTIONAL MATCH is not fused because `m` can be NULL.
+  binding, so they are equivalent. Both forms (and `count(1)`) are recognized;
+  no textual rewrite is required. OPTIONAL MATCH is not fused because `m` can
+  be NULL.
 - `count(m.firstName)` and any DISTINCT/grouped aggregate are not fused.
 
 ## 5. Verification
 
-- `PathCountMatchesUnfusedAggregate`: compares fused `count(m)` with
-  `count(m) AS c1, count(m) AS c2` (the second form cannot fuse) for 2-hop and
-  3-hop graphs with self-loops.
+- `PathCountMatchesUnfusedAggregate`: compares fused `count(m)`, `count(*)`
+  and `count(1)` with their two-aggregate forms (which cannot fuse) for 2-hop
+  and 3-hop graphs with self-loops.
 - `RelationshipUniquenessRejectsReusedEdgeBeforeThirdHop`.
 - `ExplainFinalHopCountFusion`: plan contains `PathCount`.
 - sf0.1:
@@ -98,7 +108,7 @@ a physical optimization; it does not change logical semantics.
 ```text
 MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)
 old:  ~25-32s, 85,350,462 rows through Aggregate
-new:  ~1.1-1.6s, count(m) = 85,350,462
+new:  ~0.9-1.6s, count(m)/count(*)/count(1) = 85,350,462
 ```
 
 The property variant remains on the normal path:
