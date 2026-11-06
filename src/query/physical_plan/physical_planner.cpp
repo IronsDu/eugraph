@@ -2294,6 +2294,7 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                 expand->dst_variable = e->src_variable;
                 expand->dst_column_index = 0;
                 expand->edge_label_ids = e->edge_label_ids;
+                expand->all_edge_labels = e->all_edge_labels;
                 expand->direction = e->direction;
                 if (expand->direction == cypher::RelationshipDirection::LEFT_TO_RIGHT)
                     expand->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
@@ -2324,6 +2325,7 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                 expand->dst_variable = e->dst_variable;
                 expand->dst_column_index = 0;
                 expand->edge_label_ids = e->edge_label_ids;
+                expand->all_edge_labels = e->all_edge_labels;
                 expand->direction = e->direction;
                 expand->dst_label_ids = e->dst_label_ids;
                 expand->dst_label_prop_ids = e->dst_label_prop_ids;
@@ -3129,12 +3131,25 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
 
-                    std::optional<std::vector<EdgeLabelId>> label_filters = v.edge_label_ids;
+                    std::optional<std::vector<EdgeLabelId>> label_filters;
+                    if (!v.all_edge_labels)
+                        label_filters = v.edge_label_ids;
 
                     int edge_existing = v.edge_variable.empty() ? -1 : findColumn(child_schema, v.edge_variable);
                     int dst_existing = v.dst_variable.empty() ? -1 : findColumn(child_schema, v.dst_variable);
                     bool edge_bound = edge_existing >= 0;
                     bool dst_bound = dst_existing >= 0;
+                    if (v.all_edge_labels && dst_bound && !label_filters.has_value()) {
+                        // Undirected same-endpoint patterns need the exact
+                        // {src}{dir}{label}{neighbor} seek to preserve self-loop
+                        // semantics. Expand's generic unlabelled scan would
+                        // visit OUT and IN separately without that dedup.
+                        std::vector<EdgeLabelId> labels;
+                        labels.reserve(ctx.edge_label_defs.size());
+                        for (const auto& [lid, def] : ctx.edge_label_defs)
+                            labels.push_back(lid);
+                        label_filters = std::move(labels);
+                    }
 
                     Schema output_schema = child_schema;
                     if (!v.edge_variable.empty() && !edge_bound) {
@@ -3164,8 +3179,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         }
                     }
 
-                    const bool all_edge_labels =
-                        !v.edge_label_ids.empty() && v.edge_label_ids.size() == ctx.edge_label_defs.size();
+                    const bool all_edge_labels = v.all_edge_labels;
                     // Chained Expands revisit the same intermediate vertices
                     // across chunks; cache their filtered adjacency. First-hop
                     // expands have unique sources and would only pay cache
@@ -3263,10 +3277,19 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
 
-                    std::optional<std::vector<EdgeLabelId>> label_filters = v.edge_label_ids;
+                    std::optional<std::vector<EdgeLabelId>> label_filters;
+                    if (!v.all_edge_labels)
+                        label_filters = v.edge_label_ids;
 
                     int dst_existing = v.dst_variable.empty() ? -1 : findColumn(child_schema, v.dst_variable);
                     bool dst_bound = dst_existing >= 0;
+                    if (v.all_edge_labels && dst_bound && !label_filters.has_value()) {
+                        std::vector<EdgeLabelId> labels;
+                        labels.reserve(ctx.edge_label_defs.size());
+                        for (const auto& [lid, def] : ctx.edge_label_defs)
+                            labels.push_back(lid);
+                        label_filters = std::move(labels);
+                    }
 
                     int edge_list_existing = -1;
                     if (v.bound_edge_list) {

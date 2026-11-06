@@ -24,6 +24,9 @@ struct BoundVarLenExpandOp {
     /// Planner-assigned slot captured in allocateSlotsInOp (§6.2).
     SlotId planner_dst_slot_id = INVALID_SLOT_ID;
     std::vector<EdgeLabelId> edge_label_ids;
+    /// No relationship type was written in the statement; edge_label_ids is
+    /// empty and the VLE scan must use an unprefixed adjacency prefix.
+    bool all_edge_labels = false;
     cypher::RelationshipDirection direction;
     int64_t min_hops;
     int64_t max_hops;
