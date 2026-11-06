@@ -118,6 +118,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [Value 拷贝审计](query/engine/value-copy-audit.md) | 查询热路径中不必要的 Value 物化、统一 cell 访问入口、仍必须拥有的拷贝清单与后续候选 |
 | [Aggregate typed execution 设计](query/engine/aggregate-typed-execution-design.md) | 聚合参数 chunk 级 typed 列视图、函数指针回调、null/count(*)/DISTINCT 不变量与 DuckDB 对照 |
 | [Optimizer 架构与 Columbia 迁移](query/engine/optimizer-architecture.md) | binder/analysis/passes/rules/extraction/framework 分层、规则扩展点、Columbia 已迁移项与剩余缺口 |
+| [固定路径 count 融合](query/engine/path-count-fusion.md) | 末跳 Expand 不物化行，用 outdegree + 关系唯一性修正直接计数；范围、证明与验证 |
 | [Evaluator 临时对象复用设计](query/engine/evaluator-scratch-reuse-design.md) | 表达式求值的 scratch/temp column 复用、typed copy、list comprehension/quantifier/reduce 单行 chunk 复用与分配热点 |
 | [查询值拷贝性能剖析](benchmark/query-value-copy-profiling.md) | 定位 complex-10 的真实瓶颈（值拷贝而非 VLE/推导本身）、消除深拷贝的四处改动与交替顺序 A/B 判据 |
 | [查询性能排查与优化笔记](benchmark/query-performance-optimization-notes.md) | complex-3 复盘：GDB 协程采样方法、逐行重复物化/空查询的检查清单、neo4j 计划对照、存储布局级后续优化思路 |

@@ -255,6 +255,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/shortest_path_physical_op.cpp
     src/query/physical_plan/operator/varlen_expand_physical_op.cpp
     src/query/physical_plan/operator/path_build_physical_op.cpp
+    src/query/physical_plan/operator/path_count_physical_op.cpp
     src/query/physical_plan/operator/project_physical_op.cpp
     src/query/physical_plan/operator/delete_physical_op.cpp
     src/query/physical_plan/operator/remove_physical_op.cpp

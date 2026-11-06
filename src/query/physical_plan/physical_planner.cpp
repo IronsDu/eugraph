@@ -19,6 +19,7 @@
 #include "query/physical_plan/operator/list_index_join_physical_op.hpp"
 #include "query/physical_plan/operator/materialize_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
+#include "query/physical_plan/operator/path_count_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
 #include "query/physical_plan/operator/pattern_comprehension_apply_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
@@ -3477,6 +3478,104 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // and produce duplicate output columns.
                     return planProjectOperator(v, extractChildResult(std::move(child_result)), ctx);
                 } else if constexpr (std::is_same_v<Elem, binder::BoundAggregateOp>) {
+                    // Final-hop count fusion:
+                    //   Aggregate[count(m)] -> Filter(__edge_unique) -> Expand(final)
+                    // can count the final edge choices from each prefix row:
+                    //   outdegree(current) - previous edges outgoing from current
+                    // instead of materialising every final Expand row.
+                    if (v.group_keys.empty() && v.aggregates.size() == 1 && v.output_names.size() == 1) {
+                        const auto& agg = v.aggregates[0];
+                        auto* filter = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&v.child);
+                        if (agg.func_def && agg.func_def->name == "count" && !agg.distinct && !agg.is_internal &&
+                            agg.arguments.size() == 1 && filter && *filter &&
+                            (*filter)->uniqueness_scope != binder::BoundFilterOp::UniquenessScope::CorrelatedSubplan) {
+                            auto* unique_call =
+                                std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&(*filter)->predicate);
+                            auto* final_expand = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&(*filter)->child);
+                            auto arg_name = [](const binder::BoundExpression& e) -> std::string {
+                                if (auto* c = std::get_if<binder::BoundColumnRef>(&e))
+                                    return c->name;
+                                if (auto* v = std::get_if<binder::BoundVariableRef>(&e))
+                                    return v->name;
+                                return {};
+                            };
+                            if (unique_call && *unique_call && (*unique_call)->func_def &&
+                                (*unique_call)->func_def->name == "__edge_unique" && final_expand && *final_expand &&
+                                (*final_expand)->direction == cypher::RelationshipDirection::LEFT_TO_RIGHT &&
+                                (*final_expand)->dst_label_ids.empty() && (*final_expand)->dst_label_prop_ids.empty() &&
+                                (*final_expand)->edge_prop_ids.empty() &&
+                                arg_name(agg.arguments[0]) == (*final_expand)->dst_variable) {
+                                std::vector<std::string> edge_names;
+                                for (const auto& arg : (*unique_call)->args) {
+                                    edge_names.push_back(arg_name(arg));
+                                }
+                                const size_t hops = edge_names.size();
+                                if (hops >= 2 && edge_names.back() == (*final_expand)->edge_variable) {
+                                    bool prefix_ok = true;
+                                    if (hops > 2) {
+                                        auto* prefix_filter = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(
+                                            &(*final_expand)->child);
+                                        if (!prefix_filter || !*prefix_filter) {
+                                            prefix_ok = false;
+                                        } else {
+                                            auto* prefix_call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(
+                                                &(*prefix_filter)->predicate);
+                                            if (!prefix_call || !*prefix_call || !(*prefix_call)->func_def ||
+                                                (*prefix_call)->func_def->name != "__edge_unique" ||
+                                                (*prefix_call)->args.size() != hops - 1) {
+                                                prefix_ok = false;
+                                            } else {
+                                                for (size_t i = 0; i < hops - 1; ++i) {
+                                                    if (arg_name((*prefix_call)->args[i]) != edge_names[i]) {
+                                                        prefix_ok = false;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (prefix_ok) {
+                                        auto prefix_result = planBoundOperator((*final_expand)->child, store, meta, ctx,
+                                                                               input_schema, input_types);
+                                        if (std::holds_alternative<PlanOperatorResult>(prefix_result)) {
+                                            auto pr = extractChildResult(std::move(prefix_result));
+                                            ensureSlotLayout(pr, ctx);
+                                            const int src_col =
+                                                findColumn(pr.output_schema, (*final_expand)->src_variable);
+                                            std::vector<uint32_t> prev_cols;
+                                            bool cols_ok = src_col >= 0;
+                                            for (size_t i = 0; i + 1 < hops && cols_ok; ++i) {
+                                                int c = findColumn(pr.output_schema, edge_names[i]);
+                                                if (c < 0)
+                                                    cols_ok = false;
+                                                else
+                                                    prev_cols.push_back(static_cast<uint32_t>(c));
+                                            }
+                                            // If the destination is already bound in the prefix,
+                                            // this is a self-join, not a fresh final hop.
+                                            if (cols_ok &&
+                                                findColumn(pr.output_schema, (*final_expand)->dst_variable) < 0 &&
+                                                ((*final_expand)->edge_variable.empty() ||
+                                                 findColumn(pr.output_schema, (*final_expand)->edge_variable) < 0)) {
+                                                Schema output_schema(v.output_names.begin(), v.output_names.end());
+                                                std::vector<binder::BoundType> output_types{agg.func_def->return_type};
+                                                TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
+                                                auto op = std::make_unique<PathCountPhysicalOp>(
+                                                    std::move(pr.op), store, static_cast<uint32_t>(src_col),
+                                                    std::move(prev_cols), (*final_expand)->edge_label_ids);
+                                                op->setEvalContext(ctx.eval_ctx);
+                                                op->setOutputSchema(output_schema, output_types);
+                                                op->setSlotLayout(layout);
+                                                return PlanOperatorResult{std::move(op), std::move(output_schema),
+                                                                          std::move(output_types), std::move(layout)};
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     bool saved_suppress = ctx.suppress_filter_defer;
                     bool forwards = false;
                     for (const auto& key : v.group_keys)

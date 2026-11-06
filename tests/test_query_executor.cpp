@@ -1782,7 +1782,11 @@ TEST_F(QueryExecutorTest, ChainedExpandUsesNeighborCache) {
                     .error.empty());
 
     ExpandPhysicalOp::resetCacheHitCount();
-    auto result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m)");
+    // Two aggregates keep this on the regular Expand path; a single
+    // count(m) is handled by the PathCount fusion operator and does not build
+    // the final Expand/cache.
+    auto result =
+        execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m) AS c1, count(m) AS c2");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 200);
@@ -1807,7 +1811,8 @@ TEST_F(QueryExecutorTest, SupernodeBypassesNeighborCacheAndStaysCorrect) {
     ASSERT_EQ(setenv("EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE", "64", 1), 0);
 
     ExpandPhysicalOp::resetCacheHitCount();
-    auto result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m)");
+    auto result =
+        execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(h:Hub)-[:KNOWS]->(m) RETURN count(m) AS c1, count(m) AS c2");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 200);
@@ -1816,7 +1821,8 @@ TEST_F(QueryExecutorTest, SupernodeBypassesNeighborCacheAndStaysCorrect) {
 }
 
 TEST_F(QueryExecutorTest, ExplainPerHopEdgeUniqueness) {
-    const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
+    const std::string plan =
+        getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m) AS c1, count(m) AS c2");
     ASSERT_FALSE(plan.empty());
     size_t filters = 0;
     for (size_t pos = plan.find("Filter"); pos != std::string::npos; pos = plan.find("Filter", pos + 1))
@@ -1824,6 +1830,35 @@ TEST_F(QueryExecutorTest, ExplainPerHopEdgeUniqueness) {
     // Three hops must insert e1 != e0 after hop 2 and e2 != e0/e1 after hop 3;
     // the old single post-expansion filter produced only one Filter.
     EXPECT_EQ(filters, 2u) << plan;
+}
+
+TEST_F(QueryExecutorTest, PathCountMatchesUnfusedAggregate) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'}), (b:Person {name: 'b'}), "
+                                     "(a)-[:KNOWS]->(a), (a)-[:KNOWS]->(b), "
+                                     "(b)-[:KNOWS]->(a), (b)-[:KNOWS]->(b)")
+                    .error.empty());
+
+    auto fused = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
+    auto normal = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m) AS c1, count(m) AS c2");
+    ASSERT_TRUE(fused.error.empty()) << fused.error;
+    ASSERT_TRUE(normal.error.empty()) << normal.error;
+    ASSERT_EQ(fused.rows.size(), 1u);
+    ASSERT_EQ(normal.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(fused.rows[0][0]), std::get<int64_t>(normal.rows[0][0]));
+
+    auto fused2 = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->(m) RETURN count(m)");
+    auto normal2 = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->(m) RETURN count(m) AS c1, count(m) AS c2");
+    ASSERT_TRUE(fused2.error.empty()) << fused2.error;
+    ASSERT_TRUE(normal2.error.empty()) << normal2.error;
+    EXPECT_EQ(std::get<int64_t>(fused2.rows[0][0]), std::get<int64_t>(normal2.rows[0][0]));
+}
+
+TEST_F(QueryExecutorTest, ExplainFinalHopCountFusion) {
+    const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("PathCount"), std::string::npos) << plan;
+    // The final Expand is fused; only the prefix uniqueness Filter remains.
+    EXPECT_NE(plan.find("Filter"), std::string::npos) << plan;
 }
 
 TEST_F(QueryExecutorTest, RelationshipUniquenessRejectsReusedEdgeBeforeThirdHop) {
