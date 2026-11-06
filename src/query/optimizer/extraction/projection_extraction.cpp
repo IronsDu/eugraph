@@ -1,4 +1,5 @@
 #include "query/optimizer/extraction/projection_extraction.hpp"
+#include "common/config/env_vars.hpp"
 
 #include <cstdlib>
 #include <spdlog/spdlog.h>
@@ -1668,7 +1669,7 @@ PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& roo
         }
         dedupeVarReqs(r);
     }
-    static const bool dpl_debug = std::getenv("EUGRAPH_DPL_DEBUG") != nullptr;
+    static const bool dpl_debug = std::getenv(config::kEnvDplDebug) != nullptr;
     if (dpl_debug)
         dumpPlanRequirements(reqs, resolver.names());
     return reqs;

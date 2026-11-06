@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/config/env_vars.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "storage/data/graph_session.hpp"
@@ -788,7 +789,7 @@ private:
     };
 
     static bool ioTraceEnabled() {
-        static const bool enabled = std::getenv("EUGRAPH_IO_TRACE") != nullptr;
+        static const bool enabled = std::getenv(config::kEnvIoTrace) != nullptr;
         return enabled;
     }
 

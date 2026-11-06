@@ -1,4 +1,5 @@
 #include "query/optimizer/logical_optimizer.hpp"
+#include "common/config/env_vars.hpp"
 
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
@@ -76,7 +77,7 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
     // CBO Phase 4: extract chosen physical plan. Null if any group lacks a winner.
     plan.chosen = memo_.extractChosen(root_gid, PhysProp{});
-    if (const char* force_rbo = std::getenv("EUGRAPH_OPTIMIZER_FORCE_RBO"); force_rbo != nullptr && *force_rbo == '1') {
+    if (const char* force_rbo = std::getenv(config::kEnvOptimizerForceRbo); force_rbo != nullptr && *force_rbo == '1') {
         plan.chosen.reset();
     }
     if (!plan.chosen)

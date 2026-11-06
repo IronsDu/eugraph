@@ -218,6 +218,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 |------|------|
 | [调试笔记](debugging/debugging-notes.md) | 典型 bug 排查过程与经验总结 |
 | [指标与诊断日志](debugging/metrics-and-tracing.md) | `EUGRAPH_OP_TRACE` / `EUGRAPH_IO_TRACE` / plan/pred/DPL debug 的开关、字段、归因语义与限制 |
+| [环境变量参考](reference/environment-variables.md) | 运行期诊断/调优变量、默认值、读取点、开销与测试 harness 变量的统一总表 |
 
 ## 测试
 

@@ -112,6 +112,8 @@ default: 1,048,576 entries
 
 When the bound is reached, new source vertices are counted without inserting
 into the cache; existing entries remain usable and results are unchanged.
+The variable is listed in the central
+[environment-variable reference](../../reference/environment-variables.md).
 The cache is per operator instance and is released when the operator finishes.
 Multiple PathCount operators or concurrent queries therefore multiply the
 bound, so a server-wide memory budget should be selected with that in mind.

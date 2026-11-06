@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/config/env_vars.hpp"
 #include "query/profile/query_profile.hpp"
 #include "storage/storage_op_metrics.hpp"
 
@@ -65,7 +66,7 @@ inline thread_local OpTraceRecord* tls_current_op_trace = nullptr;
 class QueryContext {
 public:
     explicit QueryContext(QueryCancel cancel = nullptr, bool profile = false)
-        : cancel_(std::move(cancel)), op_trace_(enabledFromEnv("EUGRAPH_OP_TRACE")), profile_(profile),
+        : cancel_(std::move(cancel)), op_trace_(enabledFromEnv(config::kEnvOpTrace)), profile_(profile),
           op_trace_log_(op_trace_) {
         if (profile_)
             statement_counters_ = std::make_shared<StorageOpCounters>();

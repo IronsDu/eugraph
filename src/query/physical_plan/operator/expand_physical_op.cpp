@@ -1,4 +1,5 @@
 #include "query/physical_plan/operator/expand_physical_op.hpp"
+#include "common/config/env_vars.hpp"
 
 #include "common/types/graph_types.hpp"
 
@@ -19,7 +20,7 @@ uint64_t ExpandPhysicalOp::cacheHitCount() noexcept {
 }
 
 size_t ExpandPhysicalOp::maxCachedEdgesPerSource() {
-    const char* env = std::getenv("EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE");
+    const char* env = std::getenv(config::kEnvCacheMaxEdgesPerSource);
     if (env == nullptr || *env == '\0')
         return kMaxCachedEdgesPerSource;
     char* end = nullptr;
@@ -53,7 +54,7 @@ constexpr size_t kDefaultExpandInputRows = 128;
 /// main defence against a single wildly expanding hop materialising tens of
 /// millions of rows inside one DataChunk; it is tunable for experiments.
 size_t expandInputRows() {
-    const char* env = std::getenv("EUGRAPH_EXPAND_INPUT_ROWS");
+    const char* env = std::getenv(config::kEnvExpandInputRows);
     if (env == nullptr || *env == '\0')
         return kDefaultExpandInputRows;
     char* end = nullptr;

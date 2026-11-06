@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/concurrency/graph_usage_gate.hpp"
+#include "common/config/env_vars.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
@@ -96,7 +97,7 @@ struct StreamContext {
 
     ~StreamContext() {
         if (query_store) {
-            const char* trace = std::getenv("EUGRAPH_IO_TRACE");
+            const char* trace = std::getenv(config::kEnvIoTrace);
             if (trace != nullptr && *trace != '\0') {
                 const uint64_t dispatches = query_store->ioDispatches();
                 const uint64_t searches = query_store->wtSearchCount();

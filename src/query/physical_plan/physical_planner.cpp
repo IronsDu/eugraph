@@ -1,4 +1,5 @@
 #include "query/physical_plan/physical_planner.hpp"
+#include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
@@ -2741,7 +2742,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
         return std::get<std::string>(result);
     auto phys_op = finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
     compileOperatorTree(phys_op.get(), ctx);
-    if (std::getenv("EUGRAPH_PRED_DEBUG")) {
+    if (std::getenv(config::kEnvPredDebug)) {
         std::function<void(const PhysicalOperator*)> dump_pred = [&](const PhysicalOperator* o) {
             if (!o)
                 return;
@@ -2752,7 +2753,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
         };
         dump_pred(phys_op.get());
     }
-    static const bool plan_debug = std::getenv("EUGRAPH_PLAN_DEBUG") != nullptr;
+    static const bool plan_debug = std::getenv(config::kEnvPlanDebug) != nullptr;
     if (plan_debug)
         dumpPhysicalPlan(phys_op.get(), 0);
     return phys_op;

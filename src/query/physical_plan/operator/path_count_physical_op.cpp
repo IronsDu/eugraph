@@ -1,4 +1,5 @@
 #include "query/physical_plan/operator/path_count_physical_op.hpp"
+#include "common/config/env_vars.hpp"
 
 #include "query/dataset/cell_access.hpp"
 #include "query/dataset/data_chunk.hpp"
@@ -17,7 +18,7 @@ constexpr size_t kDefaultPathCountCacheEntries = 1U << 20U;
 /// Per-operator bound. The cache is an optimisation only; when it is full
 /// degrees are recomputed instead of growing without limit on large graphs.
 size_t pathCountCacheLimit() {
-    const char* env = std::getenv("EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES");
+    const char* env = std::getenv(config::kEnvPathCountCacheMaxEntries);
     if (env == nullptr || *env == '\0')
         return kDefaultPathCountCacheEntries;
     char* end = nullptr;
