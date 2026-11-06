@@ -1926,6 +1926,15 @@ TEST_F(QueryExecutorTest, ExplainUntypedExpandAndCountWithoutProperties) {
     EXPECT_EQ(typed.find("labels=<any>"), std::string::npos) << typed;
     EXPECT_NE(typed.find("labels=["), std::string::npos) << typed;
 
+    // Explicitly listing every catalog relationship type is still a typed
+    // pattern. It must not be collapsed to <any> merely because its vector
+    // happens to cover the whole catalog.
+    const std::string explicit_all =
+        getExplainPlanText(*executor_, "MATCH (n:Person)-[:KNOWS|LIVES_IN]->(m) RETURN count(m)");
+    ASSERT_FALSE(explicit_all.empty());
+    EXPECT_EQ(explicit_all.find("labels=<any>"), std::string::npos) << explicit_all;
+    EXPECT_NE(explicit_all.find("labels=["), std::string::npos) << explicit_all;
+
     // count(m.name) does need one property load; this is the contrast that
     // proves count(m) is not silently materializing the vertex.
     const std::string property = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->(m) RETURN count(m.name)");

@@ -31,6 +31,11 @@ struct BoundExpandOp {
     SlotId dst_slot_id = INVALID_SLOT_ID;
     SlotId planner_dst_slot_id = INVALID_SLOT_ID;
     std::vector<EdgeLabelId> edge_label_ids;
+    /// No relationship type was written in the statement (`-[]->`). This is
+    /// semantic, not the same thing as an explicit label set that happens to
+    /// contain every catalog label. When true, edge_label_ids is empty and the
+    /// physical scan uses an unprefixed adjacency prefix.
+    bool all_edge_labels = false;
     cypher::RelationshipDirection direction;
     std::vector<uint16_t> edge_prop_ids;
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids;

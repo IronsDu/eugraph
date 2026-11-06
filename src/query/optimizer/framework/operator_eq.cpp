@@ -410,6 +410,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
                     return false;
+                if (av->all_edge_labels != bv->all_edge_labels)
+                    return false;
                 if (av->direction != bv->direction)
                     return false;
                 if (av->edge_prop_ids != bv->edge_prop_ids)
@@ -431,6 +433,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->dst_slot_id != bv->dst_slot_id)
                     return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
+                    return false;
+                if (av->all_edge_labels != bv->all_edge_labels)
                     return false;
                 if (av->direction != bv->direction)
                     return false;

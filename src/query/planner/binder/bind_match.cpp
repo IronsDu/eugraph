@@ -477,7 +477,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         vle->dst_column_index = end_info->column_index;
         vle->dst_slot_id = end_info->slot_id;
         vle->direction = rel.direction;
-        vle->edge_label_ids = catalog_.resolveEdgeLabelIds(normalizeRelationshipTypes(rel.rel_types));
+        vle->all_edge_labels = rel.rel_types.empty();
+        if (!vle->all_edge_labels)
+            vle->edge_label_ids = catalog_.resolveEdgeLabelIds(normalizeRelationshipTypes(rel.rel_types));
         vle->min_hops = 1;
         vle->max_hops = -1;
         if (rel.range.has_value()) {
@@ -792,6 +794,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     varlen->dst_slot_id = dinfo->slot_id;
                 varlen->dst_label_ids = dst_labels;
                 varlen->dst_label_missing = !node_pat.labels.empty() && dst_labels.empty();
+                varlen->all_edge_labels = rel_pat.rel_types.empty();
+                if (varlen->all_edge_labels)
+                    edge_label_ids.clear();
                 varlen->edge_label_ids = std::move(edge_label_ids);
                 varlen->direction = rel_pat.direction;
                 varlen->min_hops = min_hops;
@@ -927,6 +932,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (auto* dinfo = ctx_.lookup(dst_var))
                 expand->dst_slot_id = dinfo->slot_id;
             expand->dst_label_ids = dst_labels;
+            expand->all_edge_labels = rel_pat.rel_types.empty();
+            if (expand->all_edge_labels)
+                edge_label_ids.clear();
             expand->edge_label_ids = edge_label_ids;
             expand->direction = rel_pat.direction;
             expand->child = std::move(*current);

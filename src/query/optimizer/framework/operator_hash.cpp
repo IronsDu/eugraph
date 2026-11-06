@@ -409,6 +409,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, val->dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
+                seed = combine(seed, val->all_edge_labels ? 1u : 0u);
                 seed = combine(seed, static_cast<uint64_t>(val->direction));
                 for (auto p : val->edge_prop_ids)
                     seed = combine(seed, p);
@@ -429,6 +430,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, val->dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
+                seed = combine(seed, val->all_edge_labels ? 1u : 0u);
                 seed = combine(seed, static_cast<uint64_t>(val->direction));
                 seed = combine(seed, static_cast<uint64_t>(val->min_hops));
                 seed = combine(seed, static_cast<uint64_t>(val->max_hops));
