@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/optimizer/opt_rule.hpp"
+#include "query/optimizer/framework/opt_rule.hpp"
 
 namespace eugraph {
 namespace optimizer {

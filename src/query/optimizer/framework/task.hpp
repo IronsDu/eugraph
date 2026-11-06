@@ -1,7 +1,7 @@
 #pragma once
 
-#include "query/optimizer/memo.hpp"
-#include "query/optimizer/opt_rule.hpp"
+#include "query/optimizer/framework/memo.hpp"
+#include "query/optimizer/framework/opt_rule.hpp"
 
 #include <deque>
 #include <memory>

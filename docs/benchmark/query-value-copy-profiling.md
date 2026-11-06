@@ -1003,7 +1003,7 @@ ProjectionExtract(specs=[f<pass>, __pe_…51<ctor-vertex>, __anon_edge_0<pass>,
   说明要求收集阶段把 `post` 判成了「需要整个对象」；
 * 若该变量**没有任何属性被读取**（本例正是如此），只需 `VertexRef` 或空属性表的
   `VertexValue`，不必加载属性表；
-* 落点：`src/query/optimizer/requirement_collector.cpp`（`need_entire` 的设置）
+* 落点：`src/query/optimizer/analysis/requirement_collector.cpp`（`need_entire` 的设置）
   与 `ProjectionExtract` 的 `ConstructVertex` 分支 ——
   让 `ConstructVertex` 在「无属性需求」时**跳过属性加载**。
 
@@ -1063,7 +1063,7 @@ Decide（column_rewrite）认为 post 需要「整对象」
 
 ## 根因确认：`need_whole_vertex=1` 但属性需求为 0
 
-在 `column_rewrite.cpp` 的决定点插桩（`~1727`，`Decide` 生成 PEPlan 处）：
+在 `projection_extraction.cpp` 的决定点插桩（`~1727`，`Decide` 生成 PEPlan 处）：
 
 ```
 [PE] slot=1 need_whole_vertex=1 need_whole_edge=0 nprops=0
@@ -1083,7 +1083,7 @@ Decide（column_rewrite）认为 post 需要「整对象」
 | 环节 | 位置 | 事实 |
 |---|---|---|
 | 1 | `requirement_collector.cpp` | `need_whole_vertex` 被置位（`need_entire` 未被设置，**已排除**）|
-| 2 | `column_rewrite.cpp:1727` | `need_whole_vertex=1` 且 `nprops=0` → 仍分配 `object_slot_id` |
+| 2 | `projection_extraction.cpp:1727` | `need_whole_vertex=1` 且 `nprops=0` → 仍分配 `object_slot_id` |
 | 3 | `physical_planner.cpp:219` | `object_slot_id != source_slot_id` → 发出 `ConstructVertex` |
 | 4 | `projection_extract_physical_op.cpp` | 每个帖子构造完整 `VertexValue` + 拷贝 + 析构 |
 | 5 | `perf` 采样 | **80% 采样在分配/释放**；判别测量显示 **+3460 ms** |
@@ -1096,7 +1096,7 @@ Decide（column_rewrite）认为 post 需要「整对象」
 
 候选落点两处（择一或并用）：
 
-1. `column_rewrite.cpp:1727`：要求为「整点」但 `vertex_props` 为空时，
+1. `projection_extraction.cpp:1727`：要求为「整点」但 `vertex_props` 为空时，
    让 `object_slot_id = source_slot_id`（复用拓扑列），从而 planner 跳过 emit；
 2. `physical_planner.cpp:219`：emit 条件再叠加「该变量确有属性需求」。
 
@@ -1119,7 +1119,7 @@ Decide（column_rewrite）认为 post 需要「整对象」
 ```
 
 即：**变量在表达式里以 `BoundVariableRef`（顶点类型）出现时，就被标记为需要整点**，
-位置在 `column_rewrite.cpp` 的 `BoundVariableRef` 分支（~684）。
+位置在 `projection_extraction.cpp` 的 `BoundVariableRef` 分支（~684）。
 
 ### 关键：代码里已有同类问题的现成机制
 
@@ -1141,15 +1141,15 @@ current_skip = ptr->variable;
 
 | # | 位置 | 事实 |
 |---|---|---|
-| 1 | `column_rewrite.cpp:~684` | `BoundVariableRef` 顶点引用 → `need_whole_vertex = true`（**实测唯一来源**）|
-| 2 | `column_rewrite.cpp:~1727` | 该要求 + `nprops=0` → 分配 `object_slot_id` |
+| 1 | `projection_extraction.cpp:~684` | `BoundVariableRef` 顶点引用 → `need_whole_vertex = true`（**实测唯一来源**）|
+| 2 | `projection_extraction.cpp:~1727` | 该要求 + `nprops=0` → 分配 `object_slot_id` |
 | 3 | `physical_planner.cpp:~219` | slot 不同 → 发出 `ConstructVertex` |
 | 4 | `projection_extract_physical_op.cpp` | 每帖构造完整 `VertexValue` + 拷贝 + 析构 |
 | 5 | `perf` + 判别测量 | **80% 采样在分配/释放**、**+3460 ms** |
 
 ### 修法（已收窄到一处判断）
 
-在 `column_rewrite.cpp` 的 `BoundVariableRef` 分支，**扩展 `current_skip` 的判定**：
+在 `projection_extraction.cpp` 的 `BoundVariableRef` 分支，**扩展 `current_skip` 的判定**：
 当该变量是**推导的循环变量**（包括来自外层 `collect` 后被推导复用）时，
 **不标记 `need_whole_vertex`** —— 因为推导只把它用于邻接遍历，不读取属性。
 
@@ -1167,13 +1167,13 @@ current_skip = ptr->variable;
 | 候选判别 | 实测结论 |
 |---|---|
 | `vertex_props` 为空 | ❌ **不可用**：`RETURN n` 在同一设置点也是 `props=0` |
-| 专门区分「投影中的裸列引用」（`RETURN n`） | ❌ **不存在**：在 `column_rewrite.cpp:733` 的 `BoundProjectOp` 分支插桩，**零次触发**；`RETURN n` 与推导都由通用表达式遍历分支置位 |
+| 专门区分「投影中的裸列引用」（`RETURN n`） | ❌ **不存在**：在 `projection_extraction.cpp:733` 的 `BoundProjectOp` 分支插桩，**零次触发**；`RETURN n` 与推导都由通用表达式遍历分支置位 |
 | 变量是否出现在投影里 | ❌ 不解问题：`f`、`p`、`post` 都会出现在投影/推导里 |
 
 **并且在这一步修正了一处我自己的错误归因**：先前 `[WV]` 报 "BoundVariableRef" 是
 **插桩破坏 `else if` 括号后导致的误读**（在 `else if` 与赋值之间插入语句会让赋值变成无条件执行，
 if 链随之改变）。**同时插桩两个分支后**，真实来源明确为 **`BoundColumnRef` 分支**
-（`column_rewrite.cpp` ~690），且 `f` / `p` / `post` 三者 `props` 均为 0。
+（`projection_extraction.cpp` ~690），且 `f` / `p` / `post` 三者 `props` 均为 0。
 
 ### 因此修法需要新增信号，而非复用
 
@@ -1185,7 +1185,7 @@ if 链随之改变）。**同时插桩两个分支后**，真实来源明确为 
 
 **候选实现**（下一轮）：
 
-* 在 `column_rewrite` 的需求收集里加一个**上下文标记**（如 `in_final_projection`），
+* 在 `projection_extraction` 的需求收集里加一个**上下文标记**（如 `in_final_projection`），
   仅当遍历处于「最终投影项」时才把顶点列引用视为整对象消费；
 * 或在推导降级处显式声明「该变量只作邻接遍历」，
   由 binder 侧传递（与 `existence_only` / `count_only` 的标记方式一致）。
@@ -1196,7 +1196,7 @@ if 链随之改变）。**同时插桩两个分支后**，真实来源明确为 
 
 ## 修复已实现：推导不再引发整点物化（正确，但性能影响未测得）
 
-在 `column_rewrite.cpp` 的 `collectOpReqs` 里为 `BoundPatternComprehensionApplyOp`
+在 `projection_extraction.cpp` 的 `collectOpReqs` 里为 `BoundPatternComprehensionApplyOp`
 加了专门分支：**只收集左支（关联输入）的需求，不下探右支（推导子计划）**。
 
 理由已在代码注释中写明：推导**只为匹配而遍历模式，从不读取所触及顶点的属性**；

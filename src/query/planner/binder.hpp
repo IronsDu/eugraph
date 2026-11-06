@@ -321,9 +321,6 @@ public:
                               std::optional<uint16_t> source_prop_id = std::nullopt, bool strong_typed = false);
 
     // ── Projection pushdown ──
-    void addAllPropertiesForVariable(const std::string& var_name);
-    void applyProjectionPushdown(BoundLogicalOperator& op);
-    void collectLabelPropIds(const std::string& var_name, std::unordered_map<LabelId, std::vector<uint16_t>>& out);
 };
 
 } // namespace binder

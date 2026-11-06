@@ -1,4 +1,4 @@
-#include "query/optimizer/operator_eq.hpp"
+#include "query/optimizer/framework/operator_eq.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -301,6 +301,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
+                if (av->uniqueness_scope != bv->uniqueness_scope)
+                    return false;
                 return equalBoundExpression(av->predicate, bv->predicate);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (!av || !bv)

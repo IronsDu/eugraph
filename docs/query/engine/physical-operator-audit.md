@@ -475,7 +475,7 @@ ColumnSpec 7 种 Kind：
 ```
 
 **当前状态**：
-- 输出 schema 精确匹配下游需求：Passthrough → Vertex props → Edge props → Vertex labels → Edge type（顺序确保 `column_rewrite` 偏移计算正确）
+- 输出 schema 精确匹配下游需求：Passthrough → Vertex props → Edge props → Vertex labels → Edge type（顺序确保 `projection_extraction` 偏移计算正确）
 - Per-row 缓存：行内多个 spec 引用同一 source_col 时共享 vid/eid（`resolveVertexId` / `resolveEdgeId`）
 - 覆盖原则：`need_whole_vertex` / `need_whole_edge` 覆盖 `need_props`（同一变量不重复加载）
 - 列去重：管线中多次 dispatch 时，已存在的 `var.prop_name` 列不重复 emit

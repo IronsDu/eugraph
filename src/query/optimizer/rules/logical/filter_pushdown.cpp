@@ -1,4 +1,4 @@
-#include "query/optimizer/rules/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/filter_pushdown.hpp"
 
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_logical_plan.hpp"
@@ -192,6 +192,7 @@ std::vector<std::unique_ptr<GroupExpr>> FilterPushdownRule::substitute(GroupExpr
 
         auto new_filter_op = std::make_unique<binder::BoundFilterOp>();
         new_filter_op->predicate = cloneBoundExpression(predicate);
+        new_filter_op->uniqueness_scope = filter_op->uniqueness_scope;
 
         GroupExpr* filter_gexpr =
             memo.createGroupWithExpr(binder::BoundLogicalOperator(std::move(new_filter_op)), grandchild_groups);

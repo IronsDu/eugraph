@@ -215,7 +215,7 @@ ExpressionEvaluator::EvalResult ExpressionEvaluator::evaluateInternal(const bind
                 evalReduce(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
-                // column_rewrite must have replaced this placeholder with a
+                // projection_extraction must have replaced this placeholder with a
                 // BoundColumnRef to the precomputed list column. Reaching here
                 // means hoisting/rewrite was skipped (programmer error).
                 throw std::runtime_error(

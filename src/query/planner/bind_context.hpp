@@ -35,16 +35,6 @@ struct ColumnInfo {
     bool is_create_variable = false;
 };
 
-/// Property requirement pushed down to scan operators.
-struct PropertyRequirement {
-    /// The variable name whose properties are needed.
-    std::string variable_name;
-    /// If set, only properties for this label are needed (strong-type access).
-    std::optional<LabelId> label_id;
-    /// Required property IDs for the given label (or all labels if label_id is nullopt).
-    std::vector<uint16_t> prop_ids;
-};
-
 /// Binding context — shared state during AST traversal.
 struct BindContext {
     /// Monotonic identifier for a binding scope. Scope is a visibility /
@@ -56,6 +46,9 @@ struct BindContext {
     /// Set when any mutation clause (CREATE/MERGE/SET/REMOVE/DELETE) is
     /// bound anywhere in the statement, including subqueries.
     bool has_mutation = false;
+    /// True while binding the right side of a PatternComprehension/EXISTS
+    /// correlated subplan.
+    bool in_correlated_subplan = false;
 
     /// Map from variable name to column information.
     /// Scope-local: WITH clauses reset this to just their outputs, so names
@@ -84,8 +77,6 @@ struct BindContext {
     ScopeId current_scope = kRootScope;
     /// Next ScopeId to hand out. ScopeIds are never reused within a query.
     ScopeId next_scope_id = kRootScope + 1;
-    /// Accumulated property requirements for projection pushdown.
-    std::vector<PropertyRequirement> property_requirements;
     /// Ordered output columns from RETURN clause (populated by bindReturn).
     std::vector<ColumnInfo> return_columns;
     /// Next column index to assign.
@@ -163,22 +154,6 @@ struct BindContext {
         if (it == symbols.end())
             return nullptr;
         return &it->second;
-    }
-
-    /// Add a property requirement for projection pushdown.
-    void addPropertyRequirement(const std::string& var_name, std::optional<LabelId> label_id, uint16_t prop_id) {
-        for (auto& req : property_requirements) {
-            if (req.variable_name == var_name && req.label_id == label_id) {
-                // Deduplicate
-                for (uint16_t existing : req.prop_ids) {
-                    if (existing == prop_id)
-                        return;
-                }
-                req.prop_ids.push_back(prop_id);
-                return;
-            }
-        }
-        property_requirements.push_back({var_name, label_id, {prop_id}});
     }
 
     /// Save the current binding state for EXISTS sub-plan scoping.

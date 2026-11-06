@@ -2,6 +2,7 @@
 
 > 相关模块：Optimizer、Binder、PhysicalPlanner、QueryExecutor
 > 源码：`src/query/optimizer/`
+> 分层与 Columbia 迁移审计：见 [optimizer-architecture.md](../engine/optimizer-architecture.md)
 
 ---
 
@@ -59,8 +60,9 @@ Binder → LogicalOptimizer (Cascades) → PhysicalPlanner
 
 ```cpp
 // 2.5. Logical optimization
+// projection pushdown 是 optimizer 的 pre-Cascades pass，binder 只记录语义引用
 optimizer::LogicalOptimizer logical_optimizer;
-logical_optimizer.optimize(bound_stmt->plan);
+logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get());
 ```
 
 ---
@@ -357,17 +359,21 @@ Filter(LEAF)  — 匹配有一个子节点的 Filter
 
 ```
 src/query/optimizer/
-├── memo.hpp                 # Memo, Group, GroupExpr, GroupId, ExprId
-├── memo.cpp                 # copyIn, copyOut, findDuplicate, mergeGroups
-├── opt_rule.hpp             # OptNodeType, PatternNode, OptRule, RuleSet
-├── opt_rule.cpp             # nodeTypeFromVariantIndex, topMatch
-├── task.hpp                 # Task, TaskQueue, OGroupTask, OExprTask, ApplyRuleTask
-├── task.cpp                 # 各 Task::perform 实现
-├── logical_optimizer.hpp    # LogicalOptimizer
-├── logical_optimizer.cpp    # optimize(), initRules()
-└── rules/
-    ├── filter_pushdown.hpp  # FilterPushdownRule, isPenetrable
-    └── filter_pushdown.cpp
+├── framework/                # Cascades 搜索核心
+│   ├── memo.{hpp,cpp}        # Memo, Group, GroupExpr, Winner
+│   ├── task.{hpp,cpp}        # Task/Queue 与各阶段 Task
+│   ├── opt_rule.{hpp,cpp}    # OptRule, PatternNode, RuleSet
+│   ├── cbo.hpp cost_model.* log_prop.* physical_expr.*
+│   └── operator_eq.* operator_hash.* chosen_plan.hpp
+├── analysis/                 # 只读分析
+│   ├── requirement_collector.*  # VarRequirements (Enricher)
+│   └── materialization_req.hpp
+├── extraction/               # PE 决策 + slot/表达式 lowering
+│   └── projection_extraction.{hpp,cpp}
+├── rules/
+│   ├── logical/              # FilterPushdown, EdgeUniquenessPushdown
+│   └── physical/             # Impl*Rule
+└── logical_optimizer.{hpp,cpp}  # copyIn → tasks → CBO extract / RBO fallback
 ```
 
 测试：`tests/test_optimizer.cpp`
@@ -533,9 +539,9 @@ CBO 扩展需要增加 `E_GROUP` Task（探索子 Group 的所有等价表达式
 每期都会动的文件：
 
 - `src/query/optimizer/memo.{hpp,cpp}`
-- `src/query/optimizer/task.cpp`（Phase 2/4）
+- `src/query/optimizer/framework/task.cpp`（Phase 2/4）
 - `src/query/optimizer/logical_optimizer.cpp`（Phase 2/4）
-- `src/query/optimizer/cbo.hpp`（Phase 3）
+- `src/query/optimizer/framework/cbo.hpp`（Phase 3）
 - `src/query/physical_plan/physical_planner.cpp`（Phase 4）
 
 ### 复用现有代码

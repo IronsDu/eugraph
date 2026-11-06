@@ -1,4 +1,4 @@
-#include "query/optimizer/column_rewrite.hpp"
+#include "query/optimizer/extraction/projection_extraction.hpp"
 
 #include <cstdlib>
 #include <spdlog/spdlog.h>

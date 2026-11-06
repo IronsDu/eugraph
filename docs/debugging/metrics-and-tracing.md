@@ -8,7 +8,7 @@
 > - `src/query/physical_plan/query_context.hpp` / `physical_operator_base.cpp`（算子 trace）
 > - `src/query/executor/query_executor.hpp`（语句结束输出 op/io trace）
 > - `src/storage/data/async_graph_data_store.hpp`（IO dispatch / WT seek 计数）
-> - `src/query/physical_plan/physical_planner.cpp`、`src/query/optimizer/column_rewrite.cpp`
+> - `src/query/physical_plan/physical_planner.cpp`、`src/query/optimizer/extraction/projection_extraction.cpp`
 >   （plan / predicate / DPL debug）
 
 ## 1. 环境变量总表

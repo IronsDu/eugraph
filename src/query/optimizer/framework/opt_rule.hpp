@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/optimizer/memo.hpp"
+#include "query/optimizer/framework/memo.hpp"
 
 #include <memory>
 #include <string>

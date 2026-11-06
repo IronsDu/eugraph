@@ -289,63 +289,6 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 fc->return_type = BoundType::clone(func->return_type);
                 fc->distinct = ptr->distinct;
 
-                // properties(n) / keys(n) need all vertex/edge properties loaded
-                if ((func->name == "properties" || func->name == "keys") && fc->args.size() == 1) {
-                    const BoundType& arg_type = getBoundExprType(fc->args[0]);
-                    std::optional<std::string> var_name;
-                    if (std::holds_alternative<BoundColumnRef>(fc->args[0])) {
-                        var_name = std::get<BoundColumnRef>(fc->args[0]).name;
-                    } else if (std::holds_alternative<BoundVariableRef>(fc->args[0])) {
-                        var_name = std::get<BoundVariableRef>(fc->args[0]).name;
-                    }
-                    if (var_name) {
-                        if (arg_type.kind == BoundTypeKind::VERTEX) {
-                            for (const auto& [lid, ldef] : catalog_.allLabels()) {
-                                for (const auto& pd : ldef.properties) {
-                                    ctx_.addPropertyRequirement(*var_name, lid, pd.id);
-                                }
-                            }
-                        } else if (arg_type.kind == BoundTypeKind::EDGE) {
-                            for (const auto& [elid, eldef] : catalog_.allEdgeLabels()) {
-                                for (const auto& pd : eldef.properties) {
-                                    ctx_.addPropertyRequirement(*var_name, elid, pd.id);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // collect(vertex_var) / collect(edge_var): ensure all properties are
-                // loaded on the source so that subsequent list comprehension or other
-                // per-element property access sees them. Without this, the source
-                // vertex would only have explicitly-referenced properties loaded,
-                // leaving later x.prop accesses inside [x IN collect(v) | x.prop]
-                // returning null.
-                if (func->name == "collect" && fc->args.size() == 1 && fc->args.size() >= 1 && !ptr->distinct) {
-                    const BoundType& arg_type = getBoundExprType(fc->args[0]);
-                    std::optional<std::string> var_name;
-                    if (std::holds_alternative<BoundColumnRef>(fc->args[0])) {
-                        var_name = std::get<BoundColumnRef>(fc->args[0]).name;
-                    } else if (std::holds_alternative<BoundVariableRef>(fc->args[0])) {
-                        var_name = std::get<BoundVariableRef>(fc->args[0]).name;
-                    }
-                    if (var_name) {
-                        if (arg_type.kind == BoundTypeKind::VERTEX) {
-                            for (const auto& [lid, ldef] : catalog_.allLabels()) {
-                                for (const auto& pd : ldef.properties) {
-                                    ctx_.addPropertyRequirement(*var_name, lid, pd.id);
-                                }
-                            }
-                        } else if (arg_type.kind == BoundTypeKind::EDGE) {
-                            for (const auto& [elid, eldef] : catalog_.allEdgeLabels()) {
-                                for (const auto& pd : eldef.properties) {
-                                    ctx_.addPropertyRequirement(*var_name, elid, pd.id);
-                                }
-                            }
-                        }
-                    }
-                }
-
                 return BoundExpression(std::move(fc));
             } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
                 auto obj = bindExpression(ptr->object);
@@ -382,9 +325,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         prop_ref->result_type = rp.type;
 
                         // Add projection requirement
-                        if (saved_col_name) {
-                            ctx_.addPropertyRequirement(*saved_col_name, saved_label_id, pd->id);
-                        }
+                        if (saved_col_name) {}
 
                         return BoundExpression(std::move(prop_ref));
                     }
@@ -409,7 +350,6 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                                         rp.type = propertyTypeToBoundType(pd->type);
                                         merged = BoundType::merge(merged, rp.type);
                                         prop_ref->candidates.push_back(rp);
-                                        ctx_.addPropertyRequirement(col_ref.name, lid, pd->id);
                                     }
                                 }
                                 if (!prop_ref->candidates.empty()) {
@@ -456,7 +396,6 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                             prop_ref->candidates.push_back(rp);
 
                             // Add projection requirement
-                            ctx_.addPropertyRequirement(saved_var_name, lid, pd->id);
                         }
                         prop_ref->result_type = merged;
 
@@ -508,8 +447,6 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                                 rp.type = propertyTypeToBoundType(pd.type);
                                 merged = BoundType::merge(merged, rp.type);
                                 prop_ref->candidates.push_back(rp);
-                                if (var_name)
-                                    ctx_.addPropertyRequirement(*var_name, static_cast<LabelId>(elid), pd.id);
                             }
                         }
                     }
@@ -621,34 +558,6 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 }
                 bl->element_type = merged_elem;
                 bl->result_type = BoundType::List(BoundType::clone(merged_elem));
-
-                // When a VERTEX or EDGE variable is placed in a heterogeneous
-                // list (any non-graph element mixed in), the element type
-                // degrades to ANY.  Downstream dynamic property accesses like
-                // (list[i]).prop then can't resolve which properties to load.
-                // Pre-load all properties for those graph-element variables so
-                // the runtime evaluator can find them.
-                if (merged_elem.kind == BoundTypeKind::ANY) {
-                    for (const auto& element : bl->elements) {
-                        if (std::holds_alternative<BoundColumnRef>(element)) {
-                            const auto& col_ref = std::get<BoundColumnRef>(element);
-                            const BoundType& elem_type = getBoundExprType(element);
-                            if (elem_type.kind == BoundTypeKind::VERTEX) {
-                                for (const auto& [lid, ldef] : catalog_.allLabels()) {
-                                    for (const auto& pd : ldef.properties) {
-                                        ctx_.addPropertyRequirement(col_ref.name, lid, pd.id);
-                                    }
-                                }
-                            } else if (elem_type.kind == BoundTypeKind::EDGE) {
-                                for (const auto& [elid, eldef] : catalog_.allEdgeLabels()) {
-                                    for (const auto& pd : eldef.properties) {
-                                        ctx_.addPropertyRequirement(col_ref.name, elid, pd.id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
                 return BoundExpression(std::move(bl));
             } else if constexpr (std::is_same_v<Elem, cypher::Parameter>) {

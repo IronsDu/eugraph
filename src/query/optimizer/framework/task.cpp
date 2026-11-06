@@ -1,4 +1,4 @@
-#include "query/optimizer/task.hpp"
+#include "query/optimizer/framework/task.hpp"
 
 #include <algorithm>
 #include <unordered_set>
@@ -173,7 +173,7 @@ void OExprTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
     for (const auto& rule : rules.rules()) {
         if (!expr.canFire(rule->index()))
             continue;
-        if (!rule->topMatch(expr)) {
+        if (!rule->topMatch(expr) || !rule->fullMatch(expr, memo)) {
             continue;
         }
 

@@ -1,18 +1,19 @@
 #include <gtest/gtest.h>
 
 #include "query/catalog/catalog.hpp"
-#include "query/optimizer/cost_model.hpp"
-#include "query/optimizer/log_prop.hpp"
+#include "query/optimizer/analysis/materialization_req.hpp"
+#include "query/optimizer/analysis/requirement_collector.hpp"
+#include "query/optimizer/framework/cost_model.hpp"
+#include "query/optimizer/framework/log_prop.hpp"
+#include "query/optimizer/framework/memo.hpp"
+#include "query/optimizer/framework/operator_eq.hpp"
+#include "query/optimizer/framework/operator_hash.hpp"
+#include "query/optimizer/framework/opt_rule.hpp"
+#include "query/optimizer/framework/physical_expr.hpp"
 #include "query/optimizer/logical_optimizer.hpp"
-#include "query/optimizer/materialization_req.hpp"
-#include "query/optimizer/memo.hpp"
-#include "query/optimizer/operator_eq.hpp"
-#include "query/optimizer/operator_hash.hpp"
-#include "query/optimizer/opt_rule.hpp"
-#include "query/optimizer/physical_expr.hpp"
-#include "query/optimizer/requirement_collector.hpp"
-#include "query/optimizer/rules/filter_pushdown.hpp"
-#include "query/optimizer/rules/impl/impl_rules.hpp"
+#include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
+#include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
 #include <algorithm>
@@ -1654,6 +1655,34 @@ TEST(SearchCircleTest, NullWinnerWithLooserUBSignalsReoptimize) {
 }
 
 // ==================== Pattern Match Tests ====================
+
+TEST(PatternMatchTest, EdgeUniquenessRuleSkipsCorrelatedSubplan) {
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundLiteral(true);
+    filter->uniqueness_scope = BoundFilterOp::UniquenessScope::CorrelatedSubplan;
+    GroupExpr expr(INVALID_EXPR_ID, 0, BoundLogicalOperator(std::move(filter)), {});
+
+    EdgeUniquenessPushdownRule rule;
+    Memo memo;
+    EXPECT_FALSE(rule.condition(expr, memo));
+}
+
+TEST(PatternMatchTest, FullMatchTreatsDefaultChildPatternAsWildcard) {
+    // PatternNode{T, {{}}} uses the default-constructed child as a subtree
+    // wildcard. It must match an arbitrary child operator, not only a literal
+    // Singleton child.
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = makeLabelScanWithLabel("n", 0, LabelId{1});
+    filter->predicate = BoundLiteral(true);
+    BoundLogicalOperator root(std::move(filter));
+
+    Memo memo;
+    auto gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    ImplFilterRule rule;
+    EXPECT_TRUE(rule.fullMatch(filter_expr, memo));
+}
 
 TEST(PatternMatchTest, TopMatchChecksRootTypeOnly) {
     // topMatch is an O(1) pre-filter: returns true iff the candidate

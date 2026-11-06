@@ -16,7 +16,7 @@ namespace binder {
 /// After the binder hoists each PatternComprehension into a
 /// BoundPatternComprehensionApplyOp (which pre-computes a list column per
 /// outer row), the original AST node is rewritten to this placeholder
-/// carrying the output slot. column_rewrite.cpp then replaces the
+/// carrying the output slot. projection_extraction.cpp then replaces the
 /// placeholder with a BoundColumnRef pointing at the same slot, so the
 /// evaluator never sees BoundPatternComprehension directly.
 struct BoundPatternComprehension {
@@ -24,7 +24,7 @@ struct BoundPatternComprehension {
     /// BoundPatternComprehensionApplyOp. INVALID_SLOT_ID until the hoisting
     /// pass in bind_return/bind_with allocates one.
     SlotId output_slot = INVALID_SLOT_ID;
-    /// Output column name (e.g. "__pc_1") — used by column_rewrite to look up
+    /// Output column name (e.g. "__pc_1") — used by projection_extraction to look up
     /// the resolved column index.
     std::string output_name;
     /// Result type: LIST(element_type).
