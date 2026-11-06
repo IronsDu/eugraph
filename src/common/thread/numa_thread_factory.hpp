@@ -15,8 +15,10 @@
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
 #include <folly/system/ThreadName.h>
 
+#include "common/config/env_vars.hpp"
 #include <atomic>
 #include <cstdlib>
+
 #include <memory>
 #include <string>
 #include <thread>
@@ -27,7 +29,7 @@ namespace eugraph::common {
 /// True when the caller asked for NUMA binding (EUGRAPH_NUMA_BIND=1). Read once.
 inline bool numaBindingEnabled() {
     static const bool enabled = [] {
-        const char* v = std::getenv("EUGRAPH_NUMA_BIND");
+        const char* v = std::getenv(config::kEnvNumaBind);
         return v != nullptr && v[0] == '1';
     }();
     return enabled;

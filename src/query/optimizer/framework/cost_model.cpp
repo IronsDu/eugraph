@@ -88,6 +88,10 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
         return Cost(input0Card() * 1.1);
     case PhysicalOpTag::PathPropertyExtract:
         return Cost(input0Card() * 1.2); // extra cost for flatten+dedup
+    case PhysicalOpTag::PathCount:
+        // One pass over the prefix rows; final adjacency is counted, not
+        // materialised. Keep it attractive versus Expand -> Filter -> Aggregate.
+        return Cost(input0Card() * 1.05);
     }
     return Cost(0.0);
 }

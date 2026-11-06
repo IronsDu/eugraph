@@ -29,6 +29,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
@@ -336,7 +337,8 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
                     return;
                 mergeVarRequirements(dst, collectOpRequirements(val->left, catalog));
                 mergeVarRequirements(dst, collectOpRequirements(val->right, catalog));
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
                 if (!val)
                     return;
                 mergeVarRequirements(dst, collectOpRequirements(val->child, catalog));

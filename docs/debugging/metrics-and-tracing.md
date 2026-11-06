@@ -13,6 +13,10 @@
 
 ## 1. 环境变量总表
 
+> 完整运行期变量（含执行/资源调优）统一维护在
+> [docs/reference/environment-variables.md](../reference/environment-variables.md)。
+> 本表只列出诊断/trace 相关项。
+
 | 变量 | 取值 | 生效范围 | 输出 | 开销/注意 |
 |---|---|---|---|---|
 | `EUGRAPH_OP_TRACE` | 非空 | 每条语句（`QueryContext` 构造时读取） | 每个已执行物理算子一行 `[op-trace]`，语句结束时输出 | 每个算子多一层协程包装 + 每次 resume 两次时钟读取；大结果集日志很多 |

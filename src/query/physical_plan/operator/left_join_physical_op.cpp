@@ -1,4 +1,5 @@
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
+#include "common/config/env_vars.hpp"
 
 #include <cstdlib>
 
@@ -163,7 +164,7 @@ DataChunk ljMakeChunk(size_t cols) {
 } // namespace
 
 folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeChunk() {
-    const char* env = std::getenv("EUGRAPH_LJ_BATCH");
+    const char* env = std::getenv(config::kEnvLeftJoinBatch);
     // Keep batches well below DataChunk::DEFAULT_CAPACITY (1024): this path
     // materializes all batch rows in one CorrelatedSource chunk, and crossing
     // the chunk-capacity boundary changes downstream batch behavior.

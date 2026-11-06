@@ -36,6 +36,7 @@ struct BoundMergeOp;
 struct BoundUnionOp;
 struct BoundPatternComprehensionApplyOp;
 struct BoundCallOp;
+struct BoundPathCountOp;
 
 using BoundLogicalOperator =
     std::variant<BoundSingletonOp, BoundCorrelatedSourceOp, BoundScanOp, BoundLabelScanOp,
@@ -51,7 +52,7 @@ using BoundLogicalOperator =
                  // Appended last on purpose: optimizer::nodeTypeFromVariantIndex maps
                  // variant index -> OptNodeType positionally, so inserting an operator
                  // anywhere but the end silently shifts every later entry.
-                 std::unique_ptr<BoundForeachOp>>;
+                 std::unique_ptr<BoundForeachOp>, std::unique_ptr<BoundPathCountOp>>;
 
 struct BoundLogicalPlan;
 

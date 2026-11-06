@@ -1,9 +1,11 @@
 #include "query/optimizer/logical_optimizer.hpp"
+#include "common/config/env_vars.hpp"
 
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/path_count_fusion.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
@@ -75,7 +77,7 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
     // CBO Phase 4: extract chosen physical plan. Null if any group lacks a winner.
     plan.chosen = memo_.extractChosen(root_gid, PhysProp{});
-    if (const char* force_rbo = std::getenv("EUGRAPH_OPTIMIZER_FORCE_RBO"); force_rbo != nullptr && *force_rbo == '1') {
+    if (const char* force_rbo = std::getenv(config::kEnvOptimizerForceRbo); force_rbo != nullptr && *force_rbo == '1') {
         plan.chosen.reset();
     }
     if (!plan.chosen)
@@ -101,6 +103,7 @@ void LogicalOptimizer::initRules() {
     // Transformation rules
     rules_.addRule(std::make_unique<FilterPushdownRule>());
     rules_.addRule(std::make_unique<EdgeUniquenessPushdownRule>());
+    rules_.addRule(std::make_unique<PathCountFusionRule>());
 
     for (auto& rule : custom_rules_)
         rules_.addRule(std::move(rule));
@@ -121,6 +124,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplDistinctRule>());
     rules_.addRule(std::make_unique<ImplAggregateRule>());
     rules_.addRule(std::make_unique<ImplPathBuildRule>());
+    rules_.addRule(std::make_unique<ImplPathCountRule>());
     rules_.addRule(std::make_unique<ImplUnwindRule>());
     rules_.addRule(std::make_unique<ImplBinaryJoinRule>());
     rules_.addRule(std::make_unique<ImplLeftJoinRule>());

@@ -20,6 +20,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
@@ -466,6 +467,12 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->prev_edge_col_index != bv->prev_edge_col_index)
                     return false;
                 return av->edge_prop_filters == bv->edge_prop_filters;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                return av->source_variable == bv->source_variable && av->dst_variable == bv->dst_variable &&
+                       av->previous_edge_variables == bv->previous_edge_variables &&
+                       av->edge_label_ids == bv->edge_label_ids && av->output_name == bv->output_name;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

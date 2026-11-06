@@ -21,6 +21,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
@@ -458,6 +459,16 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                         seed = hashPropertyValue(seed, pv);
                     }
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
+                if (!val)
+                    return;
+                seed = hashBytes(seed, val->source_variable);
+                seed = hashBytes(seed, val->dst_variable);
+                for (const auto& name : val->previous_edge_variables)
+                    seed = hashBytes(seed, name);
+                for (auto lid : val->edge_label_ids)
+                    seed = combine(seed, static_cast<uint64_t>(lid));
+                seed = hashBytes(seed, val->output_name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 if (!val)
                     return;

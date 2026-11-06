@@ -1,4 +1,5 @@
 #include "query/physical_plan/physical_planner.hpp"
+#include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
@@ -19,6 +20,7 @@
 #include "query/physical_plan/operator/list_index_join_physical_op.hpp"
 #include "query/physical_plan/operator/materialize_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
+#include "query/physical_plan/operator/path_count_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
 #include "query/physical_plan/operator/pattern_comprehension_apply_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
@@ -602,7 +604,8 @@ static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordere
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
                 if (v)
                     collectOpSlots(v->child, out, has_write);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
@@ -738,6 +741,7 @@ static bool subtreeHasTrait(const binder::BoundLogicalOperator& op, SubtreeTrait
                               std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
                               std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
                               std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>> ||
                               std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                               std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                               std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
@@ -1220,7 +1224,8 @@ static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
                 // applied to it.
                 remapExprColumnIndices(val->list_expr, offset);
                 remapLogicalOpColumnIndices(val->child, offset);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
                 remapLogicalOpColumnIndices(val->child, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (val->src_column_index >= offset)
@@ -2156,7 +2161,8 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                     if (val)
                         visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
                     if (val)
                         visit(val->child);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
@@ -2736,7 +2742,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
         return std::get<std::string>(result);
     auto phys_op = finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
     compileOperatorTree(phys_op.get(), ctx);
-    if (std::getenv("EUGRAPH_PRED_DEBUG")) {
+    if (std::getenv(config::kEnvPredDebug)) {
         std::function<void(const PhysicalOperator*)> dump_pred = [&](const PhysicalOperator* o) {
             if (!o)
                 return;
@@ -2747,7 +2753,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
         };
         dump_pred(phys_op.get());
     }
-    static const bool plan_debug = std::getenv("EUGRAPH_PLAN_DEBUG") != nullptr;
+    static const bool plan_debug = std::getenv(config::kEnvPlanDebug) != nullptr;
     if (plan_debug)
         dumpPhysicalPlan(phys_op.get(), 0);
     return phys_op;
@@ -2879,6 +2885,7 @@ void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, cons
                           std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v)
@@ -3476,6 +3483,36 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // Re-running PE here would re-emit Construct for the alias
                     // and produce duplicate output columns.
                     return planProjectOperator(v, extractChildResult(std::move(child_result)), ctx);
+                } else if constexpr (std::is_same_v<Elem, binder::BoundPathCountOp>) {
+                    auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = extractChildResult(std::move(child_result));
+                    ensureSlotLayout(cr, ctx);
+                    int src_col = findColumn(cr.output_schema, v.source_variable);
+                    bool cols_ok = src_col >= 0;
+                    std::vector<uint32_t> prev_cols;
+                    for (const auto& name : v.previous_edge_variables) {
+                        int c = findColumn(cr.output_schema, name);
+                        if (c < 0) {
+                            cols_ok = false;
+                            break;
+                        }
+                        prev_cols.push_back(static_cast<uint32_t>(c));
+                    }
+                    if (!cols_ok)
+                        return std::string("PathCount: unresolved source/edge column");
+                    Schema output_schema{v.output_name};
+                    std::vector<binder::BoundType> output_types{binder::BoundType::Int64()};
+                    TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
+                    auto op =
+                        std::make_unique<PathCountPhysicalOp>(std::move(cr.op), store, static_cast<uint32_t>(src_col),
+                                                              std::move(prev_cols), v.edge_label_ids);
+                    op->setEvalContext(ctx.eval_ctx);
+                    op->setOutputSchema(output_schema, output_types);
+                    op->setSlotLayout(layout);
+                    return PlanOperatorResult{std::move(op), std::move(output_schema), std::move(output_types),
+                                              std::move(layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundAggregateOp>) {
                     bool saved_suppress = ctx.suppress_filter_defer;
                     bool forwards = false;

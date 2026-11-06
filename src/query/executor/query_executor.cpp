@@ -1,4 +1,5 @@
 #include "query/executor/query_executor.hpp"
+#include "common/config/env_vars.hpp"
 
 #include "common/types/constants.hpp"
 #include "query/catalog/catalog.hpp"
@@ -27,7 +28,7 @@ namespace {
 /// split into independent commit batches.
 size_t indexBackfillBatchRows() {
     constexpr size_t kDefault = 20000;
-    const char* env = std::getenv("EUGRAPH_INDEX_BACKFILL_BATCH");
+    const char* env = std::getenv(config::kEnvIndexBackfillBatch);
     if (env == nullptr || *env == '\0')
         return kDefault;
     char* end = nullptr;

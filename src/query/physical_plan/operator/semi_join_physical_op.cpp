@@ -1,4 +1,5 @@
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
+#include "common/config/env_vars.hpp"
 
 #include "query/dataset/cell_access.hpp"
 
@@ -92,7 +93,7 @@ folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executePerRow() {
 }
 
 folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
-    const char* env = std::getenv("EUGRAPH_SJ_BATCH");
+    const char* env = std::getenv(config::kEnvSemiJoinBatch);
     const size_t batch_limit = env ? std::strtoul(env, nullptr, 10) : 512;
     bool can_batch = batch_limit > 0 && correlated_source_ && !right_correlation_cols_.empty() &&
                      right_correlation_cols_.size() == left_correlation_cols_.size() &&

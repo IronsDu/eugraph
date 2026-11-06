@@ -61,6 +61,8 @@ enum class PhysicalOpTag {
     VertexPropertyExtract,
     EdgePropertyExtract,
     PathPropertyExtract,
+    // Fixed-path count fusion: count final-hop edges from prefix rows.
+    PathCount,
 };
 
 // ============================================================

@@ -1,4 +1,5 @@
 #include "query/optimizer/extraction/projection_extraction.hpp"
+#include "common/config/env_vars.hpp"
 
 #include <cstdlib>
 #include <spdlog/spdlog.h>
@@ -116,6 +117,7 @@ template <typename OpRef, typename Visit> void forEachChild(OpRef&& op, Visit&& 
                           std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
@@ -328,6 +330,7 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                     allocateSlotsInOp(v->body, name_to_slot, alloc);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 if (v)
                     allocateSlotsInOp(v->child, name_to_slot, alloc);
@@ -1529,6 +1532,7 @@ void collectAliasSlotMapOp(const binder::BoundLogicalOperator& op, AliasSlotMap&
                                  std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
@@ -1665,7 +1669,7 @@ PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& roo
         }
         dedupeVarReqs(r);
     }
-    static const bool dpl_debug = std::getenv("EUGRAPH_DPL_DEBUG") != nullptr;
+    static const bool dpl_debug = std::getenv(config::kEnvDplDebug) != nullptr;
     if (dpl_debug)
         dumpPlanRequirements(reqs, resolver.names());
     return reqs;
