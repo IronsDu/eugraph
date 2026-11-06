@@ -96,7 +96,33 @@ Everything else keeps the regular Expand/Filter/Aggregate plan.
   be NULL.
 - `count(m.firstName)` and any DISTINCT/grouped aggregate are not fused.
 
-## 5. Verification
+## 5. Memory bounds
+
+`PathCountPhysicalOp` is streaming with respect to the prefix and never
+materialises the final rows. Its only growing container is the per-operator
+degree cache (`VertexId -> outdegree`).
+
+That cache is bounded:
+
+```text
+EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES
+default: 1,048,576 entries
+0: disable caching
+```
+
+When the bound is reached, new source vertices are counted without inserting
+into the cache; existing entries remain usable and results are unchanged.
+The cache is per operator instance and is released when the operator finishes.
+Multiple PathCount operators or concurrent queries therefore multiply the
+bound, so a server-wide memory budget should be selected with that in mind.
+
+Adjacency counting uses the existing streaming `scanEdges` batches (4096
+entries per batch); it does not retain a complete supernode adjacency vector.
+The current cache bound protects the large-graph case where the prefix reaches
+millions of distinct vertices, while leaving normal LDBC-sized working sets
+(about 327k distinct vertices) fully cached.
+
+## 6. Verification
 
 - `PathCountMatchesUnfusedAggregate`: compares fused `count(m)`, `count(*)`
   and `count(1)` with their two-aggregate forms (which cannot fuse) for 2-hop

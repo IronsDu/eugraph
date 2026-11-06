@@ -1867,6 +1867,25 @@ TEST_F(QueryExecutorTest, PathCountMatchesUnfusedAggregate) {
     EXPECT_EQ(std::get<int64_t>(fused_one.rows[0][0]), std::get<int64_t>(normal_one.rows[0][0]));
 }
 
+TEST_F(QueryExecutorTest, PathCountCacheLimitPreservesResult) {
+    struct EnvGuard {
+        ~EnvGuard() {
+            unsetenv("EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES");
+        }
+    } guard;
+    setenv("EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES", "1", 1);
+
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'}), (b:Person {name: 'b'}), "
+                                     "(a)-[:KNOWS]->(b), (b)-[:KNOWS]->(a)")
+                    .error.empty());
+
+    auto fused = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
+    auto normal = execSync(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m) AS c1, count(m) AS c2");
+    ASSERT_TRUE(fused.error.empty()) << fused.error;
+    ASSERT_TRUE(normal.error.empty()) << normal.error;
+    EXPECT_EQ(std::get<int64_t>(fused.rows[0][0]), std::get<int64_t>(normal.rows[0][0]));
+}
+
 TEST_F(QueryExecutorTest, ExplainFinalHopCountFusion) {
     const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person)-[]->()-[]->()-[]->(m) RETURN count(m)");
     ASSERT_FALSE(plan.empty());
