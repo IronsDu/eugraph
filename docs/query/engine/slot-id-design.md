@@ -2,7 +2,7 @@
 
 ## 一、背景与动机
 
-### 1.1 当前 `column_rewrite` 架构的问题
+### 1.1 当前 `projection_extraction` 架构的问题
 
 `feature/projection-extract-op` 分支的目标是将分散在各拓扑算子中的 inline property loading 统一到 `ProjectionExtractPhysicalOp`。
 
@@ -10,13 +10,13 @@
 
 1. `collectPlanRequirements` 扫描表达式树，收集每个变量需要的属性
 2. `dispatchProjectionExtract` 在每个拓扑算子后包裹物理属性加载器，**可能追加扁平列**
-3. `column_rewrite`（`updateBaseCols` + `rewriteOp`）重写表达式中的列索引
+3. `projection_extraction`（`updateBaseCols` + `rewriteOp`）重写表达式中的列索引
 
-**核心痛点在第 3 步**：因为第 2 步的 `dispatchProjectionExtract` 改变了物理列数（追加 `LoadVertexProp`/`LoadEdgeProp` 等扁平列），但第 3 步的 `column_rewrite` 用第 1 步的 binder 列数来计算索引，三层列数不同步。
+**核心痛点在第 3 步**：因为第 2 步的 `dispatchProjectionExtract` 改变了物理列数（追加 `LoadVertexProp`/`LoadEdgeProp` 等扁平列），但第 3 步的 `projection_extraction` 用第 1 步的 binder 列数来计算索引，三层列数不同步。
 
 具体表现：
 
-- **`column_rewrite.cpp` 已膨胀到 ~1200 行**，包含 `updateBaseCols`、`rewriteOp`、`buildInputScope`、`project_resets`、`left_join_cols` 等多个相互耦合的机制
+- **`projection_extraction.cpp` 已膨胀到 ~1200 行**，包含 `updateBaseCols`、`rewriteOp`、`buildInputScope`、`project_resets`、`left_join_cols` 等多个相互耦合的机制
 - **7 个 bugfix commit 全部在修边界 case**：LeftJoin 右子树偏移、BinaryJoin 同理、SemiJoin 漏遍历、Project reset 跨子树污染、CREATE pending_props 漏收集 等
 - **2 个剩余回归无法安全修复**（Match7 [7]、With7 [1]），因为涉及物理列布局与 binder 列数的不匹配
 
@@ -24,7 +24,7 @@
 
 整个问题的根源在于：**BoundColumnRef 持有的是物理数组下标 `column_index`**。
 
-当 `dispatchProjectionExtract` 追加扁平列时，所有后续列的物理下标都会变化。`column_rewrite` 必须递归遍历整棵表达式树来修正这些下标——而 Join 子树、WITH 别名、Project 重命名等使得这个过程极其复杂且脆弱。
+当 `dispatchProjectionExtract` 追加扁平列时，所有后续列的物理下标都会变化。`projection_extraction` 必须递归遍历整棵表达式树来修正这些下标——而 Join 子树、WITH 别名、Project 重命名等使得这个过程极其复杂且脆弱。
 
 ### 1.3 DuckDB 的启示：ColumnBinding
 
@@ -243,7 +243,7 @@ LeftJoinPhysicalOp
 
 **关键**：左树加了 `a.name` 和 `a.age`（Slot 2, Slot 3）后变成 3 列。右树表达式持有 Slot 5（b.name）。LeftJoin 只是把左右 Layout 拼起来，**不需要做任何 offset 计算**。`b.name` 在合并 Layout 中的物理位置 = getColumnIndex(Slot 5) = **6**（自动算出来的）。
 
-对比旧架构：binder 以为左树只有 1 列、右树偏移 1，b.name 的 column_index = 1 + 右局部下标 = 错误值。需要 `column_rewrite` 手动修复。
+对比旧架构：binder 以为左树只有 1 列、右树偏移 1，b.name 的 column_index = 1 + 右局部下标 = 错误值。需要 `projection_extraction` 手动修复。
 
 ### 4.3 第三阶段：算子初始化（编译期擦除）
 
@@ -375,7 +375,7 @@ RETURN count(*)
 
 ### Phase 5：column_rewrite 重构为 DPL 管线（✅ 已完成，方向不同）
 
-原计划是"移除 column_rewrite"。实际选择了更彻底的方案：将 `column_rewrite.cpp` 重构为六阶段 Demand-Pull-Lowering 管线（参见 [projection-extract-design.md](projection-extract-design.md)），包含分配、需求收集、PEPlan 构建、别名透传、表达式 rewrite。旧 `updateExtractionBaseCols` / `project_resets` / `left_join_cols` 等机制已移除。
+原计划是"移除 column_rewrite"。实际选择了更彻底的方案：将 `projection_extraction.cpp` 重构为六阶段 Demand-Pull-Lowering 管线（参见 [projection-extract-design.md](projection-extract-design.md)），包含分配、需求收集、PEPlan 构建、别名透传、表达式 rewrite。旧 `updateExtractionBaseCols` / `project_resets` / `left_join_cols` 等机制已移除。
 
 ### Phase 6：验证与清理（✅ 已完成）
 - [x] 437 单元测试通过
@@ -384,7 +384,7 @@ RETURN count(*)
 
 ## 八、与旧架构的对照表
 
-| 概念 | 旧架构 (`column_rewrite`) | 新架构 (`SlotId + Layout`) |
+| 概念 | 旧架构 (`projection_extraction`) | 新架构 (`SlotId + Layout`) |
 |------|--------------------------|---------------------------|
 | 列引用 | `BoundColumnRef.column_index`（物理数组下标） | `BoundColumnRef.slot_id`（全局唯一 ID） + `column_index`（编译后缓存） |
 | 列数跟踪 | `updateBaseCols` 遍历 bound tree，模拟 col_count | `TupleSlotLayout.size()` 直接从物理输出 schema 获取 |
@@ -392,4 +392,4 @@ RETURN count(*)
 | WITH 重命名 | `project_resets[op][var]` 存储输入位置 | 分配新 SlotId，Layout.replace(old, new) |
 | 表达式重写 | `rewriteOp` 递归遍历，修改 column_index | `ExpressionCompiler` 在 init() 时一次性翻译 |
 | 属性列追加后 | column_index 错位，需 `rewriteOp` 修正 | SlotId 不变，`getColumnIndex()` 自动正确 |
-| 代码位置 | `column_rewrite.cpp` (~1200 lines) | `slot_layout.hpp` (~80 lines) + `expression_compiler.hpp` (~80 lines) + planner 中少量集成 |
+| 代码位置 | `projection_extraction.cpp` (~1200 lines) | `slot_layout.hpp` (~80 lines) + `expression_compiler.hpp` (~80 lines) + planner 中少量集成 |

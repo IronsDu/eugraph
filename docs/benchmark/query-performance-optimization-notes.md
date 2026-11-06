@@ -451,7 +451,7 @@ slot；子树规划时置 `ctx.deferred_slots`，Filter 包装后用普通 PE
   `SemiJoin: left slot 2 not found in left slot layout (size 0)`，已修复并用
   `AntiJoinAboveVarLenExpandResolvesCorrelationSlot` 回归。
 
-**机制 2：实体引用不物化（`row.hpp` + `column_rewrite.cpp`）**
+**机制 2：实体引用不物化（`row.hpp` + `projection_extraction.cpp`）**
 
 - `valueEquals` 把 `VertexRef`/`VertexValuePtr`、`EdgeKey`/`EdgeValuePtr` 折叠到 id；
 - `rewriteRefCompatiblePredicates` 把 `x IN list` 的 x 降到 source `VERTEX_REF`/`EDGE_KEY`；

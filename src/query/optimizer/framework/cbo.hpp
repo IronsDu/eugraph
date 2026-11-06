@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/optimizer/materialization_req.hpp"
+#include "query/optimizer/analysis/materialization_req.hpp"
 
 #include <cstdint>
 #include <string>

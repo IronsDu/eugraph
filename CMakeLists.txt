@@ -209,7 +209,6 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/binder/bind_merge.cpp
     src/query/planner/binder/bind_expression.cpp
     src/query/planner/binder/bind_pattern.cpp
-    src/query/planner/binder/bind_projection.cpp
     src/query/planner/bound_logical_plan.cpp
     src/query/planner/column_resolver.cpp
     src/query/evaluator/expression_evaluator.cpp
@@ -273,19 +272,20 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/physical_operator_base.cpp
     src/query/physical_plan/physical_planner.cpp
     src/query/executor/query_executor.cpp
-    src/query/optimizer/memo.cpp
-    src/query/optimizer/column_rewrite.cpp
-    src/query/optimizer/opt_rule.cpp
-    src/query/optimizer/task.cpp
+    src/query/optimizer/framework/memo.cpp
+    src/query/optimizer/extraction/projection_extraction.cpp
+    src/query/optimizer/framework/opt_rule.cpp
+    src/query/optimizer/framework/task.cpp
     src/query/optimizer/logical_optimizer.cpp
-    src/query/optimizer/log_prop.cpp
-    src/query/optimizer/cost_model.cpp
-    src/query/optimizer/physical_expr.cpp
-    src/query/optimizer/operator_hash.cpp
-    src/query/optimizer/operator_eq.cpp
-    src/query/optimizer/requirement_collector.cpp
-    src/query/optimizer/rules/filter_pushdown.cpp
-    src/query/optimizer/rules/impl/impl_rules.cpp
+    src/query/optimizer/framework/log_prop.cpp
+    src/query/optimizer/framework/cost_model.cpp
+    src/query/optimizer/framework/physical_expr.cpp
+    src/query/optimizer/framework/operator_hash.cpp
+    src/query/optimizer/framework/operator_eq.cpp
+    src/query/optimizer/analysis/requirement_collector.cpp
+    src/query/optimizer/rules/logical/filter_pushdown.cpp
+    src/query/optimizer/rules/logical/edge_uniqueness_pushdown.cpp
+    src/query/optimizer/rules/physical/impl_rules.cpp
 )
 
 target_include_directories(eugraph_query_engine PUBLIC

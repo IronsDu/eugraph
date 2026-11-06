@@ -315,7 +315,7 @@ ProjectPhysicalOp(items=[BoundColumnRef(SLOT_N_NAME)])
 
 **风险**：低。当前实现不 crash，错误场景返回空结果或 null。方案 B' 已覆盖绝大多数实际查询。
 
-**相关文件**：`src/query/optimizer/column_rewrite.cpp`、`src/query/physical_plan/physical_planner.cpp`、`src/query/planner/slot_id.hpp`
+**相关文件**：`src/query/optimizer/extraction/projection_extraction.cpp`、`src/query/physical_plan/physical_planner.cpp`、`src/query/planner/slot_id.hpp`
 
 ### 5.2 SlotId 分配是 binder 后补丁
 
@@ -333,9 +333,9 @@ ProjectPhysicalOp(items=[BoundColumnRef(SLOT_N_NAME)])
 
 | 文件 | 角色 |
 |------|------|
-| `src/query/optimizer/column_rewrite.hpp` | PEPlan、VariableRequirement、SlotResolver、6 个 Pass 声明 |
-| `src/query/optimizer/column_rewrite.cpp` | 6 个 Pass 实现（~1400 行） |
-| `src/query/optimizer/requirement_collector.cpp` | `collectOpRequirements`（CBO 路径用） |
+| `src/query/optimizer/extraction/projection_extraction.hpp` | PEPlan、VariableRequirement、SlotResolver、6 个 Pass 声明 |
+| `src/query/optimizer/extraction/projection_extraction.cpp` | 6 个 Pass 实现（~1400 行） |
+| `src/query/optimizer/analysis/requirement_collector.cpp` | `collectOpRequirements`（CBO 路径用） |
 | `src/query/physical_plan/physical_planner.cpp` | `planBound` 入口、`dispatchProjectionExtract`、`compileOperatorTree` |
 | `src/query/physical_plan/operator/projection_extract_physical_op.hpp` | `ColumnSpec`、`ProjectionExtractPhysicalOp` |
 | `src/query/physical_plan/expression_compiler.hpp` | `ExpressionCompiler`：slot→column 编译 |

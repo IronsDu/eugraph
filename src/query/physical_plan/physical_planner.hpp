@@ -1,7 +1,7 @@
 #pragma once
 
 #include "query/dataset/row.hpp"
-#include "query/optimizer/column_rewrite.hpp"
+#include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/physical_plan/physical_operator.hpp"
 #include "query/physical_plan/slot_layout.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"

@@ -1,11 +1,11 @@
-#include "query/optimizer/memo.hpp"
+#include "query/optimizer/framework/memo.hpp"
 
 #include <algorithm>
 #include <unordered_set>
 
-#include "query/optimizer/operator_eq.hpp"
-#include "query/optimizer/operator_hash.hpp"
-#include "query/optimizer/requirement_collector.hpp"
+#include "query/optimizer/analysis/requirement_collector.hpp"
+#include "query/optimizer/framework/operator_eq.hpp"
+#include "query/optimizer/framework/operator_hash.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_foreach_op.hpp"

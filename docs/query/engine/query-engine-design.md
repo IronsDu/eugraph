@@ -687,7 +687,10 @@ using Schema = vector<string>;   // 列名列表
 - `properties(vertex/edge)` / `keys(map)` 函数 ✅ 已实现
 - **`properties(Edge)` + 普通 Expand**：✅ 已通过 `ProjectionExtractPhysicalOp`（LoadEdgeProp / ConstructEdge spec）实现边属性延迟加载，`properties(r)` 对定长 `(a)-[r:TYPE]->(b)` 中的边正常工作。
 - **MapValue RPC 序列化**：`MapValue` 序列化为 JSON 字符串通过 `ResultValue::map_json`（Thrift union 字段 9）传输。需注意：修改 `proto/eugraph.thrift` 后运行 `thrift1 --gen mstch_cpp2 -o src/ proto/eugraph.thrift` 重新生成代码，并用 `sed 's|"proto/gen-cpp2/|"gen-cpp2/|g'` 修正 include 路径。
-- **`properties()` 触发全属性加载**：Binder 遇到 `properties(n)`（Vertex 参数）时，通过 `BindContext::addPropertyRequirement` 请求所有已知 Label 的全部属性 ID。此策略在单标签场景下开销可接受，多标签/宽表场景需后续优化为按需加载。
+- **`properties()`/`keys()` 的全属性需求**：由优化器 `requirement_collector` 生成
+  `MaterializationReq.need_props`，进入根 `PhysProp`，再由 `PropertyExtract`
+  Enricher/`projection_extraction` 决定属性加载；Binder 不再直接写 scan 的
+  `label_prop_ids`。
 
 ### 待优化：边属性邻接存储
 

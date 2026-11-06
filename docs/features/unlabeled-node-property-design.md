@@ -168,19 +168,14 @@ executeChunk():
 - `LabelScanPhysicalOp` 构造 `VertexValue` 时
 - `labels()` 函数求值时
 
-**投影下推（Watch Point）**：`BoundDynamicPropertyRef` 不携带具体的 `label_id` 和 `prop_id`，因此 `addPropertyRequirement` 无法添加精确的属性需求。scan 算子不会主动加载该属性——但求值时需要该属性存在于 `VertexValue.properties` 中。
+**投影下推（历史 Watch Point）**：`BoundDynamicPropertyRef` 不携带具体的
+`label_id`/`prop_id`。现代码由优化器的 `requirement_collector` 把
+`need_entire`/`need_labels` 放入 `PhysProp`，由 Enricher/`projection_extraction`
+负责物化；不再依赖 Binder 的 `addPropertyRequirement`。
 
-解决方式：在 `bindExpression` 创建 `BoundDynamicPropertyRef` 时，额外为 `__anon__` 标签注册一个特殊标记，让 pushdown 知道需要加载 `__anon__` 标签下的**全部属性**：
-
-```cpp
-// 伪码
-if (created DynamicPropertyRef) {
-    // 标记需要加载 __anon__ 的所有存储属性
-    ctx_.addPropertyRequirement(var_name, __anon__id, ALL_PROPERTIES);
-}
-```
-
-或者简化：`addAllPropertiesForVariable` 扩展到对 `__anon__` 也添加需求（即使 schema 为空），物理扫描时对 `__anon__` 做全属性加载。
+现代码不再用 `addPropertyRequirement` 处理这个场景：`requirement_collector`
+把 `BoundDynamicPropertyRef` 建模为 `need_entire`/`need_labels`，根 `PhysProp`
+驱动 Enricher 或 `projection_extraction` 做全对象/属性物化。
 
 ### 6. SET/REMOVE 路径
 

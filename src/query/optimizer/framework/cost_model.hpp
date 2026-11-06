@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/optimizer/cbo.hpp"
+#include "query/optimizer/framework/cbo.hpp"
 
 #include <vector>
 

@@ -4121,7 +4121,7 @@ TEST_F(QueryExecutorTest, MergeUndirectedMatch) {
 TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
     // Reproduces Merge6 scenario [3]: ON CREATE SET r.name on a dynamically
     // created edge label. The control query uses keys(r) inside a list
-    // comprehension. column_rewrite must recurse into the comprehension's
+    // comprehension. projection_extraction must recurse into the comprehension's
     // list_expr / projection so the edge variable gets fully materialised
     // (otherwise keys(r) returns empty inside the comprehension).
     auto type_id = blockingWait(async_meta_->createEdgeLabel("TYPE", {}));

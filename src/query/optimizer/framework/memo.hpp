@@ -1,9 +1,9 @@
 #pragma once
 
-#include "query/optimizer/cbo.hpp"
-#include "query/optimizer/chosen_plan.hpp"
-#include "query/optimizer/log_prop.hpp"
-#include "query/optimizer/physical_expr.hpp"
+#include "query/optimizer/framework/cbo.hpp"
+#include "query/optimizer/framework/chosen_plan.hpp"
+#include "query/optimizer/framework/log_prop.hpp"
+#include "query/optimizer/framework/physical_expr.hpp"
 #include "query/planner/bound_expression/bound_expression_fwd.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 

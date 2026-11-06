@@ -1,4 +1,4 @@
-#include "query/optimizer/opt_rule.hpp"
+#include "query/optimizer/framework/opt_rule.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -66,6 +66,12 @@ bool OptRule::fullMatch(const GroupExpr& expr, Memo& memo) const {
 }
 
 bool OptRule::matchNode(const PatternNode& pattern, const GroupExpr& expr, Memo& memo) const {
+    // A default-constructed PatternNode (Singleton, no children) is the
+    // subtree wildcard used by `PatternNode{T, {{}}}`. It must match any child
+    // operator, not only a literal Singleton child.
+    if (pattern.children.empty() && pattern.type == OptNodeType::Singleton)
+        return true;
+
     // Root operator must match
     OptNodeType actual = nodeTypeFromVariantIndex(expr.op.index());
     if (actual != pattern.type)

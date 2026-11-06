@@ -269,7 +269,9 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     ctx->label_order = plan_ctx.label_order_by_name;
     plan_ctx.slot_allocator.seed(binder.ctx().slot_allocator.current());
 
-    // 2.5. Logical optimization
+    // 2.5. Logical optimization. Projection pushdown is a pre-Cascades
+    // optimizer pass: the binder collected semantic property references, the
+    // optimizer turns them into scan/expand property demand.
     optimizer::LogicalOptimizer logical_optimizer;
     logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get());
 

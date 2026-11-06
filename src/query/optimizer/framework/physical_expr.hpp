@@ -1,7 +1,7 @@
 #pragma once
 
-#include "query/optimizer/cost_model.hpp"
-#include "query/optimizer/materialization_req.hpp"
+#include "query/optimizer/analysis/materialization_req.hpp"
+#include "query/optimizer/framework/cost_model.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 
 #include <cstdint>

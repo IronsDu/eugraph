@@ -806,9 +806,6 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
     if (errors_.empty() && current) {
         plan.root = std::move(*current);
 
-        // Apply projection pushdown: fill label_prop_ids on scan/expand operators
-        applyProjectionPushdown(plan.root);
-
         if (!ctx_.return_columns.empty()) {
             plan.output_schema = std::move(ctx_.return_columns);
         } else if (auto* call_op = tryExtractCallOp(plan.root)) {
@@ -942,7 +939,6 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
                 [&](const auto& e) {
                     using T = std::decay_t<decltype(e)>;
                     if constexpr (std::is_same_v<T, BoundColumnRef>) {
-                        addAllPropertiesForVariable(e.name);
                     } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryOp>>) {
                         collectVars(e->left);
                         collectVars(e->right);

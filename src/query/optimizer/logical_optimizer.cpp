@@ -1,11 +1,15 @@
 #include "query/optimizer/logical_optimizer.hpp"
 
-#include "query/optimizer/cbo.hpp"
-#include "query/optimizer/rules/filter_pushdown.hpp"
-#include "query/optimizer/rules/impl/impl_rules.hpp"
+#include "query/optimizer/analysis/requirement_collector.hpp"
+#include "query/optimizer/framework/cbo.hpp"
+#include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
+#include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
 #include <spdlog/spdlog.h>
+
+#include <cstdlib>
 
 namespace eugraph {
 namespace optimizer {
@@ -44,8 +48,15 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
     auto root_gid = memo_.copyIn(plan.root);
 
-    // CBO: create root context with "any" physical property and infinite cost bound.
-    Context root_ctx(PhysProp{}, Cost::infinity());
+    // CBO: root physical property carries the query's required materialisation.
+    // The binder has only recorded semantic references; this is the Cascades
+    // required-physical-property side of property demand.
+    VarRequirements root_reqs;
+    if (catalog != nullptr)
+        root_reqs = collectOpRequirements(plan.root, catalog);
+    PhysProp root_prop;
+    root_prop.setMaterializations(std::move(root_reqs));
+    Context root_ctx(std::move(root_prop), Cost::infinity());
     int root_ctx_id = memo_.addContext(std::move(root_ctx));
 
     TaskQueue queue;
@@ -64,6 +75,11 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
     // CBO Phase 4: extract chosen physical plan. Null if any group lacks a winner.
     plan.chosen = memo_.extractChosen(root_gid, PhysProp{});
+    if (const char* force_rbo = std::getenv("EUGRAPH_OPTIMIZER_FORCE_RBO"); force_rbo != nullptr && *force_rbo == '1') {
+        plan.chosen.reset();
+    }
+    if (!plan.chosen)
+        spdlog::debug("[optimizer] no CBO winner; using RBO logical plan");
 
     // Full-object Enricher lowering (VertexEnrich/EdgeEnrich/PathEnrich) is
     // not yet safe for all alias/bound-variable plans. Until that lowering is
@@ -74,13 +90,21 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
         plan.chosen.reset();
     }
 
-    // Always populate plan.root as RBO fallback.
+    // Always populate plan.root as RBO fallback. The RBO tree is not inside
+    // the Enricher mechanism, so apply the binder's property demand to it
+    // explicitly; the CBO chosen path gets this through PhysProp/PropertyExtract.
     plan.root = memo_.copyOut(root_gid, PhysProp{});
+    // TODO experiment: no fallback property pushdown
 }
 
 void LogicalOptimizer::initRules() {
     // Transformation rules
     rules_.addRule(std::make_unique<FilterPushdownRule>());
+    rules_.addRule(std::make_unique<EdgeUniquenessPushdownRule>());
+
+    for (auto& rule : custom_rules_)
+        rules_.addRule(std::move(rule));
+    custom_rules_.clear();
 
     // Implementation rules (Phase 4) — logical → physical
     rules_.addRule(std::make_unique<ImplSingletonRule>());

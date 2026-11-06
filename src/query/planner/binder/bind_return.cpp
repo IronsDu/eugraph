@@ -2216,7 +2216,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     // node above `child` so each list result is precomputed as a column before
     // any projection / aggregate sees it. The patch_map lets later-bound
     // projection expressions rewrite their BoundPatternComprehension
-    // placeholders into BoundColumnRef via column_rewrite.cpp.
+    // placeholders into BoundColumnRef via projection_extraction.cpp.
     std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>
         pc_patch_map;
     {
@@ -2547,24 +2547,6 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         if (!bound_expr)
             continue;
         patchPatternComprehensionPlaceholders(*bound_expr, pc_patch_map, *this);
-
-        // Detect whole-variable return (e.g., RETURN n) to add all property requirements
-        if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
-            auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
-            if (col_ref.type.kind == BoundTypeKind::VERTEX) {
-                addAllPropertiesForVariable(col_ref.name);
-            }
-        } else if (std::holds_alternative<std::unique_ptr<BoundLabelCast>>(*bound_expr)) {
-            auto& lc = std::get<std::unique_ptr<BoundLabelCast>>(*bound_expr);
-            if (std::holds_alternative<BoundColumnRef>(lc->object)) {
-                auto var_name = std::get<BoundColumnRef>(lc->object).name;
-                const auto* ldef = catalog_.lookupLabel(lc->label_id);
-                if (ldef) {
-                    for (const auto& pd : ldef->properties)
-                        ctx_.addPropertyRequirement(var_name, lc->label_id, pd.id);
-                }
-            }
-        }
 
         std::string alias = projectionAliasOf(item);
         BoundProjectOp::ProjectItem proj_item;
@@ -3152,14 +3134,6 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 if (!bound_expr)
                     continue;
                 patchPatternComprehensionPlaceholders(*bound_expr, wc_pc_patch_map, *this);
-
-                // Detect whole-variable pass-through to add property requirements
-                if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
-                    auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
-                    if (col_ref.type.kind == BoundTypeKind::VERTEX) {
-                        addAllPropertiesForVariable(col_ref.name);
-                    }
-                }
 
                 std::string alias = projectionAliasOf(item);
                 BoundProjectOp::ProjectItem proj_item;

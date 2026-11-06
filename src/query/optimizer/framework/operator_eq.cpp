@@ -1,4 +1,4 @@
-#include "query/optimizer/operator_eq.hpp"
+#include "query/optimizer/framework/operator_eq.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"

@@ -1,4 +1,4 @@
-#include "query/optimizer/rules/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/filter_pushdown.hpp"
 
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_logical_plan.hpp"

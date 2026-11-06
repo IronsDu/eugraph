@@ -1,7 +1,7 @@
-#include "query/optimizer/rules/impl/impl_rules.hpp"
+#include "query/optimizer/rules/physical/impl_rules.hpp"
 
-#include "query/optimizer/memo.hpp"
-#include "query/optimizer/physical_expr.hpp"
+#include "query/optimizer/framework/memo.hpp"
+#include "query/optimizer/framework/physical_expr.hpp"
 
 namespace eugraph {
 namespace optimizer {
