@@ -1076,6 +1076,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             BoundFilterOp unique_filter;
             unique_filter.predicate = BoundExpression(std::move(unique_call));
             unique_filter.child = std::move(*current);
+            unique_filter.uniqueness_scope = ctx_.in_correlated_subplan
+                                                 ? BoundFilterOp::UniquenessScope::CorrelatedSubplan
+                                                 : BoundFilterOp::UniquenessScope::TopLevel;
             current = std::make_unique<BoundFilterOp>(std::move(unique_filter));
         }
     }
@@ -2139,7 +2142,10 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
         synthetic.where_pred = cloneExpression(*pc.where_pred);
 
     std::vector<std::pair<uint32_t, uint32_t>> exists_corr;
+    const bool saved_correlated = ctx_.in_correlated_subplan;
+    ctx_.in_correlated_subplan = true;
     auto sub_plan = bindExistsSubPlan(synthetic, exists_corr, preset_corr_vars);
+    ctx_.in_correlated_subplan = saved_correlated;
     if (!sub_plan)
         return std::nullopt;
     for (const auto& [l, r] : exists_corr) {

@@ -1659,11 +1659,11 @@ TEST(SearchCircleTest, NullWinnerWithLooserUBSignalsReoptimize) {
 TEST(PatternMatchTest, EdgeUniquenessRuleSkipsCorrelatedSubplan) {
     auto filter = std::make_unique<BoundFilterOp>();
     filter->predicate = BoundLiteral(true);
+    filter->uniqueness_scope = BoundFilterOp::UniquenessScope::CorrelatedSubplan;
     GroupExpr expr(INVALID_EXPR_ID, 0, BoundLogicalOperator(std::move(filter)), {});
 
     EdgeUniquenessPushdownRule rule;
     Memo memo;
-    expr.in_correlated_subplan = true;
     EXPECT_FALSE(rule.condition(expr, memo));
 }
 

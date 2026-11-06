@@ -46,6 +46,9 @@ struct BindContext {
     /// Set when any mutation clause (CREATE/MERGE/SET/REMOVE/DELETE) is
     /// bound anywhere in the statement, including subqueries.
     bool has_mutation = false;
+    /// True while binding the right side of a PatternComprehension/EXISTS
+    /// correlated subplan.
+    bool in_correlated_subplan = false;
 
     /// Map from variable name to column information.
     /// Scope-local: WITH clauses reset this to just their outputs, so names

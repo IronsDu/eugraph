@@ -192,6 +192,7 @@ std::vector<std::unique_ptr<GroupExpr>> FilterPushdownRule::substitute(GroupExpr
 
         auto new_filter_op = std::make_unique<binder::BoundFilterOp>();
         new_filter_op->predicate = cloneBoundExpression(predicate);
+        new_filter_op->uniqueness_scope = filter_op->uniqueness_scope;
 
         GroupExpr* filter_gexpr =
             memo.createGroupWithExpr(binder::BoundLogicalOperator(std::move(new_filter_op)), grandchild_groups);

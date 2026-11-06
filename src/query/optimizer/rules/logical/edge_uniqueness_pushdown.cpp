@@ -95,12 +95,10 @@ std::unique_ptr<GroupExpr> makeFinalFilter(GroupId root_group, const binder::Bou
 } // namespace
 
 bool EdgeUniquenessPushdownRule::condition(GroupExpr& expr, Memo& memo) const {
-    if (expr.in_correlated_subplan)
-        return false;
     if (expr.child_groups.size() != 1)
         return false;
     auto* filter = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&expr.op);
-    if (!filter || !*filter)
+    if (!filter || !*filter || (*filter)->uniqueness_scope != binder::BoundFilterOp::UniquenessScope::TopLevel)
         return false;
     const binder::BoundFunctionCall* call = edgeUniqueCall(**filter);
     if (!call)

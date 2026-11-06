@@ -16,11 +16,12 @@ layout, and the remaining Columbia gaps.
 
 The binder now emits one global `__edge_unique` predicate. The optimizer rule
 `EdgeUniquenessPushdownRule` recognises a fixed-length Expand chain and
-produces the per-hop prefix alternative. It skips expressions inside
-correlated subplans (`GroupExpr::in_correlated_subplan`, currently the right
-side of `PatternComprehensionApply`): there the global filter is cheaper and
-prefix placement can disturb property-enforcer placement (complex-14 is the
-regression case).
+produces the per-hop prefix alternative. It skips filters whose
+`BoundFilterOp::uniqueness_scope` is `CorrelatedSubplan` (the right side of a
+`PatternComprehensionApply`): there the global filter is cheaper and prefix
+placement can disturb property-enforcer placement (complex-14 is the
+regression case). The scope is logical-operator metadata, not Memo context, so
+clone/equality/hash include it and the Memo remains context-free.
 
 Property demand is modelled as a Cascades **required physical property**:
 `LogicalOptimizer` derives `VarRequirements` from the logical plan, puts them
