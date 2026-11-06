@@ -147,7 +147,7 @@ void Memo::unregisterInHash(const GroupExpr& expr) {
     }
 }
 
-GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
+GroupId Memo::copyIn(binder::BoundLogicalOperator& op, bool in_correlated_subplan) {
     // Recursively insert children first (bottom-up)
     std::vector<GroupId> child_groups;
     int n_children = getChildCount(op);
@@ -183,40 +183,40 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                 }
             },
             op));
-        child_groups.push_back(copyIn(*child));
+        child_groups.push_back(copyIn(*child, in_correlated_subplan));
     } else if (n_children == 2) {
         if (std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>(op)) {
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(op);
             auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(join->left));
             join->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*left));
+            child_groups.push_back(copyIn(*left, in_correlated_subplan));
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(join->right));
             join->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*right));
+            child_groups.push_back(copyIn(*right, in_correlated_subplan));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(op)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(op);
             auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(sj->left));
             sj->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*left));
+            child_groups.push_back(copyIn(*left, in_correlated_subplan));
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(sj->right));
             sj->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*right));
+            child_groups.push_back(copyIn(*right, in_correlated_subplan));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(op)) {
             auto& lj = std::get<std::unique_ptr<binder::BoundLeftJoinOp>>(op);
             auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(lj->left));
             lj->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*left));
+            child_groups.push_back(copyIn(*left, in_correlated_subplan));
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(lj->right));
             lj->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*right));
+            child_groups.push_back(copyIn(*right, in_correlated_subplan));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op)) {
             auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op);
             auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(pc->left));
             pc->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*left));
+            child_groups.push_back(copyIn(*left, in_correlated_subplan));
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(pc->right));
             pc->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*right));
+            child_groups.push_back(copyIn(*right, true));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(op)) {
             // Two inputs: the row source, and the body sub-plan (which is opaque
             // to the rewriter but must still be carried through the memo, so it is
@@ -224,18 +224,18 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(op);
             auto child = std::make_unique<binder::BoundLogicalOperator>(std::move(fe->child));
             fe->child = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*child));
+            child_groups.push_back(copyIn(*child, in_correlated_subplan));
             auto body = std::make_unique<binder::BoundLogicalOperator>(std::move(fe->body));
             fe->body = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*body));
+            child_groups.push_back(copyIn(*body, in_correlated_subplan));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundUnionOp>>(op)) {
             auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(op);
             auto left = std::make_unique<binder::BoundLogicalOperator>(std::move(uo->left));
             uo->left = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*left));
+            child_groups.push_back(copyIn(*left, in_correlated_subplan));
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(uo->right));
             uo->right = binder::BoundScanOp{};
-            child_groups.push_back(copyIn(*right));
+            child_groups.push_back(copyIn(*right, in_correlated_subplan));
         }
     }
 
@@ -246,6 +246,7 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
     // type (e.g. two BoundLabelScanOp with different label_ids) no longer
     // collide — they hash differently and compare unequal.
     if (auto* dup = findDuplicate(op, child_groups)) {
+        dup->in_correlated_subplan = dup->in_correlated_subplan || in_correlated_subplan;
         return dup->group_id;
     }
 
@@ -253,6 +254,7 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
     GroupId gid = newGroupId();
     ExprId eid = newExprId();
     auto expr = std::make_unique<GroupExpr>(eid, gid, std::move(op), std::move(child_groups));
+    expr->in_correlated_subplan = in_correlated_subplan;
     // Phase B: walk the operator once at copyIn time to derive the
     // materialization requirements for this group. The walk is on a
     // *clone* — `op` is about to be moved into the GroupExpr and we

@@ -189,6 +189,11 @@ public:
     binder::BoundLogicalOperator op;
     std::vector<GroupId> child_groups;
 
+    // True when this expression is inside a correlated subplan (for example
+    // the right side of a PatternComprehensionApply). Rules that rely on
+    // top-level cardinality/placement should not fire there.
+    bool in_correlated_subplan = false;
+
     // Bit mask tracking which rules have been applied to avoid re-firing.
     uint64_t rule_mask = 0;
 
@@ -220,7 +225,7 @@ class Memo {
 public:
     // Insert a BoundLogicalOperator tree into the Memo.
     // Returns the GroupId of the root group.
-    GroupId copyIn(binder::BoundLogicalOperator& op);
+    GroupId copyIn(binder::BoundLogicalOperator& op, bool in_correlated_subplan = false);
 
     // Extract the best plan from the Memo as a BoundLogicalOperator tree.
     // RBO fallback: takes the last logical expression in each group.

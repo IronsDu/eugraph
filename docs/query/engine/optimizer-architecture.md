@@ -16,7 +16,11 @@ layout, and the remaining Columbia gaps.
 
 The binder now emits one global `__edge_unique` predicate. The optimizer rule
 `EdgeUniquenessPushdownRule` recognises a fixed-length Expand chain and
-produces the per-hop prefix alternative.
+produces the per-hop prefix alternative. It skips expressions inside
+correlated subplans (`GroupExpr::in_correlated_subplan`, currently the right
+side of `PatternComprehensionApply`): there the global filter is cheaper and
+prefix placement can disturb property-enforcer placement (complex-14 is the
+regression case).
 
 Property demand is modelled as a Cascades **required physical property**:
 `LogicalOptimizer` derives `VarRequirements` from the logical plan, puts them

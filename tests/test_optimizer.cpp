@@ -11,6 +11,7 @@
 #include "query/optimizer/framework/opt_rule.hpp"
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/optimizer/logical_optimizer.hpp"
+#include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
@@ -1654,6 +1655,17 @@ TEST(SearchCircleTest, NullWinnerWithLooserUBSignalsReoptimize) {
 }
 
 // ==================== Pattern Match Tests ====================
+
+TEST(PatternMatchTest, EdgeUniquenessRuleSkipsCorrelatedSubplan) {
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundLiteral(true);
+    GroupExpr expr(INVALID_EXPR_ID, 0, BoundLogicalOperator(std::move(filter)), {});
+
+    EdgeUniquenessPushdownRule rule;
+    Memo memo;
+    expr.in_correlated_subplan = true;
+    EXPECT_FALSE(rule.condition(expr, memo));
+}
 
 TEST(PatternMatchTest, FullMatchTreatsDefaultChildPatternAsWildcard) {
     // PatternNode{T, {{}}} uses the default-constructed child as a subtree
