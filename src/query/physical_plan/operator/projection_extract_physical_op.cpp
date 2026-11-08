@@ -254,6 +254,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
         // back out to rows.
         std::vector<std::vector<std::optional<PropertyValue>>> vertex_prop_cache(n_specs);
         std::vector<std::vector<std::optional<LabelIdSet>>> vertex_labels_cache(n_specs);
+        // Per label-filter spec: labels for the deferred destination-label filter.
+        std::vector<std::vector<std::optional<LabelIdSet>>> label_filter_cache(n_specs);
         for (size_t i = 0; i < n_specs; ++i) {
             const auto& spec = specs_[i];
             if (spec.kind != ColumnSpec::Kind::LoadVertexProp && spec.kind != ColumnSpec::Kind::LoadVertexLabels)
@@ -345,8 +347,6 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
         // scalar if exactly one label has the property, or a list if multiple
         // labels on the same vertex define it.
         std::vector<std::vector<std::vector<PropertyValue>>> vertex_coalesce_cache(n_specs);
-        // Per coalesce spec: labels for the deferred destination-label filter.
-        std::vector<std::vector<std::optional<LabelIdSet>>> label_filter_cache(n_specs);
         for (size_t i = 0; i < n_specs; ++i) {
             const auto& spec = specs_[i];
             if (spec.kind != ColumnSpec::Kind::LoadVertexPropCoalesce)

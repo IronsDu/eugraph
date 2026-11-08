@@ -1,6 +1,8 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
+#include "query/optimizer/analysis/plan_analysis.hpp"
+#include "query/optimizer/analysis/property_demand.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
 #include "query/optimizer/framework/memo.hpp"
@@ -889,23 +891,35 @@ static std::unordered_set<binder::SlotId> computeFilterDeferredSlots(const PlanC
 /// Slots referenced by the RETURN Project but not by the Sort/Filter side
 /// below it. These are exactly the output-only columns whose materialization
 /// can move above LIMIT.
+static std::unordered_set<binder::SlotId> deferredSlotsFromSplit(const optimizer::SplitPEPlans& split) {
+    std::unordered_set<binder::SlotId> slots;
+    for (const auto& [_, plan] : split.deferred) {
+        if (plan.object_slot_id != binder::INVALID_SLOT_ID)
+            slots.insert(plan.object_slot_id);
+        if (plan.labels_slot_id != binder::INVALID_SLOT_ID)
+            slots.insert(plan.labels_slot_id);
+        if (plan.type_slot_id != binder::INVALID_SLOT_ID)
+            slots.insert(plan.type_slot_id);
+        slots.insert(plan.prop_slot_ids.begin(), plan.prop_slot_ids.end());
+        slots.insert(plan.edge_prop_slot_ids.begin(), plan.edge_prop_slot_ids.end());
+        for (const auto& [_, co] : plan.coalesce_vertices)
+            slots.insert(co.slot_id);
+    }
+    return slots;
+}
+
 static std::unordered_set<binder::SlotId> computeDeferredSlots(const PlanContext& ctx,
                                                                const binder::BoundProjectOp& project) {
-    std::unordered_set<binder::SlotId> project_slots;
-    for (const auto& item : project.items)
-        collectExprSlots(item.expr, project_slots);
-
-    std::unordered_set<binder::SlotId> used_below;
     bool has_write = false;
-    collectOpSlots(project.child, used_below, has_write);
+    std::unordered_set<binder::SlotId> unused_slots;
+    collectOpSlots(project.child, unused_slots, has_write);
     if (has_write)
         return {};
 
+    const auto demand = optimizer::analyzePropertyDemand(project, project.child);
     std::unordered_set<binder::SlotId> deferred;
-    for (binder::SlotId s : project_slots) {
-        if (s == binder::INVALID_SLOT_ID || used_below.contains(s))
-            continue;
-        if (isPEOutputSlot(ctx, s))
+    for (binder::SlotId s : demand.output_only) {
+        if (s != binder::INVALID_SLOT_ID && isPEOutputSlot(ctx, s))
             deferred.insert(s);
     }
     return deferred;
@@ -987,6 +1001,89 @@ static PlanOperatorResult materializeDeferredAfterLimit(PlanOperatorResult&& lim
     return materializeDeferred(std::move(limit_result), ctx, deferred, store, /*as_late_materialize=*/true);
 }
 
+/// Resolve the runtime representation kind of a direct entity reference from
+/// the already-planned child. Forwarded entities may still be VERTEX_REF /
+/// EDGE_KEY when no whole-object demand forced construction; carrying the
+/// semantic VERTEX/EDGE type in the output metadata would make downstream
+/// operators store a ref into a VertexValue column (and silently lose it).
+static std::optional<binder::BoundTypeKind> actualRefKind(const binder::BoundExpression& expr,
+                                                          const PlanOperatorResult& child) {
+    binder::SlotId slot = binder::INVALID_SLOT_ID;
+    std::string name;
+    if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr)) {
+        slot = cr->slot_id;
+        name = cr->name;
+    } else if (const auto* vr = std::get_if<binder::BoundVariableRef>(&expr)) {
+        name = vr->name;
+    } else {
+        return std::nullopt;
+    }
+    if (slot != binder::INVALID_SLOT_ID) {
+        int idx = child.slot_layout.getColumnIndex(slot);
+        if (idx >= 0 && static_cast<size_t>(idx) < child.output_types.size())
+            return child.output_types[idx].kind;
+    }
+    if (!name.empty()) {
+        for (size_t i = 0; i < child.output_schema.size() && i < child.output_types.size(); ++i) {
+            if (child.output_schema[i] == name)
+                return child.output_types[i].kind;
+        }
+    }
+    return std::nullopt;
+}
+
+/// Slot of a direct entity reference, if it carries one.
+static binder::SlotId directRefSlot(const binder::BoundExpression& expr, const PlanContext& ctx) {
+    if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr))
+        return cr->slot_id;
+    if (const auto* vr = std::get_if<binder::BoundVariableRef>(&expr)) {
+        if (vr->name.empty())
+            return binder::INVALID_SLOT_ID;
+        return ctx.resolver().canonicalForName(vr->name);
+    }
+    return binder::INVALID_SLOT_ID;
+}
+
+/// True when `slot` is a ProjectionExtract-constructed object column. Such a
+/// column holds a VertexValue/EdgeValue even if an upstream operator's stale
+/// output_types still says VERTEX_REF; downgrading its metadata would make the
+/// next operator store the object into a topology column and lose it.
+static bool isConstructedObjectSlot(const PlanContext& ctx, binder::SlotId slot) {
+    if (slot == binder::INVALID_SLOT_ID)
+        return false;
+    for (const auto& [canon, plan] : ctx.extraction_info) {
+        (void)canon;
+        if (plan.object_slot_id == slot)
+            return true;
+    }
+    return false;
+}
+
+/// Keep a semantic graph type only when the column still holds a constructed
+/// object. A topology-stage source (or ANY) is the accurate metadata.
+static binder::BoundType representationType(const binder::BoundType& declared, binder::BoundTypeKind actual) {
+    if (declared.kind == actual || !binder::isSemanticGraphKind(declared.kind))
+        return declared;
+    switch (actual) {
+    case binder::BoundTypeKind::VERTEX:
+        return binder::BoundType::Vertex();
+    case binder::BoundTypeKind::VERTEX_REF:
+        return binder::BoundType::VertexRef();
+    case binder::BoundTypeKind::EDGE:
+        return binder::BoundType::Edge();
+    case binder::BoundTypeKind::EDGE_KEY:
+        return binder::BoundType::EdgeKey();
+    case binder::BoundTypeKind::PATH:
+        return binder::BoundType::Path();
+    case binder::BoundTypeKind::PATH_TOPOLOGY:
+        return binder::BoundType::PathTopology();
+    case binder::BoundTypeKind::ANY:
+        return binder::BoundType::Any();
+    default:
+        return declared;
+    }
+}
+
 /// Shared Project materialization used both by the ordinary BoundProjectOp
 /// branch and by the LIMIT rewrite (Project moved above LIMIT).
 static PlanOperatorResult planProjectOperator(binder::BoundProjectOp& v, PlanOperatorResult&& child_result,
@@ -998,11 +1095,16 @@ static PlanOperatorResult planProjectOperator(binder::BoundProjectOp& v, PlanOpe
     std::vector<binder::BoundType> output_types;
     for (auto& item : v.items) {
         ProjectPhysicalOp::ProjectItem pi;
+        const auto actual_kind = actualRefKind(item.expr, child_result);
+        const binder::SlotId ref_slot = directRefSlot(item.expr, ctx);
         pi.expr = std::move(item.expr);
         pi.name = std::move(item.alias);
         items.push_back(std::move(pi));
         output_schema.push_back(items.back().name);
-        output_types.push_back(std::move(item.result_type));
+        binder::BoundType out_type = item.result_type;
+        if (actual_kind && !isConstructedObjectSlot(ctx, ref_slot))
+            out_type = representationType(out_type, *actual_kind);
+        output_types.push_back(std::move(out_type));
     }
 
     TupleSlotLayout proj_layout;
@@ -2723,8 +2825,10 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // constructed objects (VERTEX/EDGE) so it can skip allocating a redundant
     // $obj slot — dispatchProjectionExtract then skips the matching Construct.
     auto source_types = optimizer::collectSourceTypes(bound_plan.root, ctx.resolver(), &fresh_expands);
-    ctx.extraction_info =
-        optimizer::buildExtractionInfo(ctx.requirements, source_types, ctx.resolver(), ctx.slot_allocator);
+    ctx.split_pe_plans =
+        optimizer::buildExtractionPlans(ctx.requirements, source_types, ctx.resolver(),
+                                        optimizer::analyzePlan(bound_plan.root).property, ctx.slot_allocator);
+    ctx.extraction_info = ctx.split_pe_plans.all;
 
     // Phase 3 (Alias passthrough): For each Project item of the form
     // `BoundVariableRef(X) AS Y`, propagate X's derived PE columns through Y
@@ -3008,8 +3112,10 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     ctx.defer_disabled_by_pc = subtreeHasTrait(materialized, SubtreeTrait::PatternComprehension);
     ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver(), nullptr, &ctx.label_defs);
     auto source_types = optimizer::collectSourceTypes(materialized, ctx.resolver());
-    ctx.extraction_info =
-        optimizer::buildExtractionInfo(ctx.requirements, source_types, ctx.resolver(), ctx.slot_allocator);
+    ctx.split_pe_plans =
+        optimizer::buildExtractionPlans(ctx.requirements, source_types, ctx.resolver(),
+                                        optimizer::analyzePlan(materialized).property, ctx.slot_allocator);
+    ctx.extraction_info = ctx.split_pe_plans.all;
     optimizer::lowerAliasPassthrough(materialized, ctx.extraction_info, ctx.var_slots, ctx.alias_map,
                                      ctx.slot_allocator);
     optimizer::rewriteColumnIndices(materialized, ctx.extraction_info, ctx.resolver());
@@ -3199,6 +3305,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         ctx.filtered_expand = result.get();
                     }
                     ExpandPhysicalOp* expand_op = result.get();
+                    // Input index for a PE directly above this Expand.
                     int expand_dst_col = -1;
                     for (size_t ci = 0; ci < output_schema.size(); ++ci) {
                         if (output_schema[ci] == v.dst_variable) {
@@ -3225,8 +3332,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             }
                         }
                         if (broad_labels) {
+                            bool attached = false;
                             auto* pe = dynamic_cast<ProjectionExtractPhysicalOp*>(plan_result.op.get());
-                            if (pe && pe->setRequiredLabels(static_cast<size_t>(expand_dst_col), v.dst_label_ids))
+                            if (pe)
+                                attached = pe->setRequiredLabels(static_cast<size_t>(expand_dst_col), v.dst_label_ids);
+                            if (attached)
                                 expand_op->clearDstLabelFilter();
                         }
                     }
@@ -3331,7 +3441,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops,
                             v.max_hops, store, std::move(child_schema), std::move(child_op), v.path_variable,
                             v.path_slot_id, v.all_shortest_paths, v.dst_label_ids, v.dst_label_missing,
-                            v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value);
+                            v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value,
+                            v.batch_shortest_path);
                         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                               std::move(output_types), TupleSlotLayout{}};
                         plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
@@ -3581,6 +3692,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     std::vector<binder::BoundTypeKind> output_type_kinds;
                     for (size_t i = 0; i < group_keys.size(); ++i) {
                         auto gk_type = getBoundExprType(group_keys[i].expr);
+                        // A group key that is still a topology ref must keep a
+                        // ref/ANY column kind; declaring VERTEX would make
+                        // AggregatePhysicalOp store a VertexRef into a
+                        // VertexValue column and silently drop the key.
+                        const binder::SlotId ref_slot = directRefSlot(group_keys[i].expr, ctx);
+                        if (auto actual = actualRefKind(group_keys[i].expr, cr);
+                            actual && !isConstructedObjectSlot(ctx, ref_slot))
+                            gk_type = representationType(gk_type, *actual);
                         output_types.push_back(gk_type);
                         output_type_kinds.push_back(gk_type.kind);
                     }
@@ -3650,7 +3769,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // are deferred and materialized for the surviving rows only.
                     if (auto* pp = std::get_if<std::unique_ptr<binder::BoundProjectOp>>(&v.child); pp && *pp) {
                         auto& project = **pp;
-                        auto deferred = computeDeferredSlots(ctx, project);
+                        auto deferred = deferredSlotsFromSplit(ctx.split_pe_plans);
+                        if (deferred.empty())
+                            deferred = computeDeferredSlots(ctx, project);
                         if (!deferred.empty()) {
                             auto saved_deferred = std::move(ctx.deferred_slots);
                             ctx.deferred_slots = deferred;
@@ -4411,9 +4532,15 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_slots.reserve(v.outputs.size());
                     for (const auto& out : v.outputs)
                         output_slots.push_back(out.slot_id);
+                    int batch_column = v.batch_enabled ? findColumn(rr.output_schema, v.batch_var) : -1;
+                    if (v.batch_enabled && batch_column < 0 && !rr.output_schema.empty())
+                        batch_column = 0; // binder puts the batch key first
+                    const bool batch = batch_column >= 0 && !v.existence_only;
+                    const size_t list_column_start = batch_column >= 0 ? static_cast<size_t>(batch_column) + 1 : 0;
                     auto result = std::make_unique<PatternComprehensionApplyPhysicalOp>(
                         std::move(lr.op), std::move(rr.op), correlated, std::move(left_corr_cols),
-                        std::move(list_elem_types));
+                        std::move(list_elem_types), batch, static_cast<size_t>(batch_column >= 0 ? batch_column : 0),
+                        list_column_start);
                     result->setOutputSlots(std::move(output_slots));
                     // Existence-derived comprehensions (`NOT (a)-[:R]-(b)`,
                     // `EXISTS { ... }`, `WHERE (a)-->(b)`) are consumed only as

@@ -21,7 +21,7 @@ jobs:
   # Ubuntu with GCC
   build-gcc:
     name: Ubuntu (GCC)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       checks: write
@@ -148,7 +148,7 @@ jobs:
   # Code Coverage
   coverage:
     name: Code Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Smaller than the workflow-wide 1G: this is the 5th ccache entry and the
     # quota has to hold it together with the vcpkg archives.
     env:
@@ -316,7 +316,7 @@ jobs:
 
   build-clang:
     name: Ubuntu (Clang)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout code
@@ -440,7 +440,7 @@ jobs:
   # Format Check with clang-format
   format-check:
     name: Format Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: silkeh/clang:18
 
@@ -459,7 +459,7 @@ jobs:
   # Address Sanitizer
   asan:
     name: Address Sanitizer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       checks: write
@@ -654,7 +654,7 @@ jobs:
   asan-tck:
     name: Address Sanitizer (TCK)
     needs: asan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -755,7 +755,7 @@ jobs:
   # Undefined Behavior Sanitizer
   ubsan:
     name: Undefined Behavior Sanitizer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       checks: write
@@ -913,7 +913,7 @@ jobs:
   # Static Analysis with clang-tidy
   static-analysis:
     name: Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout code

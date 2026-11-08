@@ -1,11 +1,13 @@
 #include "query/optimizer/logical_optimizer.hpp"
 #include "common/config/env_vars.hpp"
 
+#include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
+#include "query/optimizer/rules/logical/tag_anchored_join_reorder.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
@@ -36,7 +38,8 @@ bool hasFullObjectEnricher(const ChosenPlan& plan) {
 
 } // namespace
 
-void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog) {
+void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog,
+                                const std::unordered_map<LabelId, uint64_t>* label_vertex_counts) {
     // A LogicalOptimizer instance may be reused. Reset per-query state before
     // building a fresh search space; otherwise rules_ accumulates duplicate
     // rule indices and memo_ cross-query deduplicates unrelated plans.
@@ -44,9 +47,19 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     rules_ = RuleSet{};
     initRules();
 
+    // Join-direction rewrite for the LDBC c6 tag-co-occurrence shape: the
+    // selective knownTag anchor should drive the pattern. Guarded by label
+    // cardinality estimates; other shapes are untouched.
+    if (catalog)
+        rewriteTagAnchoredJoin(plan, catalog, label_vertex_counts);
+
     // Make the catalog available to LogProp derivation. Group::getLogProp
     // picks it up via Memo::getCatalog() during OInputsTask cost computation.
     memo_.setCatalog(catalog);
+
+    // Structural optimizer pass (no CBO statistics): choose the bounded
+    // multi-target shortestPath execution strategy before memoization.
+    markShortestPathBatch(plan.root);
 
     auto root_gid = memo_.copyIn(plan.root);
 

@@ -156,3 +156,11 @@ complex-3      99.28      96.32     0.970
   `verify_ldbc_results.py` 21/21。
 - 剩余：c9 的 53k 次 coalesce 属性读仍是主体（~65 ms），需要存储布局；c14 的 Person
   标签不在门控内（小标签，延迟无收益）。
+
+## 9. c6 Expand→Expand 扩展（2026-11-07，已回退）
+
+2026-11-07 曾按 §6 的 D1 方向实现 labels-only PE，但热身后同轮 A/B 发现：
+c10 59→41ms、c14 127→85ms（关闭 D1 后恢复），D1 的 labels-only PE 对
+Comment/Post 等大标签的普通 Expand 是纯额外 reading，收益只在 c6 的
+Expand→Expand 形状；而 c6 已由 tag-anchored join reorder 取代（2.1s→56ms）。
+因此 D1 wrapper 已完整回退，仅保留 coalesce 路径的 `setRequiredLabels`。

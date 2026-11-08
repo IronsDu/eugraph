@@ -29,58 +29,102 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
             list_buffers.push_back(std::move(buf));
         }
 
-        for (size_t i = 0; i < n_left; ++i) {
-            // Inject the left row directly; the chunk stays alive while the
-            // right sub-plan drains, so no per-row vector<Value> is needed.
-            correlated_source_->setRowFromChunk(in_chunk, i, left_correlation_cols_);
+        // Empty list for rows without a matching right row (batch Aggregate
+        // emits no group row for an empty batch).
+        for (size_t oi = 0; oi < list_element_types_.size(); ++oi)
+            for (size_t i = 0; i < n_left; ++i)
+                list_buffers[oi]->list_data[i] = mk<ListValue>(ListValue{});
 
-            // Drain the right sub-plan. The right sub-plan ends with
-            // Aggregate(collect(...)) emitting one row per group; with no
-            // group keys we get a single row whose column[oi] IS the fully
-            // collected ListValue.
-            std::vector<ListValue> collected;
-            collected.resize(list_element_types_.size());
-            // Existence-only: every consumer of this column reads it solely
-            // through the synthesised `size(list) > 0` predicate, so the list
-            // contents are dead — only its emptiness is observable. Stop at the
-            // first matching row and keep a single dummy element, which yields
-            // exactly the same truth value (`0 > 0` false / `1 > 0` true) while
-            // skipping the rest of the correlated sub-plan and the whole
-            // collect() materialisation.
-            bool existence_hit = false;
-            auto right_gen = cancellable(right_->executeChunkTraced());
-            while (auto right_chunk = co_await right_gen.next()) {
-                if (!right_chunk || right_chunk->count == 0)
-                    continue;
-                for (size_t oi = 0; oi < list_element_types_.size(); ++oi) {
-                    if (oi >= right_chunk->columns.size())
-                        break;
-                    Value v = right_chunk->columns[oi].getValue(0);
-                    if (std::holds_alternative<ListValuePtr>(v)) {
-                        auto& lv = (*std::get<ListValuePtr>(v));
-                        if (existence_only_) {
-                            if (!lv.elements.empty() && collected[oi].elements.empty())
-                                collected[oi].elements.push_back(ValueStorage{Value{int64_t{1}}});
-                        } else {
-                            collected[oi] = std::move(lv);
-                        }
-                    } else if (!::eugraph::isNull(v)) {
-                        collected[oi].elements.push_back(ValueStorage{std::move(v)});
-                    }
+        if (batch_enabled_ && n_left > 0) {
+            for (size_t base = 0; base < n_left; base += kBatchSize) {
+                const size_t end = std::min(n_left, base + kBatchSize);
+                std::vector<std::vector<Value>> corr_rows;
+                corr_rows.reserve(end - base);
+                for (size_t i = base; i < end; ++i) {
+                    std::vector<Value> values;
+                    values.reserve(left_correlation_cols_.size() + 1);
+                    for (uint32_t col : left_correlation_cols_)
+                        values.push_back(in_chunk.columns[col].getValue(i));
+                    values.push_back(Value{static_cast<int64_t>(i - base)});
+                    corr_rows.push_back(std::move(values));
                 }
-                if (existence_only_) {
-                    for (const auto& lv : collected) {
-                        if (!lv.elements.empty()) {
-                            existence_hit = true;
-                            break;
+                correlated_source_->setRows(std::move(corr_rows));
+
+                auto right_gen = cancellable(right_->executeChunkTraced());
+                while (auto right_chunk = co_await right_gen.next()) {
+                    if (!right_chunk || right_chunk->count == 0)
+                        continue;
+                    for (size_t r = 0; r < right_chunk->count; ++r) {
+                        if (batch_column_ >= right_chunk->columns.size())
+                            continue;
+                        Value bid_value = right_chunk->columns[batch_column_].getValue(r);
+                        const auto* bid = std::get_if<int64_t>(&bid_value);
+                        if (!bid || *bid < 0 || static_cast<size_t>(*bid) >= end - base)
+                            continue;
+                        const size_t row = base + static_cast<size_t>(*bid);
+                        for (size_t oi = 0; oi < list_element_types_.size(); ++oi) {
+                            const size_t col = list_column_start_ + oi;
+                            if (col >= right_chunk->columns.size())
+                                break;
+                            Value v = right_chunk->columns[col].getValue(r);
+                            if (auto* lv = std::get_if<ListValuePtr>(&v)) {
+                                if (*lv)
+                                    list_buffers[oi]->list_data[row] = mk<ListValue>(**lv);
+                            } else if (!::eugraph::isNull(v)) {
+                                ListValue one;
+                                one.elements.push_back(ValueStorage{std::move(v)});
+                                list_buffers[oi]->list_data[row] = mk<ListValue>(std::move(one));
+                            }
                         }
                     }
-                    if (existence_hit)
-                        break;
                 }
             }
-            for (size_t oi = 0; oi < list_element_types_.size(); ++oi) {
-                list_buffers[oi]->list_data[i] = mk<ListValue>(std::move(collected[oi]));
+        } else {
+            for (size_t i = 0; i < n_left; ++i) {
+                std::vector<Value> values;
+                values.reserve(left_correlation_cols_.size() + 1);
+                for (uint32_t col : left_correlation_cols_)
+                    values.push_back(in_chunk.columns[col].getValue(i));
+                values.push_back(Value{int64_t{0}});
+                correlated_source_->setValues(values);
+
+                std::vector<ListValue> collected;
+                collected.resize(list_element_types_.size());
+                bool existence_hit = false;
+                auto right_gen = cancellable(right_->executeChunkTraced());
+                while (auto right_chunk = co_await right_gen.next()) {
+                    if (!right_chunk || right_chunk->count == 0)
+                        continue;
+                    for (size_t oi = 0; oi < list_element_types_.size(); ++oi) {
+                        const size_t col = list_column_start_ + oi;
+                        if (col >= right_chunk->columns.size())
+                            break;
+                        Value v = right_chunk->columns[col].getValue(0);
+                        if (std::holds_alternative<ListValuePtr>(v)) {
+                            auto& lv = (*std::get<ListValuePtr>(v));
+                            if (existence_only_) {
+                                if (!lv.elements.empty() && collected[oi].elements.empty())
+                                    collected[oi].elements.push_back(ValueStorage{Value{int64_t{1}}});
+                            } else {
+                                collected[oi] = std::move(lv);
+                            }
+                        } else if (!::eugraph::isNull(v)) {
+                            collected[oi].elements.push_back(ValueStorage{std::move(v)});
+                        }
+                    }
+                    if (existence_only_) {
+                        for (const auto& lv : collected) {
+                            if (!lv.elements.empty()) {
+                                existence_hit = true;
+                                break;
+                            }
+                        }
+                        if (existence_hit)
+                            break;
+                    }
+                }
+                for (size_t oi = 0; oi < list_element_types_.size(); ++oi)
+                    list_buffers[oi]->list_data[i] = mk<ListValue>(std::move(collected[oi]));
             }
         }
 

@@ -60,15 +60,16 @@ ShortestPathPhysicalOp::ShortestPathPhysicalOp(
     cypher::RelationshipDirection direction, int64_t min_hops, int64_t max_hops, IAsyncGraphDataStore& store,
     Schema input_schema, std::unique_ptr<PhysicalOperator> child, std::string path_var, binder::SlotId path_slot,
     bool all_shortest_paths, std::vector<LabelId> dst_label_ids, bool dst_label_missing, uint32_t src_filter_index_id,
-    PropertyValue src_filter_value, uint32_t dst_filter_index_id, PropertyValue dst_filter_value)
+    PropertyValue src_filter_value, uint32_t dst_filter_index_id, PropertyValue dst_filter_value,
+    bool batch_shortest_path)
     : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), label_filters_(std::move(label_filters)),
       direction_(direction), forward_dir_(scanDirection(direction)), backward_dir_(oppositeDirection(forward_dir_)),
       min_hops_(min_hops), max_hops_(max_hops), store_(store), input_schema_(std::move(input_schema)),
       child_(std::move(child)), path_var_(std::move(path_var)), path_slot_(path_slot),
-      all_shortest_paths_(all_shortest_paths), dst_label_ids_(std::move(dst_label_ids)),
-      dst_label_missing_(dst_label_missing), src_filter_index_id_(src_filter_index_id),
-      src_filter_value_(std::move(src_filter_value)), dst_filter_index_id_(dst_filter_index_id),
-      dst_filter_value_(std::move(dst_filter_value)) {
+      all_shortest_paths_(all_shortest_paths), batch_shortest_path_(batch_shortest_path),
+      dst_label_ids_(std::move(dst_label_ids)), dst_label_missing_(dst_label_missing),
+      src_filter_index_id_(src_filter_index_id), src_filter_value_(std::move(src_filter_value)),
+      dst_filter_index_id_(dst_filter_index_id), dst_filter_value_(std::move(dst_filter_value)) {
     if (!label_filters_.has_value()) {
         scan_filters_.push_back(std::nullopt);
     } else {
@@ -348,6 +349,75 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
     co_return buildPath(start, forward_links);
 }
 
+folly::coro::Task<std::unordered_map<VertexId, PathValue>>
+ShortestPathPhysicalOp::shortestPathsFromSource(VertexId start, const std::vector<VertexId>& targets) {
+    std::unordered_map<VertexId, PathValue> result;
+    if (max_hops_ < 0 || max_hops_ > 8)
+        co_return result;
+
+    std::unordered_set<VertexId> wanted(targets.begin(), targets.end());
+    std::unordered_map<VertexId, Visit> visits;
+    visits.emplace(start, Visit{0, {}, false});
+    std::vector<VertexId> frontier{start};
+
+    for (int depth = 1; depth <= static_cast<int>(max_hops_) && !frontier.empty(); ++depth) {
+        std::vector<VertexId> next;
+        auto frontier_lists = co_await scanBatch(frontier, forward_dir_);
+        for (size_t fi = 0; fi < frontier.size(); ++fi) {
+            if (cancelled())
+                co_return result;
+            const VertexId v = frontier[fi];
+            for (const auto& e : *frontier_lists[fi]) {
+                if (e.id == start || visits.contains(e.id))
+                    continue;
+                Visit visit;
+                visit.dist = depth;
+                visit.parent = e.link;
+                visit.has_parent = true;
+                visits.emplace(e.id, visit);
+                next.push_back(e.id);
+            }
+        }
+        frontier = std::move(next);
+        bool all_found = true;
+        for (VertexId target : wanted) {
+            auto it = visits.find(target);
+            if (it == visits.end() || it->second.dist > depth) {
+                all_found = false;
+                break;
+            }
+        }
+        if (all_found)
+            break;
+    }
+
+    if (wanted.contains(start) && min_hops_ <= 0)
+        result.emplace(start, buildPath(start, {}));
+    for (VertexId target : targets) {
+        if (target == start)
+            continue;
+        auto it = visits.find(target);
+        if (it == visits.end() || !it->second.has_parent)
+            continue;
+        if (it->second.dist < min_hops_ || it->second.dist > max_hops_)
+            continue;
+        std::vector<EdgeLink> links;
+        VertexId cur = target;
+        while (cur != start) {
+            auto node = visits.find(cur);
+            if (node == visits.end() || !node->second.has_parent)
+                break;
+            links.push_back(node->second.parent);
+            cur = node->second.parent.from;
+        }
+        if (cur != start || links.size() != static_cast<size_t>(it->second.dist))
+            continue;
+        std::reverse(links.begin(), links.end());
+        result.emplace(target, buildPath(start, links));
+    }
+    co_return result;
+}
+
 folly::coro::AsyncGenerator<PathValue> ShortestPathPhysicalOp::allShortestPaths(VertexId start, VertexId end) {
     auto one = co_await shortestBidirectional(start, end);
     if (!one.has_value())
@@ -477,6 +547,10 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
             return output;
         };
 
+        std::vector<VertexId> row_start(input_rows, INVALID_VERTEX_ID);
+        std::vector<VertexId> row_end(input_rows, INVALID_VERTEX_ID);
+        std::vector<bool> row_valid(input_rows, false);
+        std::unordered_map<VertexId, std::vector<size_t>> groups;
         for (size_t row = 0; row < input_rows; ++row) {
             if (src_col_idx_ < 0 || dst_col_idx_ < 0)
                 continue;
@@ -490,8 +564,39 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
                 continue;
             if (!co_await hasDstLabels(end))
                 continue;
+            row_start[row] = start;
+            row_end[row] = end;
+            row_valid[row] = true;
+            groups[start].push_back(row);
+        }
 
-            if (all_shortest_paths_) {
+        std::vector<std::optional<PathValue>> row_paths(input_rows);
+        if (batch_shortest_path_ && !all_shortest_paths_) {
+            for (const auto& [start, rows] : groups) {
+                if (rows.size() < 2)
+                    continue;
+                std::vector<VertexId> targets;
+                targets.reserve(rows.size());
+                for (size_t row : rows)
+                    targets.push_back(row_end[row]);
+                auto paths = co_await shortestPathsFromSource(start, targets);
+                for (size_t row : rows) {
+                    auto it = paths.find(row_end[row]);
+                    if (it != paths.end())
+                        row_paths[row] = it->second;
+                }
+            }
+        }
+
+        for (size_t row = 0; row < input_rows; ++row) {
+            if (!row_valid[row])
+                continue;
+            const VertexId start = row_start[row];
+            const VertexId end = row_end[row];
+            if (row_paths[row].has_value()) {
+                pending_path_elements += row_paths[row]->elements.size();
+                pending.emplace_back(row, std::move(*row_paths[row]));
+            } else if (all_shortest_paths_) {
                 auto paths = allShortestPaths(start, end);
                 while (auto path = co_await paths.next()) {
                     pending_path_elements += path->elements.size();
@@ -500,7 +605,7 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
                         pending_path_elements >= MAX_PENDING_PATH_ELEMENTS)
                         co_yield flush();
                 }
-            } else {
+            } else if (!batch_shortest_path_ || groups[start].size() == 1) {
                 auto path = co_await shortestBidirectional(start, end);
                 if (path.has_value()) {
                     pending_path_elements += path->elements.size();

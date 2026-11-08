@@ -1233,7 +1233,9 @@ std::optional<cypher::Expression> anchorPred(const cypher::Expression& expr, con
 
 std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::ExistsExpr& exists,
                                                               std::vector<std::pair<uint32_t, uint32_t>>& correlation,
-                                                              const std::vector<std::string>& preset_corr_vars) {
+                                                              const std::vector<std::string>& preset_corr_vars,
+                                                              const std::string& extra_corr_var,
+                                                              SlotId extra_corr_slot) {
     bool is_full_query = (exists.full_query != nullptr);
     // For full EXISTS subquery, extract the first MATCH clause's patterns
     // into a local vector to reuse the simple EXISTS binding path.
@@ -1622,7 +1624,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
 
     // Create the source leaf operator
     BoundLogicalOperator source_op;
-    if (is_correlated || !correlation.empty()) {
+    if (is_correlated || !correlation.empty() || !extra_corr_var.empty()) {
         BoundCorrelatedSourceOp source;
         for (const auto& [outer_slot, sub_slot] : correlation) {
             for (const auto& [name, info] : ctx_.symbols) {
@@ -1639,6 +1641,15 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 }
             }
         }
+        if (!extra_corr_var.empty()) {
+            // Internal batch key used by PatternComprehensionApply; it is not
+            // a user variable and has no outer column (column index 0 is a
+            // placeholder for LogProp).
+            source.variables.push_back(extra_corr_var);
+            source.types.push_back(BoundType::Int64());
+            source.column_indices.push_back(0);
+            source.slot_ids.push_back(extra_corr_slot);
+        }
         if (!is_correlated) {
             // Nested EXISTS: start var not correlated, but extra vars are.
             // CrossJoin CorrelatedSource(extras) + Scan(start_var).
@@ -1649,7 +1660,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             join->right = std::move(start_scan);
             source_op = BoundLogicalOperator(std::move(join));
             // start_var's column_index shifted by number of extra correlation cols.
-            size_t extra_cols = correlation.size();
+            size_t extra_cols = correlation.size() + (extra_corr_var.empty() ? 0 : 1);
             if (auto* col = ctx_.lookup(start_var_name))
                 const_cast<ColumnInfo*>(col)->column_index += static_cast<uint32_t>(extra_cols);
         } else {
@@ -2150,9 +2161,11 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
         synthetic.where_pred = cloneExpression(*pc.where_pred);
 
     std::vector<std::pair<uint32_t, uint32_t>> exists_corr;
+    const std::string batch_var = "__pc_batch_" + std::to_string(nextAnonId());
+    const SlotId batch_slot = allocateNamedSlot(batch_var);
     const bool saved_correlated = ctx_.in_correlated_subplan;
     ctx_.in_correlated_subplan = true;
-    auto sub_plan = bindExistsSubPlan(synthetic, exists_corr, preset_corr_vars);
+    auto sub_plan = bindExistsSubPlan(synthetic, exists_corr, preset_corr_vars, batch_var, batch_slot);
     ctx_.in_correlated_subplan = saved_correlated;
     if (!sub_plan)
         return std::nullopt;
@@ -2193,6 +2206,12 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     item.result_type = out_element_type;
     item.output_slot = INVALID_SLOT_ID;
     proj_op->items.push_back(std::move(item));
+    BoundProjectOp::ProjectItem batch_item;
+    batch_item.expr = BoundColumnRef(1, BoundType::Int64(), batch_var, batch_slot);
+    batch_item.alias = batch_var;
+    batch_item.result_type = BoundType::Int64();
+    batch_item.output_slot = batch_slot;
+    proj_op->items.push_back(std::move(batch_item));
     proj_op->child = std::move(*sub_plan);
     sub_plan = std::move(proj_op);
 
@@ -2216,6 +2235,8 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     agg_item.is_internal = false; // must be visible — PCApply reads this column directly
     agg_item.keeps_nulls = true;  // collect() must retain nulls for pattern comprehension
     agg_op->aggregates.push_back(std::move(agg_item));
+    agg_op->group_keys.push_back(BoundExpression(BoundColumnRef(1, BoundType::Int64(), batch_var, batch_slot)));
+    agg_op->output_names.push_back(batch_var);
     agg_op->output_names.push_back("__pc_list");
     agg_op->child = std::move(*sub_plan);
     sub_plan = std::move(agg_op);
@@ -2237,6 +2258,9 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     out.name = out_name;
     out.element_type = out_element_type;
     apply->outputs.push_back(std::move(out));
+    apply->batch_enabled = true;
+    apply->batch_slot_id = batch_slot;
+    apply->batch_var = batch_var;
     return BoundLogicalOperator(std::move(apply));
 }
 

@@ -40,7 +40,8 @@ See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
 - `framework/` — memo/tasks/rules/CBO.
 - `analysis/` — `requirement_collector` + materialization model.
 - `extraction/` — `projection_extraction` (PEPlan, slot and expression lowering).
-- `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`.
+- `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`, plus the
+  guarded `TagAnchoredJoinReorder` pre-pass (c6 shape only).
 - `rules/physical/` — implementation rules.
 
 ## 3. Columbia mapping and gaps
@@ -56,7 +57,8 @@ Implemented:
 
 Deliberately not yet implemented (framework supports adding them):
 
-- join-order enumeration/reordering rules;
+- general join-order enumeration/reordering rules (the c6 tag-anchored
+  pre-pass is a single guarded shape, not a general reorder);
 - general projection/column-pruning rules (projection pushdown is currently a
   deterministic pass, not a memo rule);
 - aggregate/distinct pushdown rules;

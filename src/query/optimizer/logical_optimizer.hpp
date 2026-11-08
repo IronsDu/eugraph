@@ -21,7 +21,8 @@ public:
 
     /// Optimize the logical plan. The catalog provides cardinality statistics
     /// for LogProp derivation; nullptr uses default estimates.
-    void optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog = nullptr);
+    void optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog = nullptr,
+                  const std::unordered_map<LabelId, uint64_t>* label_vertex_counts = nullptr);
 
 private:
     Memo memo_;

@@ -274,7 +274,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // optimizer pass: the binder collected semantic property references, the
     // optimizer turns them into scan/expand property demand.
     optimizer::LogicalOptimizer logical_optimizer;
-    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get());
+    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get(), &ctx->label_vertex_counts);
 
     // 3. Physical planning. Try CBO-chosen plan first (Phase 4); fall back
     // to planBound (RBO over the optimized logical tree) when no winner.

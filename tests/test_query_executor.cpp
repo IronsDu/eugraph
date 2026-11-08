@@ -25,6 +25,7 @@
 #include <folly/coro/BlockingWait.h>
 #include <limits>
 #include <set>
+#include <sstream>
 
 using namespace eugraph;
 using namespace eugraph::compute;
@@ -5476,6 +5477,31 @@ TEST_F(QueryExecutorTest, PatternComprehensionInsideListComprehension) {
     }
 }
 
+TEST_F(QueryExecutorTest, PatternComprehensionBatchMultipleRows) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p1:Person {id: 1})-[:KNOWS]->(p2:Person {id: 2})-[:KNOWS]->"
+                                     "(p3:Person {id: 3}), (p4:Person {id: 4})")
+                    .error.empty());
+
+    auto result = execSync(*executor_, "UNWIND [1, 2, 4] AS id "
+                                       "MATCH (p:Person {id: id}) "
+                                       "RETURN id, [(p)-[:KNOWS]->(f) | f.id] AS fs ORDER BY id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3u);
+    std::vector<int64_t> expected_ids = {1, 2, 4};
+    std::vector<std::vector<int64_t>> expected = {{2}, {3}, {}};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][0]));
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][0]), expected_ids[i]);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[i][1]));
+        const auto& lv = (*std::get<ListValuePtr>(result.rows[i][1]));
+        ASSERT_EQ(lv.elements.size(), expected[i].size());
+        for (size_t j = 0; j < lv.elements.size(); ++j) {
+            ASSERT_TRUE(std::holds_alternative<int64_t>(lv.elements[j].value));
+            EXPECT_EQ(std::get<int64_t>(lv.elements[j].value), expected[i][j]);
+        }
+    }
+}
+
 // ── A comprehension whose pattern endpoint is an enclosing variable ──
 //
 // The fixture is built so the two candidate answers differ: `p`'s own post carries
@@ -10494,6 +10520,54 @@ TEST_F(QueryExecutorTest, DeferredDestinationLabelFilterDropsRows) {
         << "deferred destination-label filter was not attached";
 }
 
+/// LDBC c6 tag co-occurrence: the selective knownTag anchor must drive the
+/// pattern instead of expanding every friend's posts first. The rewrite is
+/// gated by Tag << Post cardinality and a one-row friends aggregate.
+TEST_F(QueryExecutorTest, C6TagAnchoredReorder) {
+    auto tag_id = blockingWait(async_meta_->createLabel("Tag"));
+    ASSERT_NE(tag_id, INVALID_LABEL_ID);
+    auto post_id = blockingWait(async_meta_->createLabel("Post"));
+    ASSERT_NE(post_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(tag_id));
+    blockingWait(async_data_->createLabel(post_id));
+    async_meta_->setLabelVertexCount(tag_id, 100);
+    async_meta_->setLabelVertexCount(post_id, 1000);
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+
+    ASSERT_TRUE(execSync(*executor_, "CREATE (known:Tag {id: 100, name: 'known'}), "
+                                     "(co:Tag {id: 101, name: 'co'}), "
+                                     "(p1:Person {id: 1})-[:KNOWS]->(p2:Person {id: 2}), "
+                                     "(post:Post {id: 10}), "
+                                     "(post)-[:HAS_CREATOR]->(p2), "
+                                     "(post)-[:HAS_TAG]->(known), "
+                                     "(post)-[:HAS_TAG]->(co)")
+                    .error.empty());
+
+    const std::string query = "MATCH (knownTag:Tag {name: 'known'}) "
+                              "WITH knownTag.id AS knownTagId "
+                              "MATCH (person:Person {id: 1})-[:KNOWS*1..2]-(friend) "
+                              "WHERE NOT person = friend "
+                              "WITH knownTagId, collect(distinct friend) AS friends "
+                              "UNWIND friends AS f "
+                              "MATCH (f)<-[:HAS_CREATOR]-(post:Post), "
+                              "      (post)-[:HAS_TAG]->(t:Tag {id: knownTagId}), "
+                              "      (post)-[:HAS_TAG]->(tag:Tag) "
+                              "WHERE NOT t = tag "
+                              "WITH tag.name AS tagName, count(post) AS postCount "
+                              "RETURN tagName, postCount ORDER BY postCount DESC, tagName ASC LIMIT 10";
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "co");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1);
+
+    std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("Expand(src=knownTag"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("Expand(src=f, dst=post"), std::string::npos) << plan;
+}
+
 // ==================== operator-level trace attribution ====================
 
 namespace {
@@ -10605,6 +10679,118 @@ TEST_F(QueryExecutorTest, FilterBoundaryDeferredSortKeyKeepsCorrectTopN) {
     ASSERT_EQ(result.rows.size(), 2u);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "delta");
     EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "charlie");
+}
+
+// ==================== Identity-only whole-object demand ====================
+
+/// `WITH n RETURN n.name` only needs identity + a flat property. Treating the
+/// WITH forward as a whole-object consumer made ProjectionExtract construct a
+/// full VertexValue (labels + every property) for every row before the final
+/// projection. The entity is never returned as an object here.
+TEST_F(QueryExecutorTest, WithForwardedVertexPropertyAccessDoesNotConstructObject) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:Person {name: 'a', age: 1})").error.empty());
+
+    std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person) WITH n RETURN n.name");
+    ASSERT_FALSE(plan.empty());
+    EXPECT_EQ(plan.find("ctor-vertex"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, "MATCH (n:Person) WITH n RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "a");
+}
+
+/// Same shape with a GROUP BY: `WITH n, count(*)` groups by identity; the
+/// group key does not need a constructed object just because it is a vertex.
+TEST_F(QueryExecutorTest, AggregateGroupKeyPropertyAccessDoesNotConstructObject) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:Person {name: 'a'}), (:Person {name: 'b'})").error.empty());
+
+    std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person) WITH n, count(*) AS c RETURN n.name, c");
+    ASSERT_FALSE(plan.empty());
+    EXPECT_EQ(plan.find("ctor-vertex"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, "MATCH (n:Person) WITH n, count(*) AS c RETURN n.name, c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+}
+
+/// Guard: returning the entity itself must still construct the object.
+TEST_F(QueryExecutorTest, WithForwardedVertexReturnedWholeKeepsObject) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:Person {name: 'a', age: 7})").error.empty());
+
+    std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person) WITH n RETURN n");
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("ctor-vertex"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, "MATCH (n:Person) WITH n RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(result.rows[0][0]));
+    auto& vv = *std::get<VertexValuePtr>(result.rows[0][0]);
+    EXPECT_FALSE(vv.properties.empty());
+}
+
+/// c5 shape: `WITH forum, collect(friend)` / `WITH forum, count(post)` only
+/// group by the forum's identity. The PE above the HAS_MEMBER Expand must not
+/// construct a forum VertexValue (friend's collect object may remain).
+TEST_F(QueryExecutorTest, C5LikeGroupKeyDoesNotConstructForumBeforeMembershipFilter) {
+    ASSERT_TRUE(execSync(*executor_,
+                         "CREATE (p:Person {id: 1}), (f1:Person {id: 2}), (f2:Person {id: 3}), "
+                         "(forum1:Forum {id: 10, title: 'forum-a'}), (forum2:Forum {id: 11, title: 'forum-b'}), "
+                         "(post1:Post {id: 100}), (post2:Post {id: 101}), "
+                         "(p)-[:KNOWS]->(f1), (p)-[:KNOWS]->(f2), "
+                         "(forum1)-[:HAS_MEMBER {joinDate: 1}]->(f1), "
+                         "(forum2)-[:HAS_MEMBER {joinDate: 1}]->(f2), "
+                         "(forum1)-[:CONTAINER_OF]->(post1), (forum2)-[:CONTAINER_OF]->(post2), "
+                         "(post1)-[:HAS_CREATOR]->(f1), (post2)-[:HAS_CREATOR]->(f2)")
+                    .error.empty());
+
+    const std::string query = "MATCH (person:Person {id: 1})-[:KNOWS*1..2]-(friend:Person) "
+                              "WHERE NOT person = friend "
+                              "WITH DISTINCT friend "
+                              "MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum) "
+                              "WHERE membership.joinDate > 0 "
+                              "WITH forum, collect(friend) AS friends "
+                              "OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum) "
+                              "WHERE friend IN friends "
+                              "WITH forum, count(post) AS postCount "
+                              "RETURN forum.title AS forumName, postCount "
+                              "ORDER BY postCount DESC, forum.id ASC LIMIT 20";
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "forum-a");
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "forum-b");
+
+    std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    std::vector<std::string> lines;
+    std::istringstream stream(plan);
+    for (std::string line; std::getline(stream, line);)
+        lines.push_back(line);
+    int expand_idx = -1;
+    for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
+        if (lines[i].find("Expand(") != std::string::npos && lines[i].find("edge=membership") != std::string::npos) {
+            expand_idx = i;
+            break;
+        }
+    }
+    ASSERT_GE(expand_idx, 0) << plan;
+    int pe_idx = -1;
+    for (int i = expand_idx - 1; i >= 0; --i) {
+        if (lines[i].find("ProjectionExtract(specs=") != std::string::npos) {
+            pe_idx = i;
+            break;
+        }
+    }
+    ASSERT_GE(pe_idx, 0) << plan;
+    EXPECT_NE(lines[pe_idx].find("forum<pass>"), std::string::npos) << lines[pe_idx];
+    const size_t ctor_pos = lines[pe_idx].find("ctor-vertex");
+    const size_t second_ctor =
+        ctor_pos == std::string::npos ? std::string::npos : lines[pe_idx].find("ctor-vertex", ctor_pos + 1);
+    EXPECT_EQ(second_ctor, std::string::npos) << lines[pe_idx];
 }
 
 /// A correlated anti-join above a VarLenExpand used to see an empty left slot

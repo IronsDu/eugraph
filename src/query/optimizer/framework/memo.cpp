@@ -873,6 +873,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
                 c->shortest_path = val->shortest_path;
                 c->all_shortest_paths = val->all_shortest_paths;
+                c->batch_shortest_path = val->batch_shortest_path;
                 c->edge_variable = val->edge_variable;
                 c->edge_column_index = val->edge_column_index;
                 c->edge_slot_id = val->edge_slot_id;
@@ -905,6 +906,9 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 auto c = std::make_unique<binder::BoundPatternComprehensionApplyOp>();
                 c->correlation = val->correlation;
+                c->batch_enabled = val->batch_enabled;
+                c->batch_slot_id = val->batch_slot_id;
+                c->batch_var = val->batch_var;
                 for (const auto& out : val->outputs) {
                     binder::BoundPatternComprehensionApplyOp::Output co;
                     co.slot_id = out.slot_id;
