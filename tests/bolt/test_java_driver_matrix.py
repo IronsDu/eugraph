@@ -8,6 +8,7 @@ visible in one place, matching the Python and JS matrices.
 """
 
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -17,10 +18,27 @@ import pytest
 
 
 # Keep this list aligned with test_python_driver_matrix.py / test_js_driver_matrix.py:
-# one Bolt 4.4 driver and one current 5.x driver.
+# one Bolt 4.4 driver and one current 5.x driver.  The 5.x jar comes from the
+# Neo4j distribution, whose patch version moves between CI images; discover the
+# installed 5.28.x version instead of pinning a patch release.
+_DRIVER_GLOB_PREFIX = "5.28"
+
+
+def _discover_5x_version():
+    lib_dir = os.environ.get("NEO4J_JAVA_DRIVER_LIB_DIR")
+    if not lib_dir:
+        return _DRIVER_GLOB_PREFIX + ".x"
+    jars = sorted(Path(lib_dir).glob(f"neo4j-java-driver-{_DRIVER_GLOB_PREFIX}.*.jar"))
+    if jars:
+        match = re.search(r"neo4j-java-driver-([0-9.]+)\.jar$", jars[-1].name)
+        if match:
+            return match.group(1)
+    return _DRIVER_GLOB_PREFIX + ".x"
+
+
 JAVA_DRIVER_VERSIONS = [
     "4.4.3",
-    "5.28.15",
+    _discover_5x_version(),
 ]
 
 
@@ -61,6 +79,13 @@ def _driver_jar_for_version(version):
 
     lib_dir = os.environ.get("NEO4J_JAVA_DRIVER_LIB_DIR")
     assert lib_dir, "NEO4J_JAVA_DRIVER_LIB_DIR is not set"
+    if version.endswith(".x"):
+        jars = sorted(Path(lib_dir).glob(f"neo4j-java-driver-{_DRIVER_GLOB_PREFIX}.*.jar"))
+        assert jars, (
+            f"no neo4j-java-driver-{_DRIVER_GLOB_PREFIX}.*.jar under {lib_dir}; "
+            "set NEO4J_JAVA_DRIVER_LIB_DIR or CMake's NEO4J_JAVA_DRIVER_JAR"
+        )
+        return jars[-1]
     jar = Path(lib_dir) / f"neo4j-java-driver-{version}.jar"
     assert jar.is_file(), f"driver jar not found: {jar}"
     return jar

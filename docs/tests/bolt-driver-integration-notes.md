@@ -17,11 +17,12 @@
 |---|---|---|
 | Python | 4.4.12、5.20.0 | `tests/bolt/test_python_driver_matrix.py` |
 | JS（WebSocket） | 4.4.11、5.20.0、6.2.0 | `tests/bolt/test_js_driver_matrix.py` |
-| Java | **4.4.3**、5.28.15 | `tests/bolt/test_java_driver_matrix.py` |
+| Java | **4.4.3**、5.28.x（自动发现当前镜像的 patch 版本） | `tests/bolt/test_java_driver_matrix.py` |
 
 Java 的 4.4.3（Bolt 4.4）默认从 Maven Central 下载到
-`build/java_driver_jars/`；5.28.15 使用 `NEO4J_JAVA_DRIVER_LIB_DIR` 指向的
-Neo4j 发行版 jar。两者都运行 `tests/bolt/TestJavaDriver.java` 的同一套
+`build/java_driver_jars/`；5.28.x 使用 `NEO4J_JAVA_DRIVER_LIB_DIR` 指向的
+Neo4j 发行版 jar（按 `neo4j-java-driver-5.28.*.jar` 自动发现，避免 CI 镜像
+patch 版本漂移导致矩阵硬编码失败）。两者都运行 `tests/bolt/TestJavaDriver.java` 的同一套
 连接/CRUD/类型/路径/部分 PULL 用例。
 
 | 约定 | 说明 |
