@@ -454,7 +454,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->path_handled_by_varlen != bv->path_handled_by_varlen)
                     return false;
-                if (av->shortest_path != bv->shortest_path || av->all_shortest_paths != bv->all_shortest_paths)
+                if (av->shortest_path != bv->shortest_path || av->all_shortest_paths != bv->all_shortest_paths ||
+                    av->batch_shortest_path != bv->batch_shortest_path)
                     return false;
                 if (av->edge_variable != bv->edge_variable)
                     return false;

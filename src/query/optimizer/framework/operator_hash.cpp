@@ -446,6 +446,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, val->path_handled_by_varlen ? 1u : 0u);
                 seed = combine(seed, val->shortest_path ? 1u : 0u);
                 seed = combine(seed, val->all_shortest_paths ? 1u : 0u);
+                seed = combine(seed, val->batch_shortest_path ? 1u : 0u);
                 seed = combine(seed, val->dst_label_missing ? 1u : 0u);
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);

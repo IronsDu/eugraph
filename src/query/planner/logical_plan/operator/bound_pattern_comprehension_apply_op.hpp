@@ -45,6 +45,13 @@ struct BoundPatternComprehensionApplyOp {
     };
     std::vector<Output> outputs;
 
+    /// Internal batch key injected into the right sub-plan. When enabled, the
+    /// right Aggregate groups by this slot and the physical Apply executes the
+    /// correlated sub-plan once per left batch.
+    bool batch_enabled = false;
+    SlotId batch_slot_id = INVALID_SLOT_ID;
+    std::string batch_var;
+
     /// True when every consumer of this Apply only asks "does at least one
     /// match exist?" — i.e. the comprehension came from a boolean-context
     /// pattern predicate (`NOT (a)-[:R]-(b)`, `EXISTS { ... }`, `WHERE (a)-->(b)`)

@@ -45,6 +45,10 @@ struct BoundVarLenExpandOp {
     /// handles ordinary variable-length enumeration.
     bool shortest_path = false;
     bool all_shortest_paths = false;
+    /// Optimizer-selected physical strategy: share one forward BFS among rows
+    /// with the same start vertex. Set by ShortestPathBatchRule, never by the
+    /// physical operator's own shape heuristic.
+    bool batch_shortest_path = false;
     // P2: named edge variable ([e:KNOWS*2]) → LIST<EDGE>
     std::string edge_variable;
     uint32_t edge_column_index = 0;

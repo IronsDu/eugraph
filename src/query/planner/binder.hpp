@@ -207,7 +207,9 @@ public:
     /// as columns 0, 1, ... in a BoundCorrelatedSourceOp leaf.
     std::optional<BoundLogicalOperator> bindExistsSubPlan(const cypher::ExistsExpr& exists,
                                                           std::vector<std::pair<uint32_t, uint32_t>>& correlation,
-                                                          const std::vector<std::string>& preset_corr_vars = {});
+                                                          const std::vector<std::string>& preset_corr_vars = {},
+                                                          const std::string& extra_corr_var = "",
+                                                          SlotId extra_corr_slot = INVALID_SLOT_ID);
     /// Collect EXISTS expressions from the top-level AND chain of a WHERE predicate.
     /// Each entry is (ExistsExpr pointer, is_anti). is_anti=true means the EXISTS
     /// was wrapped in a NOT, i.e. NOT EXISTS { ... }.

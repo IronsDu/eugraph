@@ -54,6 +54,8 @@ struct PlanContext {
     /// so all PE-related decisions — slot allocation, Construct emit, prop
     /// loads — live in one place.
     optimizer::PEPlans extraction_info;
+    /// Extraction-owned split of PE columns into pre-LIMIT and deferred sets.
+    optimizer::SplitPEPlans split_pe_plans;
     /// Maps variable name → globally-unique SlotId. Populated by
     /// optimizer::allocateAllSlots at the start of planBound (covers all
     /// variable names in the bound tree, including aliases).

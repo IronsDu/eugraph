@@ -284,9 +284,12 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/framework/operator_hash.cpp
     src/query/optimizer/framework/operator_eq.cpp
     src/query/optimizer/analysis/requirement_collector.cpp
+    src/query/optimizer/analysis/property_demand.cpp
+    src/query/optimizer/analysis/plan_analysis.cpp
     src/query/optimizer/rules/logical/filter_pushdown.cpp
     src/query/optimizer/rules/logical/edge_uniqueness_pushdown.cpp
     src/query/optimizer/rules/logical/path_count_fusion.cpp
+    src/query/optimizer/rules/logical/tag_anchored_join_reorder.cpp
     src/query/optimizer/rules/physical/impl_rules.cpp
 )
 

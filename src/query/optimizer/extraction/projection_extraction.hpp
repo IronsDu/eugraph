@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "query/optimizer/analysis/property_demand.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 #include "query/planner/slot_id.hpp"
@@ -81,9 +82,12 @@ struct PEPlan {
 /// Per-variable requirement collected by scanning downstream operators.
 /// Determines which ColumnSpec list ProjectionExtractPhysicalOp must emit.
 struct VariableRequirement {
-    /// RETURN n / SET n.x / REMOVE n.x / BoundDynamicPropertyRef on vertex:
-    /// extract must construct a full VertexValue column (appended after the
-    /// source VertexRef column).
+    /// True object consumers only (RETURN n as the statement output, SET /
+    /// REMOVE / DELETE, dynamic property access, labels()/type(), ...).
+    /// Forwarding through WITH or grouping by the entity raises only identity
+    /// demand and must NOT set this; otherwise the whole VertexValue is built
+    /// at the lowest PE for every row (LDBC c5: 538k forum rows for 72k
+    /// forums). See collectTerminalEntitySlots for the statement-output mark.
     bool need_whole_vertex = false;
     /// RETURN r / BoundDynamicPropertyRef on edge: extract must append a
     /// full EdgeValue column.
@@ -237,6 +241,13 @@ NameSlotMap buildFreshExpandMap(const binder::BoundLogicalOperator& root);
 /// consumers (Project / Filter / Sort / Aggregate / Set / Remove / Delete /
 /// Merge). Variable references are resolved via `resolver.slotForName` and
 /// canonicalized via `resolver.canonicalOf` before keying the result.
+///
+/// Identity vs object: a bare entity forwarded by an intermediate Project or
+/// used as an Aggregate group key does not raise whole-object demand. Slots
+/// that are part of the statement output (terminal Project items / Aggregate
+/// group keys) are re-marked whole after the walk, so `RETURN n` still builds
+/// a VertexValue.
+///
 /// When `fresh_expands` is non-null, BoundVariableRef demand is additionally
 /// keyed under the fresh expand slot so PEPlans are created for reintroduced
 /// names that differ from the alias-chain result (§6.2).
@@ -253,6 +264,18 @@ PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& roo
 SourceTypes collectSourceTypes(const binder::BoundLogicalOperator& root, const SlotResolver& resolver,
                                const NameSlotMap* fresh_expands = nullptr);
 
+/// Extraction-owned split between columns needed before LIMIT and columns
+/// that can be materialized after it. The physical planner must not infer this
+/// split locally.
+struct SplitPEPlans {
+    /// Complete extraction plan; pre_limit + deferred are filtered views.
+    PEPlans all;
+    PEPlans pre_limit;
+    PEPlans deferred;
+};
+
+SplitPEPlans splitPEPlans(const PEPlans& plans, const PropertyDemand& demand, const AliasSlotMap& alias_map);
+
 /// Convert PlanRequirements into PEPlans, allocating slot_ids for every
 /// appended PE column. New ids come from `alloc.next()`.
 ///
@@ -262,6 +285,12 @@ SourceTypes collectSourceTypes(const binder::BoundLogicalOperator& root, const S
 /// dispatchProjectionExtract skips the Construct emit.
 PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& source_types, const SlotResolver& resolver,
                             binder::SlotAllocator& alloc);
+
+/// Unified extraction entry: allocate all PE columns once, then split them
+/// into pre-LIMIT and deferred plans from PropertyDemand.
+SplitPEPlans buildExtractionPlans(const PlanRequirements& reqs, const SourceTypes& source_types,
+                                  const SlotResolver& resolver, const PropertyDemand& demand,
+                                  binder::SlotAllocator& alloc);
 
 /// Propagate derived PE columns through variable-alias chains. For each
 /// Project item of the form `BoundVariableRef(X) AS Y`:

@@ -329,7 +329,62 @@ ProjectPhysicalOp(items=[BoundColumnRef(SLOT_N_NAME)])
 
 风险：低。type gate 覆盖了已知 case，仅在出现 binder 发出非图类型但 optimizer 错误认为是图类型的 forward 时漏。
 
-## 六、相关文件
+## 六、身份需求与对象需求（2026-11-07）
+
+### 6.1 背景
+
+c5（New groups）在 sf1 上的 PE 曾为每个 `HAS_MEMBER` 行构造完整的 `forum` VertexValue：
+
+```
+ProjectionExtract(specs=[friend<pass>, friend<ctor>,
+                         membership<pass>, membership.joinDate<eprop>,
+                         forum<pass>, forum<ctor>])
+  rows = 538,726，wtSearch = 538,726（≈1 次/行）
+```
+
+forum 只有 72k 个，且 `forum` 只被 `WITH forum` / `GROUP BY forum` 转发、分组，最终只读 20 行的 `title`。
+`ConstructVertex` 对每个不同 vid 执行 `getVertexLabelsBatch` + `batchGetVertexProperties(..., {})`（label + 全部属性），因此这是纯浪费。
+
+### 6.2 三类需求
+
+| 类别 | 含义 | 典型位置 | 是否构造对象 |
+|---|---|---|---|
+| object | 需要完整 VertexValue/EdgeValue | 结果 Project 返回实体、SET/REMOVE/DELETE/MERGE 目标、`n[$k]`、`labels/type/properties/keys`、LabelCast、`toString(n)` | 是 |
+| identity | 只需实体身份/引用 | 中间 `WITH n` / `WITH n AS m` 直接转发、`GROUP BY n`、pattern 端点、相等/IN | 否 |
+| property | 只需具体属性 | `n.name`、`ORDER BY n.id` | 平铺加载 |
+
+规则：只有 object 类设置 `need_whole_vertex/edge`；identity 类不设置；property 类照旧。
+
+### 6.3 Phase 1 的调整
+
+- `collectOpReqs` 的 Project 分支：item 是直接实体引用时**不**设置 whole-object；其它表达式仍走 `collectExprReqs`（列表/Map/函数参数/`collect(n)` 里的实体仍是 object）。
+- `collectOpReqs` 的 Aggregate 分支：group key 是直接实体引用时**不**设置 whole-object；分组哈希/相等按实体 id 折叠（`RowHash/RowEqual`、`RowDigest`），语义不变。
+- 新增 `collectTerminalEntitySlots(root)`：从根沿 `Limit/Skip/Distinct/Sort/Union` 下探，收集**语句输出**里的实体槽（结果 Project 的直接实体项、Aggregate 的 group key）。这些槽在需求收集后强制标 whole-object，保证 `RETURN n` / `RETURN a, count(*)` 仍输出 VertexValue。
+- 引用解析以**名字**优先（与 `collectExprReqs` 一致），slot 仅作匿名引用兜底：`WITH n AS a ... RETURN a` 的 ref 可能携带过期的 bind-time slot，名字链才能解析到 canonical。
+
+### 6.4 表示类型必须跟随真实列
+
+转发实体不再构造对象后，列的实际表示是 `VERTEX_REF` / `EDGE_KEY` / `ANY`，但 binder 的静态类型仍是 `VERTEX` / `EDGE`。如果 Project/Aggregate 的 `output_types` 继续声明 `VERTEX`，下游 `setValue` 会把 ref 写进 VertexValue 列并静默丢失（c5 的 forum 分组键会变成 null）。
+
+- `planProjectOperator`：对直接实体 ref，用子结果的真实列类型（`actualRefKind`）修正输出类型；若该槽是 PE 构造对象槽（`object_slot_id`），保持 `VERTEX/EDGE`。
+- Aggregate group key：同样修正 `output_type_kinds`；构造对象槽保持语义类型。
+- 这样 Aggregate 的 group key 列可以是 `VERTEX_REF`/`ANY`，下游 `LoadVertexProp` 通过 `columnVertexId` 仍能读出属性。
+
+### 6.5 别名透传的补全
+
+`lowerAliasPassthroughOp` 在无对象覆盖时会把 flat prop / label / type 列追加到 Project 输出；本次补上：
+
+- **coalesce 列**（多候选属性）也必须转发，否则 `WITH n RETURN n.name` 在 `name` 跨多个 label 时读到被 Project 丢掉的槽；
+- 追加的 `BoundColumnRef` 使用**非空名字**，`ExpressionCompiler` 才会按 `slot_id` 解析列号；匿名 ref 会被编译器跳过并固定读 column 0。
+
+### 6.6 验证
+
+- 单测：`DemandClassificationTest.*`（中间 WITH / group key 不物化；结果 Project、SET、动态属性、`collect` 仍物化）。
+- 集成：`WithForwardedVertexPropertyAccessDoesNotConstructObject`、`AggregateGroupKeyPropertyAccessDoesNotConstructObject`、`WithForwardedVertexReturnedWholeKeepsObject`、`C5LikeGroupKeyDoesNotConstructForumBeforeMembershipFilter`。
+- 全量：query_executor_tests 627/627、optimizer_tests 124/124。
+- sf1 交错 A/B（3 轮 baseline/new 交替）：c5 的 538k PE 不再出现 `forum<ctor-vertex>`，端到端 3.72s → 2.82s（-24%）；21 条 LDBC 结果哈希一致；c9 的 PROFILE dbHits 不变（916k creationDate），交错 A/B 在 ±1.5% 内；c2 不变。剩余优化：Filter 上方的 Project 仍抑制 filter-boundary 延迟，forum.title 在 538k PE 上物化；安全放宽该抑制是后续工作。
+
+## 七、相关文件
 
 | 文件 | 角色 |
 |------|------|

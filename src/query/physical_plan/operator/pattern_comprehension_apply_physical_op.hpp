@@ -28,10 +28,11 @@ public:
     PatternComprehensionApplyPhysicalOp(std::unique_ptr<PhysicalOperator> left, std::unique_ptr<PhysicalOperator> right,
                                         CorrelatedSourcePhysicalOp* correlated_source,
                                         std::vector<uint32_t> left_correlation_cols,
-                                        std::vector<binder::BoundType> list_element_types)
+                                        std::vector<binder::BoundType> list_element_types, bool batch_enabled,
+                                        size_t batch_column, size_t list_column_start)
         : left_(std::move(left)), right_(std::move(right)), correlated_source_(correlated_source),
-          left_correlation_cols_(std::move(left_correlation_cols)), list_element_types_(std::move(list_element_types)) {
-    }
+          left_correlation_cols_(std::move(left_correlation_cols)), list_element_types_(std::move(list_element_types)),
+          batch_enabled_(batch_enabled), batch_column_(batch_column), list_column_start_(list_column_start) {}
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
@@ -72,6 +73,14 @@ private:
     /// only its emptiness is observable, and every upstream consumer reads it
     /// through the synthesised `size(list) > 0` predicate.
     bool existence_only_ = false;
+
+    /// PC batching: the right sub-plan groups by an injected batch key. Batch
+    /// execution sends a batch of correlated rows in one CorrelatedSource call
+    /// and splits the right Aggregate rows by that key.
+    bool batch_enabled_ = false;
+    size_t batch_column_ = 0;
+    size_t list_column_start_ = 0;
+    static constexpr size_t kBatchSize = 256;
 };
 
 } // namespace compute

@@ -48,6 +48,21 @@ std::string forwardRefName(const binder::BoundExpression& expr) {
     return "";
 }
 
+/// True when `expr` is a bare graph-entity reference (vertex or edge). This is
+/// the "identity" form: it can be forwarded through WITH or used as a GROUP BY
+/// key without constructing a VertexValue/EdgeValue. Property access, lists,
+/// maps and function arguments are handled by collectExprReqs instead.
+bool isDirectEntityRef(const binder::BoundExpression& expr, binder::BoundTypeKind& kind) {
+    if (const auto* vr = std::get_if<binder::BoundVariableRef>(&expr))
+        kind = vr->type.kind;
+    else if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr))
+        kind = cr->type.kind;
+    else
+        return false;
+    return kind == binder::BoundTypeKind::VERTEX || kind == binder::BoundTypeKind::VERTEX_REF ||
+           kind == binder::BoundTypeKind::EDGE || kind == binder::BoundTypeKind::EDGE_KEY;
+}
+
 /// Extract a variable name from an object expression (BoundVariableRef or
 /// BoundColumnRef). Also unwraps BoundLabelCast and startNode/endNode
 /// function calls. Returns empty string if not extractable.
@@ -66,6 +81,80 @@ std::string varNameFromObject(const binder::BoundExpression& obj) {
             return varNameFromObject((*fc)->args[0]);
     }
     return "";
+}
+
+/// Resolve a direct entity reference to its canonical slot.
+binder::SlotId canonicalSlotOfRef(const binder::BoundExpression& expr, const SlotResolver& resolver) {
+    binder::SlotId slot = binder::INVALID_SLOT_ID;
+    std::string name;
+    if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr)) {
+        slot = cr->slot_id;
+        name = cr->name;
+    } else if (const auto* vr = std::get_if<binder::BoundVariableRef>(&expr)) {
+        name = vr->name;
+    } else {
+        return binder::INVALID_SLOT_ID;
+    }
+    // Names are authoritative for demand, matching collectExprReqs: a ref may
+    // carry a stale bind-time slot after later alias allocation (e.g.
+    // `WITH n AS a ... RETURN a`), while the name resolves through the alias
+    // chain. Slot is the fallback for anonymous refs.
+    if (!name.empty()) {
+        const binder::SlotId by_name = resolver.canonicalForName(name);
+        if (by_name != binder::INVALID_SLOT_ID)
+            return by_name;
+    }
+    if (slot != binder::INVALID_SLOT_ID)
+        return resolver.canonicalOf(slot);
+    return binder::INVALID_SLOT_ID;
+}
+
+/// Collect the entity slots that are part of the statement's output. The plan
+/// may end with a Project, an Aggregate (RETURN a, count(*)), or a UNION of
+/// either; row-shaping operators forward the same columns. These slots must be
+/// constructed regardless of the identity-only rules used for intermediate
+/// WITH / GROUP BY forwards.
+void collectTerminalEntitySlots(const binder::BoundLogicalOperator& op, const SlotResolver& resolver,
+                                std::unordered_map<binder::SlotId, binder::BoundTypeKind>& out) {
+    std::visit(
+        [&](const auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                if (!v)
+                    return;
+                for (const auto& item : v->items) {
+                    binder::BoundTypeKind kind = binder::BoundTypeKind::ANY;
+                    if (!isDirectEntityRef(item.expr, kind))
+                        continue;
+                    const binder::SlotId canon = canonicalSlotOfRef(item.expr, resolver);
+                    if (canon != binder::INVALID_SLOT_ID)
+                        out[canon] = kind;
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                if (!v)
+                    return;
+                for (const auto& key : v->group_keys) {
+                    binder::BoundTypeKind kind = binder::BoundTypeKind::ANY;
+                    if (!isDirectEntityRef(key, kind))
+                        continue;
+                    const binder::SlotId canon = canonicalSlotOfRef(key, resolver);
+                    if (canon != binder::INVALID_SLOT_ID)
+                        out[canon] = kind;
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                if (v)
+                    collectTerminalEntitySlots(v->child, resolver, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                if (v) {
+                    collectTerminalEntitySlots(v->left, resolver, out);
+                    collectTerminalEntitySlots(v->right, resolver, out);
+                }
+            }
+        },
+        op);
 }
 
 /// Look up the slot for a variable name. The caller guarantees the name has
@@ -661,18 +750,14 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                     collectExprReqs(v->predicate, reqs, resolver, "", label_defs);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
+                    // Forwarding an entity through a Project (`WITH n`) only
+                    // needs its identity. Terminal output slots are re-marked
+                    // by collectTerminalEntitySlots after this walk. Property /
+                    // list / map / function uses take the collectExprReqs path.
                     for (const auto& item : v->items) {
-                        if (auto* cref = std::get_if<binder::BoundColumnRef>(&item.expr)) {
-                            if (cref->type.kind == binder::BoundTypeKind::VERTEX && !cref->name.empty()) {
-                                binder::SlotId canon = resolver.canonicalForName(cref->name);
-                                if (canon != binder::INVALID_SLOT_ID)
-                                    reqs[canon].need_whole_vertex = true;
-                            } else if (cref->type.kind == binder::BoundTypeKind::EDGE && !cref->name.empty()) {
-                                binder::SlotId canon = resolver.canonicalForName(cref->name);
-                                if (canon != binder::INVALID_SLOT_ID)
-                                    reqs[canon].need_whole_edge = true;
-                            }
-                        }
+                        binder::BoundTypeKind kind = binder::BoundTypeKind::ANY;
+                        if (isDirectEntityRef(item.expr, kind))
+                            continue;
                         collectExprReqs(item.expr, reqs, resolver, "", label_defs);
                     }
                 }
@@ -685,6 +770,13 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
                     for (const auto& k : v->group_keys) {
+                        // Grouping by a bare entity is identity grouping; the
+                        // runtime hash/equality folds refs and objects to the
+                        // entity id. The group key is not itself an object
+                        // consumer.
+                        binder::BoundTypeKind kind = binder::BoundTypeKind::ANY;
+                        if (isDirectEntityRef(k, kind))
+                            continue;
                         collectExprReqs(k, reqs, resolver, "", label_defs);
                     }
                     for (const auto& agg : v->aggregates) {
@@ -1297,15 +1389,14 @@ void rewriteOp(binder::BoundLogicalOperator& op, const PEPlans& plans, const Slo
 /// Append a passthrough item `BoundColumnRef(slot=S) AS __alias_<Y>_<kind>`
 /// to the given Project. Also register the alias name → slot in name_to_slot.
 ///
-/// The appended BoundColumnRef is deliberately ANONYMOUS (empty name): the
-/// subsequent rewriteColumnIndices pass re-targets any *named* BoundColumnRef
-/// to its variable's canonical/source slot, which would clobber the derived
-/// slot we just wired up. An empty name resolves to no PEPlan, so the ref is
-/// left untouched and the derived slot survives into the Project's output.
+/// The ref carries the alias name so ExpressionCompiler resolves its slot_id
+/// against the child layout. rewriteColumnIndices only promotes *semantic
+/// graph* refs, so the scalar/ANY/List types used here are left untouched.
+/// (An anonymous ref would skip slot resolution and read column 0.)
 void appendAliasPassthroughItem(binder::BoundProjectOp& proj, const std::string& alias_name, binder::SlotId source_slot,
                                 const binder::BoundType& result_type, NameSlotMap& name_to_slot) {
     binder::BoundProjectOp::ProjectItem item;
-    item.expr = binder::BoundColumnRef{0, result_type, "", source_slot};
+    item.expr = binder::BoundColumnRef{0, result_type, alias_name, source_slot};
     item.alias = alias_name;
     item.result_type = result_type;
     item.output_slot = source_slot;
@@ -1482,6 +1573,14 @@ void lowerAliasPassthroughOp(binder::BoundLogicalOperator& op, const PEPlans& pl
                                                        std::to_string(pi.edge_prop_order[j].second),
                                                    pslot, binder::BoundType::Any(), name_to_slot);
                     }
+                    // Multi-candidate properties are emitted as one coalesced
+                    // flat column. That column must be forwarded too, or a
+                    // downstream `WITH n RETURN n.name` reads a slot the
+                    // Project dropped.
+                    for (const auto& [prop, co] : pi.coalesce_vertices) {
+                        appendAliasPassthroughItem(*v, "__fwd_" + tag + "_c_" + prop, co.slot_id, co.type,
+                                                   name_to_slot);
+                    }
                     if (pi.labels_slot_id != binder::INVALID_SLOT_ID) {
                         appendAliasPassthroughItem(*v, "__fwd_" + tag + "_labels", pi.labels_slot_id,
                                                    binder::BoundType::List(binder::BoundType::String()), name_to_slot);
@@ -1643,6 +1742,14 @@ PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& roo
                                          const std::unordered_map<LabelId, LabelDef>* label_defs) {
     PlanRequirements reqs;
     collectOpReqs(root, reqs, resolver, label_defs);
+    std::unordered_map<binder::SlotId, binder::BoundTypeKind> terminal_entities;
+    collectTerminalEntitySlots(root, resolver, terminal_entities);
+    for (const auto& [slot, kind] : terminal_entities) {
+        if (kind == binder::BoundTypeKind::EDGE || kind == binder::BoundTypeKind::EDGE_KEY)
+            reqs[slot].need_whole_edge = true;
+        else
+            reqs[slot].need_whole_vertex = true;
+    }
     // When a name was reintroduced by a descendant Expand after WITH
     // aliasing, canonicalForName follows the alias chain to a different
     // slot. The fresh binding must have its own PEPlan so RETURN-level
@@ -1749,6 +1856,15 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
     return plans;
 }
 
+SplitPEPlans buildExtractionPlans(const PlanRequirements& reqs, const SourceTypes& source_types,
+                                  const SlotResolver& resolver, const PropertyDemand& demand,
+                                  binder::SlotAllocator& alloc) {
+    auto all = buildExtractionInfo(reqs, source_types, resolver, alloc);
+    auto split = splitPEPlans(all, demand, {});
+    split.all = std::move(all);
+    return split;
+}
+
 void lowerAliasPassthrough(binder::BoundLogicalOperator& root, const PEPlans& plans, NameSlotMap& name_to_slot,
                            AliasSlotMap& alias_map, binder::SlotAllocator& alloc) {
     lowerAliasPassthroughOp(root, plans, name_to_slot, alias_map, alloc);
@@ -1845,6 +1961,96 @@ void rewriteRefCompatiblePredicates(binder::BoundLogicalOperator& op, const Name
 
 void rewriteColumnIndices(binder::BoundLogicalOperator& op, const PEPlans& plans, const SlotResolver& resolver) {
     rewriteOp(op, plans, resolver);
+}
+
+} // namespace optimizer
+} // namespace eugraph
+
+namespace eugraph {
+namespace optimizer {
+
+SplitPEPlans splitPEPlans(const PEPlans& plans, const PropertyDemand& demand, const AliasSlotMap& alias_map) {
+    SplitPEPlans split;
+    for (const auto& [canon, plan] : plans) {
+        auto is_deferred = [&](binder::SlotId slot) {
+            if (slot == binder::INVALID_SLOT_ID)
+                return false;
+            if (demand.output_only.contains(slot))
+                return true;
+            const auto canonical = getCanonicalSlot(alias_map, slot);
+            return canonical != binder::INVALID_SLOT_ID && demand.output_only.contains(canonical);
+        };
+
+        PEPlan pre = plan;
+        pre.prop_order.clear();
+        pre.prop_slot_ids.clear();
+        for (size_t i = 0; i < plan.prop_slot_ids.size(); ++i) {
+            if (is_deferred(plan.prop_slot_ids[i]))
+                continue;
+            pre.prop_order.push_back(plan.prop_order[i]);
+            pre.prop_slot_ids.push_back(plan.prop_slot_ids[i]);
+        }
+        pre.edge_prop_order.clear();
+        pre.edge_prop_slot_ids.clear();
+        for (size_t i = 0; i < plan.edge_prop_slot_ids.size(); ++i) {
+            if (is_deferred(plan.edge_prop_slot_ids[i]))
+                continue;
+            pre.edge_prop_order.push_back(plan.edge_prop_order[i]);
+            pre.edge_prop_slot_ids.push_back(plan.edge_prop_slot_ids[i]);
+        }
+        for (auto it = pre.coalesce_vertices.begin(); it != pre.coalesce_vertices.end();) {
+            if (is_deferred(it->second.slot_id))
+                it = pre.coalesce_vertices.erase(it);
+            else
+                ++it;
+        }
+        if (is_deferred(pre.object_slot_id))
+            pre.object_slot_id = binder::INVALID_SLOT_ID;
+        if (is_deferred(pre.labels_slot_id))
+            pre.labels_slot_id = binder::INVALID_SLOT_ID;
+        if (is_deferred(pre.type_slot_id))
+            pre.type_slot_id = binder::INVALID_SLOT_ID;
+
+        PEPlan deferred = plan;
+        deferred.prop_order.clear();
+        deferred.prop_slot_ids.clear();
+        for (size_t i = 0; i < plan.prop_slot_ids.size(); ++i) {
+            if (!is_deferred(plan.prop_slot_ids[i]))
+                continue;
+            deferred.prop_order.push_back(plan.prop_order[i]);
+            deferred.prop_slot_ids.push_back(plan.prop_slot_ids[i]);
+        }
+        deferred.edge_prop_order.clear();
+        deferred.edge_prop_slot_ids.clear();
+        for (size_t i = 0; i < plan.edge_prop_slot_ids.size(); ++i) {
+            if (!is_deferred(plan.edge_prop_slot_ids[i]))
+                continue;
+            deferred.edge_prop_order.push_back(plan.edge_prop_order[i]);
+            deferred.edge_prop_slot_ids.push_back(plan.edge_prop_slot_ids[i]);
+        }
+        for (auto it = deferred.coalesce_vertices.begin(); it != deferred.coalesce_vertices.end();) {
+            if (!is_deferred(it->second.slot_id))
+                it = deferred.coalesce_vertices.erase(it);
+            else
+                ++it;
+        }
+        if (!is_deferred(deferred.object_slot_id))
+            deferred.object_slot_id = binder::INVALID_SLOT_ID;
+        if (!is_deferred(deferred.labels_slot_id))
+            deferred.labels_slot_id = binder::INVALID_SLOT_ID;
+        if (!is_deferred(deferred.type_slot_id))
+            deferred.type_slot_id = binder::INVALID_SLOT_ID;
+
+        if (!pre.prop_slot_ids.empty() || !pre.edge_prop_slot_ids.empty() || !pre.coalesce_vertices.empty() ||
+            pre.object_slot_id != binder::INVALID_SLOT_ID || pre.labels_slot_id != binder::INVALID_SLOT_ID ||
+            pre.type_slot_id != binder::INVALID_SLOT_ID)
+            split.pre_limit.emplace(canon, std::move(pre));
+        if (!deferred.prop_slot_ids.empty() || !deferred.edge_prop_slot_ids.empty() ||
+            !deferred.coalesce_vertices.empty() || deferred.object_slot_id != binder::INVALID_SLOT_ID ||
+            deferred.labels_slot_id != binder::INVALID_SLOT_ID || deferred.type_slot_id != binder::INVALID_SLOT_ID)
+            split.deferred.emplace(canon, std::move(deferred));
+    }
+    return split;
 }
 
 } // namespace optimizer

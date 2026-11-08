@@ -2,7 +2,10 @@
 
 #include "query/catalog/catalog.hpp"
 #include "query/optimizer/analysis/materialization_req.hpp"
+#include "query/optimizer/analysis/plan_analysis.hpp"
+#include "query/optimizer/analysis/property_demand.hpp"
 #include "query/optimizer/analysis/requirement_collector.hpp"
+#include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/cost_model.hpp"
 #include "query/optimizer/framework/log_prop.hpp"
 #include "query/optimizer/framework/memo.hpp"
@@ -2527,4 +2530,311 @@ TEST(EnricherE2ETest, NoEnricherWhenNoPropertyAccess) {
     EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
     ASSERT_EQ(plan.chosen->children.size(), 1u);
     EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::LabelScan);
+}
+
+TEST(PropertyDemandTest, ClassifiesOutputOnlySlotsAboveLimit) {
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "filter_key", 200));
+    filter->child = BoundLogicalOperator(BoundSingletonOp{});
+
+    auto limit = std::make_unique<BoundLimitOp>();
+    limit->constant = 10;
+    limit->child = BoundLogicalOperator(std::move(filter));
+
+    auto project = std::make_unique<BoundProjectOp>();
+    BoundProjectOp::ProjectItem item;
+    item.expr = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "payload", 100));
+    item.alias = "payload";
+    item.result_type = BoundType::Int64();
+    project->items.push_back(std::move(item));
+    project->child = BoundLogicalOperator(std::move(limit));
+
+    PropertyDemand demand = analyzePropertyDemand(BoundLogicalOperator(std::move(project)));
+    EXPECT_TRUE(demand.has_limit);
+    EXPECT_TRUE(demand.required_below_limit.contains(200));
+    EXPECT_TRUE(demand.output_only.contains(100));
+    EXPECT_FALSE(demand.output_only.contains(200));
+}
+
+TEST(PlanAnalysisTest, CollectsLabelDemandFromLabelScan) {
+    binder::BoundLabelScanOp scan;
+    scan.variable = "n";
+    scan.column_index = 0;
+    scan.label_ids = {7};
+    scan.label_names = {"Person"};
+
+    PlanAnalysis analysis = analyzePlan(BoundLogicalOperator(scan));
+    EXPECT_TRUE(analysis.label.required_dst_labels.contains(7));
+    EXPECT_TRUE(analysis.property.output_only.empty());
+}
+
+TEST(PlanAnalysisTest, ExtractionSplitsPreLimitAndDeferredPlans) {
+    PEPlan plan;
+    plan.source_slot_id = 1;
+    plan.prop_order = {{1, 2}, {1, 3}};
+    plan.prop_slot_ids = {200, 100};
+
+    PropertyDemand demand;
+    demand.output_only = {100};
+
+    auto split = splitPEPlans({{1, plan}}, demand, {});
+    ASSERT_EQ(split.pre_limit.size(), 1u);
+    ASSERT_EQ(split.deferred.size(), 1u);
+    EXPECT_EQ(split.pre_limit.at(1).prop_slot_ids, std::vector<binder::SlotId>{200});
+    EXPECT_EQ(split.deferred.at(1).prop_slot_ids, std::vector<binder::SlotId>{100});
+}
+
+// ==================== Identity vs object demand ====================
+//
+// A graph entity that is only forwarded through WITH or used as a GROUP BY
+// key needs its identity, not a constructed VertexValue/EdgeValue. Marking it
+// whole-object makes ProjectionExtract read labels + every property for every
+// row (LDBC c5: 538k forum rows for 72k forums). Only a result Project that
+// returns the entity itself, or an operator that truly consumes the object,
+// may raise whole-object demand.
+
+TEST(DemandClassificationTest, ForwardedVertexThroughWithIsIdentityOnly) {
+    NameSlotMap names{{"n", 1}, {"x", 2}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto with = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "n", 1));
+        item.alias = "n";
+        item.result_type = BoundType::Vertex();
+        with->items.push_back(std::move(item));
+    }
+    with->child = makeLabelScan("n", 0);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "x", 2));
+        item.alias = "x";
+        item.result_type = BoundType::Int64();
+        result->items.push_back(std::move(item));
+    }
+    result->child = BoundLogicalOperator(std::move(with));
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_FALSE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, ForwardedEdgeThroughWithIsIdentityOnly) {
+    NameSlotMap names{{"r", 4}, {"x", 2}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto with = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Edge(), "r", 4));
+        item.alias = "r";
+        item.result_type = BoundType::Edge();
+        with->items.push_back(std::move(item));
+    }
+    with->child = makeLabelScan("n", 0);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "x", 2));
+        item.alias = "x";
+        item.result_type = BoundType::Int64();
+        result->items.push_back(std::move(item));
+    }
+    result->child = BoundLogicalOperator(std::move(with));
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_FALSE(reqs[4].need_whole_edge);
+}
+
+TEST(DemandClassificationTest, AggregateGroupKeyIsIdentityOnly) {
+    NameSlotMap names{{"n", 1}, {"x", 2}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto aggregate = std::make_unique<BoundAggregateOp>();
+    aggregate->group_keys.push_back(BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "n", 1)));
+    aggregate->child = makeLabelScan("n", 0);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "x", 2));
+        item.alias = "x";
+        item.result_type = BoundType::Int64();
+        result->items.push_back(std::move(item));
+    }
+    result->child = BoundLogicalOperator(std::move(aggregate));
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_FALSE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, ResultProjectStillNeedsWholeVertex) {
+    NameSlotMap names{{"n", 1}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "n", 1));
+        item.alias = "n";
+        item.result_type = BoundType::Vertex();
+        result->items.push_back(std::move(item));
+    }
+    result->child = makeLabelScan("n", 0);
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, ResultProjectUnderLimitStillNeedsWholeVertex) {
+    NameSlotMap names{{"n", 1}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "n", 1));
+        item.alias = "n";
+        item.result_type = BoundType::Vertex();
+        result->items.push_back(std::move(item));
+    }
+    result->child = makeLabelScan("n", 0);
+
+    auto limit = std::make_unique<BoundLimitOp>();
+    limit->constant = 5;
+    limit->child = BoundLogicalOperator(std::move(result));
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(limit)), resolver);
+    EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, UnionBranchResultProjectStillNeedsWholeVertex) {
+    NameSlotMap names{{"n", 1}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto makeBranch = []() {
+        auto project = std::make_unique<BoundProjectOp>();
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "n", 1));
+        item.alias = "n";
+        item.result_type = BoundType::Vertex();
+        project->items.push_back(std::move(item));
+        project->child = makeLabelScan("n", 0);
+        return BoundLogicalOperator(std::move(project));
+    };
+
+    auto union_op = std::make_unique<BoundUnionOp>();
+    union_op->all = true;
+    union_op->left = makeBranch();
+    union_op->right = makeBranch();
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(union_op)), resolver);
+    EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, WithAliasReturnedWholeVertexStillNeedsWholeVertex) {
+    NameSlotMap names{{"n", 1}, {"m", 3}};
+    AliasSlotMap aliases{{3, 1}};
+    SlotResolver resolver(names, aliases);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "m", 3));
+        item.alias = "m";
+        item.result_type = BoundType::Vertex();
+        result->items.push_back(std::move(item));
+    }
+    result->child = makeLabelScan("n", 0);
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, CollectArgumentStillNeedsWholeVertex) {
+    NameSlotMap names{{"n", 1}, {"x", 2}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto aggregate = std::make_unique<BoundAggregateOp>();
+    {
+        BoundAggregateOp::AggregateItem agg;
+        agg.function_name = "collect";
+        agg.arguments.push_back(BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "n", 1)));
+        aggregate->aggregates.push_back(std::move(agg));
+    }
+    aggregate->child = makeLabelScan("n", 0);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "x", 2));
+        item.alias = "x";
+        item.result_type = BoundType::Int64();
+        result->items.push_back(std::move(item));
+    }
+    result->child = BoundLogicalOperator(std::move(aggregate));
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, SetTargetStillNeedsWholeVertex) {
+    NameSlotMap names{{"n", 1}, {"x", 2}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto set = std::make_unique<BoundSetOp>();
+    {
+        BoundSetOp::SetItem item;
+        item.kind = BoundSetOp::ItemKind::SET_PROPERTY;
+        item.target_variable = "n";
+        set->items.push_back(std::move(item));
+    }
+    set->child = makeLabelScan("n", 0);
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "x", 2));
+        item.alias = "x";
+        item.result_type = BoundType::Int64();
+        result->items.push_back(std::move(item));
+    }
+    result->child = BoundLogicalOperator(std::move(set));
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
+    NameSlotMap names{{"n", 1}};
+    AliasSlotMap aliases;
+    SlotResolver resolver(names, aliases);
+
+    auto dynamic = std::make_unique<BoundDynamicPropertyRef>();
+    dynamic->object = BoundExpression(BoundColumnRef(0, BoundType::Vertex(), "n", 1));
+    dynamic->property = "name";
+
+    auto result = std::make_unique<BoundProjectOp>();
+    {
+        BoundProjectOp::ProjectItem item;
+        item.expr = BoundExpression(std::move(dynamic));
+        item.alias = "v";
+        item.result_type = BoundType::Any();
+        result->items.push_back(std::move(item));
+    }
+    result->child = makeLabelScan("n", 0);
+
+    auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
+    EXPECT_TRUE(reqs[1].need_whole_vertex);
 }

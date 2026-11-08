@@ -34,7 +34,8 @@ public:
                            std::string path_var, binder::SlotId path_slot, bool all_shortest_paths = false,
                            std::vector<LabelId> dst_label_ids = {}, bool dst_label_missing = false,
                            uint32_t src_filter_index_id = 0, PropertyValue src_filter_value = {},
-                           uint32_t dst_filter_index_id = 0, PropertyValue dst_filter_value = {});
+                           uint32_t dst_filter_index_id = 0, PropertyValue dst_filter_value = {},
+                           bool batch_shortest_path = false);
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
@@ -78,6 +79,8 @@ private:
     folly::coro::Task<std::vector<std::shared_ptr<const NeighborList>>> scanBatch(const std::vector<VertexId>& vids,
                                                                                   Direction scan_dir);
     folly::coro::Task<std::optional<PathValue>> shortestBidirectional(VertexId start, VertexId end);
+    folly::coro::Task<std::unordered_map<VertexId, PathValue>>
+    shortestPathsFromSource(VertexId start, const std::vector<VertexId>& targets);
     /// Streams paths instead of materialising a vector of PathValue. The
     /// caller keeps at most one DataChunk batch of them.
     folly::coro::AsyncGenerator<PathValue> allShortestPaths(VertexId start, VertexId end);
@@ -100,6 +103,9 @@ private:
     std::string path_var_;
     binder::SlotId path_slot_ = binder::INVALID_SLOT_ID;
     bool all_shortest_paths_ = false;
+    /// Set by the optimizer (ShortestPathBatchRule); selects the multi-target
+    /// BFS implementation. The physical operator never infers this from shape.
+    bool batch_shortest_path_ = false;
     std::vector<LabelId> dst_label_ids_;
     bool dst_label_missing_ = false;
     uint32_t src_filter_index_id_ = 0;
