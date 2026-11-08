@@ -2323,6 +2323,18 @@ SyncGraphDataStore::createIndexEqualityCursor(GraphSession& gs, const std::strin
 }
 
 std::unique_ptr<ISyncGraphDataStore::IIndexScanCursor>
+SyncGraphDataStore::createIndexPrefixCursor(GraphSession& gs, const std::string& table, const std::string& prefix) {
+    CursorHandle cursor = gs.acquire_scan_cursor(table);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "createIndexPrefixCursor: cannot open cursor on " + table);
+        return nullptr;
+    }
+    return std::make_unique<IndexScanCursorImpl>(gs, std::move(cursor),
+                                                 IndexScanCursorImpl::Spec{prefix, {}, false, /*prefix_mode=*/true});
+}
+
+std::unique_ptr<ISyncGraphDataStore::IIndexScanCursor>
 SyncGraphDataStore::createIndexRangeCursor(GraphSession& gs, const std::string& table,
                                            const std::optional<PropertyValue>& start,
                                            const std::optional<PropertyValue>& end) {

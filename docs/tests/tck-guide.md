@@ -6,7 +6,8 @@ EuGraph 使用 [openCypher TCK](https://github.com/opencypher/openCypher/tree/ma
 覆盖多标签 scoped cast 与强属性访问；`vertex-summary.feature` 覆盖顶点摘要缓存的正确性
 （CREATE 写入、SET/REMOVE/标签增删/DELETE 失效、大属性回退、MERGE、多行重复顶点、null）；
 `path/self-loop-path.feature` 覆盖自环路径的节点/关系序列（`length`/`nodes`/`relationships`
-以及 Bolt 路径结构）。
+以及 Bolt 路径结构）；`string-index-boundaries.feature` 覆盖字符串索引的精确等值、前缀查询、
+复合索引 leading prefix，以及索引扫描返回多个字符串列时的值正确性。
 
 ## 构建
 

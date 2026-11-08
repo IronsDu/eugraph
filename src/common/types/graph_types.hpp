@@ -185,6 +185,9 @@ struct LabelDef {
         std::vector<uint16_t> prop_ids;
         bool unique = false;
         IndexState state = IndexState::WRITE_ONLY;
+        // 2 = self-delimiting string keys (0x00 escape + 0x00 0x00 terminator).
+        // Older keys are not readable and must be rebuilt from data.
+        uint8_t encoding_version = 2;
     };
     std::vector<IndexDef> indexes;
 };

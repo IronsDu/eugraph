@@ -56,16 +56,36 @@ DROP INDEX   → 删除元数据 + 删除物理表
 
 | 属性类型 | 编码 |
 |----------|------|
-| null | `0xFF` |
-| bool | `0x00` / `0x01` |
-| int64 | `0x00` + 8 字节 BE，符号翻转 |
-| double | `0x01` + 8 字节 IEEE 754，符号翻转 |
-| string | `0x02` + 原始字节 |
+| null | `0x00` |
+| bool | `0x01` + 1 字节 |
+| int64 | `0x02` + 8 字节 BE，符号翻转 |
+| double | `0x03` + 8 字节 IEEE 754，符号翻转 |
+| string | `0x04` + escaped bytes + `0x00 0x00` |
 
-等值查询使用 `encodeEqualityPrefix` 前缀扫描；范围查询使用 `search_near` + 边界检查。
+字符串采用 order-preserving 自定界编码：
 
-边索引 value 存储邻接信息（`src_id`, `dst_id`, `seq`, `label_id`），`EdgeIndexScanPhysicalOp`
-一次扫描即可产出 src/dst/edge，无需回表。
+```text
+0x00 字节 -> 0x00 0xFF
+字符串结束 -> 0x00 0x00
+```
+
+因此：
+
+- **精确等值**：`encodeEqualityPrefix` 带 terminator，`Jose` 不会匹配 `Joseph`；
+- **前缀查询**：`encodePrefix` 不带 terminator，`Jose` 匹配 `Jose` / `Joseph` / `Josef`；
+- **复合索引**：每个 string 组件自定界，`("ab","c")` 与 `("a","bc")` 不会冲突；
+- `entity_id` 仍追加在 terminator 之后；同一 value 的多个实体按 id 排序；
+- 字符串字典序和范围扫描的排序语义保持不变。
+
+索引 key 格式版本为 `encoding_version = 2`。v1（无 terminator）索引不读取、不迁移；
+planner 只使用 v2 的 PUBLIC 索引，旧索引必须 `DROP INDEX` / `CREATE INDEX` 重建。
+
+`tryBoundIndexScan` 支持：
+
+- 等值：所有 accessor 都有 `=` 条件；
+- 前缀：leading accessor 序列上的 `STARTS WITH`，可带前面的等值列；
+- 复合索引的 prefix 之后若还有其他条件，保留原 Filter（residual filter），不直接丢掉；
+- `STARTS WITH` 只在字符串 literal、v2 索引上启用。
 
 ## 4. DDL 语法
 
