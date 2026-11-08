@@ -78,17 +78,8 @@ jobs:
           ${{ runner.os }}-vcpkg-archives-gcc-
 
     - name: Bootstrap vcpkg
-      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
-      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
-      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
-      # 可存，作业退化成每次源码重建全部依赖）。
-      run: |
-        if [ -f "vcpkg/vcpkg" ]; then
-          echo "Using existing vcpkg binary"
-        else
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        fi
-        ./vcpkg/vcpkg version
+      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Debug vcpkg environment
       run: |
@@ -214,17 +205,8 @@ jobs:
           ${{ runner.os }}-vcpkg-archives-coverage-
 
     - name: Bootstrap vcpkg
-      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
-      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
-      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
-      # 可存，作业退化成每次源码重建全部依赖）。
-      run: |
-        if [ -f "vcpkg/vcpkg" ]; then
-          echo "Using existing vcpkg binary"
-        else
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        fi
-        ./vcpkg/vcpkg version
+      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake with Coverage
       # Ninja + parallel build: the serial Makefiles build took 45 min on the
@@ -371,17 +353,8 @@ jobs:
           ${{ runner.os }}-vcpkg-archives-buildclang-
 
     - name: Bootstrap vcpkg
-      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
-      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
-      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
-      # 可存，作业退化成每次源码重建全部依赖）。
-      run: |
-        if [ -f "vcpkg/vcpkg" ]; then
-          echo "Using existing vcpkg binary"
-        else
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        fi
-        ./vcpkg/vcpkg version
+      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Debug vcpkg environment
       run: |
@@ -545,17 +518,8 @@ jobs:
           ${{ runner.os }}-vcpkg-archives-asan-
 
     - name: Bootstrap vcpkg
-      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
-      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
-      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
-      # 可存，作业退化成每次源码重建全部依赖）。
-      run: |
-        if [ -f "vcpkg/vcpkg" ]; then
-          echo "Using existing vcpkg binary"
-        else
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        fi
-        ./vcpkg/vcpkg version
+      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake with ASan
       run: |
@@ -841,17 +805,8 @@ jobs:
           ${{ runner.os }}-vcpkg-archives-ubsan-
 
     - name: Bootstrap vcpkg
-      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
-      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
-      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
-      # 可存，作业退化成每次源码重建全部依赖）。
-      run: |
-        if [ -f "vcpkg/vcpkg" ]; then
-          echo "Using existing vcpkg binary"
-        else
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        fi
-        ./vcpkg/vcpkg version
+      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake with UBSan
       run: |
@@ -954,17 +909,8 @@ jobs:
           ${{ runner.os }}-vcpkg-archives-clang-tidy-
 
     - name: Bootstrap vcpkg
-      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
-      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
-      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
-      # 可存，作业退化成每次源码重建全部依赖）。
-      run: |
-        if [ -f "vcpkg/vcpkg" ]; then
-          echo "Using existing vcpkg binary"
-        else
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        fi
-        ./vcpkg/vcpkg version
+      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake and generate compile_commands.json
       run: |
