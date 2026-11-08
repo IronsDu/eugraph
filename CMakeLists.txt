@@ -1180,7 +1180,7 @@ if(EUGRAPH_BUILD_TESTS)
             endif()
             if(JAVA_EXECUTABLE AND NEO4J_JAVA_DRIVER_JAR)
                 get_filename_component(NEO4J_JAVA_DRIVER_LIB_DIR "${NEO4J_JAVA_DRIVER_JAR}" DIRECTORY)
-                set(BOLT_JAVA_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_java_driver_integration.py")
+                set(BOLT_JAVA_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_java_driver_matrix.py")
                 add_test(NAME bolt_java_driver_integration_tests
                     COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-java-tests.sh"
                         "$<TARGET_FILE:eugraph-server>"
