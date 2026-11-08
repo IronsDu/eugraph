@@ -10,7 +10,13 @@ namespace eugraph {
 //   bool:    2 bytes = 0x01 + (0x00=false / 0x01=true)
 //   int64:   9 bytes = 0x02 + sign-flipped big-endian
 //   double:  9 bytes = 0x03 + IEEE sign-flipped big-endian
-//   string:  1+N     = 0x04 + raw bytes
+//   string: 1+N+2   = 0x04 + escaped bytes + 0x00 0x00
+//
+// String escaping is order-preserving and self-delimiting:
+//   0x00 byte -> 0x00 0xFF
+//   end       -> 0x00 0x00
+// The terminator lets equality scans use an exact value prefix while prefix
+// scans can deliberately stop before the terminator.
 
 std::string IndexKeyCodec::encodeSortableValue(const PropertyValue& value) {
     std::string buf;
@@ -42,7 +48,16 @@ std::string IndexKeyCodec::encodeSortableValue(const PropertyValue& value) {
                     buf.push_back(static_cast<char>((bits >> (i * 8)) & 0xFF));
             } else if constexpr (std::is_same_v<T, std::string>) {
                 buf.push_back(static_cast<char>(0x04));
-                buf.append(arg);
+                for (unsigned char ch : arg) {
+                    if (ch == 0x00) {
+                        buf.push_back(static_cast<char>(0x00));
+                        buf.push_back(static_cast<char>(0xFF));
+                    } else {
+                        buf.push_back(static_cast<char>(ch));
+                    }
+                }
+                buf.push_back(static_cast<char>(0x00));
+                buf.push_back(static_cast<char>(0x00));
             } else {
                 // array types not indexable
                 buf.push_back(static_cast<char>(0xFE));
@@ -91,6 +106,33 @@ std::string IndexKeyCodec::encodeEqualityPrefix(const PropertyValue& value) {
 
 std::string IndexKeyCodec::encodeEqualityPrefix(const std::vector<PropertyValue>& values) {
     return encodeSortableValues(values);
+}
+
+std::string IndexKeyCodec::encodePrefix(const PropertyValue& value) {
+    if (!std::holds_alternative<std::string>(value))
+        return encodeSortableValue(value);
+    std::string buf;
+    buf.reserve(16);
+    buf.push_back(static_cast<char>(0x04));
+    for (unsigned char ch : std::get<std::string>(value)) {
+        if (ch == 0x00) {
+            buf.push_back(static_cast<char>(0x00));
+            buf.push_back(static_cast<char>(0xFF));
+        } else {
+            buf.push_back(static_cast<char>(ch));
+        }
+    }
+    return buf;
+}
+
+std::string IndexKeyCodec::encodePrefix(const std::vector<PropertyValue>& values, size_t prefix_col) {
+    if (prefix_col >= values.size())
+        return {};
+    std::string buf;
+    for (size_t i = 0; i < prefix_col; ++i)
+        buf.append(encodeSortableValue(values[i]));
+    buf.append(encodePrefix(values[prefix_col]));
+    return buf;
 }
 
 } // namespace eugraph

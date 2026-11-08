@@ -199,6 +199,8 @@ public:
                                                                 const PropertyValue& value) override;
     std::unique_ptr<IIndexScanCursor> createIndexEqualityCursor(GraphSession& session, const std::string& table,
                                                                 const std::vector<PropertyValue>& values) override;
+    std::unique_ptr<IIndexScanCursor> createIndexPrefixCursor(GraphSession& session, const std::string& table,
+                                                              const std::string& prefix) override;
     std::unique_ptr<IIndexScanCursor> createIndexRangeCursor(GraphSession& session, const std::string& table,
                                                              const std::optional<PropertyValue>& start,
                                                              const std::optional<PropertyValue>& end) override;

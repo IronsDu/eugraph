@@ -207,6 +207,7 @@ void MetadataCodec::encodeIndexDef(std::string& buf, const LabelDef::IndexDef& i
         encodeU16(buf, pid);
     encodeU8(buf, idx.unique ? 1 : 0);
     encodeU8(buf, static_cast<uint8_t>(idx.state));
+    encodeU8(buf, idx.encoding_version);
 }
 
 LabelDef::IndexDef MetadataCodec::decodeIndexDef(std::string_view data, size_t& offset) {
@@ -226,6 +227,7 @@ LabelDef::IndexDef MetadataCodec::decodeIndexDef(std::string_view data, size_t& 
         idx.prop_ids[i] = decodeU16(data, offset);
     idx.unique = decodeU8(data, offset) != 0;
     idx.state = static_cast<IndexState>(decodeU8(data, offset));
+    idx.encoding_version = decodeU8(data, offset);
     return idx;
 }
 

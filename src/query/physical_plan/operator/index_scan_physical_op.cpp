@@ -10,10 +10,10 @@ namespace compute {
 IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                                          PropertyValue search_value, std::optional<PropertyValue> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs)
+                                         std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col)
     : variable_(std::move(variable)), label_id_(label_id), prop_ids_({prop_id}), mode_(mode), eq_values_(),
-      range_start_(std::nullopt), range_end_(std::nullopt), output_types_(std::move(output_types)), store_(store),
-      label_defs_(std::move(label_defs)) {
+      prefix_col_(prefix_col), range_start_(std::nullopt), range_end_(std::nullopt),
+      output_types_(std::move(output_types)), store_(store), label_defs_(std::move(label_defs)) {
     if (mode == ScanMode::EQUALITY) {
         eq_values_.push_back(std::move(search_value));
     } else {
@@ -29,10 +29,11 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id,
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs)
+                                         std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col)
     : variable_(std::move(variable)), label_id_(label_id), index_id_(0), prop_ids_(std::move(prop_ids)), mode_(mode),
-      eq_values_(std::move(eq_values)), range_start_(std::move(range_start)), range_end_(std::move(range_end)),
-      output_types_(std::move(output_types)), store_(store), label_defs_(std::move(label_defs)) {}
+      eq_values_(std::move(eq_values)), prefix_col_(prefix_col), range_start_(std::move(range_start)),
+      range_end_(std::move(range_end)), output_types_(std::move(output_types)), store_(store),
+      label_defs_(std::move(label_defs)) {}
 
 // Index-id based composite constructor
 IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, uint32_t index_id, std::vector<uint16_t> prop_ids,
@@ -40,9 +41,9 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, uint32_t index_id
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs)
+                                         std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col)
     : variable_(std::move(variable)), label_id_(INVALID_LABEL_ID), index_id_(index_id), prop_ids_(std::move(prop_ids)),
-      mode_(mode), eq_values_(std::move(eq_values)), range_start_(std::move(range_start)),
+      mode_(mode), eq_values_(std::move(eq_values)), prefix_col_(prefix_col), range_start_(std::move(range_start)),
       range_end_(std::move(range_end)), output_types_(std::move(output_types)), store_(store),
       label_defs_(std::move(label_defs)) {}
 
@@ -52,6 +53,8 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
     if (index_id_ != 0) {
         if (mode_ == ScanMode::EQUALITY) {
             gen = cancellable(store_.scanVerticesByIndexId(index_id_, eq_values_, scan_batch));
+        } else if (mode_ == ScanMode::PREFIX) {
+            gen = cancellable(store_.scanVerticesByIndexIdPrefix(index_id_, eq_values_, prefix_col_, scan_batch));
         } else {
             gen = cancellable(store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_, scan_batch));
         }
@@ -60,6 +63,13 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
             gen = cancellable(store_.scanVerticesByIndex(label_id_, prop_ids_[0], eq_values_[0], scan_batch));
         } else {
             gen = cancellable(store_.scanVerticesByIndexComposite(label_id_, prop_ids_, eq_values_, scan_batch));
+        }
+    } else if (mode_ == ScanMode::PREFIX) {
+        if (prop_ids_.size() == 1) {
+            gen = cancellable(store_.scanVerticesByIndexPrefix(label_id_, prop_ids_[0], eq_values_[0], scan_batch));
+        } else {
+            gen = cancellable(
+                store_.scanVerticesByIndexCompositePrefix(label_id_, prop_ids_, eq_values_, prefix_col_, scan_batch));
         }
     } else {
         if (prop_ids_.size() == 1) {
@@ -118,7 +128,7 @@ std::string IndexScanPhysicalOp::toString() const {
             prop_list += std::to_string(prop_ids_[i]);
         }
     }
-    std::string modestr = (mode_ == ScanMode::EQUALITY) ? "eq" : "range";
+    std::string modestr = (mode_ == ScanMode::EQUALITY) ? "eq" : (mode_ == ScanMode::PREFIX ? "prefix" : "range");
     return "IndexScan(variable=" + variable_ + ", label=" + label_name + ", props=[" + prop_list +
            "], mode=" + modestr + ")";
 }

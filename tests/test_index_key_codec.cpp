@@ -75,6 +75,70 @@ TEST(IndexKeyCodec, IndexKeyOrdering) {
     EXPECT_LT(key3, key2); // value 10 < 20 overrides id
 }
 
+TEST(IndexKeyCodec, StringExactAndPrefixBoundaries) {
+    auto jose = IndexKeyCodec::encodeIndexKey(std::string("Jose"), 7);
+    auto joseph = IndexKeyCodec::encodeIndexKey(std::string("Joseph"), 7);
+    auto josef = IndexKeyCodec::encodeIndexKey(std::string("Josef"), 7);
+    auto jose_trinidad = IndexKeyCodec::encodeIndexKey(std::string("Jose Trinidad"), 7);
+
+    auto exact = IndexKeyCodec::encodeEqualityPrefix(std::string("Jose"));
+    EXPECT_EQ(jose.rfind(exact, 0), 0u);
+    EXPECT_NE(joseph.rfind(exact, 0), 0u);
+    EXPECT_NE(josef.rfind(exact, 0), 0u);
+    EXPECT_NE(jose_trinidad.rfind(exact, 0), 0u);
+
+    auto prefix = IndexKeyCodec::encodePrefix(std::string("Jose"));
+    EXPECT_EQ(jose.rfind(prefix, 0), 0u);
+    EXPECT_EQ(joseph.rfind(prefix, 0), 0u);
+    EXPECT_EQ(josef.rfind(prefix, 0), 0u);
+    EXPECT_EQ(jose_trinidad.rfind(prefix, 0), 0u);
+}
+
+TEST(IndexKeyCodec, StringEmbeddedNulAndOrdering) {
+    auto empty = IndexKeyCodec::encodeSortableValue(std::string(""));
+    auto a = IndexKeyCodec::encodeSortableValue(std::string("a"));
+    auto a_nul = IndexKeyCodec::encodeSortableValue(std::string("a\0", 2));
+    auto aa = IndexKeyCodec::encodeSortableValue(std::string("aa"));
+    auto b = IndexKeyCodec::encodeSortableValue(std::string("b"));
+
+    EXPECT_LT(empty, a);
+    EXPECT_LT(a, a_nul);
+    EXPECT_LT(a_nul, aa);
+    EXPECT_LT(aa, b);
+
+    auto exact_a_nul = IndexKeyCodec::encodeEqualityPrefix(std::string("a\0", 2));
+    auto key_a_nul = IndexKeyCodec::encodeIndexKey(std::string("a\0", 2), 1);
+    EXPECT_EQ(key_a_nul.rfind(exact_a_nul, 0), 0u);
+    EXPECT_NE(key_a_nul.rfind(IndexKeyCodec::encodeEqualityPrefix(std::string("a")), 0), 0u);
+}
+
+TEST(IndexKeyCodec, CompositeStringBoundaries) {
+    auto key_ab_c = IndexKeyCodec::encodeIndexKey(std::vector<PropertyValue>{std::string("ab"), std::string("c")}, 1);
+    auto key_a_bc = IndexKeyCodec::encodeIndexKey(std::vector<PropertyValue>{std::string("a"), std::string("bc")}, 1);
+    EXPECT_NE(key_ab_c, key_a_bc);
+
+    auto exact = IndexKeyCodec::encodeEqualityPrefix(std::vector<PropertyValue>{std::string("Jose"), std::string("A")});
+    auto exact_longer =
+        IndexKeyCodec::encodeEqualityPrefix(std::vector<PropertyValue>{std::string("Joseph"), std::string("A")});
+    EXPECT_NE(exact, exact_longer);
+
+    auto jose_a = IndexKeyCodec::encodeIndexKey(std::vector<PropertyValue>{std::string("Jose"), std::string("A")}, 1);
+    auto joseph_a =
+        IndexKeyCodec::encodeIndexKey(std::vector<PropertyValue>{std::string("Joseph"), std::string("A")}, 1);
+    EXPECT_EQ(jose_a.rfind(exact, 0), 0u);
+    EXPECT_NE(joseph_a.rfind(exact, 0), 0u);
+
+    auto leading_prefix =
+        IndexKeyCodec::encodePrefix(std::vector<PropertyValue>{std::string("Jose"), std::string("A")}, 0);
+    EXPECT_EQ(jose_a.rfind(leading_prefix, 0), 0u);
+    EXPECT_EQ(joseph_a.rfind(leading_prefix, 0), 0u);
+
+    auto second_prefix =
+        IndexKeyCodec::encodePrefix(std::vector<PropertyValue>{std::string("Jose"), std::string("A")}, 1);
+    EXPECT_EQ(jose_a.rfind(second_prefix, 0), 0u);
+    EXPECT_NE(joseph_a.rfind(second_prefix, 0), 0u);
+}
+
 TEST(IndexKeyCodec, EqualityPrefix) {
     auto val = int64_t(42);
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(val);
@@ -92,6 +156,7 @@ TEST(MetadataCodec, IndexDefRoundTrip) {
     idx.prop_ids = {3, 5};
     idx.unique = true;
     idx.state = IndexState::WRITE_ONLY;
+    idx.encoding_version = 2;
 
     std::string buf;
     MetadataCodec::encodeIndexDef(buf, idx);
@@ -103,6 +168,7 @@ TEST(MetadataCodec, IndexDefRoundTrip) {
     EXPECT_EQ(decoded.prop_ids, idx.prop_ids);
     EXPECT_EQ(decoded.unique, idx.unique);
     EXPECT_EQ(decoded.state, idx.state);
+    EXPECT_EQ(decoded.encoding_version, 2);
 }
 
 TEST(MetadataCodec, LabelDefWithIndexes) {

@@ -285,6 +285,9 @@ public:
                                                                         const PropertyValue& value) = 0;
     virtual std::unique_ptr<IIndexScanCursor> createIndexEqualityCursor(GraphSession& session, const std::string& table,
                                                                         const std::vector<PropertyValue>& values) = 0;
+    /// Prefix cursor for a raw, already-encoded string prefix (no terminator).
+    virtual std::unique_ptr<IIndexScanCursor> createIndexPrefixCursor(GraphSession& session, const std::string& table,
+                                                                      const std::string& prefix) = 0;
     /// range：start 为**排他**下界、end 为排他上界（与既有 scanIndexRange 语义一致）✓
     virtual std::unique_ptr<IIndexScanCursor> createIndexRangeCursor(GraphSession& session, const std::string& table,
                                                                      const std::optional<PropertyValue>& start,

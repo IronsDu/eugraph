@@ -295,13 +295,22 @@ value: u8  version = 1
 
 | 属性类型 | 编码格式 |
 |----------|----------|
-| null | `0xFF`（排最前） |
-| bool | `0x00` / `0x01` |
-| int64 | `0x00` + 8 字节 BE，符号翻转（`val ^ 0x8000...`） |
-| double | `0x01` + 8 字节 IEEE 754，符号翻转 |
-| string | `0x02` + 原始字节（v1 仅 ASCII 排序） |
+| null | `0x00` |
+| bool | `0x01` + 1 字节 |
+| int64 | `0x02` + 8 字节 BE，符号翻转（`val ^ 0x8000...`） |
+| double | `0x03` + 8 字节 IEEE 754，符号翻转 |
+| string | `0x04` + escaped bytes + `0x00 0x00` |
 
-等值查询使用 `encodeEqualityPrefix` 做前缀扫描；范围查询用 `search_near` + 边界检查。
+字符串转义是 order-preserving 的：`0x00` → `0x00 0xFF`，结束 → `0x00 0x00`。
+这样：
+
+- 等值使用带 terminator 的 exact prefix，`Jose` 不匹配 `Joseph`；
+- 前缀查询使用不带 terminator 的 raw prefix；
+- 复合索引每个字符串组件都有明确边界。
+
+等值查询使用 `encodeEqualityPrefix` 做前缀扫描；前缀查询使用
+`encodePrefix` + prefix cursor；范围查询用 `search_near` + 边界检查。
+索引格式版本为 2；v1 索引不读取，需重建。
 
 ### 边索引 Value 编码
 

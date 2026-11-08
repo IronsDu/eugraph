@@ -15,9 +15,13 @@
   取 min。客户端为官方 Bolt driver。
 - 参数：complex/short 用 `personId=933`、`messageId=3`；complex-13/14 用
   `person1Id=933, person2Id=1129`；complex-1 的 `firstName` 保持文件默认 `Jose`。
-- 结果一致性：21 条查询行数一致；**20/21 语义一致**。complex-1 两边结果集不同：
-  SF1 neo4j 的 `Person.firstName='Jose'` 为 95 人，eugraph 为 147 人，属于 SF1 两份
-  数据的导入差异，不是本轮引擎改动；因此 c1 的耗时只作参考，严格对比应剔除 c1。
+- c1 结果说明：SF1 neo4j 的 `Person.firstName='Jose'` 为 95 人，eugraph 旧索引路径
+  为 147 人。根因已定位为字符串索引等值扫描缺少 value 边界（`Jose` 前缀误匹配
+  `Joseph` / `Josef` / `Jose Trinidad`），不是两份数据不一致。索引编码已改为
+  `0x04 + escaped bytes + 0x00 0x00` 并增加精确/前缀扫描；重建索引后 c1 的
+  行集与 `Jose` 人数（95）已对齐。c1 结果中仍可能出现 `[null,null,null]` 组织
+  元组，这是 LDBC driver 的 `asOrganization` 不处理 null tuple，属于独立的
+  driver 适配问题。下表 c1 耗时仍来自旧索引版本，仅作参考。
 
 ## 2. 结果
 

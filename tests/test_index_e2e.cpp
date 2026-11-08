@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+#include <set>
 #include <spdlog/spdlog.h>
 #include <string>
 
@@ -165,6 +166,16 @@ static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& que
     return result.rows;
 }
 
+static std::string explainQuery(QueryExecutor& executor, const std::string& query) {
+    auto rows = runQuery(executor, "EXPLAIN " + query);
+    std::string plan;
+    for (const auto& row : rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan += std::get<std::string>(row[0]) + "\n";
+    }
+    return plan;
+}
+
 // Helper: create label with properties via meta + data stores
 static void createLabel(TestEnv& env, const std::string& name, const std::vector<PropertyDef>& props) {
     auto label_id = blockingWait(env.async_meta->createLabel(name, props));
@@ -266,6 +277,142 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
     auto& val = rows[0][0];
     ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(val));
     EXPECT_EQ((*std::get<VertexValuePtr>(val)).id, 3u);
+}
+
+TEST_F(IndexE2ETest, StringIndexExactAndPrefixScan) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+
+    auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(label_def.has_value());
+    LabelId label_id = label_def->id;
+    auto name_prop_id = label_def->properties[0].id;
+
+    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_name", "Person", {"name"}, false)));
+    ASSERT_TRUE(blockingWait(env.async_meta->updateIndexState("idx_name", IndexState::PUBLIC)));
+    auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(updated_def.has_value());
+    ASSERT_TRUE(env.data_store->createIndex(vidxTableById(updated_def->indexes[0].index_id)));
+
+    const std::vector<std::string> names = {"Jose", "Joseph", "Josef", "Jose Trinidad", "Alice"};
+    for (size_t i = 0; i < names.size(); ++i) {
+        Properties props(1);
+        props[name_prop_id] = names[i];
+        insertVertexWithIndex(env, label_id, static_cast<VertexId>(i + 1), props, *updated_def);
+    }
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    auto exact_plan = explainQuery(executor, "MATCH (n:Person) WHERE n.name = 'Jose' RETURN n.name");
+    EXPECT_NE(exact_plan.find("IndexScan"), std::string::npos) << exact_plan;
+    EXPECT_NE(exact_plan.find("mode=eq"), std::string::npos) << exact_plan;
+    auto prefix_plan = explainQuery(executor, "MATCH (n:Person) WHERE n.name STARTS WITH 'Jose' RETURN n.name");
+    EXPECT_NE(prefix_plan.find("IndexScan"), std::string::npos) << prefix_plan;
+    EXPECT_NE(prefix_plan.find("mode=prefix"), std::string::npos) << prefix_plan;
+
+    auto exact = runQuery(executor, "MATCH (n:Person) WHERE n.name = 'Jose' RETURN n.name");
+    ASSERT_EQ(exact.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(exact[0][0]));
+    EXPECT_EQ(std::get<std::string>(exact[0][0]), "Jose");
+
+    auto prefix = runQuery(executor, "MATCH (n:Person) WHERE n.name STARTS WITH 'Jose' RETURN n.name");
+    EXPECT_EQ(prefix.size(), 4u);
+    for (const auto& row : prefix) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
+        EXPECT_EQ(std::get<std::string>(row[0]).rfind("Jose", 0), 0u);
+    }
+
+    auto no_match = runQuery(executor, "MATCH (n:Person) WHERE n.name = 'Jos' RETURN n.name");
+    EXPECT_TRUE(no_match.empty());
+}
+
+TEST_F(IndexE2ETest, CompositeStringIndexExactAndPrefix) {
+    createLabel(env, "Person",
+                {
+                    {0, "firstName", PropertyType::STRING, false, std::nullopt},
+                    {0, "lastName", PropertyType::STRING, false, std::nullopt},
+                });
+
+    auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(label_def.has_value());
+    LabelId label_id = label_def->id;
+    auto first_id = label_def->properties[0].id;
+    auto last_id = label_def->properties[1].id;
+
+    ASSERT_TRUE(
+        blockingWait(env.async_meta->createVertexIndex("idx_name", "Person", {"firstName", "lastName"}, false)));
+    ASSERT_TRUE(blockingWait(env.async_meta->updateIndexState("idx_name", IndexState::PUBLIC)));
+    auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(updated_def.has_value());
+    ASSERT_TRUE(env.data_store->createIndex(vidxTableById(updated_def->indexes[0].index_id)));
+
+    const std::vector<std::pair<std::string, std::string>> names = {
+        {"Jose", "A"}, {"Joseph", "A"}, {"Jose", "B"}, {"Alice", "A"}};
+    for (size_t i = 0; i < names.size(); ++i) {
+        Properties props(2);
+        props[first_id] = names[i].first;
+        props[last_id] = names[i].second;
+        insertVertexWithIndex(env, label_id, static_cast<VertexId>(i + 1), props, *updated_def);
+    }
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    auto exact_plan =
+        explainQuery(executor, "MATCH (n:Person) WHERE n.firstName = 'Jose' AND n.lastName = 'A' RETURN n.firstName");
+    EXPECT_NE(exact_plan.find("IndexScan"), std::string::npos) << exact_plan;
+    EXPECT_NE(exact_plan.find("mode=eq"), std::string::npos) << exact_plan;
+    auto prefix_plan = explainQuery(
+        executor, "MATCH (n:Person) WHERE n.firstName = 'Jose' AND n.lastName STARTS WITH '' RETURN n.firstName");
+    EXPECT_NE(prefix_plan.find("IndexScan"), std::string::npos) << prefix_plan;
+    EXPECT_NE(prefix_plan.find("mode=prefix"), std::string::npos) << prefix_plan;
+
+    auto exact = runQuery(executor, "MATCH (n:Person) WHERE n.firstName = 'Jose' AND n.lastName = 'A' "
+                                    "RETURN n.firstName, n.lastName");
+    ASSERT_EQ(exact.size(), 1u);
+    ASSERT_EQ(exact[0].size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(exact[0][0]));
+    ASSERT_TRUE(std::holds_alternative<std::string>(exact[0][1]));
+    EXPECT_EQ(std::get<std::string>(exact[0][0]), "Jose");
+    EXPECT_EQ(std::get<std::string>(exact[0][1]), "A");
+
+    // Force the composite prefix scan (EQ first column, PREFIX last column)
+    // and return *both indexed string columns*: the index only yields the
+    // vertex id, so both values must still come back through PE correctly.
+    auto prefix = runQuery(executor, "MATCH (n:Person) WHERE n.firstName = 'Jose' AND n.lastName STARTS WITH '' "
+                                     "RETURN n.firstName, n.lastName");
+    ASSERT_EQ(prefix.size(), 2u);
+    std::set<std::pair<std::string, std::string>> got;
+    for (const auto& row : prefix) {
+        ASSERT_EQ(row.size(), 2u);
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[1]));
+        got.emplace(std::get<std::string>(row[0]), std::get<std::string>(row[1]));
+    }
+    EXPECT_EQ(got, (std::set<std::pair<std::string, std::string>>{{"Jose", "A"}, {"Jose", "B"}}));
+
+    auto prefix_a = runQuery(executor, "MATCH (n:Person) WHERE n.firstName = 'Jose' AND n.lastName STARTS WITH 'A' "
+                                       "RETURN n.firstName, n.lastName");
+    ASSERT_EQ(prefix_a.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(prefix_a[0][0]), "Jose");
+    EXPECT_EQ(std::get<std::string>(prefix_a[0][1]), "A");
+
+    // Leading-column prefix on a composite index: no later accessor is
+    // constrained, so the prefix scan may drop the filter. Both returned
+    // string columns must still be materialized correctly.
+    auto leading_plan =
+        explainQuery(executor, "MATCH (n:Person) WHERE n.firstName STARTS WITH 'Jose' RETURN n.firstName, n.lastName");
+    EXPECT_NE(leading_plan.find("IndexScan"), std::string::npos) << leading_plan;
+    EXPECT_NE(leading_plan.find("mode=prefix"), std::string::npos) << leading_plan;
+    auto leading =
+        runQuery(executor, "MATCH (n:Person) WHERE n.firstName STARTS WITH 'Jose' RETURN n.firstName, n.lastName");
+    ASSERT_EQ(leading.size(), 3u);
+    std::set<std::pair<std::string, std::string>> leading_got;
+    for (const auto& row : leading) {
+        ASSERT_EQ(row.size(), 2u);
+        leading_got.emplace(std::get<std::string>(row[0]), std::get<std::string>(row[1]));
+    }
+    EXPECT_EQ(leading_got,
+              (std::set<std::pair<std::string, std::string>>{{"Jose", "A"}, {"Jose", "B"}, {"Joseph", "A"}}));
 }
 
 TEST_F(IndexE2ETest, QueryWithoutIndexUsesLabelScan) {

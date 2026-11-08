@@ -1777,23 +1777,25 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
     auto make_index_scan = [&](const LabelDef::IndexDef& idx, ScanMode mode, std::vector<PropertyValue> eq_values,
                                std::optional<std::vector<PropertyValue>> range_start,
                                std::optional<std::vector<PropertyValue>> range_end,
-                               std::vector<binder::BoundType> output_types) -> std::unique_ptr<IndexScanPhysicalOp> {
+                               std::vector<binder::BoundType> output_types,
+                               size_t prefix_col = 0) -> std::unique_ptr<IndexScanPhysicalOp> {
         if (idx.index_id != 0) {
             return std::make_unique<IndexScanPhysicalOp>(
                 scan_op.variable, idx.index_id, idx.prop_ids, mode, std::move(eq_values), std::move(range_start),
-                std::move(range_end), std::move(output_types), store, ctx.label_defs);
+                std::move(range_end), std::move(output_types), store, ctx.label_defs, prefix_col);
         }
         return std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, mode,
                                                      std::move(eq_values), std::move(range_start), std::move(range_end),
-                                                     std::move(output_types), store, ctx.label_defs);
+                                                     std::move(output_types), store, ctx.label_defs, prefix_col);
     };
 
     for (const auto& idx : label_def.indexes) {
-        if (idx.state != IndexState::PUBLIC)
+        if (idx.state != IndexState::PUBLIC || idx.encoding_version != 2)
             continue;
 
         size_t match_count = 0;
         bool last_is_range = false;
+        bool last_is_prefix = false;
         std::vector<PropertyValue> eq_values;
         std::optional<PropertyValue> range_start;
         std::optional<PropertyValue> range_end;
@@ -1810,13 +1812,26 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 break;
 
             if (i < idx.accessors.size() - 1) {
-                if (cond.op != cypher::BinaryOperator::EQ)
+                if (cond.op == cypher::BinaryOperator::EQ) {
+                    eq_values.push_back(std::move(cond.value));
+                    match_count++;
+                } else if (cond.op == cypher::BinaryOperator::STARTS_WITH &&
+                           std::holds_alternative<std::string>(cond.value)) {
+                    eq_values.push_back(std::move(cond.value));
+                    last_is_prefix = true;
+                    match_count++;
                     break;
-                eq_values.push_back(std::move(cond.value));
-                match_count++;
+                } else {
+                    break;
+                }
             } else {
                 if (cond.op == cypher::BinaryOperator::EQ) {
                     eq_values.push_back(std::move(cond.value));
+                    match_count++;
+                } else if (cond.op == cypher::BinaryOperator::STARTS_WITH &&
+                           std::holds_alternative<std::string>(cond.value)) {
+                    eq_values.push_back(std::move(cond.value));
+                    last_is_prefix = true;
                     match_count++;
                 } else if (cond.op == cypher::BinaryOperator::GT || cond.op == cypher::BinaryOperator::GTE) {
                     range_start = std::move(cond.value);
@@ -1832,8 +1847,26 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             }
         }
 
-        if (match_count == 0 || match_count != idx.accessors.size())
+        if (match_count == 0)
             continue;
+        if (!last_is_prefix && match_count != idx.accessors.size())
+            continue;
+        if (last_is_prefix) {
+            // A PREFIX scan can stop at the prefixed column. It is only safe to
+            // drop the original Filter when no other predicate exists and no
+            // later accessor is constrained.
+            if (conditions.size() != match_count)
+                continue;
+            bool later_constrained = false;
+            for (size_t j = match_count; j < idx.accessors.size(); ++j) {
+                if (prop_conditions.contains(idx.accessors[j].property_name)) {
+                    later_constrained = true;
+                    break;
+                }
+            }
+            if (later_constrained)
+                continue;
+        }
 
         Schema output_schema;
         std::vector<binder::BoundType> output_types;
@@ -1844,7 +1877,10 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         auto result_output_types = output_types;
 
         std::unique_ptr<IndexScanPhysicalOp> result;
-        if (!last_is_range) {
+        if (last_is_prefix) {
+            result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::PREFIX, std::move(eq_values), std::nullopt,
+                                     std::nullopt, std::move(output_types), match_count - 1);
+        } else if (!last_is_range) {
             result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::EQUALITY, std::move(eq_values), std::nullopt,
                                      std::nullopt, std::move(output_types));
         } else {

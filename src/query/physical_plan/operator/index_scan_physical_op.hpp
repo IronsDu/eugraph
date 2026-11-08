@@ -21,6 +21,7 @@ class IndexScanPhysicalOp : public PhysicalOperator {
 public:
     enum class ScanMode {
         EQUALITY,
+        PREFIX,
         RANGE
     };
 
@@ -28,21 +29,21 @@ public:
     IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                         PropertyValue search_value, std::optional<PropertyValue> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::unordered_map<LabelId, LabelDef> label_defs);
+                        std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col = 0);
 
     // Composite constructor
     IndexScanPhysicalOp(std::string variable, LabelId label_id, std::vector<uint16_t> prop_ids, ScanMode mode,
                         std::vector<PropertyValue> eq_values, std::optional<std::vector<PropertyValue>> range_start,
                         std::optional<std::vector<PropertyValue>> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::unordered_map<LabelId, LabelDef> label_defs);
+                        std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col = 0);
 
     // Index-id based composite constructor (new index table naming)
     IndexScanPhysicalOp(std::string variable, uint32_t index_id, std::vector<uint16_t> prop_ids, ScanMode mode,
                         std::vector<PropertyValue> eq_values, std::optional<std::vector<PropertyValue>> range_start,
                         std::optional<std::vector<PropertyValue>> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::unordered_map<LabelId, LabelDef> label_defs);
+                        std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col = 0);
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
@@ -53,7 +54,8 @@ private:
     uint32_t index_id_ = 0;
     std::vector<uint16_t> prop_ids_;
     ScanMode mode_;
-    std::vector<PropertyValue> eq_values_;                  // equality scan values
+    std::vector<PropertyValue> eq_values_;                  // equality/prefix scan values
+    size_t prefix_col_ = 0;                                 // PREFIX: raw component index
     std::optional<std::vector<PropertyValue>> range_start_; // range start (composite)
     std::optional<std::vector<PropertyValue>> range_end_;   // range end (composite or single)
     std::vector<binder::BoundType> output_types_;

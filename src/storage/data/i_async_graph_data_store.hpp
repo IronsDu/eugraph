@@ -196,8 +196,15 @@ public:
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndex(LabelId label_id, uint16_t prop_id, const PropertyValue& value, std::vector<VertexId>& out) = 0;
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexPrefix(LabelId label_id, uint16_t prop_id, const PropertyValue& prefix,
+                              std::vector<VertexId>& out) = 0;
+    virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
                                  const std::vector<PropertyValue>& values, std::vector<VertexId>& out) = 0;
+    virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexCompositePrefix(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                       const std::vector<PropertyValue>& values, size_t prefix_col,
+                                       std::vector<VertexId>& out) = 0;
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                              const std::optional<PropertyValue>& end, std::vector<VertexId>& out) = 0;
@@ -206,6 +213,9 @@ public:
         const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out) = 0;
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values, std::vector<VertexId>& out) = 0;
+    virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexIdPrefix(uint32_t index_id, const std::vector<PropertyValue>& values, size_t prefix_col,
+                                std::vector<VertexId>& out) = 0;
 
     /// 主键点查：在 index_id 指定的唯一索引上按完整元组做等值查找，取 vid 最小者。
     /// 找不到返回 nullopt。取最小者与「重复主键 first-wins」的语义一致

@@ -8,6 +8,7 @@
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/data/index_maintenance.hpp"
 #include "storage/io_scheduler.hpp"
+#include "storage/kv/index_key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
 #include "storage/storage_op_metrics.hpp"
 
@@ -542,6 +543,19 @@ public:
     }
 
     folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexPrefix(LabelId label_id, uint16_t prop_id, const PropertyValue& prefix,
+                              std::vector<VertexId>& out) override {
+        std::string table = vidxTable(label_id, prop_id);
+        auto encoded = IndexKeyCodec::encodePrefix(prefix);
+        return scanIndexCursor<VertexId>(
+            out,
+            [this, table, encoded = std::move(encoded)]() {
+                return store_.createIndexPrefixCursor(session_, table, encoded);
+            },
+            [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
+    }
+
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                              const std::optional<PropertyValue>& end, std::vector<VertexId>& out) override {
         std::string table = vidxTable(label_id, prop_id);
@@ -564,12 +578,39 @@ public:
     }
 
     folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexCompositePrefix(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                       const std::vector<PropertyValue>& values, size_t prefix_col,
+                                       std::vector<VertexId>& out) override {
+        std::string table = vidxCompositeTable(label_id, prop_ids);
+        auto encoded = IndexKeyCodec::encodePrefix(values, prefix_col);
+        return scanIndexCursor<VertexId>(
+            out,
+            [this, table, encoded = std::move(encoded)]() {
+                return store_.createIndexPrefixCursor(session_, table, encoded);
+            },
+            [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
+    }
+
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values,
                           std::vector<VertexId>& out) override {
         std::string table = vidxTableById(index_id);
         auto vals = values;
         return scanIndexCursor<VertexId>(
             out, [this, table, vals]() { return store_.createIndexEqualityCursor(session_, table, vals); },
+            [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
+    }
+
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexIdPrefix(uint32_t index_id, const std::vector<PropertyValue>& values, size_t prefix_col,
+                                std::vector<VertexId>& out) override {
+        std::string table = vidxTableById(index_id);
+        auto encoded = IndexKeyCodec::encodePrefix(values, prefix_col);
+        return scanIndexCursor<VertexId>(
+            out,
+            [this, table, encoded = std::move(encoded)]() {
+                return store_.createIndexPrefixCursor(session_, table, encoded);
+            },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
