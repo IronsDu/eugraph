@@ -154,10 +154,10 @@ bool ljCorrEqual(const Value& a, const Value& b) {
     return valueEquals(a, b).value_or(false);
 }
 
-DataChunk ljMakeChunk(size_t cols) {
+DataChunk ljMakeChunk(const std::vector<binder::BoundTypeKind>& kinds) {
     DataChunk out;
-    for (size_t i = 0; i < cols; ++i)
-        out.columns.push_back(Column::flat(binder::BoundTypeKind::ANY, DataChunk::DEFAULT_CAPACITY));
+    for (auto kind : kinds)
+        out.columns.push_back(Column::flat(kind, DataChunk::DEFAULT_CAPACITY));
     return out;
 }
 
@@ -230,7 +230,10 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeBatch(std::vec
             right_rows.push_back(std::move(row));
         }
 
-    DataChunk out = ljMakeChunk(left_kinds.size() + right_output_types_.size());
+    std::vector<binder::BoundTypeKind> output_kinds = left_kinds;
+    for (const auto& t : right_output_types_)
+        output_kinds.push_back(t.kind);
+    DataChunk out = ljMakeChunk(output_kinds);
     std::vector<const Row*> matches;
     for (const auto& left : left_rows) {
         matches.clear();
@@ -270,7 +273,7 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeBatch(std::vec
         if (out.count >= DataChunk::DEFAULT_CAPACITY) {
             out.sel = SelectionVector::identity(out.count);
             co_yield std::move(out);
-            out = ljMakeChunk(left_kinds.size() + right_output_types_.size());
+            out = ljMakeChunk(output_kinds);
         }
     }
     if (out.count > 0) {

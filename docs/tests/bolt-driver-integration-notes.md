@@ -11,13 +11,56 @@
 
 ## 一、测试设施约定
 
+### 驱动版本矩阵
+
+| 驱动 | 覆盖版本 | 矩阵入口 |
+|---|---|---|
+| Python | 4.4.12、5.20.0 | `tests/bolt/test_python_driver_matrix.py` |
+| JS（WebSocket） | 4.4.11、5.20.0、6.2.0 | `tests/bolt/test_js_driver_matrix.py` |
+| Java | **4.4.3**、5.28.15 | `tests/bolt/test_java_driver_matrix.py` |
+
+Java 的 4.4.3（Bolt 4.4）默认从 Maven Central 下载到
+`build/java_driver_jars/`；5.28.15 使用 `NEO4J_JAVA_DRIVER_LIB_DIR` 指向的
+Neo4j 发行版 jar。两者都运行 `tests/bolt/TestJavaDriver.java` 的同一套
+连接/CRUD/类型/路径/部分 PULL 用例。
+
 | 约定 | 说明 |
 |---|---|
 | 每个驱动测试**独占端口组** | CMake 为三者分别指定 `BOLT_PORT/THRIFT_PORT`（17690/17691/17692 + 19090/19091/19092） |
 | 三者**互斥 + 独占**运行 | `RESOURCE_LOCK "bolt_driver_port"` + `RUN_SERIAL TRUE`（JVM/Node/多版本驱动对并发敏感） |
 | 包装脚本**必须**： | ① 就绪等待足够长（ASan 构建慢，现为 **180s**）；② **失败时保留 `WORK_DIR`**（内含 `bolt-server.log`）；③ **退出码必须传播**（`cleanup()` 末尾 `exit $rc`，否则 trap 里 `rm -rf` 成功会把脚本退出码覆盖成 0 ⇒ **谎报成功**）；④ 内层测试加**硬超时** + 服务端 `setsid` **独立进程组**并按组清理（否则孙进程继承 ctest 的 stdout/stderr 管道 ⇒ **ctest 在测试超时后仍无限阻塞**） |
-| Java 驱动的 jar | CMake 按 **glob `neo4j-java-driver-5.28.*.jar`** 探测（**不要钉死小版本**：曾因 5.28.14 vs 5.28.15 导致该测试**静默不被注册**） |
+| Java 驱动的 jar | 5.28.x 由 CMake 按 **glob `neo4j-java-driver-5.28.*.jar`** 探测（**不要钉死小版本**）；4.4.3 由矩阵测试下载/缓存，覆盖 Bolt 4.4 协议 |
 | 测试数据隔离 | 测试自带 `DROP DATABASE` + `CREATE DATABASE`（py/js）；**每次运行也可用唯一库名**（前缀区分驱动，如 `bolt_py_<uuid>`）以避免与残留/并发互相干扰 |
+
+### Bolt 4.4 / c10 null 行：LeftJoin 批量化输出列类型
+
+2026-11-08 用 LDBC 官方 Java driver（内置 neo4j-java-driver 4.4.3）跑 c10 时，
+`commonInterestScore` 为 null。用 Python/Bolt 5 直接查同一 query/参数也能看到：
+
+```text
+row 1: personId=null, personFirstName=null, ..., commonInterestScore=0
+```
+
+根因在 `LeftJoinPhysicalOp::executeBatch`：批量化路径用
+`ljMakeChunk(left_kinds.size() + right_output_types_.size())` 创建输出 chunk，
+但所有列都声明为 `ANY`，而单行路径会按左右两侧的真实 `BoundTypeKind` 建列。
+c10 的 `OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)` 走批量路径时，
+左列（friend/city/person）在部分行被写成 null，随后 `collect`/Aggregate
+产生一个 null friend 分组；Java driver 对 `friend.id` 调 `asLong()` 就抛
+`Cannot coerce NULL to Java long`。
+
+修复：`ljMakeChunk` 接收 typed kind 列表，批量输出按 `left_kinds` +
+`right_output_types_` 建列，与单行路径一致。验证：
+
+- 同 query `MATCH (friend:Person) OPTIONAL MATCH ... WITH friend, collect(post)`
+  从 `1529 groups / 1528 non-null` 恢复为 `1528 / 1528`；
+- c10 Python/Bolt 5 与 Java/Bolt 4.4 均不再出现 null friend；
+- `EUGRAPH_LJ_BATCH=0`（关闭批量）原本就是正确的，说明问题只在批量输出列。
+
+c1 的 null 不是同一问题：c1 结果里存在 `[[null,null,null]]` 组织三元组，
+LDBC driver 的 `asOrganization` 不处理 null tuple；c14 的 connection terminated
+是 c1/c10 handler 抛出异常后 driver 关闭 executor 的级联，c14 单独跑是正常的。
+三者的共同测试入口是 Java matrix；c10 的 engine 修复让 Bolt 4.4 路径不再返回 null。
 
 ## 二、一次排查的根因链（2026-10，非索引缺陷）
 
