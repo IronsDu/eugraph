@@ -177,5 +177,5 @@ CaseExpr、List/Map 字面量、ListComprehension、PatternComprehension、
 ExistsExpr、Subscript/Slice、量词（ALL/ANY/NONE/SINGLE）均已进入执行路径。
 
 仍待处理的能力见 [cypher-syntax.md](cypher-syntax.md) 的“Neo4j 支持但 EuGraph
-尚未支持”一节；其中主要包括 `CALL { ... }` 子查询、`LOAD CSV`、约束 DDL、
-RETURN/CASE 中的完整 EXISTS 子查询，以及嵌套 EXISTS 过滤错误。
+尚未支持”一节；其中主要包括明确不做的 `CALL { ... }` 子查询、`LOAD CSV`、
+约束 DDL，以及复杂的 RETURN/CASE 完整 EXISTS 形式。

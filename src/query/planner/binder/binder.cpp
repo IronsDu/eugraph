@@ -220,13 +220,46 @@ BoundExpression Binder::makeEqualityExpr(const BoundColumnRef& left, const Bound
 }
 
 const cypher::PatternComprehension* Binder::internProjectionExistsPattern(const cypher::ExistsExpr& ex) {
-    if (ex.full_query)
-        return nullptr;
     auto it = projection_exists_patterns_.find(&ex);
     if (it != projection_exists_patterns_.end())
         return it->second;
 
-    auto pc = std::make_unique<cypher::PatternComprehension>(existsToPatternComprehension(ex));
+    auto pc = std::make_unique<cypher::PatternComprehension>();
+    if (ex.full_query) {
+        // Projection EXISTS only needs row existence.  The common
+        // `EXISTS { MATCH <pattern> [WHERE ...] RETURN ... }` shape is
+        // equivalent to a pattern comprehension used as a boolean list;
+        // more complex forms (WITH, aggregation, multiple non-MATCH clauses)
+        // still fall back to an explicit binder error.
+        for (const auto& clause : ex.full_query->clauses) {
+            if (const auto* mc = std::get_if<std::unique_ptr<cypher::MatchClause>>(&clause)) {
+                for (const auto& pp : (*mc)->patterns)
+                    pc->patterns.push_back(cloneExistsPatternPart(pp));
+                if ((*mc)->where_pred) {
+                    if (pc->where_pred) {
+                        auto both = std::make_unique<cypher::BinaryOp>();
+                        both->op = cypher::BinaryOperator::AND;
+                        both->left = std::move(*pc->where_pred);
+                        both->right = cloneInlineExpr(*(*mc)->where_pred);
+                        pc->where_pred = cypher::Expression(std::move(both));
+                    } else {
+                        pc->where_pred = cloneInlineExpr(*(*mc)->where_pred);
+                    }
+                }
+            } else if (std::holds_alternative<std::unique_ptr<cypher::ReturnClause>>(clause)) {
+                // The returned value is irrelevant to EXISTS.
+            } else {
+                return nullptr;
+            }
+        }
+        if (pc->patterns.empty())
+            return nullptr;
+    } else {
+        for (const auto& pp : ex.patterns)
+            pc->patterns.push_back(cloneExistsPatternPart(pp));
+        if (ex.where_pred)
+            pc->where_pred = cloneInlineExpr(*ex.where_pred);
+    }
     const cypher::PatternComprehension* raw = pc.get();
     projection_exists_patterns_[&ex] = raw;
     projection_exists_storage_.push_back(std::move(pc));

@@ -883,6 +883,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->prev_edge_var = val->prev_edge_var;
                 c->prev_edge_col_index = val->prev_edge_col_index;
                 c->edge_prop_filters = val->edge_prop_filters;
+                c->edge_prop_filter_exprs = val->edge_prop_filter_exprs;
                 return c;
             }
             // Binary operators — copy scalar fields, skip left/right

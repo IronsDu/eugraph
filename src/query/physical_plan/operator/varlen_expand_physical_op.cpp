@@ -1,6 +1,10 @@
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
+
 #include "common/types/constants.hpp"
 #include "query/dataset/row.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
+#include "query/physical_plan/operator/property_value_convert.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 
 #include <spdlog/spdlog.h>
@@ -70,6 +74,20 @@ std::string VarLenExpandPhysicalOp::toString() const {
     }
     s += ", direction=" + dir + ")";
     return s;
+}
+
+void VarLenExpandPhysicalOp::compileExpressions(const TupleSlotLayout& input_layout) {
+    if (edge_prop_filter_exprs_.empty())
+        return;
+    ExpressionCompiler compiler(input_layout);
+    for (auto& [label_id, filters] : edge_prop_filter_exprs_) {
+        (void)label_id;
+        for (auto& [prop_id, expr] : filters) {
+            (void)prop_id;
+            if (expr)
+                compiler.compile(*expr);
+        }
+    }
 }
 
 folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
@@ -289,6 +307,34 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
     while (auto chunk = co_await child_gen.next()) {
         const size_t input_rows = chunk->numRows();
+
+        // Evaluate inline edge-property expressions once per input row.  The
+        // filter values may depend on outer variables (e.g. {score: a.name}),
+        // so they cannot be precomputed at bind time.
+        std::unordered_map<const binder::BoundExpression*, std::vector<Value>> filter_values;
+        if (!edge_prop_filter_exprs_.empty()) {
+            ExpressionEvaluator evaluator(eval_ctx_);
+            std::vector<const binder::BoundExpression*> exprs;
+            std::unordered_set<const binder::BoundExpression*> seen;
+            for (const auto& [label_id, filters] : edge_prop_filter_exprs_) {
+                (void)label_id;
+                for (const auto& [prop_id, expr] : filters) {
+                    (void)prop_id;
+                    if (expr && seen.insert(expr.get()).second)
+                        exprs.push_back(expr.get());
+                }
+            }
+            evaluator.resetForChunk();
+            co_await evaluator.prefetch(exprs, *chunk);
+            for (const auto* expr : exprs) {
+                Column values = Column::flat(binder::BoundTypeKind::ANY, input_rows);
+                evaluator.evaluate(*expr, *chunk, values);
+                auto& out = filter_values[expr];
+                out.reserve(input_rows);
+                for (size_t i = 0; i < input_rows; ++i)
+                    out.push_back(values.getValue(i));
+            }
+        }
         size_t input_cols = chunk->numColumns();
 
         struct OutputEntry {
@@ -444,6 +490,35 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             for (const auto& [pid, expected] : fit->second) {
                                 if (pid >= props->size() || !props->at(pid).has_value() ||
                                     props->at(pid).value() != expected) {
+                                    pass = false;
+                                    break;
+                                }
+                            }
+                        } else {
+                            pass = false;
+                        }
+                        if (!pass)
+                            continue;
+                    }
+                }
+                if (!edge_prop_filter_exprs_.empty()) {
+                    auto fit = edge_prop_filter_exprs_.find(edge.edge_label_id);
+                    if (fit != edge_prop_filter_exprs_.end() && !fit->second.empty()) {
+                        std::vector<uint16_t> prop_ids;
+                        for (const auto& [pid, _] : fit->second)
+                            prop_ids.push_back(pid);
+                        auto props = co_await store_.getEdgeProperties(edge.edge_label_id, edge.edge_id, prop_ids);
+                        bool pass = true;
+                        if (props) {
+                            for (const auto& [pid, expr] : fit->second) {
+                                auto vit = filter_values.find(expr.get());
+                                if (vit != filter_values.end() && static_cast<size_t>(src_row) < vit->second.size()) {
+                                    auto expected = valueToPropertyValue(vit->second[src_row]);
+                                }
+                                if (!expr || vit == filter_values.end() ||
+                                    static_cast<size_t>(src_row) >= vit->second.size() || pid >= props->size() ||
+                                    !props->at(pid).has_value() ||
+                                    props->at(pid).value() != valueToPropertyValue(vit->second[src_row])) {
                                     pass = false;
                                     break;
                                 }
