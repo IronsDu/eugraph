@@ -605,9 +605,10 @@ TEST_F(WTGraphStoreTest, MultipleEdgesSamePair) {
     EdgeLabelId label_id = 1;
 
     auto txn = writeTxn();
-    store_->insertEdge(txn, 400, 1, 2, label_id, Properties{})
-        store_->insertEdge(txn, 401, 1, 2, label_id, Properties{})
-            store_->insertEdge(txn, 402, 1, 2, label_id, Properties{}) commit(txn);
+    store_->insertEdge(txn, 400, 1, 2, label_id, Properties{});
+    store_->insertEdge(txn, 401, 1, 2, label_id, Properties{});
+    store_->insertEdge(txn, 402, 1, 2, label_id, Properties{});
+    commit(txn);
 
     std::vector<EdgeId> found;
     store_->scanEdges(store_->autoSession(), 1, Direction::OUT, label_id,
