@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 namespace eugraph {
@@ -79,6 +80,7 @@ public:
         }
         txn_.on_commit_result(out);
         err_.set(out);
+        summary_written_.clear();
         return out;
     }
 
@@ -97,6 +99,7 @@ public:
             }
         }
         txn_.on_rollback();
+        summary_written_.clear();
     }
 
     /// 收尾：关全部 cursor → 后端事务仍开着 ⇒ 回滚 ✓（归还由池负责 ✓）
@@ -120,6 +123,7 @@ public:
                 }
             }
             txn_.on_rollback();
+            summary_written_.clear();
             spdlog::warn("[GraphSession] 未提交就收尾 ⇒ 已回滚（调用方应显式 commit/rollback）");
         }
     }
@@ -165,6 +169,21 @@ public:
     [[nodiscard]] bool active() const noexcept {
         return txn_.active();
     }
+
+    /// Vertex summaries written by this transaction.  A summary is normally a
+    /// committed cache row, but a fresh `insertVertex` writes it inside the
+    /// user transaction; a later property/label mutation in the same
+    /// transaction must delete that uncommitted row through this session rather
+    /// than a separate autocommit session (which cannot see it).
+    void markSummaryWritten(VertexId vid) {
+        summary_written_.insert(vid);
+    }
+    bool consumeSummaryWritten(VertexId vid) {
+        return summary_written_.erase(vid) != 0;
+    }
+    void clearSummaryWritten() noexcept {
+        summary_written_.clear();
+    }
     [[nodiscard]] TxnState state() const noexcept {
         return txn_.state();
     }
@@ -203,6 +222,7 @@ private:
         // 新事务成功开始后，才清掉上一个事务留下的非致命错误 ✓
         if (err_.has())
             err_.clear();
+        summary_written_.clear();
         if (!session_) {
             txn_.on_rollback();
             err_.set(TxnOutcome{TxnState::Failed, EINVAL, "begin: no WT session", TxnErrorClass::Unknown});
@@ -225,6 +245,7 @@ private:
     std::shared_ptr<CursorProvider> cursors_; // cursor 所有权边界 ✓（默认每会话缓存）
     TxnController txn_{};
     StickyError err_{};
+    std::unordered_set<VertexId> summary_written_;
     bool closed_ = false;
 };
 

@@ -982,6 +982,21 @@ TEST_F(WTGraphStoreTest, CoalescePropertiesBatchAcrossLabels) {
     EXPECT_TRUE(empty_vids.empty());
 }
 
+TEST_F(WTGraphStoreTest, SameTransactionInsertThenPropertyInvalidatesSummary) {
+    auto txn = writeTxn();
+    // insertVertex writes a summary containing the vertex's label (even with
+    // no properties), before the same transaction adds a property.
+    ASSERT_TRUE(store_->insertVertex(txn, 945, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    ASSERT_TRUE(store_->putVertexProperty(txn.get(), 945, 1, 0, PropertyValue(int64_t(77))));
+    commit(txn);
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}};
+    auto after = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {945}, candidates);
+    ASSERT_EQ(after.size(), 1u);
+    ASSERT_EQ(after[0].size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(after[0][0]), 77);
+}
+
 TEST_F(WTGraphStoreTest, SummaryIsInvalidatedByPropertyUpdate) {
     auto txn = writeTxn();
     ASSERT_TRUE(store_->insertVertex(
@@ -1010,6 +1025,69 @@ TEST_F(WTGraphStoreTest, SummaryIsInvalidatedByPropertyUpdate) {
     ASSERT_EQ(labels.size(), 1u);
     EXPECT_TRUE(labels[0].contains(1));
     EXPECT_TRUE(labels[0].contains(2));
+}
+
+TEST_F(WTGraphStoreTest, ConcurrentDifferentPropertyWritesDoNotConflict) {
+    auto setup = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        setup, 941, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, int64_t(1)}, {1, int64_t(2)}})}}));
+    commit(setup);
+
+    // Both transactions invalidate the same vertex summary through an
+    // independent autocommit delete, then write different canonical property
+    // keys.  They must not turn the disposable summary row into a user-visible
+    // write conflict.
+    auto t1 = writeTxn();
+    auto t2 = writeTxn();
+    ASSERT_TRUE(store_->putVertexProperty(t1.get(), 941, 1, 0, PropertyValue(int64_t(10))));
+    ASSERT_TRUE(store_->putVertexProperty(t2.get(), 941, 1, 1, PropertyValue(int64_t(20))));
+
+    EXPECT_TRUE(store_->commitTransaction(t1));
+    EXPECT_TRUE(store_->commitTransaction(t2));
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}, {1, 1}};
+    auto after = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {941}, candidates);
+    ASSERT_EQ(after.size(), 1u);
+    ASSERT_EQ(after[0].size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(after[0][0]), 10);
+    EXPECT_EQ(std::get<int64_t>(after[0][1]), 20);
+}
+
+TEST_F(WTGraphStoreTest, SummaryInvalidationOnPropertyWriteRollbackIsSafe) {
+    auto setup = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        setup, 943, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, int64_t(1)}, {1, int64_t(2)}})}}));
+    commit(setup);
+
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->putVertexProperty(txn.get(), 943, 1, 0, PropertyValue(int64_t(99))));
+    store_->rollbackTransaction(txn);
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}, {1, 1}};
+    auto after = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {943}, candidates);
+    ASSERT_EQ(after.size(), 1u);
+    ASSERT_EQ(after[0].size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(after[0][0]), 1); // canonical old value
+    EXPECT_EQ(std::get<int64_t>(after[0][1]), 2);
+}
+
+TEST_F(WTGraphStoreTest, RepeatedPropertyWriteWithoutSummarySucceeds) {
+    auto setup = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(setup, 944,
+                                     std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, int64_t(1)}})}}));
+    commit(setup);
+
+    for (int i = 0; i < 3; ++i) {
+        auto txn = writeTxn();
+        ASSERT_TRUE(store_->putVertexProperty(txn.get(), 944, 1, 0, PropertyValue(int64_t(10 + i))));
+        commit(txn);
+    }
+
+    const std::vector<std::pair<LabelId, uint16_t>> candidates = {{1, 0}};
+    auto after = store_->getVertexCoalescePropertiesBatch(store_->autoSession(), {944}, candidates);
+    ASSERT_EQ(after.size(), 1u);
+    ASSERT_EQ(after[0].size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(after[0][0]), 12);
 }
 
 TEST_F(WTGraphStoreTest, SummaryTreatsLaterDeclaredPropertyAsNull) {

@@ -176,6 +176,16 @@ std::optional<std::string> wt::table_get(WT_SESSION* session, const std::string&
     return value;
 }
 
+int wt::table_remove_code(WT_SESSION* session, const std::string& table, std::string_view key) {
+    if (session == nullptr)
+        return EINVAL;
+    WtCursor cursor = open_cursor(session, table);
+    if (!cursor)
+        return cursor.error();
+    setItem(cursor.get(), key);
+    return cursor->remove(cursor.get());
+}
+
 bool wt::table_del(WT_SESSION* session, const std::string& table, std::string_view key) {
     if (session == nullptr) {
         spdlog::error("table_del: null session");

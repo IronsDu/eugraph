@@ -207,5 +207,5 @@ public:
 9. **融合属性批量读**：`getVertexCoalescePropertiesBatch(session, vids, candidates)` / `batchGetVertexCoalesceProperties(vids, candidates)` 对每个 vid 扫一次 `vertex_data` 的 `{vid}{0x01}` 前缀，同时完成候选 label/prop 的取值；返回值按 `candidates` 顺序排列，缺失候选直接省略。默认 async 实现退化为逐候选点查，`AsyncGraphDataStore` 覆盖为一次前缀扫描。
 10. **批量邻接扫描**：`scanEdgesBatch(session, src_ids, dir, filter, cb)` 每 4,096 个 source 复用一个 `edge_index` cursor；邻接缓存启用时回退逐 source 的 `createEdgeScanCursor`。批量接口与 caller-owned 流式 `scanEdges` 都不把整个邻接集物化到共享状态里。
 11. **DROP 清理**：`dropLabel`/`dropEdgeLabel` 在 drop per-label 表之前，先按 `label_fwd`/`etype` 枚举并删除 `vertex_data` 标签/属性记录或 `edge_index`/缓存邻接记录；具体编码见 [kv-encoding.md](kv-encoding.md)。
-12. **邻接缓存容量**：`SyncGraphDataStore` 的构造参数 `adjacency_cache_capacity` 是每方向 COMPLETE 邻接上限；默认 0 表示关闭缓存、`edge_index` 保存全量边，测试可传小的 N 覆盖 COMPLETE/OVERFLOW 路径。
+12. **邻接缓存容量**：`SyncGraphDataStore` 的构造参数 `adjacency_cache_capacity` 是每方向 COMPLETE 邻接上限；默认 0 表示关闭缓存、`edge_index` 保存全量边，测试可传小的 N 覆盖 COMPLETE/OVERFLOW 路径。**风险**：N>0 时每个顶点方向的 state/count 是共享 key，边增删做 count RMW；不同边只要共享端点就可能并发冲突，启用前必须补 per-vertex 写串行化/重试。
 13. **同步扫描回调是非拥有 view**：`scanVerticesByLabel` / `scanEdges` / `scanEdgesBatch` / index scan 的 callback 使用 `folly::FunctionRef`，只在调用期间有效；实现不得保存或异步投递。需要跨调用保存的工厂仍用拥有型 `std::function`。详见 [scan-callback-design.md](scan-callback-design.md)。

@@ -47,6 +47,48 @@ protected:
 };
 } // namespace
 
+TEST_F(GraphSessionTest, SummaryWrittenMarkersArePerSession) {
+    auto a = make_session();
+    auto b = make_session();
+    ASSERT_TRUE(a->begin_write());
+    ASSERT_TRUE(b->begin_write());
+
+    a->markSummaryWritten(7);
+    EXPECT_TRUE(a->consumeSummaryWritten(7));
+    EXPECT_FALSE(a->consumeSummaryWritten(7)); // consumed once
+    EXPECT_FALSE(b->consumeSummaryWritten(7)); // not shared
+
+    b->markSummaryWritten(8);
+    EXPECT_FALSE(a->consumeSummaryWritten(8));
+
+    // commit/rollback clear the marker set
+    a->markSummaryWritten(9);
+    EXPECT_TRUE(a->commit().committed());
+    EXPECT_FALSE(a->consumeSummaryWritten(9));
+
+    b->rollback();
+    ASSERT_TRUE(b->begin_write());
+    b->markSummaryWritten(10);
+    b->rollback();
+    EXPECT_FALSE(b->consumeSummaryWritten(10));
+}
+
+TEST_F(GraphSessionTest, SummaryWrittenMarkersDoNotLeakOnReuse) {
+    auto session = make_session();
+    ASSERT_TRUE(session->begin_write());
+    session->markSummaryWritten(42);
+    EXPECT_TRUE(session->commit().committed());
+
+    ASSERT_TRUE(session->begin_write());
+    EXPECT_FALSE(session->consumeSummaryWritten(42));
+    session->markSummaryWritten(43);
+    session->rollback();
+    session->reset_for_reuse();
+    ASSERT_TRUE(session->begin_write());
+    EXPECT_FALSE(session->consumeSummaryWritten(43));
+    EXPECT_TRUE(session->commit().committed());
+}
+
 TEST_F(GraphSessionTest, ReadOnlyLifecycleCommitsExplicitly) {
     auto session = make_session();
     EXPECT_TRUE(session->begin_read());
