@@ -265,15 +265,25 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeBatch(std::vec
             }
             ++out.count;
         };
-        if (matches.empty())
-            emit(nullptr);
-        else
-            for (const auto* right : matches)
-                emit(right);
-        if (out.count >= DataChunk::DEFAULT_CAPACITY) {
+        auto emitAndFlush = [&](const Row* right) -> bool {
+            emit(right);
+            if (out.count < DataChunk::DEFAULT_CAPACITY)
+                return false;
             out.sel = SelectionVector::identity(out.count);
-            co_yield std::move(out);
-            out = ljMakeChunk(output_kinds);
+            return true;
+        };
+        if (matches.empty()) {
+            if (emitAndFlush(nullptr)) {
+                co_yield std::move(out);
+                out = ljMakeChunk(output_kinds);
+            }
+        } else {
+            for (const auto* right : matches) {
+                if (emitAndFlush(right)) {
+                    co_yield std::move(out);
+                    out = ljMakeChunk(output_kinds);
+                }
+            }
         }
     }
     if (out.count > 0) {
