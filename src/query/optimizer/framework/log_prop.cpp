@@ -36,6 +36,10 @@
 namespace eugraph {
 namespace optimizer {
 
+namespace {
+template <typename> inline constexpr bool always_false = false;
+}
+
 // ============================================================
 // Main derive dispatch — visits BoundLogicalOperator variant
 // ============================================================
@@ -122,9 +126,9 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
                     return lp;
                 }
                 return derivePassthrough(input_lps.at(0));
+            } else {
+                static_assert(always_false<T>, "unhandled BoundLogicalOperator in LogPropDeriver::derive");
             }
-            // Fallback: should not reach here
-            return LogProp{};
         },
         op);
 }

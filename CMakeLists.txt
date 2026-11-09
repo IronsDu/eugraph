@@ -273,6 +273,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/physical_operator_base.cpp
     src/query/physical_plan/physical_planner.cpp
     src/query/executor/query_executor.cpp
+    src/query/optimizer/logical_model/logical_op_model.cpp
     src/query/optimizer/framework/memo.cpp
     src/query/optimizer/extraction/projection_extraction.cpp
     src/query/optimizer/framework/opt_rule.cpp

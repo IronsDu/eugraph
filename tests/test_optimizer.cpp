@@ -13,6 +13,7 @@
 #include "query/optimizer/framework/operator_hash.hpp"
 #include "query/optimizer/framework/opt_rule.hpp"
 #include "query/optimizer/framework/physical_expr.hpp"
+#include "query/optimizer/logical_model/logical_op_model.hpp"
 #include "query/optimizer/logical_optimizer.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
@@ -2837,4 +2838,56 @@ TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
 
     auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
     EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(LogicalOpModel, PathCountClonePreservesFieldsAndChildAccess) {
+    BoundPathCountOp count;
+    count.source_variable = "a";
+    count.dst_variable = "b";
+    count.previous_edge_variables = {"e0", "e1"};
+    count.edge_label_ids = {7, 9};
+    count.output_name = "count";
+    count.child = makeLabelScan("a", 3);
+    BoundLogicalOperator op(std::make_unique<BoundPathCountOp>(std::move(count)));
+
+    const auto& model = logicalOpModel();
+    EXPECT_EQ(model.childCount(op), 1);
+    EXPECT_EQ(model.type(op), OptNodeType::PathCount);
+
+    BoundLogicalOperator cloned = model.clone(op);
+    const auto& c = std::get<std::unique_ptr<BoundPathCountOp>>(cloned);
+    ASSERT_TRUE(c);
+    EXPECT_EQ(c->source_variable, "a");
+    EXPECT_EQ(c->dst_variable, "b");
+    EXPECT_EQ(c->previous_edge_variables, (std::vector<std::string>{"e0", "e1"}));
+    EXPECT_EQ(c->edge_label_ids, (std::vector<EdgeLabelId>{7, 9}));
+    EXPECT_EQ(c->output_name, "count");
+
+    auto child = model.takeChild(op, 0);
+    EXPECT_EQ(model.childCount(op), 1); // placeholder BoundScanOp remains
+    EXPECT_TRUE(std::holds_alternative<BoundLabelScanOp>(child));
+    EXPECT_EQ(std::get<BoundLabelScanOp>(child).variable, "a");
+}
+
+TEST(LogicalOpModel, BinaryChildAccessAndSet) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->left = makeLabelScan("l", 0);
+    join->right = makeLabelScan("r", 1);
+    BoundLogicalOperator op(std::move(join));
+    const auto& model = logicalOpModel();
+    ASSERT_EQ(model.childCount(op), 2);
+
+    auto left = model.takeChild(op, 0);
+    auto right = model.takeChild(op, 1);
+    EXPECT_TRUE(std::holds_alternative<BoundLabelScanOp>(left));
+    EXPECT_TRUE(std::holds_alternative<BoundLabelScanOp>(right));
+    EXPECT_EQ(std::get<BoundLabelScanOp>(left).variable, "l");
+    EXPECT_EQ(std::get<BoundLabelScanOp>(right).variable, "r");
+
+    model.setChild(op, 0, makeLabelScan("new_l", 2));
+    model.setChild(op, 1, makeLabelScan("new_r", 3));
+    auto& j = std::get<std::unique_ptr<BoundBinaryJoinOp>>(op);
+    ASSERT_TRUE(j);
+    EXPECT_EQ(std::get<BoundLabelScanOp>(j->left).variable, "new_l");
+    EXPECT_EQ(std::get<BoundLabelScanOp>(j->right).variable, "new_r");
 }
