@@ -9,7 +9,8 @@
 ## 一、顶层结构
 
 ```
-Statement = variant<unique_ptr<RegularQuery>, unique_ptr<StandaloneCall>>
+Statement = variant<unique_ptr<RegularQuery>, unique_ptr<StandaloneCall>,
+                     unique_ptr<ExplainStatement>, unique_ptr<ProfileStatement>>
 
 RegularQuery
   ├── SingleQuery first
@@ -18,9 +19,10 @@ RegularQuery
 SingleQuery
   └── vector<Clause> clauses
 
-Clause = variant<unique_ptr<MatchClause>, UnwindClause, CallClause, CreateClause,
-                 MergeClause, DeleteClause, SetClause, RemoveClause, ReturnClause,
-                 WithClause>
+Clause = variant<unique_ptr<MatchClause>, unique_ptr<UnwindClause>, unique_ptr<CallClause>,
+                 unique_ptr<CreateClause>, unique_ptr<MergeClause>, unique_ptr<DeleteClause>,
+                 unique_ptr<SetClause>, unique_ptr<RemoveClause>, unique_ptr<ReturnClause>,
+                 unique_ptr<WithClause>, unique_ptr<ForeachClause>>
 ```
 
 ---
@@ -39,6 +41,7 @@ Clause = variant<unique_ptr<MatchClause>, UnwindClause, CallClause, CreateClause
 | `MergeClause` | `pattern`, `on_create`, `on_match` |
 | `UnwindClause` | `list_expr`, `variable` |
 | `CallClause` | `procedure_name`, `args`, `yield_items`, `where_pred` |
+| `ForeachClause` | `variable`, `list_expr`, `body: vector<Clause>` |
 
 ### ReturnItem
 
@@ -164,12 +167,15 @@ ParenExpr { Expression inner; }
 
 ## 五、执行状态
 
-详细执行状态见 [cypher-syntax.md](cypher-syntax.md)，此处简述：
+当前 `Statement`/`Clause` 中的常规查询、独立 `CALL`、`EXPLAIN`、`PROFILE` 都已进入
+执行路径。MATCH、OPTIONAL MATCH、CREATE、MERGE、SET、REMOVE、DELETE、UNWIND、
+WITH、RETURN、CALL、UNION/UNION ALL、FOREACH 均已实现。
 
-**已执行**的子句：MATCH, CREATE, SET, REMOVE, RETURN + ORDER BY/SKIP/LIMIT/DISTINCT + 聚合
+表达式方面，Literal、Variable、Parameter、PropertyAccess、LabelCastExpr、
+FunctionCall、BinaryOp（含 `%`/`^`/字符串谓词/LIST_CONCAT）、UnaryOp、
+CaseExpr、List/Map 字面量、ListComprehension、PatternComprehension、
+ExistsExpr、Subscript/Slice、量词（ALL/ANY/NONE/SINGLE）均已进入执行路径。
 
-**仅解析**的子句：DELETE, MERGE, UNWIND, WITH, CALL, UNION
-
-**已执行的表达式**：Literal, Variable, PropertyAccess, LabelCastExpr, FunctionCall(`id`/聚合), BinaryOp(比较/算术/逻辑/IN/XOR), UnaryOp(NOT/NEGATE/IS_NULL), CaseExpr, List, 量词(ALL/ANY/NONE/SINGLE)
-
-**仅解析的表达式**：% ^, STARTS_WITH/ENDS_WITH/CONTAINS, ListComprehension, PatternComprehension, Exists, Subscript/Slice, $param
+仍待处理的能力见 [cypher-syntax.md](cypher-syntax.md) 的“Neo4j 支持但 EuGraph
+尚未支持”一节；其中主要包括 `CALL { ... }` 子查询、`LOAD CSV`、约束 DDL、
+RETURN/CASE 中的完整 EXISTS 子查询，以及嵌套 EXISTS 过滤错误。
