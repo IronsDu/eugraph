@@ -23,6 +23,12 @@ placement can disturb property-enforcer placement (complex-14 is the
 regression case). The scope is logical-operator metadata, not Memo context, so
 clone/equality/hash include it and the Memo remains context-free.
 
+The Memo reaches operator behavior only through `LogicalOpModel`
+(`type/clone/equals/hash/child access`). Concrete-operator knowledge lives in
+`logical_model/`; an unhandled operator is a compile-time `static_assert`,
+never a silent `BoundScanOp` substitute. The same fail-closed rule applies to
+operator equality/hash and `LogProp` derivation.
+
 Property demand is modelled as a Cascades **required physical property**:
 `LogicalOptimizer` derives `VarRequirements` from the logical plan, puts them
 in the root `PhysProp`, and lets `OInputsTask` insert `VertexPropertyExtract` /
@@ -37,8 +43,12 @@ property reads from expressions during projection extraction; the CBO path uses
 
 See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
 
-- `framework/` — memo/tasks/rules/CBO.
-- `analysis/` — `requirement_collector` + materialization model.
+- `framework/` — memo/tasks/rules/CBO. It talks to operators through the
+  `LogicalOpModel` interface and does not include concrete `Bound*Op` headers.
+- `logical_model/` — concrete logical-operator adaptation: `LogicalOpModel`
+  implementation, operator equality/hash, `LogProp`, requirement collection.
+- `physical_model/` — physical cost model and physical-property helpers.
+- `analysis/` — read-only analysis and the materialization model.
 - `extraction/` — `projection_extraction` (PEPlan, slot and expression lowering).
 - `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`, plus the
   guarded `TagAnchoredJoinReorder` pre-pass (c6 shape only).
@@ -82,6 +92,10 @@ Known framework debt:
    source.
 4. RuleSet registration is explicit in `initRules`; `LogicalOptimizer::addRule`
    is the extension hook for experiments (one optimizer instance per query).
+5. `LogicalOpModel` is currently a single type-erased adapter over the existing
+   closed operator representations. The remaining step toward a fully open
+   operator hierarchy is to make each concrete operator own its model
+   operations; `Memo` already does not depend on those representations.
 
 ## 4. Verification
 

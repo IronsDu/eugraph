@@ -280,7 +280,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/framework/task.cpp
     src/query/optimizer/logical_optimizer.cpp
     src/query/optimizer/logical_model/log_prop.cpp
-    src/query/optimizer/framework/cost_model.cpp
+    src/query/optimizer/physical_model/cost_model.cpp
     src/query/optimizer/framework/physical_expr.cpp
     src/query/optimizer/logical_model/operator_hash.cpp
     src/query/optimizer/logical_model/operator_eq.cpp

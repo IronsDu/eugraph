@@ -1,7 +1,7 @@
 #pragma once
 
 #include "query/optimizer/analysis/materialization_req.hpp"
-#include "query/optimizer/framework/cost_model.hpp"
+#include "query/optimizer/physical_model/cost_model.hpp"
 // Full bound_logical_plan.hpp needed because ChosenPlan holds BoundLogicalOperator
 // by value, which requires complete operator alternative types.
 #include "query/planner/bound_logical_plan.hpp"

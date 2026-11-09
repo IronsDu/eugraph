@@ -1,8 +1,9 @@
-#include "query/optimizer/framework/cost_model.hpp"
+#include "query/optimizer/physical_model/cost_model.hpp"
 
 #include "query/optimizer/logical_model/log_prop.hpp"
 
 #include <cmath>
+#include <stdexcept>
 
 namespace eugraph {
 namespace optimizer {
@@ -93,7 +94,8 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
         // materialised. Keep it attractive versus Expand -> Filter -> Aggregate.
         return Cost(input0Card() * 1.05);
     }
-    return Cost(0.0);
+    // Fail closed: adding a PhysicalOpTag requires an explicit cost formula.
+    throw std::logic_error("findLocalCost: unhandled PhysicalOpTag");
 }
 
 } // namespace optimizer
