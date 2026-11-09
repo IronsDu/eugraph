@@ -254,6 +254,9 @@ const cypher::PatternComprehension* Binder::internProjectionExistsPattern(const 
         }
         if (pc->patterns.empty())
             return nullptr;
+        // A pattern comprehension needs a projection to produce list elements.
+        // The value is irrelevant; only the list length is used for EXISTS.
+        pc->projection = std::make_unique<cypher::Literal>(cypher::Literal{true});
     } else {
         for (const auto& pp : ex.patterns)
             pc->patterns.push_back(cloneExistsPatternPart(pp));

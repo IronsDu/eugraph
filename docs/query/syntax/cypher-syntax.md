@@ -141,7 +141,7 @@ MATCH (n), (m) WHERE (n)-[:KNOWS]->(m) RETURN n, m
 | `EXISTS { MATCH ... RETURN ... }`（完整子查询） | 已实现（首个 MATCH + 可选 WITH/RETURN；更新子句在绑定期报错） |
 | 嵌套 EXISTS | 已实现（pattern / full 子查询） |
 | EXISTS 在 RETURN/CASE 中的 pattern 形式 | 已实现 |
-| `EXISTS { MATCH ... RETURN ... }` 在 RETURN/CASE/表达式中 | 已实现（单 MATCH + 可选 WHERE/RETURN；复杂 WITH/聚合仍拒绝） |
+| `EXISTS { MATCH ... RETURN ... }` 在 RETURN/CASE/表达式中 | 已实现（相关变量、单 MATCH + 可选 WHERE/RETURN；无外部相关变量或复杂 WITH/聚合仍拒绝） |
 
 **模式推导式（Pattern Comprehension）**：`[(n)-->(m) | expr]` 已实现，且支持嵌套在列表推导式中，例如 `[x IN nodes(p) | size([(x)-->(:Y) | 1])]`。含模式推导式的顶层列表推导式在绑定阶段降级为外层 `PatternComprehensionApplyOp`：右子树先 `UNWIND` 迭代列表，再对每个元素执行模式推导式，最后 `collect` 回单行列表；不改变普通列表推导式与普通模式推导式的既有执行路径。
 
@@ -447,7 +447,7 @@ FOREACH`）；需要逐元素 MATCH 时用 `UNWIND`。
 | `LOAD CSV FROM ...` | 语法错误 | neo4j 支持导入 |
 | `CREATE CONSTRAINT ...` | 语法错误 | EuGraph 目前只有自己的 `CREATE INDEX` DDL |
 | `SHOW CONSTRAINTS` | 语法错误（约束功能本轮明确不做） | `SHOW INDEXES` 已支持 |
-| RETURN/CASE 中的复杂完整 `EXISTS` | 仅支持单 MATCH + 可选 WHERE/RETURN | WITH、聚合等复杂形式仍拒绝 |
+| RETURN/CASE 中的完整 `EXISTS`（无外部相关变量） | 绑定错误 | 相关变量、单 MATCH 形式已支持；WITH/聚合等复杂形式仍拒绝 |
 
 另外，`CALL db.labels()` 暴露内部 `__anon__` 标签，这是 EuGraph 与 neo4j 的有意差异，不属于“未支持”。
 ---
