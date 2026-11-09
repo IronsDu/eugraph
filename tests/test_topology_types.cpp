@@ -58,26 +58,24 @@ TEST(TopologyTypesTest, EdgeKeyLayoutAndDefaults) {
     EXPECT_EQ(k.src_id, INVALID_VERTEX_ID);
     EXPECT_EQ(k.dst_id, INVALID_VERTEX_ID);
     EXPECT_EQ(k.label_id, INVALID_EDGE_LABEL_ID);
-    EXPECT_EQ(k.seq, 0u);
+    EXPECT_EQ(k.id, INVALID_EDGE_ID);
 
     // EdgeKey must remain small enough for inline column storage.
-    // 8 (id) + 8 (src) + 8 (dst) + 2 (label) + 4 (seq) + padding ≤ 32.
+    // 8 (id) + 8 (src) + 8 (dst) + 2 (label) + padding ≤ 32.
     EXPECT_LE(sizeof(EdgeKey), 32u);
 }
 
 TEST(TopologyTypesTest, EdgeKeyConstructAndCompare) {
-    EdgeKey a{100, 1, 2, 5, 0};
-    EdgeKey b{100, 1, 2, 5, 0};
-    EdgeKey c{101, 1, 2, 5, 0};
-    EdgeKey d{100, 1, 3, 5, 0}; // dst differs
-    EdgeKey e{100, 1, 2, 6, 0}; // label differs
-    EdgeKey f{100, 1, 2, 5, 1}; // seq differs
+    EdgeKey a{100, 1, 2, 5};
+    EdgeKey b{100, 1, 2, 5};
+    EdgeKey c{101, 1, 2, 5};
+    EdgeKey d{100, 1, 3, 5}; // dst differs
+    EdgeKey e{100, 1, 2, 6}; // label differs
 
     EXPECT_EQ(a, b);
     EXPECT_NE(a, c);
     EXPECT_NE(a, d);
     EXPECT_NE(a, e);
-    EXPECT_NE(a, f);
 }
 
 // ==================== TC-A03: PathTopology basic construction ====================
@@ -96,16 +94,14 @@ TEST(TopologyTypesTest, PathTopologyEmptyAndLengthInvariants) {
     EXPECT_EQ(single.hopCount(), 0u);
     EXPECT_EQ(single.edge_ids.size(), 0u);
 
-    // 3-hop path: 4 vertices, 3 edges, 3 label_ids, 3 seqs.
+    // 3-hop path: 4 vertices, 3 edges, 3 label_ids.
     PathTopology three_hop;
     three_hop.vertex_ids = {1, 2, 3, 4};
     three_hop.edge_ids = {10, 11, 12};
     three_hop.edge_label_ids = {5, 5, 6};
-    three_hop.seqs = {0, 0, 0};
     EXPECT_EQ(three_hop.vertexCount(), 4u);
     EXPECT_EQ(three_hop.hopCount(), 3u);
     EXPECT_EQ(three_hop.edge_label_ids.size(), three_hop.hopCount());
-    EXPECT_EQ(three_hop.seqs.size(), three_hop.hopCount());
 }
 
 TEST(TopologyTypesTest, PathTopologyEquality) {
@@ -113,7 +109,6 @@ TEST(TopologyTypesTest, PathTopologyEquality) {
     a.vertex_ids = {1, 2};
     a.edge_ids = {10};
     a.edge_label_ids = {5};
-    a.seqs = {0};
 
     b = a;
     EXPECT_EQ(a, b);
@@ -192,7 +187,7 @@ TEST(TopologyTypesTest, ValueHoldsVertexRef) {
 }
 
 TEST(TopologyTypesTest, ValueHoldsEdgeKey) {
-    EdgeKey k{100, 1, 2, 5, 0};
+    EdgeKey k{100, 1, 2, 5};
     Value v = k;
     ASSERT_TRUE(std::holds_alternative<EdgeKey>(v));
     EXPECT_EQ(std::get<EdgeKey>(v).id, 100u);
@@ -200,7 +195,7 @@ TEST(TopologyTypesTest, ValueHoldsEdgeKey) {
     Value same = k;
     EXPECT_TRUE(*valueEquals(v, same));
 
-    EdgeKey other{101, 1, 2, 5, 0};
+    EdgeKey other{101, 1, 2, 5};
     EXPECT_FALSE(*valueEquals(v, Value(other)));
 }
 
@@ -209,7 +204,6 @@ TEST(TopologyTypesTest, ValueHoldsPathTopology) {
     p.vertex_ids = {1, 2, 3};
     p.edge_ids = {10, 11};
     p.edge_label_ids = {5, 5};
-    p.seqs = {0, 0};
 
     Value v = mk<PathTopology>(p);
     ASSERT_TRUE(std::holds_alternative<PathTopologyPtr>(v));
@@ -226,7 +220,7 @@ TEST(TopologyTypesTest, ValueHashHandlesNewTypes) {
     EXPECT_EQ(ValueHash{}(r1), ValueHash{}(r2));
     EXPECT_NE(ValueHash{}(r1), ValueHash{}(r3));
 
-    EdgeKey k{1, 2, 3, 4, 0};
+    EdgeKey k{1, 2, 3, 4};
     Value ek = k;
     EXPECT_EQ(ValueHash{}(ek), ValueHash{}(Value(k)));
 
@@ -260,7 +254,7 @@ TEST(ColumnBufferTest, ReservesAndReadsEdgeKeyColumn) {
     buf.reserve(2);
     EXPECT_EQ(buf.edge_key_data.size(), 2u);
 
-    buf.edge_key_data[0] = EdgeKey{5, 1, 2, 100, 0};
+    buf.edge_key_data[0] = EdgeKey{5, 1, 2, 100};
     Value v = buf.getValue(0);
     ASSERT_TRUE(std::holds_alternative<EdgeKey>(v));
     EXPECT_EQ(std::get<EdgeKey>(v).id, 5u);
@@ -275,7 +269,6 @@ TEST(ColumnBufferTest, ReservesAndReadsPathTopologyColumn) {
     p.vertex_ids = {1, 2, 3};
     p.edge_ids = {10, 11};
     p.edge_label_ids = {5, 5};
-    p.seqs = {0, 0};
     buf.path_topology_data[0] = mk<PathTopology>(p);
 
     Value v = buf.getValue(0);
@@ -295,7 +288,7 @@ TEST(ColumnBufferTest, SetValueRoundTripsNewTypes) {
     ColumnBuffer ebuf;
     ebuf.type = BoundTypeKind::EDGE_KEY;
     ebuf.reserve(2);
-    ebuf.setValue(0, Value(EdgeKey{7, 1, 2, 3, 0}));
+    ebuf.setValue(0, Value(EdgeKey{7, 1, 2, 3}));
     EXPECT_EQ(std::get<EdgeKey>(ebuf.getValue(0)).id, 7u);
 }
 
@@ -381,10 +374,10 @@ TEST(DataChunkReplaceColumnTest, UpgradeEdgeKeyToEdge) {
     DataChunk chunk;
     chunk.addColumn(BoundTypeKind::EDGE_KEY);
     chunk.resize(1);
-    chunk.columns[0].buffer->edge_key_data[0] = EdgeKey{7, 1, 2, 5, 0};
+    chunk.columns[0].buffer->edge_key_data[0] = EdgeKey{7, 1, 2, 5};
 
     Column edge_col = Column::flat(BoundTypeKind::EDGE, 1);
-    edge_col.buffer->edge_data[0] = mk<EdgeValue>(EdgeValue{7, 1, 2, 5, 0, std::nullopt, false});
+    edge_col.buffer->edge_data[0] = mk<EdgeValue>(EdgeValue{7, 1, 2, 5, std::nullopt, false});
     chunk.replaceColumn(0, std::move(edge_col));
 
     EXPECT_EQ(chunk.columns[0].type, BoundTypeKind::EDGE);
@@ -400,7 +393,6 @@ TEST(DataChunkReplaceColumnTest, UpgradePathTopologyToPath) {
     pt.vertex_ids = {1, 2};
     pt.edge_ids = {10};
     pt.edge_label_ids = {5};
-    pt.seqs = {0};
     chunk.columns[0].buffer->path_topology_data[0] = mk<PathTopology>(pt);
 
     Column path_col = Column::flat(BoundTypeKind::PATH, 1);

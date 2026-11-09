@@ -835,7 +835,7 @@ MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
         }
     }
 
-    bool ok = co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, eid, props);
+    bool ok = co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, props);
     if (!ok) {
         spdlog::warn("MergePhysicalOp: insertEdge failed for eid={} src={} dst={} label={}", eid, src_vid, dst_vid,
                      effective_elid);
@@ -1555,7 +1555,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                             PathValue pv;
                             ValueStorage start_vs{Value(mk<VertexValue>(start_vv))};
                             ValueStorage edge_vs{
-                                Value(mk<EdgeValue>(edge_id, start_vid, end_vid, edge_label, 0, std::nullopt))};
+                                Value(mk<EdgeValue>(edge_id, start_vid, end_vid, edge_label, std::nullopt))};
                             ValueStorage end_vs{Value(mk<VertexValue>(end_vv))};
                             pv.elements = {start_vs, edge_vs, end_vs};
                             col.setValue(0, Value(mk<PathValue>(pv)));

@@ -37,15 +37,15 @@ DuckDB 的列裁剪（Projection Pushdown）本质上是一种"需求反向传�
 ```
 拓扑阶段用（✅ 已实现）：
   - VertexRef { VertexId id }        — 顶点引用，不含任何语义数据
-  - EdgeKey { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; uint32_t seq; }
+  - EdgeKey { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; }
                                      — 边 ID + 拓扑信息，不含 properties/type name
   - PathTopology { vector<VertexId> vertex_ids; vector<EdgeId> edge_ids;
-                   vector<EdgeLabelId> edge_label_ids; vector<uint32_t> seqs; }
-                                     — 路径骨架（vid/eid/label_id/seq 并行数组）
+                   vector<EdgeLabelId> edge_label_ids; }
+                                     — 路径骨架（vid/eid/label_id 并行数组）
 
 语义阶段用（已有，未变）：
   - VertexValue { id; labels; properties; deleted }
-  - EdgeValue { id; src_id; dst_id; label_id; seq; optional<Properties> properties; deleted }
+  - EdgeValue { id; src_id; dst_id; label_id; optional<Properties> properties; deleted }
   - PathValue { vector<ValueStorage> elements }  — 完整路径（element 可含 VertexValue/EdgeValue）
 ```
 
@@ -438,10 +438,9 @@ body 是挂在 `CorrelatedSourcePhysicalOp` 之上的更新链。
 
 **当前状态**：
 - src 列：从 child 传递，保持拓扑或升级后状态
-- edge 列：输出 `EdgeKey`（`{id, src_id, dst_id, label_id, seq}`），仅在 `edge_var_` 非空时
+- edge 列：输出 `EdgeKey`（`{id, src_id, dst_id, label_id}`），仅在 `edge_var_` 非空时
 - dst 列：输出 `VertexRef`，仅在 `dst_var_` 非空时
 - 语义升级由 `ProjectionExtractPhysicalOp` 完成：`LoadVertexLabels` / `LoadVertexProp` / `ConstructVertex`（dst）、`LoadEdgeProp` / `LoadEdgeType` / `ConstructEdge`（edge）
-- 修复了 `edges[i].seq`（uint64_t）到 `EdgeKey::seq`（uint32_t）的窄化转换
 
 **待完成**：主动 CONSTANT 提升（检测所有输出行共享同一源顶点时源端列改用 `Column::constant()`）。
 
@@ -878,8 +877,8 @@ Project        → name
 
 **需要新增**：
 - `VertexRef` — 顶点引用，包装 `uint64`。与裸 `uint64` 的关键区别：(1) `BoundTypeKind::VERTEX_REF` 让 Enricher 能识别出"这是一个待提升的顶点 ID"而非普通整数；(2) 类型安全——不会被误当作 EdgeId、count 或其他整数；(3) 运行时大小与 `uint64` 完全一致（零开销包装）。注意代码库已有 `VertexId = uint64_t` typedef，但 typedef 不提供类型安全，需要 strong type（`struct VertexRef { VertexId id; };`）
-- `EdgeKey { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; uint32_t seq; }` — 与现有 `EdgeValue` 的区别是不含 `optional<Properties>` 和 type name。对应 `BoundTypeKind::EDGE_KEY`
-- `PathTopology` — 路径骨架，元素序列为 `[(vid, eid, label_id, seq), ...]`，不含 labels 和 properties。对应 `BoundTypeKind::PATH_TOPOLOGY`
+- `EdgeKey { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; }` — 与现有 `EdgeValue` 的区别是不含 `optional<Properties>` 和 type name。对应 `BoundTypeKind::EDGE_KEY`
+- `PathTopology` — 路径骨架，元素序列为 `[(vid, eid, label_id), ...]`，不含 labels 和 properties。对应 `BoundTypeKind::PATH_TOPOLOGY`
 
 ### BoundDynamicPropertyRef 的消除（与 `multi-label-design.md` 协调）
 
@@ -1233,7 +1232,7 @@ TC-29  MATCH (a)-[:knows]->(b)-[:works_at]->(c),
 | 优化 | 现状 | 关键文件 |
 |------|------|---------|
 | **SelectionVector 零拷贝过滤** | 已完整实现。Filter 通过 DICTIONARY 列共享 `ColumnBuffer`（`shared_ptr`），只改 SelectionVector 下标，不拷贝数据。Expand、SemiJoin 同样使用此模式。 | `data_chunk.hpp:254-310`、`filter_physical_op.cpp:31-47` |
-| **边按源顶点聚簇存储** | 已实现。`edge_index` 表 key 为 `{vertex_id, direction, label_id, neighbor_id, seq}`，源顶点 ID 为 leading key，B-tree 中同源顶点的边物理相邻。 | `key_codec.hpp:34-50` |
+| **边按源顶点聚簇存储** | 已实现。`edge_index` 表 key 为 `{vertex_id, direction, label_id, neighbor_id, edge_id}`，源顶点 ID 为 leading key，B-tree 中同源顶点的边物理相邻。 | `key_codec.hpp:34-50` |
 
 ### 部分存在，本次重构扩展
 

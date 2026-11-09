@@ -117,7 +117,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
         }
 
         if (ok)
-            ok = co_await store_.insertEdge(eid, src, dst, effective_label_id, eid, props);
+            ok = co_await store_.insertEdge(eid, src, dst, effective_label_id, props);
 
         if (ok && edge_label_def) {
             for (const auto& idx : edge_label_def->indexes) {
@@ -137,7 +137,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                 if (!allPresent)
                     continue;
 
-                auto adj_value = ValueCodec::encodeEdgeAdjacency(src, dst, 0, effective_label_id);
+                auto adj_value = ValueCodec::encodeEdgeAdjacency(src, dst, effective_label_id);
                 auto table = idx.prop_ids.size() == 1 ? eidxTable(effective_label_id, idx.prop_ids[0])
                                                       : eidxCompositeTable(effective_label_id, idx.prop_ids);
                 co_await store_.insertIndexEntry(table, values, eid, std::move(adj_value));
@@ -237,7 +237,6 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                 ev.src_id = src;
                 ev.dst_id = dst;
                 ev.label_id = effective_label_id;
-                ev.seq = 0;
                 if (!props.empty())
                     ev.properties = props;
 

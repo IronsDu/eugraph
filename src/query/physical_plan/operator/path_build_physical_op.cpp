@@ -41,10 +41,9 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                 }
                 last_vertex = vid;
             };
-            auto append_edge = [&](VertexId src, VertexId dst, EdgeId eid, EdgeLabelId elid, uint64_t seq) {
+            auto append_edge = [&](VertexId src, VertexId dst, EdgeId eid, EdgeLabelId elid) {
                 pt.edge_ids.push_back(eid);
                 pt.edge_label_ids.push_back(elid);
-                pt.seqs.push_back(seq);
                 pt.edge_src_ids.push_back(src);
                 pt.edge_dst_ids.push_back(dst);
                 VertexId neighbor = (last_vertex == INVALID_VERTEX_ID || src == last_vertex) ? dst : src;
@@ -59,10 +58,10 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
             auto append_edge_value = [&](const Value& edge_value) {
                 if (std::holds_alternative<EdgeKey>(edge_value)) {
                     const auto& ek = std::get<EdgeKey>(edge_value);
-                    append_edge(ek.src_id, ek.dst_id, ek.id, ek.label_id, ek.seq);
+                    append_edge(ek.src_id, ek.dst_id, ek.id, ek.label_id);
                 } else if (std::holds_alternative<EdgeValuePtr>(edge_value)) {
                     const auto& ev = (*std::get<EdgeValuePtr>(edge_value));
-                    append_edge(ev.src_id, ev.dst_id, ev.id, ev.label_id, ev.seq);
+                    append_edge(ev.src_id, ev.dst_id, ev.id, ev.label_id);
                 }
             };
 

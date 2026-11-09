@@ -49,7 +49,7 @@ ev.id = eid;
 ev.src_id = src;
 ev.dst_id = dst;
 ev.label_id = effective_label_id;
-ev.seq = 0;
+
 // ❌ ev.properties 未填充
 ```
 
@@ -202,7 +202,7 @@ ev.id = eid;
 ev.src_id = src;
 ev.dst_id = dst;
 ev.label_id = effective_label_id;
-ev.seq = 0;
+
 if (!props.empty())
     ev.properties = props;   // 新增
 ```
@@ -512,7 +512,7 @@ TCK 中存在 `SET (n).p = 'x'` 语法（带括号的属性访问），AST 解�
 
 ### 风险 1：内存态镜像可能漏字段
 
-`VertexValue` / `EdgeValue` 字段较多（id, labels, properties, seq, src_id, dst_id, ...）。如果只补 `labels` 而漏 `properties`，又会出现新的"写后不可见"。**对策**：§4.1.2 (c) 的 `mirrorVertex` / `mirrorEdge` helper 强制要求调用方提供完整 updated 对象，避免散点更新。
+`VertexValue` / `EdgeValue` 字段较多（id, labels, properties, src_id, dst_id, ...）。如果只补 `labels` 而漏 `properties`，又会出现新的"写后不可见"。**对策**：§4.1.2 (c) 的 `mirrorVertex` / `mirrorEdge` helper 强制要求调用方提供完整 updated 对象，避免散点更新。
 
 ### 风险 2：守卫抽取可能改变 MERGE 现有行为
 

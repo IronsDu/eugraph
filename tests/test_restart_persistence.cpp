@@ -236,7 +236,7 @@ TEST_F(RestartPersistenceTest, EdgeDataPersistsAcrossRestart) {
         Properties edge_props;
         edge_props.resize(1);
         edge_props[0] = PropertyValue(static_cast<int64_t>(2024));
-        ASSERT_TRUE(s->sync_data->insertEdge(txn, /*eid=*/1, /*src=*/1, /*dst=*/2, knows_label, /*seq=*/0, edge_props));
+        ASSERT_TRUE(s->sync_data->insertEdge(txn, /*eid=*/1, /*src=*/1, /*dst=*/2, knows_label, edge_props));
 
         ASSERT_TRUE(s->sync_data->commitTransaction(txn));
 

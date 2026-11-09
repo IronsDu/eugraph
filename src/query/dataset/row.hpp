@@ -32,7 +32,6 @@ struct EdgeValue {
     VertexId src_id = INVALID_VERTEX_ID;
     VertexId dst_id = INVALID_VERTEX_ID;
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
-    uint64_t seq = 0;
     std::optional<Properties> properties;
     bool deleted = false;
     bool operator==(const EdgeValue& o) const {
@@ -313,7 +312,7 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
         const auto& pa = *std::get<PathTopologyPtr>(a);
         const auto& pb = *std::get<PathTopologyPtr>(b);
         return pa.vertex_ids == pb.vertex_ids && pa.edge_ids == pb.edge_ids && pa.edge_label_ids == pb.edge_label_ids &&
-               pa.seqs == pb.seqs && pa.edge_src_ids == pb.edge_src_ids && pa.edge_dst_ids == pb.edge_dst_ids;
+               pa.edge_src_ids == pb.edge_src_ids && pa.edge_dst_ids == pb.edge_dst_ids;
     }
     if (std::holds_alternative<VertexValuePtr>(a) && std::holds_alternative<VertexValuePtr>(b))
         return *std::get<VertexValuePtr>(a) == *std::get<VertexValuePtr>(b);

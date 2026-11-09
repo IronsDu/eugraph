@@ -1056,8 +1056,8 @@ TEST(EdgeUniqueBatchTest, DetectsDuplicateEdgesAndIgnoresNulls) {
     const EdgeId a_ids[n] = {10, 10, 11, 12};
     const EdgeId b_ids[n] = {20, 10, 21, 22};
     for (size_t i = 0; i < n; ++i) {
-        a.buffer->edge_key_data[i] = EdgeKey(a_ids[i], 1, 2, 3, 0);
-        b.buffer->edge_key_data[i] = EdgeKey(b_ids[i], 1, 2, 3, 0);
+        a.buffer->edge_key_data[i] = EdgeKey(a_ids[i], 1, 2, 3);
+        b.buffer->edge_key_data[i] = EdgeKey(b_ids[i], 1, 2, 3);
     }
     b.setNull(3);
 

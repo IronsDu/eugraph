@@ -130,14 +130,12 @@ public:
     struct EdgeIndexEntry {
         VertexId neighbor_id;
         EdgeLabelId edge_label_id;
-        uint64_t seq;
         EdgeId edge_id;
     };
 
     struct EdgeTypeIndexEntry {
         VertexId src_vertex_id;
         VertexId dst_vertex_id;
-        uint64_t seq;
         EdgeId edge_id;
     };
 
@@ -181,9 +179,9 @@ public:
     // ==================== Edge ====================
 
     virtual bool insertEdge(GraphSession& session, EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
-                            uint64_t seq, const Properties& props) = 0;
-    virtual bool deleteEdge(GraphSession& session, EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id,
-                            uint64_t seq) = 0;
+                            const Properties& props) = 0;
+    virtual bool deleteEdge(GraphSession& session, EdgeId eid, EdgeLabelId label_id, VertexId src_id,
+                            VertexId dst_id) = 0;
 
     // ==================== Edge Properties ====================
 

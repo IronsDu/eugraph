@@ -125,14 +125,12 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         co_return vv;
     };
 
-    auto loadEdge = [&](EdgeId eid, EdgeLabelId elid, VertexId src, VertexId dst,
-                        uint64_t seq) -> folly::coro::Task<EdgeValue> {
+    auto loadEdge = [&](EdgeId eid, EdgeLabelId elid, VertexId src, VertexId dst) -> folly::coro::Task<EdgeValue> {
         EdgeValue ev;
         ev.id = eid;
         ev.src_id = src;
         ev.dst_id = dst;
         ev.label_id = elid;
-        ev.seq = seq;
         auto props = co_await store_.getEdgeProperties(elid, eid);
         if (props)
             ev.properties = std::move(*props);
@@ -149,7 +147,6 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         VertexId neighbor_id;
         EdgeId edge_id;
         EdgeLabelId edge_label_id;
-        uint64_t seq;
         bool physical_out = true; // true: found via OUT adjacency
     };
 
@@ -164,7 +161,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
             auto edge_gen = cancellable(store_.scanEdges(vid, scan_dir, label_filter, scan_batch));
             while (auto edge_batch = co_await edge_gen.next()) {
                 for (const auto& e : *edge_batch)
-                    out.push_back({e.neighbor_id, e.edge_id, e.edge_label_id, e.seq, phy_out});
+                    out.push_back({e.neighbor_id, e.edge_id, e.edge_label_id, phy_out});
             }
         }
         co_return out;
@@ -266,8 +263,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     for (const auto& be : *batch) {
                         auto it = adjacency_cache.find(be.src_id);
                         if (it != adjacency_cache.end())
-                            it->second.push_back({be.entry.neighbor_id, be.entry.edge_id, be.entry.edge_label_id,
-                                                  be.entry.seq, phy_out});
+                            it->second.push_back(
+                                {be.entry.neighbor_id, be.entry.edge_id, be.entry.edge_label_id, phy_out});
                     }
                 }
             }
@@ -313,7 +310,6 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
             bool has_incoming;
             EdgeId incoming_edge_id = INVALID_EDGE_ID;
             EdgeLabelId incoming_edge_label_id = INVALID_EDGE_LABEL_ID;
-            uint64_t incoming_edge_seq = 0;
             // Physical src/dst of the incoming edge so loadEdge gets the
             // correct direction regardless of traversal direction.
             VertexId incoming_physical_src = INVALID_VERTEX_ID;
@@ -479,16 +475,15 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                         for (size_t si = 1; si < stack.size(); ++si) {
                             pv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(
                                 co_await loadEdge(stack[si].incoming_edge_id, stack[si].incoming_edge_label_id,
-                                                  stack[si].incoming_physical_src, stack[si].incoming_physical_dst,
-                                                  stack[si].incoming_edge_seq)))});
+                                                  stack[si].incoming_physical_src, stack[si].incoming_physical_dst)))});
                             pv.elements.push_back(
                                 ValueStorage{Value(mk<VertexValue>(co_await loadVertex(stack[si].vertex)))});
                         }
                         // Add current edge and destination vertex
                         VertexId cur_phys_src = edge.physical_out ? frame.vertex : edge.neighbor_id;
                         VertexId cur_phys_dst = edge.physical_out ? edge.neighbor_id : frame.vertex;
-                        pv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(co_await loadEdge(
-                            edge.edge_id, edge.edge_label_id, cur_phys_src, cur_phys_dst, edge.seq)))});
+                        pv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(
+                            co_await loadEdge(edge.edge_id, edge.edge_label_id, cur_phys_src, cur_phys_dst)))});
                         VertexValue dst_vv = co_await loadVertex(edge.neighbor_id);
                         pv.elements.push_back(ValueStorage{Value(mk<VertexValue>(std::move(dst_vv)))});
                         entry.path = std::move(pv);
@@ -499,13 +494,12 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                         for (size_t si = 1; si < stack.size(); ++si) {
                             lv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(
                                 co_await loadEdge(stack[si].incoming_edge_id, stack[si].incoming_edge_label_id,
-                                                  stack[si].incoming_physical_src, stack[si].incoming_physical_dst,
-                                                  stack[si].incoming_edge_seq)))});
+                                                  stack[si].incoming_physical_src, stack[si].incoming_physical_dst)))});
                         }
                         VertexId el_phys_src = edge.physical_out ? frame.vertex : edge.neighbor_id;
                         VertexId el_phys_dst = edge.physical_out ? edge.neighbor_id : frame.vertex;
                         lv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(
-                            co_await loadEdge(edge.edge_id, edge.edge_label_id, el_phys_src, el_phys_dst, edge.seq)))});
+                            co_await loadEdge(edge.edge_id, edge.edge_label_id, el_phys_src, el_phys_dst)))});
                         entry.edge_list = std::move(lv);
                     }
                     bool emit = true;
@@ -624,7 +618,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     VertexId push_physical_src = edge.physical_out ? frame.vertex : edge.neighbor_id;
                     VertexId push_physical_dst = edge.physical_out ? edge.neighbor_id : frame.vertex;
                     stack.push_back({edge.neighbor_id, next_depth, std::move(next_edges), 0, edge_key, true,
-                                     edge.edge_id, edge.edge_label_id, edge.seq, push_physical_src, push_physical_dst});
+                                     edge.edge_id, edge.edge_label_id, push_physical_src, push_physical_dst});
                 }
             }
         }

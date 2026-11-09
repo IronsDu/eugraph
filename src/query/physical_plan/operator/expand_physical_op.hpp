@@ -111,7 +111,6 @@ private:
         VertexId dst_id;
         EdgeId edge_id;
         EdgeLabelId edge_label_id;
-        uint64_t seq;
         /// For UNDIRECTED split: true when the edge was found via the OUT
         /// adjacency list (physical src = liker, dst = neighbor); false when
         /// found via IN (physical src = neighbor, dst = liker).
@@ -163,7 +162,6 @@ private:
         VertexId dst_id;
         EdgeId edge_id;
         EdgeLabelId edge_label_id;
-        uint64_t seq;
         bool physical_out;
     };
     static constexpr size_t kMaxCachedEdges = 1'000'000;

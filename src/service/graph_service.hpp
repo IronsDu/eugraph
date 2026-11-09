@@ -121,7 +121,6 @@ public:
         EdgeId eid;
         BatchEdgeEndpoint src;
         BatchEdgeEndpoint dst;
-        uint64_t seq;
         std::vector<PropertyValue> props;
     };
 

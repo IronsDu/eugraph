@@ -1453,7 +1453,6 @@ EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name
         entry.eid = 0; // will be assigned by service
         entry.src = to_endpoint(rec.src().value());
         entry.dst = to_endpoint(rec.dst().value());
-        entry.seq = i;
         for (const auto& pv : *rec.properties()) {
             entry.props.push_back(thriftToPropertyValue(pv));
         }

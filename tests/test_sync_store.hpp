@@ -21,6 +21,8 @@ namespace eugraph::test {
 
 class TestSyncGraphDataStore : public SyncGraphDataStore {
 public:
+    using SyncGraphDataStore::deleteEdge;
+    using SyncGraphDataStore::insertEdge;
     explicit TestSyncGraphDataStore(uint32_t adjacency_cache_capacity = 0)
         : SyncGraphDataStore(adjacency_cache_capacity) {
         bind_connection(conn_);

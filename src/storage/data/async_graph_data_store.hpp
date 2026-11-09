@@ -416,11 +416,11 @@ public:
         co_return result;
     }
 
-    folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id, uint64_t seq,
+    folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
                                        const Properties& props) override {
         auto p = props;
-        auto result = co_await dispatch([this, eid, src_id, dst_id, label_id, seq, p = std::move(p)]() -> bool {
-            return store_.insertEdge(session_, eid, src_id, dst_id, label_id, seq, p);
+        auto result = co_await dispatch([this, eid, src_id, dst_id, label_id, p = std::move(p)]() -> bool {
+            return store_.insertEdge(session_, eid, src_id, dst_id, label_id, p);
         });
         co_return result;
     }
@@ -653,7 +653,7 @@ public:
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
-                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.label_id);
                 return entry;
             });
     }
@@ -668,7 +668,7 @@ public:
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
-                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.label_id);
                 return entry;
             });
     }
@@ -684,7 +684,7 @@ public:
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
-                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.label_id);
                 return entry;
             });
     }
@@ -702,7 +702,7 @@ public:
             [](const ISyncGraphDataStore::IIndexScanCursor& c) {
                 EdgeIndexScanEntry entry;
                 entry.edge_id = c.entityId();
-                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                ValueCodec::decodeEdgeAdjacency(c.value(), entry.src_id, entry.dst_id, entry.label_id);
                 return entry;
             });
     }
@@ -714,10 +714,9 @@ public:
         co_return ok;
     }
 
-    folly::coro::Task<bool> deleteEdge(EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id,
-                                       uint64_t seq) override {
-        auto ok = co_await dispatch([this, eid, label_id, src_id, dst_id, seq]() {
-            return store_.deleteEdge(session_, eid, label_id, src_id, dst_id, seq);
+    folly::coro::Task<bool> deleteEdge(EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id) override {
+        auto ok = co_await dispatch([this, eid, label_id, src_id, dst_id]() {
+            return store_.deleteEdge(session_, eid, label_id, src_id, dst_id);
         });
         co_return ok;
     }
@@ -760,7 +759,7 @@ public:
         co_await dispatchVoid([this, edge_label_id, entries = std::move(entries), &edge_label_defs]() {
             GraphSession& session = session_;
             for (const auto& e : entries) {
-                store_.insertEdge(session, e.eid, e.src_id, e.dst_id, edge_label_id, e.seq, e.props);
+                store_.insertEdge(session, e.eid, e.src_id, e.dst_id, edge_label_id, e.props);
                 auto index_entries = collectEdgeIndexEntries(edge_label_defs, edge_label_id, e.eid, e.props);
                 insertEdgeIndexEntries(store_, session, index_entries);
             }

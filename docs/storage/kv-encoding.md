@@ -18,8 +18,8 @@
 | `vertex_existence` | 顶点存在表（含无标签 vertex，`MATCH (n)` 的全图扫描来源） | `{vertex_id:u64BE}` |
 | `vertex_summary` | 顶点摘要缓存：labels + 小属性（可丢弃，读加速） | `{vertex_id:u64BE}` |
 | `label_fwd_{id}` | 标签→顶点正向索引（每标签一表） | `{vertex_id:u64BE}` |
-| `edge_index` | 边邻接索引；邻接缓存启用时只保存 OVERFLOW 方向的边 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` |
-| `etype_{id}` | 边类型索引（每关系类型一表） | `{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}` |
+| `edge_index` | 边邻接索引；邻接缓存启用时只保存 OVERFLOW 方向的边 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{edge_id:u64BE}` |
+| `etype_{id}` | 边类型索引（每关系类型一表） | `{src_id:u64BE}{dst_id:u64BE}{edge_id:u64BE}` |
 | `eprop_{id}` | 边属性存储（每关系类型一表） | `{edge_id:u64BE}{prop_id:u16BE}` |
 | `vidx_{index_id}` | 顶点二级索引 | `{sortable_value}{entity_id:u64BE}` |
 | `vidx_{index_id}` | 顶点复合索引（单/复合同表名规则） | `{sortable_values...}{entity_id:u64BE}` |
@@ -45,18 +45,18 @@
 0x01 PROPERTY   {v}{0x01}{label:u16BE}{prop:u16BE}
 
 0x02 OUT        {v}{0x02}                              -> state + count
-                {v}{0x02}{label:u16BE}{neighbor:u64BE}{seq:u64BE} -> edge_id
+                {v}{0x02}{label:u16BE}{neighbor:u64BE}{edge_id:u64BE} -> edge_id
 
 0x03 IN         {v}{0x03}                              -> state + count
-                {v}{0x03}{label:u16BE}{neighbor:u64BE}{seq:u64BE} -> edge_id
+                {v}{0x03}{label:u16BE}{neighbor:u64BE}{edge_id:u64BE} -> edge_id
 ```
 
 | kind | 含义 | Key | Value |
 |---|---|---|---|
 | `0x00` | 标签 | `{vid:u64BE}{0x00}{label_id:u16BE}` | 空 |
 | `0x01` | 属性 | `{vid:u64BE}{0x01}{label_id:u16BE}{prop_id:u16BE}` | ValueCodec |
-| `0x02` | OUT 邻接 | `{vid}{0x02}` state；每条边 `{vid}{0x02}{label}{neighbor}{seq}` | state+count；edge_id |
-| `0x03` | IN 邻接 | `{vid}{0x03}` state；每条边 `{vid}{0x03}{label}{neighbor}{seq}` | state+count；edge_id |
+| `0x02` | OUT 邻接 | `{vid}{0x02}` state；每条边 `{vid}{0x02}{label}{neighbor}{edge_id}` | state+count；edge_id |
+| `0x03` | IN 邻接 | `{vid}{0x03}` state；每条边 `{vid}{0x03}{label}{neighbor}{edge_id}` | state+count；edge_id |
 
 ```
 前缀 {vid}{0x00} → 该顶点的所有标签
@@ -338,7 +338,7 @@ value: u8  version = 1
 边属性索引的 value 存储边的邻接信息，避免二次查询。格式（26 字节）：
 
 ```
-{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}{label_id:u16BE}
+{src_id:u64BE}{dst_id:u64BE}{edge_id:u64BE}{label_id:u16BE}
 ```
 
 编解码由 `ValueCodec::encodeEdgeAdjacency` / `decodeEdgeAdjacency` 实现。
@@ -467,7 +467,7 @@ Values 使用 `MetadataCodec` 进行二进制编解码（`src/storage/meta/meta_
 2. **prop_id 替代属性名**：KV key 中存 prop_id 而非属性名字符串，字段改名只需修改元数据，无需重写数据
 3. **prop_id 永不复用**：删除列后 prop_id 保留空洞，新增列分配新 ID，避免旧数据被误读
 4. **边双向索引**：edge_index 表同时维护出边和入边索引，每条逻辑边对应两条记录
-5. **边索引邻接冗余**：边属性索引的 value 存储邻接信息（src/dst/seq/label_id），使 `EdgeIndexScanPhysicalOp` 无需二次查询即可产出完整行。代价是每条索引条目多 26 字节
+5. **边索引邻接冗余**：边属性索引的 value 存储邻接信息（src/dst/label_id），使 `EdgeIndexScanPhysicalOp` 无需二次查询即可产出完整行。代价是每条索引条目多 18 字节
 6. **vertex_data 按顶点聚簇**：标签、属性、可选邻接共享同一个 `{vid}` 前缀；删除顶点只需一次前缀扫描，PE 的 labels/props 可以融合读取
 7. **邻接缓存默认关闭**：N=0 时 `edge_index` 保存全量边；N>0 的 COMPLETE/OVERFLOW 是可选层，实测 N=64 在 c5/c14 上是负收益
 8. **不做历史迁移**：`label_reverse`/`vprop` 的数据不迁移，已有图重新导入
