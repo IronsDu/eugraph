@@ -40,7 +40,6 @@ EdgeValue buildVirtualRelationship(VertexId src_id, VertexId dst_id, EdgeLabelId
     edge.src_id = src_id;
     edge.dst_id = dst_id;
     edge.label_id = edge_label_id;
-    edge.seq = 0;
     edge.properties = Properties{};
     return edge;
 }

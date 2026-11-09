@@ -730,7 +730,7 @@ using Schema = vector<string>;   // 列名列表
 
 **遍历算法**：DFS + 显式栈。`StackFrame` 记录当前顶点、深度、预取邻边列表、边索引、入边信息。每步：
 
-1. 检查边是否重复（`visited_edges` per-source-row，含 src_id/edge_label_id/dst_id/seq）——保证**路径内边唯一性**
+1. 检查边是否重复（`visited_edges` per-source-row，含 src_id/edge_label_id/dst_id/edge_id）——保证**路径内边唯一性**
 2. 检查边属性过滤条件——不满足则 `continue`
 3. 若 `next_depth >= min_hops`，emit 一条结果（含路径/边列表）
 4. 若未达深度上限（或 unbounded），扫描邻边、顶点循环检测（线性扫描 stack）、入栈

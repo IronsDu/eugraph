@@ -54,7 +54,6 @@ private:
         VertexId dst = INVALID_VERTEX_ID;
         EdgeId edge_id = INVALID_EDGE_ID;
         EdgeLabelId edge_label_id = INVALID_EDGE_LABEL_ID;
-        uint64_t seq = 0;
     };
     struct Neighbor {
         VertexId id = INVALID_VERTEX_ID;

@@ -746,7 +746,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                 }
                             }
                             auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
-                                                                             entry.seq, edge_label_def->id);
+                                                                             edge_label_def->id);
                             co_await write_store.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
                         }
                         if (hasConflict) {

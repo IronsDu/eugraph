@@ -272,12 +272,12 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
         auto drop_one = [&](VertexId vid, Direction dir, VertexId neighbor) {
             auto st = getAdjacencyState(session.get(), vid, dir);
             if (st && st->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
-                KeyCodec::VertexDataAdjEdgeKey ck{vid, dir, edge_label_id, neighbor, e.seq};
+                KeyCodec::VertexDataAdjEdgeKey ck{vid, dir, edge_label_id, neighbor, e.edge_id};
                 wt::table_del(session.get(), TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjEdgeKey(ck));
                 uint32_t count = st->count > 0 ? st->count - 1 : 0;
                 putAdjacencyState(session.get(), vid, dir, KeyCodec::AdjacencyCacheState::COMPLETE, count);
             } else {
-                KeyCodec::EdgeIndexKey ik{vid, dir, edge_label_id, neighbor, e.seq};
+                KeyCodec::EdgeIndexKey ik{vid, dir, edge_label_id, neighbor, e.edge_id};
                 wt::table_del(session.get(), TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(ik));
             }
         };
@@ -1167,7 +1167,7 @@ bool SyncGraphDataStore::promoteAdjacency(WT_SESSION* session, VertexId vid, Dir
         if (KeyCodec::isVertexDataAdjStateKey(key))
             return true;
         auto k = KeyCodec::decodeVertexDataAdjEdgeKey(key);
-        KeyCodec::EdgeIndexKey idx{k.vertex_id, direction, k.edge_label_id, k.neighbor_id, k.seq};
+        KeyCodec::EdgeIndexKey idx{k.vertex_id, direction, k.edge_label_id, k.neighbor_id, k.edge_id};
         entries.emplace_back(KeyCodec::encodeEdgeIndexKey(idx), std::string(value));
         keys.emplace_back(key);
         return true;
@@ -1181,45 +1181,45 @@ bool SyncGraphDataStore::promoteAdjacency(WT_SESSION* session, VertexId vid, Dir
 }
 
 bool SyncGraphDataStore::insertAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
-                                             EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
+                                             EdgeLabelId label_id, VertexId neighbor_id, EdgeId eid) {
     const std::string edge_val = ValueCodec::encodeU64(eid);
     if (adjacency_cache_capacity_ == 0) {
-        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, eid};
         return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
     }
     auto state = getAdjacencyState(session, vid, direction);
     if (!state || state->state == KeyCodec::AdjacencyCacheState::OVERFLOW) {
-        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, eid};
         return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
     }
     if (state->count >= adjacency_cache_capacity_) {
         if (!promoteAdjacency(session, vid, direction, state->count))
             return false;
-        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, eid};
         return wt::table_put(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx), edge_val);
     }
-    KeyCodec::VertexDataAdjEdgeKey key{vid, direction, label_id, neighbor_id, seq};
+    KeyCodec::VertexDataAdjEdgeKey key{vid, direction, label_id, neighbor_id, eid};
     if (!wt::table_put(session, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjEdgeKey(key), edge_val))
         return false;
     return putAdjacencyState(session, vid, direction, KeyCodec::AdjacencyCacheState::COMPLETE, state->count + 1);
 }
 
 bool SyncGraphDataStore::deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction,
-                                             EdgeLabelId label_id, VertexId neighbor_id, uint64_t seq, EdgeId eid) {
+                                             EdgeLabelId label_id, VertexId neighbor_id, EdgeId eid) {
     (void)eid;
     if (adjacency_cache_capacity_ == 0) {
-        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+        KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, eid};
         wt::table_del(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx));
         return true;
     }
     auto state = getAdjacencyState(session, vid, direction);
     if (state && state->state == KeyCodec::AdjacencyCacheState::COMPLETE) {
-        KeyCodec::VertexDataAdjEdgeKey key{vid, direction, label_id, neighbor_id, seq};
+        KeyCodec::VertexDataAdjEdgeKey key{vid, direction, label_id, neighbor_id, eid};
         wt::table_del(session, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataAdjEdgeKey(key));
         uint32_t count = state->count > 0 ? state->count - 1 : 0;
         return putAdjacencyState(session, vid, direction, KeyCodec::AdjacencyCacheState::COMPLETE, count);
     }
-    KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, seq};
+    KeyCodec::EdgeIndexKey idx{vid, direction, label_id, neighbor_id, eid};
     wt::table_del(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(idx));
     return true;
 }
@@ -1237,20 +1237,20 @@ bool SyncGraphDataStore::collectCachedEdges(WT_SESSION* session, VertexId vid, D
         auto k = KeyCodec::decodeVertexDataAdjEdgeKey(key);
         if (label_filter && k.edge_label_id != *label_filter)
             return true;
-        out.push_back({k.neighbor_id, k.edge_label_id, k.seq, ValueCodec::decodeU64(value)});
+        out.push_back({k.neighbor_id, k.edge_label_id, k.edge_id});
         return true;
     });
     return true;
 }
 
 bool SyncGraphDataStore::insertEdge(GraphSession& gs, EdgeId eid, VertexId src_id, VertexId dst_id,
-                                    EdgeLabelId label_id, uint64_t seq, const Properties& props) {
+                                    EdgeLabelId label_id, const Properties& props) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return false;
 
     const std::string edge_id_val = ValueCodec::encodeU64(eid);
-    KeyCodec::EdgeTypeIndexKey type_key{src_id, dst_id, seq};
+    KeyCodec::EdgeTypeIndexKey type_key{src_id, dst_id, eid};
     if (!wt::table_put(gs, etypeTable(label_id), KeyCodec::encodeEdgeTypeIndexKey(type_key), edge_id_val))
         return false;
 
@@ -1263,25 +1263,25 @@ bool SyncGraphDataStore::insertEdge(GraphSession& gs, EdgeId eid, VertexId src_i
         }
     }
 
-    if (!insertAdjacencyEdge(gs.wt_session(), src_id, Direction::OUT, label_id, dst_id, seq, eid))
+    if (!insertAdjacencyEdge(gs.wt_session(), src_id, Direction::OUT, label_id, dst_id, eid))
         return false;
-    if (!insertAdjacencyEdge(gs.wt_session(), dst_id, Direction::IN, label_id, src_id, seq, eid))
+    if (!insertAdjacencyEdge(gs.wt_session(), dst_id, Direction::IN, label_id, src_id, eid))
         return false;
     return true;
 }
 
 bool SyncGraphDataStore::deleteEdge(GraphSession& gs, EdgeId eid, EdgeLabelId label_id, VertexId src_id,
-                                    VertexId dst_id, uint64_t seq) {
+                                    VertexId dst_id) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return false;
 
-    if (!deleteAdjacencyEdge(gs.wt_session(), src_id, Direction::OUT, label_id, dst_id, seq, eid))
+    if (!deleteAdjacencyEdge(gs.wt_session(), src_id, Direction::OUT, label_id, dst_id, eid))
         return false;
-    if (!deleteAdjacencyEdge(gs.wt_session(), dst_id, Direction::IN, label_id, src_id, seq, eid))
+    if (!deleteAdjacencyEdge(gs.wt_session(), dst_id, Direction::IN, label_id, src_id, eid))
         return false;
 
-    KeyCodec::EdgeTypeIndexKey type_key{src_id, dst_id, seq};
+    KeyCodec::EdgeTypeIndexKey type_key{src_id, dst_id, eid};
     wt::table_del(gs, etypeTable(label_id), KeyCodec::encodeEdgeTypeIndexKey(type_key));
 
     auto prefix = KeyCodec::encodeEPropPrefix(eid);
@@ -1409,7 +1409,7 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
             auto k = KeyCodec::decodeVertexDataAdjEdgeKey(key);
             if (label_filter && k.edge_label_id != *label_filter)
                 return true;
-            EdgeIndexEntry entry{k.neighbor_id, k.edge_label_id, k.seq, ValueCodec::decodeU64(value)};
+            EdgeIndexEntry entry{k.neighbor_id, k.edge_label_id, k.edge_id};
             return callback(entry);
         });
         return;
@@ -1424,7 +1424,7 @@ void SyncGraphDataStore::scanEdges(GraphSession& gs, VertexId vid, Direction dir
 
     wt::table_scan(gs, TABLE_EDGE_INDEX, prefix, [&](std::string_view key, std::string_view value) {
         auto decoded = KeyCodec::decodeEdgeIndexKey(key);
-        EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(value)};
+        EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.edge_id};
         return callback(entry);
     });
 }
@@ -1498,8 +1498,7 @@ void SyncGraphDataStore::scanEdgesBatch(GraphSession& gs, const std::vector<Vert
             if (!key.starts_with(prefix))
                 break;
             auto decoded = KeyCodec::decodeEdgeIndexKey(key);
-            EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
-                                 ValueCodec::decodeU64(getValueViewFromCursor(c))};
+            EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.edge_id};
             if (!callback(vid, entry))
                 return;
             ret = c->next(c);
@@ -1529,7 +1528,7 @@ void SyncGraphDataStore::scanEdgesExact(GraphSession& gs, VertexId vid, Directio
     auto prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, label_id, neighbor_id);
     wt::table_scan(gs, TABLE_EDGE_INDEX, prefix, [&](std::string_view key, std::string_view value) {
         auto decoded = KeyCodec::decodeEdgeIndexKey(key);
-        EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(value)};
+        EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.edge_id};
         return callback(entry);
     });
 }
@@ -1550,8 +1549,7 @@ void SyncGraphDataStore::scanEdgesByType(GraphSession& gs, EdgeLabelId label_id,
 
     wt::table_scan(gs, etypeTable(label_id), prefix, [&](std::string_view key, std::string_view value) {
         auto decoded = KeyCodec::decodeEdgeTypeIndexKey(key);
-        EdgeTypeIndexEntry entry{decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq,
-                                 ValueCodec::decodeU64(value)};
+        EdgeTypeIndexEntry entry{decoded.src_vertex_id, decoded.dst_vertex_id, decoded.edge_id};
         return callback(entry);
     });
 }
@@ -1716,7 +1714,7 @@ void EdgeScanCursorImpl::readCurrent() {
 
     const auto value = getValueViewFromCursor(c);
     auto decoded = KeyCodec::decodeEdgeIndexKey(key);
-    current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(value)};
+    current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.edge_id};
     valid_ = true;
 }
 
@@ -1893,7 +1891,7 @@ void VertexDataEdgeScanCursor::readCurrent() {
             }
             continue;
         }
-        current_ = {k.neighbor_id, k.edge_label_id, k.seq, ValueCodec::decodeU64(getValueViewFromCursor(c))};
+        current_ = {k.neighbor_id, k.edge_label_id, k.edge_id};
         valid_ = true;
         return;
     }
@@ -1954,7 +1952,7 @@ void EdgeTypeScanCursorImpl::readCurrent() {
 
     const auto value = getValueViewFromCursor(c);
     auto decoded = KeyCodec::decodeEdgeTypeIndexKey(key);
-    current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq, ValueCodec::decodeU64(value)};
+    current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.edge_id};
     valid_ = true;
 }
 

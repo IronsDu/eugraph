@@ -1807,7 +1807,7 @@ TEST_F(IndexE2ETest, EdgeIndexScanStreamsBeyondBatch) {
     GraphSession& session = **lease;
     ASSERT_TRUE(session.begin_write());
     for (size_t i = 0; i < N; ++i) {
-        auto payload = ValueCodec::encodeEdgeAdjacency(static_cast<VertexId>(i), static_cast<VertexId>(i + 1), 0, elid);
+        auto payload = ValueCodec::encodeEdgeAdjacency(static_cast<VertexId>(i), static_cast<VertexId>(i + 1), elid);
         ASSERT_TRUE(env.data_store->insertIndexEntry(session, table, std::string("dup"), i, payload));
     }
     ASSERT_TRUE(session.commit().committed());

@@ -145,7 +145,6 @@ ShortestPathPhysicalOp::scanBatch(const std::vector<VertexId>& vids, Direction s
                     }
                     link.edge_id = be.entry.edge_id;
                     link.edge_label_id = be.entry.edge_label_id;
-                    link.seq = be.entry.seq;
                     n.link = link;
                     lists[it->second].push_back(n);
                 }
@@ -209,7 +208,6 @@ PathValue ShortestPathPhysicalOp::buildPath(VertexId start, const std::vector<Ed
         ev.label_id = link.edge_label_id;
         ev.src_id = link.src;
         ev.dst_id = link.dst;
-        ev.seq = link.seq;
         path.elements.push_back(ValueStorage{Value(mk<EdgeValue>(std::move(ev)))});
         VertexValue next;
         next.id = link.to;
@@ -295,7 +293,6 @@ folly::coro::Task<std::optional<PathValue>> ShortestPathPhysicalOp::shortestBidi
                     back.dst = e.link.dst;
                     back.edge_id = e.link.edge_id;
                     back.edge_label_id = e.link.edge_label_id;
-                    back.seq = e.link.seq;
                     auto [it, inserted] = b_visit.try_emplace(e.id, Visit{next_depth, {}, false});
                     if (inserted) {
                         it->second.parent = back;

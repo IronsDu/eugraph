@@ -84,7 +84,7 @@ TEST_F(KeyCodecTest, VertexDataAdjacencyStateAndEdgeKeys) {
     EXPECT_EQ(decoded.direction, Direction::IN);
     EXPECT_EQ(decoded.edge_label_id, 3u);
     EXPECT_EQ(decoded.neighbor_id, 7u);
-    EXPECT_EQ(decoded.seq, 9u);
+    EXPECT_EQ(decoded.edge_id, 9u);
     EXPECT_EQ(KeyCodec::vertexDataKind(key), KeyCodec::VertexDataKind::IN_ADJACENCY);
 }
 
@@ -146,7 +146,7 @@ TEST_F(KeyCodecTest, VertexDataAdjacencyPrefixAndSortOrder) {
     EXPECT_FALSE(KeyCodec::isVertexDataAdjStateKey(KeyCodec::encodeVertexDataVertexPrefix(42)));
     EXPECT_FALSE(KeyCodec::isVertexDataAdjStateKey(edge));
 
-    // Edge keys sort by label, then neighbor, then seq inside one vertex prefix.
+    // Edge keys sort by label, then neighbor, then edge_id inside one vertex prefix.
     EXPECT_LT(KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9}),
               KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 4, 1, 0}));
     EXPECT_LT(KeyCodec::encodeVertexDataAdjEdgeKey({42, Direction::OUT, 3, 7, 9}),
@@ -160,7 +160,7 @@ TEST_F(KeyCodecTest, VertexDataAdjacencyPrefixAndSortOrder) {
     EXPECT_EQ(out_decoded.direction, Direction::OUT);
     EXPECT_EQ(out_decoded.edge_label_id, 3u);
     EXPECT_EQ(out_decoded.neighbor_id, 7u);
-    EXPECT_EQ(out_decoded.seq, 9u);
+    EXPECT_EQ(out_decoded.edge_id, 9u);
 }
 
 // ==================== Edge Index (table:edge_index) ====================
@@ -177,7 +177,7 @@ TEST_F(KeyCodecTest, EncodeDecodeEdgeIndexKey) {
     EXPECT_EQ(decoded.direction, Direction::OUT);
     EXPECT_EQ(decoded.edge_label_id, 2u);
     EXPECT_EQ(decoded.neighbor_id, 3u);
-    EXPECT_EQ(decoded.seq, 100u);
+    EXPECT_EQ(decoded.edge_id, 100u);
 }
 
 TEST_F(KeyCodecTest, EdgeIndexKeyDirection) {
@@ -221,7 +221,7 @@ TEST_F(KeyCodecTest, EncodeDecodeEdgeTypeIndexKey) {
     auto decoded = KeyCodec::decodeEdgeTypeIndexKey(key);
     EXPECT_EQ(decoded.src_vertex_id, 10u);
     EXPECT_EQ(decoded.dst_vertex_id, 20u);
-    EXPECT_EQ(decoded.seq, 5u);
+    EXPECT_EQ(decoded.edge_id, 5u);
 }
 
 TEST_F(KeyCodecTest, EdgeTypeIndexPrefixEmpty) {

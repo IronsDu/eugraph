@@ -208,7 +208,6 @@ struct EdgeIndexScanEntry {
     EdgeId edge_id = INVALID_EDGE_ID;
     VertexId src_id = INVALID_VERTEX_ID;
     VertexId dst_id = INVALID_VERTEX_ID;
-    uint64_t seq = 0;
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
 };
 
@@ -255,14 +254,12 @@ struct EdgeKey {
     VertexId src_id = INVALID_VERTEX_ID;
     VertexId dst_id = INVALID_VERTEX_ID;
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
-    uint32_t seq = 0;
 
     EdgeKey() = default;
-    EdgeKey(EdgeId eid, VertexId s, VertexId d, EdgeLabelId lid, uint32_t seq_)
-        : id(eid), src_id(s), dst_id(d), label_id(lid), seq(seq_) {}
+    EdgeKey(EdgeId eid, VertexId s, VertexId d, EdgeLabelId lid) : id(eid), src_id(s), dst_id(d), label_id(lid) {}
 
     bool operator==(const EdgeKey& o) const {
-        return id == o.id && src_id == o.src_id && dst_id == o.dst_id && label_id == o.label_id && seq == o.seq;
+        return id == o.id && src_id == o.src_id && dst_id == o.dst_id && label_id == o.label_id;
     }
     bool operator!=(const EdgeKey& o) const {
         return !(*this == o);
@@ -271,12 +268,11 @@ struct EdgeKey {
 
 // Path topology: parallel arrays of vertex/edge IDs.
 // For an n-hop path, vertex_ids.size() == n+1, edge_ids.size() == n,
-// edge_label_ids.size() == n, seqs.size() == n.
+// edge_label_ids.size() == n.
 struct PathTopology {
     std::vector<VertexId> vertex_ids;
     std::vector<EdgeId> edge_ids;
     std::vector<EdgeLabelId> edge_label_ids;
-    std::vector<uint32_t> seqs;
     std::vector<VertexId> edge_src_ids;
     std::vector<VertexId> edge_dst_ids;
 
@@ -292,7 +288,7 @@ struct PathTopology {
 
     bool operator==(const PathTopology& o) const {
         return vertex_ids == o.vertex_ids && edge_ids == o.edge_ids && edge_label_ids == o.edge_label_ids &&
-               seqs == o.seqs;
+               edge_src_ids == o.edge_src_ids && edge_dst_ids == o.edge_dst_ids;
     }
     bool operator!=(const PathTopology& o) const {
         return !(*this == o);

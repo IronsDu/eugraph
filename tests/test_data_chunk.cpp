@@ -60,8 +60,8 @@ TEST(DataChunkTypedAccess, TypedSettersMatchTheValuePathForEveryKind) {
                                 [](Column& c, size_t i) { return c.setString(i, "abc"); });
     expectTypedMatchesValuePath(BoundTypeKind::VERTEX_REF, Value(VertexRef{7}),
                                 [](Column& c, size_t i) { return c.setVertexRef(i, VertexRef{7}); });
-    expectTypedMatchesValuePath(BoundTypeKind::EDGE_KEY, Value(EdgeKey{3, 1, 2, 4, 5}),
-                                [](Column& c, size_t i) { return c.setEdgeKey(i, EdgeKey{3, 1, 2, 4, 5}); });
+    expectTypedMatchesValuePath(BoundTypeKind::EDGE_KEY, Value(EdgeKey{3, 1, 2, 4}),
+                                [](Column& c, size_t i) { return c.setEdgeKey(i, EdgeKey{3, 1, 2, 4}); });
     expectTypedMatchesValuePath(BoundTypeKind::PATH_TOPOLOGY, Value(mk<PathTopology>()),
                                 [](Column& c, size_t i) { return c.setPathTopology(i, mk<PathTopology>()); });
     expectTypedMatchesValuePath(BoundTypeKind::VERTEX, Value(mk<VertexValue>()),
@@ -416,7 +416,7 @@ TEST(EdgeIndexScanLayout, BoundColumnsFollowPlannerOrder) {
 TEST(EdgeIndexScanLayout, ValuesLandInTheColumnTheirVariableOwns) {
     const VertexRef src{101};
     const VertexRef dst{202};
-    const EdgeKey key{303, 101, 202, 7, 9};
+    const EdgeKey key{303, 101, 202, 7};
 
     const Layout l = layoutFor(/*src=*/true, /*dst=*/true, /*edge=*/true);
     DataChunk chunk;
@@ -447,7 +447,6 @@ TEST(EdgeIndexScanLayout, ValuesLandInTheColumnTheirVariableOwns) {
     EXPECT_EQ(got.src_id, key.src_id);
     EXPECT_EQ(got.dst_id, key.dst_id);
     EXPECT_EQ(got.label_id, key.label_id);
-    EXPECT_EQ(got.seq, key.seq);
 }
 
 /// 只绑定 dst 时，它必须落在 0 号列（planner 会把它压到第一个位置）。

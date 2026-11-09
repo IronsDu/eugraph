@@ -168,10 +168,9 @@ public:
     virtual folly::coro::Task<bool> insertVertex(VertexId vid,
                                                  std::span<const std::pair<LabelId, Properties>> label_props) = 0;
     virtual folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
-                                               uint64_t seq, const Properties& props) = 0;
+                                               const Properties& props) = 0;
     virtual folly::coro::Task<bool> deleteVertex(VertexId vid) = 0;
-    virtual folly::coro::Task<bool> deleteEdge(EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id,
-                                               uint64_t seq) = 0;
+    virtual folly::coro::Task<bool> deleteEdge(EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id) = 0;
 
     // Index Operations
     virtual folly::coro::Task<bool> createIndex(const std::string& table_name) = 0;
@@ -251,7 +250,6 @@ public:
         EdgeId eid;
         VertexId src_id;
         VertexId dst_id;
-        uint64_t seq;
         Properties props;
     };
     /// 批量写入顶点，并**在同一事务内维护索引条目**（与查询写路径语义一致）。

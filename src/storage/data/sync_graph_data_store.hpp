@@ -112,9 +112,8 @@ public:
 
     // Edge
     bool insertEdge(GraphSession& session, EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
-                    uint64_t seq, const Properties& props) override;
-    bool deleteEdge(GraphSession& session, EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id,
-                    uint64_t seq) override;
+                    const Properties& props) override;
+    bool deleteEdge(GraphSession& session, EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id) override;
 
     // Edge Properties
     std::optional<Properties> getEdgeProperties(GraphSession& session, EdgeLabelId label_id, EdgeId eid) override;
@@ -220,9 +219,9 @@ private:
     bool putAdjacencyState(WT_SESSION* session, VertexId vid, Direction direction, KeyCodec::AdjacencyCacheState state,
                            uint32_t count);
     bool insertAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction, EdgeLabelId label_id,
-                             VertexId neighbor_id, uint64_t seq, EdgeId eid);
+                             VertexId neighbor_id, EdgeId eid);
     bool deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction, EdgeLabelId label_id,
-                             VertexId neighbor_id, uint64_t seq, EdgeId eid);
+                             VertexId neighbor_id, EdgeId eid);
     bool promoteAdjacency(WT_SESSION* session, VertexId vid, Direction direction, uint32_t cached_count);
     /// Invalidate the disposable vertex-summary cache in its own autocommit
     /// transaction, before the caller mutates canonical vertex_data.  The

@@ -48,7 +48,6 @@ inline Value relationshipsImpl(const Value& arg) {
             EdgeValue ev;
             ev.id = pt.edge_ids[i];
             ev.label_id = pt.edge_label_ids[i];
-            ev.seq = pt.seqs[i];
             lv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(std::move(ev)))});
         }
         return Value(mk<ListValue>(std::move(lv)));

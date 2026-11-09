@@ -83,8 +83,8 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
             for (const auto& entry : *batch) {
                 chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.src_id});
                 chunk.columns[1].setVertexRef(chunk.count, VertexRef{entry.dst_id});
-                chunk.columns[2].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
-                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                chunk.columns[2].setEdgeKey(chunk.count,
+                                            EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id});
                 ++chunk.count;
             }
         } else if (!src_var_.empty() && !dst_var_.empty()) {
@@ -96,15 +96,15 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
         } else if (!src_var_.empty() && !edge_var_.empty()) {
             for (const auto& entry : *batch) {
                 chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.src_id});
-                chunk.columns[1].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
-                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                chunk.columns[1].setEdgeKey(chunk.count,
+                                            EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id});
                 ++chunk.count;
             }
         } else if (!dst_var_.empty() && !edge_var_.empty()) {
             for (const auto& entry : *batch) {
                 chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.dst_id});
-                chunk.columns[1].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
-                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                chunk.columns[1].setEdgeKey(chunk.count,
+                                            EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id});
                 ++chunk.count;
             }
         } else if (!src_var_.empty()) {
@@ -119,8 +119,8 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
             }
         } else if (!edge_var_.empty()) {
             for (const auto& entry : *batch) {
-                chunk.columns[0].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
-                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                chunk.columns[0].setEdgeKey(chunk.count,
+                                            EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id});
                 ++chunk.count;
             }
         }

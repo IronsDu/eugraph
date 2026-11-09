@@ -43,13 +43,13 @@ public:
     static VertexDataKind vertexDataKind(std::string_view key);
 
     // Adjacency: state key is exactly {vertex}{kind}; each edge key appends
-    // {label}{neighbor}{seq} and maps to edge_id.
+    // {label}{neighbor}{edge_id} and maps to edge_id.
     struct VertexDataAdjEdgeKey {
         VertexId vertex_id;
         Direction direction;
         EdgeLabelId edge_label_id;
         VertexId neighbor_id;
-        uint64_t seq;
+        EdgeId edge_id;
     };
 
     static std::string encodeVertexDataAdjStateKey(VertexId vertex_id, Direction direction);
@@ -76,13 +76,13 @@ public:
     static std::string encodeVertexSummaryKey(VertexId vertex_id);
 
     // ==================== Edge Index (table:edge_index) ====================
-    // Key: {vertex_id:uint64 BE}{direction:uint8}{edge_label_id:uint16 BE}{neighbor_id:uint64 BE}{seq:uint64 BE}
+    // Key: {vertex_id:uint64 BE}{direction:uint8}{edge_label_id:uint16 BE}{neighbor_id:uint64 BE}{edge_id:uint64 BE}
     struct EdgeIndexKey {
         VertexId vertex_id;
         Direction direction;
         EdgeLabelId edge_label_id;
         VertexId neighbor_id;
-        uint64_t seq;
+        EdgeId edge_id;
     };
 
     static std::string encodeEdgeIndexKey(const EdgeIndexKey& key);
@@ -94,11 +94,11 @@ public:
                                              VertexId neighbor_id);
 
     // ==================== Edge Type Index (table:etype_{id}) ====================
-    // Key: {src_vertex_id:uint64 BE}{dst_vertex_id:uint64 BE}{seq:uint64 BE}
+    // Key: {src_vertex_id:uint64 BE}{dst_vertex_id:uint64 BE}{edge_id:uint64 BE}
     struct EdgeTypeIndexKey {
         VertexId src_vertex_id;
         VertexId dst_vertex_id;
-        uint64_t seq;
+        EdgeId edge_id;
     };
 
     static std::string encodeEdgeTypeIndexKey(const EdgeTypeIndexKey& key);

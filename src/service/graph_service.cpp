@@ -604,7 +604,6 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
         entry.eid = 0; // 稍后统一分配
         entry.src_id = *src;
         entry.dst_id = *dst;
-        entry.seq = i;
         for (const auto& pv : entries[i].props)
             entry.props.push_back(std::optional<PropertyValue>(pv));
         batch_entries.push_back(std::move(entry));

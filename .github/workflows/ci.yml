@@ -77,8 +77,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-gcc-
 
+    - name: Cache vcpkg tool
+      # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
+      # separately from the package archives so a release-asset 504 does not
+      # force every job to rebuild the tool from source.
+      uses: actions/cache@v4
+      with:
+        path: vcpkg/vcpkg
+        key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('vcpkg/scripts/vcpkg-tool-metadata.txt') }}
+
     - name: Bootstrap vcpkg
-      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      # 官方 release edge 偶发 504；脚本按 checksum 下载，镜像不可用时从固定
+      # tag 源码构建同一个 vcpkg tool。
       run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Debug vcpkg environment
@@ -204,8 +214,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-coverage-
 
+    - name: Cache vcpkg tool
+      # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
+      # separately from the package archives so a release-asset 504 does not
+      # force every job to rebuild the tool from source.
+      uses: actions/cache@v4
+      with:
+        path: vcpkg/vcpkg
+        key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('vcpkg/scripts/vcpkg-tool-metadata.txt') }}
+
     - name: Bootstrap vcpkg
-      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      # 官方 release edge 偶发 504；脚本按 checksum 下载，镜像不可用时从固定
+      # tag 源码构建同一个 vcpkg tool。
       run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake with Coverage
@@ -352,8 +372,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-buildclang-
 
+    - name: Cache vcpkg tool
+      # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
+      # separately from the package archives so a release-asset 504 does not
+      # force every job to rebuild the tool from source.
+      uses: actions/cache@v4
+      with:
+        path: vcpkg/vcpkg
+        key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('vcpkg/scripts/vcpkg-tool-metadata.txt') }}
+
     - name: Bootstrap vcpkg
-      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      # 官方 release edge 偶发 504；脚本按 checksum 下载，镜像不可用时从固定
+      # tag 源码构建同一个 vcpkg tool。
       run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Debug vcpkg environment
@@ -517,8 +547,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-asan-
 
+    - name: Cache vcpkg tool
+      # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
+      # separately from the package archives so a release-asset 504 does not
+      # force every job to rebuild the tool from source.
+      uses: actions/cache@v4
+      with:
+        path: vcpkg/vcpkg
+        key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('vcpkg/scripts/vcpkg-tool-metadata.txt') }}
+
     - name: Bootstrap vcpkg
-      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      # 官方 release edge 偶发 504；脚本按 checksum 下载，镜像不可用时从固定
+      # tag 源码构建同一个 vcpkg tool。
       run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake with ASan
@@ -804,8 +844,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-ubsan-
 
+    - name: Cache vcpkg tool
+      # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
+      # separately from the package archives so a release-asset 504 does not
+      # force every job to rebuild the tool from source.
+      uses: actions/cache@v4
+      with:
+        path: vcpkg/vcpkg
+        key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('vcpkg/scripts/vcpkg-tool-metadata.txt') }}
+
     - name: Bootstrap vcpkg
-      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      # 官方 release edge 偶发 504；脚本按 checksum 下载，镜像不可用时从固定
+      # tag 源码构建同一个 vcpkg tool。
       run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake with UBSan
@@ -908,8 +958,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-clang-tidy-
 
+    - name: Cache vcpkg tool
+      # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
+      # separately from the package archives so a release-asset 504 does not
+      # force every job to rebuild the tool from source.
+      uses: actions/cache@v4
+      with:
+        path: vcpkg/vcpkg
+        key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('vcpkg/scripts/vcpkg-tool-metadata.txt') }}
+
     - name: Bootstrap vcpkg
-      # 官方 release edge 偶发 504；脚本自带 checksum 校验 + 镜像 fallback。
+      # 官方 release edge 偶发 504；脚本按 checksum 下载，镜像不可用时从固定
+      # tag 源码构建同一个 vcpkg tool。
       run: ./scripts/bootstrap-vcpkg-ci.sh
 
     - name: Configure CMake and generate compile_commands.json

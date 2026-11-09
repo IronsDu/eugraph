@@ -735,7 +735,6 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                             ev.src_id = ek.src_id;
                             ev.dst_id = ek.dst_id;
                             ev.label_id = ek.label_id;
-                            ev.seq = ek.seq;
                         } else if (std::holds_alternative<EdgeValuePtr>(v)) {
                             ev = (*std::get<EdgeValuePtr>(v));
                         } else {

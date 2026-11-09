@@ -93,10 +93,10 @@ Value: {label_id:u16BE}{status:u8}{properties_def}{indexes}
 ### 2.3 当前流程
 
 ```
-1. 扫描 table:etype_{id}，收集该 label 的所有 (src, dst, seq)
+1. 扫描 table:etype_{id}，收集该 label 的所有 (src, dst, edge_id)
 2. 对每条边：
    - 对 src/OUT 与 dst/IN 两个方向分别读 vertex_data 的 state：
-     - COMPLETE：删除 {vid}{kind}{label}{neighbor}{seq} 缓存 key，count--
+     - COMPLETE：删除 {vid}{kind}{label}{neighbor}{edge_id} 缓存 key，count--
      - OVERFLOW / 无 state：删除 edge_index 的对应 key
 3. WT drop table:etype_{id}
 4. WT drop table:eprop_{id}

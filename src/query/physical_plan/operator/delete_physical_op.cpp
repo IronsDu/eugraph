@@ -30,7 +30,6 @@ struct DeleteEntity {
     EdgeLabelId edge_label_id = INVALID_EDGE_LABEL_ID;
     VertexId edge_src = INVALID_VERTEX_ID;
     VertexId edge_dst = INVALID_VERTEX_ID;
-    uint64_t seq = 0;
     VertexId vertex_id = INVALID_VERTEX_ID;
 };
 
@@ -39,28 +38,27 @@ void collectDeleteEntities(const Value& value, std::vector<DeleteEntity>& out) {
         return;
     } else if (std::holds_alternative<VertexValuePtr>(value)) {
         const auto& v = (*std::get<VertexValuePtr>(value));
-        out.push_back({false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, 0, v.id});
+        out.push_back({false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, v.id});
     } else if (std::holds_alternative<VertexRef>(value)) {
         const auto& v = std::get<VertexRef>(value);
-        out.push_back({false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, 0, v.id});
+        out.push_back({false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, v.id});
     } else if (std::holds_alternative<EdgeValuePtr>(value)) {
         const auto& e = (*std::get<EdgeValuePtr>(value));
-        out.push_back({true, e.id, e.label_id, e.src_id, e.dst_id, e.seq, INVALID_VERTEX_ID});
+        out.push_back({true, e.id, e.label_id, e.src_id, e.dst_id, INVALID_VERTEX_ID});
     } else if (std::holds_alternative<EdgeKey>(value)) {
         const auto& e = std::get<EdgeKey>(value);
-        out.push_back({true, e.id, e.label_id, e.src_id, e.dst_id, e.seq, INVALID_VERTEX_ID});
+        out.push_back({true, e.id, e.label_id, e.src_id, e.dst_id, INVALID_VERTEX_ID});
     } else if (std::holds_alternative<PathValuePtr>(value)) {
         for (const auto& elem : (*std::get<PathValuePtr>(value)).elements)
             collectDeleteEntities(elem.value, out);
     } else if (std::holds_alternative<PathTopologyPtr>(value)) {
         const auto& p = (*std::get<PathTopologyPtr>(value));
         for (size_t i = 0; i < p.edge_ids.size(); ++i) {
-            out.push_back({true, p.edge_ids[i], p.edge_label_ids[i], p.edge_src_ids[i], p.edge_dst_ids[i], p.seqs[i],
-                           INVALID_VERTEX_ID});
+            out.push_back(
+                {true, p.edge_ids[i], p.edge_label_ids[i], p.edge_src_ids[i], p.edge_dst_ids[i], INVALID_VERTEX_ID});
         }
         for (VertexId vid : p.vertex_ids)
-            out.push_back(
-                {false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, 0, vid});
+            out.push_back({false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, vid});
     } else if (std::holds_alternative<ListValuePtr>(value)) {
         for (const auto& elem : (*std::get<ListValuePtr>(value)).elements)
             collectDeleteEntities(elem.value, out);
@@ -151,8 +149,7 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
                     auto edge_index_entries = co_await collectEdgeIndexEntries(store_, edge_label_defs_, entity.edge_id,
                                                                                entity.edge_label_id);
                     co_await deleteEdgeIndexEntries(store_, edge_index_entries);
-                    co_await store_.deleteEdge(entity.edge_id, entity.edge_label_id, entity.edge_src, entity.edge_dst,
-                                               entity.seq);
+                    co_await store_.deleteEdge(entity.edge_id, entity.edge_label_id, entity.edge_src, entity.edge_dst);
                 }
             }
 
@@ -166,15 +163,13 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
                     auto out_gen = cancellable(store_.scanEdges(vid, Direction::OUT, std::nullopt, out_batch));
                     while (auto edge_batch = co_await out_gen.next()) {
                         for (const auto& entry : *edge_batch)
-                            co_await store_.deleteEdge(entry.edge_id, entry.edge_label_id, vid, entry.neighbor_id,
-                                                       entry.seq);
+                            co_await store_.deleteEdge(entry.edge_id, entry.edge_label_id, vid, entry.neighbor_id);
                     }
                     std::vector<ISyncGraphDataStore::EdgeIndexEntry> in_batch;
                     auto in_gen = cancellable(store_.scanEdges(vid, Direction::IN, std::nullopt, in_batch));
                     while (auto edge_batch = co_await in_gen.next()) {
                         for (const auto& entry : *edge_batch)
-                            co_await store_.deleteEdge(entry.edge_id, entry.edge_label_id, entry.neighbor_id, vid,
-                                                       entry.seq);
+                            co_await store_.deleteEdge(entry.edge_id, entry.edge_label_id, entry.neighbor_id, vid);
                     }
                 } else if (checked_vertices.insert(vid).second) {
                     bool has_connected = false;

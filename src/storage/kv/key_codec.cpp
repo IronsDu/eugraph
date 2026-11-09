@@ -147,7 +147,7 @@ std::string KeyCodec::encodeVertexDataAdjEdgeKey(const VertexDataAdjEdgeKey& k) 
                                                                     : VertexDataKind::OUT_ADJACENCY));
     encodeU16BE(key, k.edge_label_id);
     encodeU64BE(key, k.neighbor_id);
-    encodeU64BE(key, k.seq);
+    encodeU64BE(key, k.edge_id);
     return key;
 }
 
@@ -157,7 +157,7 @@ KeyCodec::VertexDataAdjEdgeKey KeyCodec::decodeVertexDataAdjEdgeKey(std::string_
     k.direction = vertexDataKind(key) == VertexDataKind::IN_ADJACENCY ? Direction::IN : Direction::OUT;
     k.edge_label_id = decodeU16BE(key, 9);
     k.neighbor_id = decodeU64BE(key, 11);
-    k.seq = decodeU64BE(key, 19);
+    k.edge_id = decodeU64BE(key, 19);
     return k;
 }
 
@@ -195,7 +195,7 @@ std::string KeyCodec::encodeEdgeIndexKey(const EdgeIndexKey& k) {
     encodeU8(key, static_cast<uint8_t>(k.direction));
     encodeU16BE(key, k.edge_label_id);
     encodeU64BE(key, k.neighbor_id);
-    encodeU64BE(key, k.seq);
+    encodeU64BE(key, k.edge_id);
     return key;
 }
 
@@ -210,7 +210,7 @@ KeyCodec::EdgeIndexKey KeyCodec::decodeEdgeIndexKey(std::string_view key) {
     off += 2;
     k.neighbor_id = decodeU64BE(key, off);
     off += 8;
-    k.seq = decodeU64BE(key, off);
+    k.edge_id = decodeU64BE(key, off);
     return k;
 }
 
@@ -249,7 +249,7 @@ std::string KeyCodec::encodeEdgeTypeIndexKey(const EdgeTypeIndexKey& k) {
     key.reserve(8 + 8 + 8);
     encodeU64BE(key, k.src_vertex_id);
     encodeU64BE(key, k.dst_vertex_id);
-    encodeU64BE(key, k.seq);
+    encodeU64BE(key, k.edge_id);
     return key;
 }
 
@@ -257,7 +257,7 @@ KeyCodec::EdgeTypeIndexKey KeyCodec::decodeEdgeTypeIndexKey(std::string_view key
     EdgeTypeIndexKey k;
     k.src_vertex_id = decodeU64BE(key, 0);
     k.dst_vertex_id = decodeU64BE(key, 8);
-    k.seq = decodeU64BE(key, 16);
+    k.edge_id = decodeU64BE(key, 16);
     return k;
 }
 

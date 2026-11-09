@@ -168,7 +168,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 for (size_t i = 0; i < n; ++i) {
                     const auto& e = (*edge_batch)[i];
                     src_data[i] = VertexRef(e.src_vertex_id);
-                    edge_data[i] = EdgeKey(e.edge_id, e.src_vertex_id, e.dst_vertex_id, lid, e.seq);
+                    edge_data[i] = EdgeKey(e.edge_id, e.src_vertex_id, e.dst_vertex_id, lid);
                     dst_data[i] = VertexRef(e.dst_vertex_id);
                 }
                 if (direction_ == cypher::RelationshipDirection::UNDIRECTED)
@@ -214,7 +214,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     if (e.src_vertex_id == e.dst_vertex_id)
                         continue;
                     rsrc_data[w] = VertexRef(e.dst_vertex_id);
-                    redge_data[w] = EdgeKey(e.edge_id, e.dst_vertex_id, e.src_vertex_id, lid, e.seq);
+                    redge_data[w] = EdgeKey(e.edge_id, e.dst_vertex_id, e.src_vertex_id, lid);
                     rdst_data[w] = VertexRef(e.src_vertex_id);
                     ++w;
                 }
@@ -327,7 +327,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     while (auto out_batch = co_await out_gen.next()) {
                         for (const auto& entry : *out_batch) {
                             if (allowed_seen.insert(entry.edge_id).second)
-                                edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                                edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, true});
                             break;
                         }
                         break;
@@ -339,8 +339,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             if (entry.src_vertex_id == entry.dst_vertex_id)
                                 continue;
                             if (allowed_seen.insert(entry.edge_id).second)
-                                edges.push_back(
-                                    {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
+                                edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, false});
                             break;
                         }
                         break;
@@ -363,8 +362,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     while (auto edge_batch = co_await edge_gen.next()) {
                         for (const auto& entry : *edge_batch) {
                             const bool phy_out = (scan_dir == Direction::OUT);
-                            edges.push_back(
-                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
+                            edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, phy_out});
                         }
                     }
                 }
@@ -382,8 +380,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                 continue;
                         }
                         bool phy_out = (scan_dir == Direction::OUT);
-                        edges.push_back(
-                            {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
+                        edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, phy_out});
                     }
                 }
             }
@@ -436,7 +433,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                         continue;
                                     for (size_t src_row : row_it->second)
                                         edges.push_back({src_row, be.entry.neighbor_id, be.entry.edge_id,
-                                                         be.entry.edge_label_id, be.entry.seq, phy_out});
+                                                         be.entry.edge_label_id, phy_out});
                                 }
                             }
                         }
@@ -500,7 +497,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                         break;
                                     }
                                     miss_edges.push_back({source_index, be.entry.neighbor_id, be.entry.edge_id,
-                                                          be.entry.edge_label_id, be.entry.seq, dir == Direction::OUT});
+                                                          be.entry.edge_label_id, dir == Direction::OUT});
                                 }
                                 if (cache_build_overflow)
                                     break;
@@ -520,7 +517,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
 
                             for (const auto& e : miss_edges) {
                                 VertexId src_id = miss_ids[e.src_row];
-                                fresh[src_id].push_back({e.dst_id, e.edge_id, e.edge_label_id, e.seq, e.physical_out});
+                                fresh[src_id].push_back({e.dst_id, e.edge_id, e.edge_label_id, e.physical_out});
                             }
 
                             size_t fresh_edges = 0;
@@ -562,8 +559,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                 continue;
                             for (const auto& e : *cached)
                                 for (size_t src_row : row_it->second)
-                                    edges.push_back(
-                                        {src_row, e.dst_id, e.edge_id, e.edge_label_id, e.seq, e.physical_out});
+                                    edges.push_back({src_row, e.dst_id, e.edge_id, e.edge_label_id, e.physical_out});
                         }
                         labels_pre_filtered = true;
                     }
@@ -614,8 +610,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             while (auto out_batch = co_await out_gen.next()) {
                                 for (const auto& entry : *out_batch) {
                                     if (allowed_seen.insert(entry.edge_id).second)
-                                        edges.push_back(
-                                            {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                                        edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, true});
                                     break;
                                 }
                                 break;
@@ -629,8 +624,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                         if (entry.src_vertex_id == entry.dst_vertex_id)
                                             continue;
                                         if (allowed_seen.insert(entry.edge_id).second)
-                                            edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_,
-                                                             entry.seq, false});
+                                            edges.push_back(
+                                                {src_row, dst_id, entry.edge_id, allowed_edge_label_, false});
                                         break;
                                     }
                                     break;
@@ -655,8 +650,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                         continue;
                                 }
                                 bool phy_out = (dir == Direction::OUT);
-                                edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id,
-                                                 entry.seq, phy_out});
+                                edges.push_back(
+                                    {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, phy_out});
                             }
                         }
                     }
@@ -736,8 +731,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 // neighbor and the physical dst is the current vertex.
                 const VertexId physical_src = e.physical_out ? sid : e.dst_id;
                 const VertexId physical_dst = e.physical_out ? e.dst_id : sid;
-                edge_data[i] =
-                    EdgeKey{e.edge_id, physical_src, physical_dst, e.edge_label_id, static_cast<uint32_t>(e.seq)};
+                edge_data[i] = EdgeKey{e.edge_id, physical_src, physical_dst, e.edge_label_id};
             }
         }
         output.count = edges.size();

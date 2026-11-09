@@ -39,8 +39,32 @@ if [[ ! -x vcpkg/vcpkg ]] || ! vcpkg/vcpkg version >/dev/null 2>&1; then
         done
         rm -f "$tmp"
         if [[ "$downloaded" -ne 1 ]]; then
-            echo "unable to obtain vcpkg-glibc (official bootstrap and mirrors failed)" >&2
-            exit 1
+            # Release assets can be unavailable through both GitHub and every
+            # configured mirror (504 from the release edge).  Git transport and
+            # codeload are separate endpoints; build the same pinned tool from
+            # source rather than failing the whole matrix.
+            echo "release assets unavailable; building vcpkg tool from pinned source..." >&2
+            src_dir="$(mktemp -d)"
+            trap 'rm -rf "$src_dir"' EXIT
+            if ! git clone --depth 1 --branch "$VCPKG_TOOL_RELEASE_TAG" \
+                    https://github.com/microsoft/vcpkg-tool.git "$src_dir/src" >&2; then
+                echo "unable to obtain vcpkg-glibc (official bootstrap, mirrors, and git source failed)" >&2
+                exit 1
+            fi
+            if ! cmake -S "$src_dir/src" -B "$src_dir/build" -G Ninja \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DVCPKG_DEVELOPMENT_WARNINGS=OFF \
+                    -DVCPKG_BUILD_FUZZING=OFF >&2; then
+                echo "vcpkg tool source configure failed" >&2
+                exit 1
+            fi
+            if ! cmake --build "$src_dir/build" --target vcpkg -j "${BUILD_JOBS:-2}" >&2; then
+                echo "vcpkg tool source build failed" >&2
+                exit 1
+            fi
+            cp "$src_dir/build/vcpkg" vcpkg/vcpkg
+            chmod +x vcpkg/vcpkg
+            downloaded=1
         fi
     fi
 fi

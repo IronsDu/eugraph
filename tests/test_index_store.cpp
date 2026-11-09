@@ -195,9 +195,9 @@ TEST_F(IndexStoreTest, EdgeIndexInsertAndScanEquality) {
     ASSERT_TRUE(store_->createIndex(table));
 
     // Insert edge index entries with adjacency payloads
-    auto adj1 = ValueCodec::encodeEdgeAdjacency(10, 20, 0, 1);
-    auto adj2 = ValueCodec::encodeEdgeAdjacency(30, 40, 0, 1);
-    auto adj3 = ValueCodec::encodeEdgeAdjacency(10, 50, 0, 1);
+    auto adj1 = ValueCodec::encodeEdgeAdjacency(10, 20, 1);
+    auto adj2 = ValueCodec::encodeEdgeAdjacency(30, 40, 1);
+    auto adj3 = ValueCodec::encodeEdgeAdjacency(10, 50, 1);
 
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(25), 1, adj1));
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(30), 2, adj2));
@@ -215,9 +215,8 @@ TEST_F(IndexStoreTest, EdgeIndexInsertAndScanEquality) {
     auto txn = store_->beginTransaction();
     store_->scanIndexEqualityWithValue(txn, table, int64_t(25), [&](uint64_t entity_id, std::string_view val) {
         VertexId src = 0, dst = 0;
-        uint64_t seq = 0;
         EdgeLabelId lid = 0;
-        ValueCodec::decodeEdgeAdjacency(val, src, dst, seq, lid);
+        ValueCodec::decodeEdgeAdjacency(val, src, dst, lid);
         results.push_back({entity_id, src, dst});
         return true;
     });
@@ -237,7 +236,7 @@ TEST_F(IndexStoreTest, EdgeIndexUniqueConstraint) {
     auto table = eidxTable(1, 0);
     ASSERT_TRUE(store_->createIndex(table));
 
-    auto adj = ValueCodec::encodeEdgeAdjacency(10, 20, 0, 1);
+    auto adj = ValueCodec::encodeEdgeAdjacency(10, 20, 1);
     EXPECT_TRUE(store_->checkUniqueConstraint(txn(), table, int64_t(42)));
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(42), 1, adj));
     EXPECT_FALSE(store_->checkUniqueConstraint(txn(), table, int64_t(42)));
@@ -248,7 +247,7 @@ TEST_F(IndexStoreTest, EdgeIndexScanRange) {
     auto table = eidxTable(1, 0);
     ASSERT_TRUE(store_->createIndex(table));
 
-    auto adj = ValueCodec::encodeEdgeAdjacency(0, 0, 0, 1);
+    auto adj = ValueCodec::encodeEdgeAdjacency(0, 0, 1);
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(10), 1, adj));
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(20), 2, adj));
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(30), 3, adj));
@@ -274,8 +273,8 @@ TEST_F(IndexStoreTest, EdgeIndexDeleteEntry) {
     auto table = eidxTable(1, 0);
     ASSERT_TRUE(store_->createIndex(table));
 
-    auto adj1 = ValueCodec::encodeEdgeAdjacency(10, 20, 0, 1);
-    auto adj2 = ValueCodec::encodeEdgeAdjacency(10, 20, 0, 1);
+    auto adj1 = ValueCodec::encodeEdgeAdjacency(10, 20, 1);
+    auto adj2 = ValueCodec::encodeEdgeAdjacency(10, 20, 1);
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(25), 1, adj1));
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, int64_t(25), 2, adj2));
 
@@ -301,7 +300,7 @@ TEST_F(IndexStoreTest, EdgeCompositeIndexInsertAndScan) {
     auto table = eidxCompositeTable(1, prop_ids);
     ASSERT_TRUE(store_->createIndex(table));
 
-    auto adj = ValueCodec::encodeEdgeAdjacency(10, 20, 0, 1);
+    auto adj = ValueCodec::encodeEdgeAdjacency(10, 20, 1);
     std::vector<PropertyValue> values = {int64_t(25), std::string("active")};
     EXPECT_TRUE(store_->insertIndexEntry(txn(), table, values, 1, adj));
 

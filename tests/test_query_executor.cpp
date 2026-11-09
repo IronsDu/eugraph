@@ -140,8 +140,8 @@ protected:
     // Helper: insert test edges
     void insertTestEdges() {
         auto txn = sync_data_->beginTransaction();
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 
@@ -150,11 +150,11 @@ protected:
         insertTestVertices();
         auto txn = sync_data_->beginTransaction();
         // 2 KNOWS edges: 1->2, 1->3
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, {}));
         // 2 LIVES_IN edges: 1->4, 1->5
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 1, 4, LIVES_IN_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 1, 5, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 1, 4, LIVES_IN_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 1, 5, LIVES_IN_LABEL, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 
@@ -167,19 +167,19 @@ protected:
         std::vector<std::pair<LabelId, Properties>> lp = {{PERSON_LABEL, Properties{}}};
         ASSERT_TRUE(sync_data_->insertVertex(txn, 6, lp));
         // KNOWS chain: 1->2, 2->3, 3->4
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 4, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 4, KNOWS_LABEL, {}));
         // LIVES_IN: 1->5, 2->6
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 1, 5, LIVES_IN_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 5, 2, 6, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 1, 5, LIVES_IN_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 5, 2, 6, LIVES_IN_LABEL, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 
     // Extra LIVES_IN edge 5 -> 2 for correlated-start reverse-expand tests.
     void addReverseLivesInEdge() {
         auto txn = sync_data_->beginTransaction();
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 6, 5, 2, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 6, 5, 2, LIVES_IN_LABEL, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 };
@@ -566,7 +566,7 @@ TEST_F(QueryExecutorTest, ExpandMultipleEdgesFromSameSource) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
     for (VertexId dst = 2; dst <= 5; ++dst) {
-        ASSERT_TRUE(sync_data_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, {}));
     }
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
@@ -594,7 +594,7 @@ TEST_F(QueryExecutorTest, ExpandWithLimit) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
     for (VertexId dst = 2; dst <= 5; ++dst) {
-        ASSERT_TRUE(sync_data_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, {}));
     }
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
@@ -3466,9 +3466,9 @@ protected:
     void insertPersonWithEdges() {
         insertPersonData();
         auto txn = sync_data_->beginTransaction();
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 };
@@ -4325,9 +4325,9 @@ TEST_F(QueryExecutorTest, VarLenExpandMixedLabelChainReturnsDstProperty) {
     // KNOWS chain: 1->2->3->4
     {
         auto txn = sync_data_->beginTransaction();
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 4, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 4, KNOWS_LABEL, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
     // c at end of *2 chain from anon (= vertex 2 after first expand from a=1):
@@ -4410,7 +4410,7 @@ TEST_F(QueryExecutorTest, VarLenExpandSelfLoop) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
     // Self-loop on vertex 1
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 1, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     // [*1]: 1->1 (self-loop) = 1 row
@@ -4423,9 +4423,9 @@ TEST_F(QueryExecutorTest, VarLenExpandCycle) {
     // Triangle: 1->2->3->1
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 1, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     // 1-3 hops from vertex 1: must not infinite loop
@@ -4441,8 +4441,8 @@ TEST_F(QueryExecutorTest, VarLenExpandMultiEdge) {
     // Two edges between same vertex pair
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 2, KNOWS_LABEL, 1, {})); // different seq
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 2, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     // [*1]: 2 different edges → 2 rows (same dst vertex)
@@ -4487,7 +4487,7 @@ TEST_F(QueryExecutorTest, VarLenExpandUndirected) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
     // 1→2 (KNOWS)
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     // Undirected: 1-[KNOWS*1]-2 matches from both directions
@@ -4643,7 +4643,7 @@ TEST_F(QueryExecutorTest, VarLenExpandPathWithRange) {
 TEST_F(QueryExecutorTest, VarLenExpandPathSelfLoop) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 1, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1]->(b) RETURN p, length(p)");
@@ -4693,8 +4693,8 @@ TEST_F(QueryExecutorTest, VarLenExpandUnboundedCycle) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
     // Cycle: 1→2, 2→1 (mutual KNOWS)
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 1, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     // Unbounded with cycle — must terminate (vertex cycle detection)
@@ -4719,17 +4719,17 @@ TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilter) {
     insertMultiHopEdges();
     auto txn = sync_data_->beginTransaction();
     // Replace 1→2 with RATED edge (score=5)
-    ASSERT_TRUE(sync_data_->deleteEdge(txn, 1, KNOWS_LABEL, 1, 2, 0));
+    ASSERT_TRUE(sync_data_->deleteEdge(txn, 1, KNOWS_LABEL, 1, 2));
     ASSERT_TRUE(
-        sync_data_->insertEdge(txn, 1, 1, 2, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(5))}));
+        sync_data_->insertEdge(txn, 1, 1, 2, rated_label_id, Properties{PropertyValue(static_cast<int64_t>(5))}));
     // Replace 2→3 with RATED edge (score=10)
-    ASSERT_TRUE(sync_data_->deleteEdge(txn, 2, KNOWS_LABEL, 2, 3, 0));
+    ASSERT_TRUE(sync_data_->deleteEdge(txn, 2, KNOWS_LABEL, 2, 3));
     ASSERT_TRUE(
-        sync_data_->insertEdge(txn, 2, 2, 3, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(10))}));
+        sync_data_->insertEdge(txn, 2, 2, 3, rated_label_id, Properties{PropertyValue(static_cast<int64_t>(10))}));
     // Replace 3→4 with RATED edge (score=5)
-    ASSERT_TRUE(sync_data_->deleteEdge(txn, 3, KNOWS_LABEL, 3, 4, 0));
+    ASSERT_TRUE(sync_data_->deleteEdge(txn, 3, KNOWS_LABEL, 3, 4));
     ASSERT_TRUE(
-        sync_data_->insertEdge(txn, 3, 3, 4, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(5))}));
+        sync_data_->insertEdge(txn, 3, 3, 4, rated_label_id, Properties{PropertyValue(static_cast<int64_t>(5))}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     // Filter: only edges with score=5
@@ -4753,7 +4753,7 @@ TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilterNoMatch) {
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
     ASSERT_TRUE(
-        sync_data_->insertEdge(txn, 1, 1, 2, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(5))}));
+        sync_data_->insertEdge(txn, 1, 1, 2, rated_label_id, Properties{PropertyValue(static_cast<int64_t>(5))}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     // No edge has score=999
@@ -4981,10 +4981,10 @@ TEST_F(QueryExecutorTest, VarLenExpandDiamondAllPaths) {
     auto txn = sync_data_->beginTransaction();
     std::vector<std::pair<LabelId, Properties>> lp6 = {{PERSON_LABEL, Properties{}}};
     ASSERT_TRUE(sync_data_->insertVertex(txn, 6, lp6));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 4, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 3, 4, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 4, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 3, 4, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1..2]->(b) WHERE id(a) = 1 AND id(b) = 4 RETURN a, b");
@@ -4998,9 +4998,9 @@ TEST_F(QueryExecutorTest, VarLenExpandEdgeUniqueness) {
     // edges exist; the edge uniqueness constraint prevents reuse within a path.
     insertTestVertices();
     auto txn = sync_data_->beginTransaction();
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
-    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 1, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*4]->(b) RETURN a, b");
@@ -5174,11 +5174,11 @@ void insertExistsTestGraph(test::TestSyncGraphDataStore& sync_data, LabelId pers
         sync_data.insertVertex(txn, vid, label_props);
     }
     // Alice -> Bob, Alice -> Charlie
-    sync_data.insertEdge(txn, 1, 1, 2, knows_label, 0, {});
-    sync_data.insertEdge(txn, 2, 1, 3, knows_label, 0, {});
+    sync_data.insertEdge(txn, 1, 1, 2, knows_label, {});
+    sync_data.insertEdge(txn, 2, 1, 3, knows_label, {});
     // Bob -> David, Charlie -> David
-    sync_data.insertEdge(txn, 3, 2, 4, knows_label, 0, {});
-    sync_data.insertEdge(txn, 4, 3, 4, knows_label, 0, {});
+    sync_data.insertEdge(txn, 3, 2, 4, knows_label, {});
+    sync_data.insertEdge(txn, 4, 3, 4, knows_label, {});
     sync_data.commitTransaction(txn);
 }
 
@@ -6080,10 +6080,10 @@ TEST_F(QueryExecutorTest, OptionalMatchBoundStartAndBoundEndUsesCorrelatedChain)
     {
         auto txn = sync_data_->beginTransaction();
         // Direct a->c edge keeps the outer MATCH free of CrossProduct.
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 3, KNOWS_LABEL, {}));
         // Optional a->b->c path, with b = Person 2.
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 2, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 2, KNOWS_LABEL, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 
@@ -9142,9 +9142,9 @@ protected:
              {PropertyValue(std::string("Carol")), PropertyValue(int64_t{35}), PropertyValue(std::string("LA"))}}};
         ASSERT_TRUE(sync_data_->insertVertex(txn, 3, p3));
         // KNOWS edges with since property
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, Properties{PropertyValue(int64_t{2020})}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, Properties{PropertyValue(int64_t{2019})}));
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, 0, Properties{PropertyValue(int64_t{2021})}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, Properties{PropertyValue(int64_t{2020})}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, Properties{PropertyValue(int64_t{2019})}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, Properties{PropertyValue(int64_t{2021})}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
         executor_ =
@@ -10288,7 +10288,7 @@ TEST_F(QueryExecutorTest, ExpandUndirectedPaginatesLargeAdjacency) {
     constexpr uint64_t kEdgeCount = 4100;
     auto txn = sync_data_->beginTransaction();
     for (uint64_t i = 0; i < kEdgeCount; ++i)
-        ASSERT_TRUE(sync_data_->insertEdge(txn, 20000 + i, 1, 2, KNOWS_LABEL, i, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 20000 + i, 1, 2, KNOWS_LABEL, {}));
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     auto result = execSync(*executor_, "MATCH (a:Person {name: 'name1'})-[:KNOWS]-(b) RETURN count(*) AS c");
