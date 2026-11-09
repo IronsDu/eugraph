@@ -2,7 +2,7 @@
 
 > [当前实现] 参见 [README.md](../../README.md) 返回文档导航
 
-本文档描述 EuGraph 当前支持的 Cypher 语法。标注为「仅解析」表示 ANTLR 能正确解析但执行层尚未实现。
+本文档描述 EuGraph 当前支持的 Cypher 语法。已知未支持能力集中在第三节，按实测的 neo4j 差异维护。
 
 ---
 
@@ -37,13 +37,14 @@ MATCH (a)-[:KNOWS*1..5]-(b)                -- 无向变长
 
 **变长路径限制**：
 - min/max 必须是字面量整数，min >= 0
-- 混合固定+变长链且带命名路径（`p = (a)-[:X]->(b)-[:Y*2..3]->(c)`）不支持
 - 边属性过滤值仅支持字面常量（不支持表达式或变量引用）
 
-**限制**：
-- 仅支持单个 MATCH 子句（多 MATCH 不支持）
-- 仅支持单个 pattern part（逗号分隔的多个模式不支持）
-- OPTIONAL MATCH 已支持：匹配失败时右侧变量为 NULL（左连接语义）
+**已支持**：
+- 多个 MATCH 子句；
+- 逗号分隔的多个 pattern part；
+- OPTIONAL MATCH：匹配失败时右侧变量为 NULL（左连接语义）；
+- 固定跳 + 变长跳混合链，包括命名路径（例如
+  `p=(a)-[:X]->(b)-[:Y*1..2]->(c)`）。
 
 ### WHERE — 过滤
 
@@ -62,7 +63,7 @@ WHERE x IS NULL / x IS NOT NULL
 | 逻辑 | `AND`, `OR`, `NOT` | 已实现 |
 | 空判断 | `IS NULL`, `IS NOT NULL` | 已实现 |
 | 算术 | `+`, `-`, `*`, `/` | 已实现 |
-| 算术 | `%`, `^` | 仅解析 |
+| 算术 | `%`, `^` | 已实现 |
 | 字符串 | `STARTS WITH`, `ENDS WITH`, `CONTAINS` | 已实现 |
 | 列表 | `IN` | 已实现 |
 | 逻辑 | `XOR` | 已实现 |
@@ -134,12 +135,13 @@ MATCH (n), (m) WHERE (n)-[:KNOWS]->(m) RETURN n, m
 | 拒绝纯节点 `WHERE (n)` | 已实现（`InvalidArgumentType`） |
 | 单跳 / 多跳展开 | 已实现 |
 | 无向展开 `-[...]-` | 已实现 |
-| EXISTS 内部属性过滤（`WHERE m.name = ...`） | 部分（属性下推有已知问题） |
+| EXISTS 内部属性过滤（`WHERE m.name = ...`） | 已实现 |
 | 多 EXISTS OR 组合（`EXISTS1 OR EXISTS2`） | 已实现（EXISTS 项构成的 OR 树，经 AntiSemiJoin 反演组合求值） |
 | 变长模式谓词 `WHERE (n)-[:REL*]-()` | 未实现 |
 | `EXISTS { MATCH ... RETURN ... }`（完整子查询） | 已实现（首个 MATCH + 可选 WITH/RETURN；更新子句在绑定期报错） |
-| 嵌套 EXISTS | 已实现（简单/完整子查询嵌套均支持） |
-| EXISTS 在 RETURN/CASE 等非 WHERE 上下文 | 未实现 |
+| 嵌套 EXISTS | 语法已支持；嵌套相关过滤当前结果不正确，待修复 |
+| EXISTS 在 RETURN/CASE 中的 pattern 形式 | 已实现 |
+| `EXISTS { MATCH ... RETURN ... }` 在 RETURN/CASE/表达式中 | 未实现（WHERE 中的完整子查询已实现） |
 
 **模式推导式（Pattern Comprehension）**：`[(n)-->(m) | expr]` 已实现，且支持嵌套在列表推导式中，例如 `[x IN nodes(p) | size([(x)-->(:Y) | 1])]`。含模式推导式的顶层列表推导式在绑定阶段降级为外层 `PatternComprehensionApplyOp`：右子树先 `UNWIND` 迭代列表，再对每个元素执行模式推导式，最后 `collect` 回单行列表；不改变普通列表推导式与普通模式推导式的既有执行路径。
 
@@ -190,10 +192,12 @@ MATCH (n:Person) WITH DISTINCT n.city AS city RETURN city
 - `DISTINCT`
 - 作用域重置（仅 WITH 输出列在后续可见）
 
-**已知限制**：
-- WITH 后接 MATCH 时，第二个 MATCH 创建独立扫描算子，不使用 WITH 输出作为输入（如 `WITH n.city AS city MATCH (c:City {name: city})` 中 `city` 无法传入第二个 MATCH）
-- 聚合结果类型为 `ANY`，WHERE 中与具体类型（如 int64）比较可能失败（如 `WHERE count > 1`）
-- WITH 后 SET 属性更新可能不生效（作用域重置后列索引变化）
+**已验证**：
+- WITH 后接 MATCH，包括相关变量和独立扫描；
+- 聚合后的 `WHERE`（HAVING）；
+- WITH 后 SET 属性更新。
+
+同一语句内的标签读回限制见 FOREACH 章节（`SET n:Label` 后同一语句的 `labels(n)` 不会刷新，新建多标签同理）；提交后另起语句可读到完整标签集。
 
 ### UNWIND — 列表展开
 
@@ -229,10 +233,10 @@ RETURN duplicate
 - 可作为首子句（无输入源）或接在其他子句之后
 - 原始变量在 UNWIND 后仍保持作用域（不裁剪上下文）
 
-**限制**：
-- 列表拼接 `+` 尚未支持 LIST_CONCAT 语义（`UNWIND (first + second) AS x` 会报错）
-- `range()` 函数尚未注册（`UNWIND range(1, 3) AS x` 会报错）
-- `RETURN *` 尚未实现变量展开（配合 UNWIND 时无法返回全部变量）
+**已验证**：
+- 列表拼接 `+`；
+- `range(start, end[, step])`；
+- `RETURN *` / `WITH *` 变量展开。
 
 ### UNION / UNION ALL — 查询合并
 
@@ -334,10 +338,13 @@ CREATE (n:Person {name: 'Alice', age: 30})
 CREATE (n:Person)-[:KNOWS {since: 2020}]->(m:Person)
 ```
 
+**支持**：
+- 属性值支持表达式（例如 `CREATE (x:B {name: c1.name + '0'})`）；
+- 多标签 CREATE（`CREATE (n:Person:Employee)` 和带属性形式），属性按标签解析（单个命中→写入该标签，无命中→`__anon__`，多个命中→歧义报错）；
+- 新建多个标签可以持久化；同一语句内 `labels(n)` 不会立即刷新，另起语句可读到完整标签集。
+
 **限制**：
-- 属性值仅支持字面量（字符串/整数/浮点/布尔），不支持表达式
-- 仅解析第一个关系类型名
-- 支持多标签 CREATE（`CREATE (n:Person:Employee)` 和 `CREATE (n:Person:Employee {age: 30, salary: 50000})`），属性按标签解析（单个命中→写入该标签，无命中→`__anon__`，多个命中→歧义报错）
+- CREATE 关系必须恰好指定一个关系类型；`()-[:R1|R2]->()` 会报 `NoSingleRelationshipType`（neo4j 同样拒绝）。
 
 ### SET — 属性/标签设置
 
@@ -430,19 +437,21 @@ FOREACH`）；需要逐元素 MATCH 时用 `UNWIND`。
 
 ---
 
-## 三、仅解析（执行层未实现）
+## 三、Neo4j 支持但 EuGraph 尚未支持（待确认）
 
-| 子句/特性 | 说明 |
-|-----------|------|
-| `MERGE` | 条件创建（含 ON CREATE/MATCH SET） |
-| `CALL` | 过程调用（已可用，见第八节） |
-| `CASE WHEN THEN ELSE END` | 条件表达式 |
-| `[x IN list WHERE pred \| proj]` | 列表推导 |
-| `ALL/ANY/NONE/SINGLE(...)` | 量词谓词（已实现，见 WHERE 子句） |
-| `EXISTS { pattern WHERE ... }` | 存在性子查询（部分支持，见下表） |
-| `list[index]` / `list[from..to]` | 下标/切片 |
-| `{k: v}` / `[1, 2, 3]` | Map/List 字面量求值 |
+以下为与本地 neo4j 5 实测确认的差距，**不是**“仅解析”的旧清单；确认后再排期实现：
 
+| 特性 | 当前行为 | 备注 |
+|------|----------|------|
+| `CALL { ... }` / `CALL () { ... }` 子查询 | 语法错误 | neo4j 支持变量作用域子查询 |
+| `LOAD CSV FROM ...` | 语法错误 | neo4j 支持导入 |
+| `CREATE CONSTRAINT ...` | 语法错误 | EuGraph 目前只有自己的 `CREATE INDEX` DDL |
+| `SHOW CONSTRAINTS` | 语法错误 | `SHOW INDEXES` 可解析但当前无有效输出 |
+| RETURN/CASE 中的完整 `EXISTS { MATCH ... RETURN ... }` | 绑定错误 | WHERE 中的完整 EXISTS 已支持；pattern 形式在 RETURN/CASE 已支持 |
+| 嵌套 EXISTS 过滤 | 语法通过但结果错误 | `EXISTS { ... WHERE EXISTS { ... } }` 返回空结果，待修复 |
+| 变长边属性过滤引用变量/表达式 | 绑定错误 | 只接受字面常量；neo4j 接受表达式 |
+
+另外，`CALL db.labels()` 暴露内部 `__anon__` 标签，这是 EuGraph 与 neo4j 的有意差异，不属于“未支持”。
 ---
 
 ## 四、聚合函数
@@ -601,8 +610,8 @@ CALL db.schema.relTypeProperties()   RETURN relType, propertyName, propertyTypes
 CALL db.schema.visualization()       RETURN nodes, relationships
 ```
 
-过程参数与 `YIELD` 已支持（`CALL proc(args) YIELD a, b AS c RETURN ...`），但
-**`YIELD ... WHERE ...` 绑定器尚未支持**，过滤请写在 `RETURN` 之后或用 `WITH`。
+过程参数、`YIELD` 和 `YIELD ... WHERE ...` 均已支持：
+`CALL proc(args) YIELD a, b AS c WHERE ... RETURN ...`。
 完整清单见 `CALL dbms.procedures()` / `SHOW PROCEDURES`。
 
 ### 8.4 已声明的类型 vs 实际写入
