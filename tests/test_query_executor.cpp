@@ -3924,6 +3924,18 @@ TEST_F(QueryExecutorTest, UnwindCreateReturnSkipLimit) {
     ASSERT_EQ(r1.rows.size(), 3u);
 }
 
+TEST_F(QueryExecutorTest, VarLenEdgePropertyFilterExpression) {
+    auto setup = execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS {score: 'a'}]->(b:Person {name: 'b'})"
+                                      "-[:KNOWS {score: 'b'}]->(c:Person {name: 'c'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result =
+        execSync(*executor_, "MATCH p=(a:Person {name: 'a'})-[:KNOWS*1..2 {score: a.name}]->(b) RETURN length(p) AS n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {
     // KNOWS chain: 1->2->3->4, LIVES_IN: 1->5, 2->6
     insertMultiHopEdges();
@@ -4770,10 +4782,13 @@ TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilterNonexistent) {
 }
 
 TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilterNonLiteral) {
-    // Non-literal value in property filter should be rejected
-    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*2 {score: a.age}]->(b) RETURN a, b");
-    EXPECT_FALSE(result.error.empty());
-    EXPECT_NE(result.error.find("literal"), std::string::npos);
+    // A property-filter value may reference an outer variable and is
+    // evaluated per input row.
+    auto setup = execSync(*executor_, "CREATE (a:Person {age: 5})-[:RATED4 {score: 5}]->(b:Person {age: 6})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:RATED4*1 {score: a.age}]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
 }
 
 // ==================== Path Predicate Tests (P3b) ====================
@@ -5288,6 +5303,20 @@ TEST_F(QueryExecutorTest, ExistsPatternSubqueryInReturn) {
     }
 }
 
+TEST_F(QueryExecutorTest, ExistsFullSubqueryPatternInReturn) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, EXISTS { MATCH (n)-[:KNOWS]->(:Person) RETURN 1 } AS e "
+                                       "ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    const bool expected[] = {true, true, true, false, false};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<bool>(result.rows[i][1])) << "row " << i;
+        EXPECT_EQ(std::get<bool>(result.rows[i][1]), expected[i]) << "row " << i;
+    }
+}
+
 TEST_F(QueryExecutorTest, ExistsFullSubqueryInReturnError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
     auto result = execSync(*executor_, "MATCH (n) RETURN EXISTS { MATCH (m) WHERE m = n RETURN m } AS has_rel");
@@ -5418,6 +5447,20 @@ TEST_F(QueryExecutorTest, ExistsPatternSubqueryWithWhereInReturn) {
 }
 
 // ── Nested EXISTS with a correlated property filter (ExistentialSubquery3 [1]) ──
+
+TEST_F(QueryExecutorTest, NestedExistsPatternCorrelatesOuterChainNode) {
+    auto setup = execSync(
+        *executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(b:Person {name: 'b'})-[:KNOWS]->(c:Person {name: 'c'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(
+        *executor_,
+        "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]->(m) WHERE EXISTS { (m)-[:KNOWS]->() } } RETURN n.name AS n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "a");
+}
 
 TEST_F(QueryExecutorTest, NestedExistsWithCorrelatedPropertyFilter) {
     auto setup =

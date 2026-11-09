@@ -471,7 +471,23 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->prev_edge_col_index != bv->prev_edge_col_index)
                     return false;
-                return av->edge_prop_filters == bv->edge_prop_filters;
+                if (av->edge_prop_filters != bv->edge_prop_filters)
+                    return false;
+                if (av->edge_prop_filter_exprs.size() != bv->edge_prop_filter_exprs.size())
+                    return false;
+                for (const auto& [label_id, filters] : av->edge_prop_filter_exprs) {
+                    auto it = bv->edge_prop_filter_exprs.find(label_id);
+                    if (it == bv->edge_prop_filter_exprs.end() || it->second.size() != filters.size())
+                        return false;
+                    for (size_t i = 0; i < filters.size(); ++i) {
+                        if (filters[i].first != it->second[i].first)
+                            return false;
+                        if (!filters[i].second || !it->second[i].second ||
+                            !equalBoundExpression(*filters[i].second, *it->second[i].second))
+                            return false;
+                    }
+                }
+                return true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

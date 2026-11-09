@@ -462,6 +462,14 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                         seed = hashPropertyValue(seed, pv);
                     }
                 }
+                for (const auto& [lid, filters] : val->edge_prop_filter_exprs) {
+                    seed = combine(seed, static_cast<uint64_t>(lid));
+                    for (const auto& [pid, expr] : filters) {
+                        seed = combine(seed, pid);
+                        if (expr)
+                            seed = combine(seed, hashBoundExpression(*expr));
+                    }
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
                 if (!val)
                     return;

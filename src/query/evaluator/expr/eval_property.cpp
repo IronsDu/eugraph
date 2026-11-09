@@ -156,9 +156,45 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             // Structural field access on topology-form vertex (n.id).
             // The whole-vertex object hasn't been constructed (no PEPlan
             // requested it), so handle the cheap structural reads here.
-            if (ref.candidates.empty() && !ref.property_name.empty()) {
-                if (ref.property_name == "id") {
-                    r = Value(static_cast<int64_t>(vref.id));
+            if (ref.candidates.empty() && !ref.property_name.empty() && ref.property_name == "id") {
+                r = Value(static_cast<int64_t>(vref.id));
+            } else if (!ref.property_name.empty()) {
+                // A property access on a bare VertexRef (e.g. VarLenExpand's
+                // inline edge filter {score: a.name}) reads the data loaded by
+                // prefetch(); evaluation stays storage-free.
+                auto pit = prefetched_vertex_data_.find(vref.id);
+                if (pit != prefetched_vertex_data_.end()) {
+                    recordPrefetchHit();
+                    const auto& props = pit->second.properties;
+                    for (const auto& candidate : ref.candidates) {
+                        auto lit = props.find(candidate.label_id);
+                        if (lit != props.end() && candidate.prop_id < lit->second.size() &&
+                            lit->second[candidate.prop_id].has_value()) {
+                            r = pvToValue(*lit->second[candidate.prop_id]);
+                            break;
+                        }
+                    }
+                    if (std::holds_alternative<std::monostate>(r)) {
+                        for (const auto& [lid, props_vec] : props) {
+                            const LabelDef* ldef = findLabelDef(lid);
+                            if (!ldef)
+                                continue;
+                            for (const auto& pd : ldef->properties) {
+                                if (pd.name == ref.property_name && pd.id < props_vec.size() &&
+                                    props_vec[pd.id].has_value()) {
+                                    r = pvToValue(*props_vec[pd.id]);
+                                    break;
+                                }
+                            }
+                            if (!std::holds_alternative<std::monostate>(r))
+                                break;
+                        }
+                    }
+                } else if (prefetching_) {
+                    prefetch_pending_ids_.push_back(vref.id);
+                } else {
+                    missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
+                    recordPrefetchMiss();
                 }
             }
         } else if (std::holds_alternative<EdgeKey>(ov)) {

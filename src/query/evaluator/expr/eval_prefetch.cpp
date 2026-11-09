@@ -267,6 +267,21 @@ folly::coro::Task<void> ExpressionEvaluator::prefetch(const std::vector<const bi
         case binder::BoundTypeKind::DURATION:
         case binder::BoundTypeKind::NULL_TYPE:
         case binder::BoundTypeKind::VERTEX_REF:
+            // A property reference may target a topology-stage VertexRef
+            // (e.g. VarLenExpand's inline edge filter `{score: a.name}`).
+            // Prefetch those ids too when an expression actually needs graph
+            // data; otherwise the evaluator sees a bare ref and returns null.
+            if (needed) {
+                for (size_t r = 0; r < rows; ++r) {
+                    Value v = col.getValue(r);
+                    if (std::holds_alternative<VertexRef>(v)) {
+                        VertexId id = std::get<VertexRef>(v).id;
+                        if (seen.insert(id).second)
+                            ids.push_back(id);
+                    }
+                }
+            }
+            continue;
         case binder::BoundTypeKind::EDGE_KEY:
         case binder::BoundTypeKind::PATH_TOPOLOGY:
             continue;

@@ -22,6 +22,8 @@
 namespace eugraph {
 namespace binder {
 
+cypher::PatternPart clonePatternPart(const cypher::PatternPart& in);
+
 namespace {
 
 PropertyValue literalToPropertyValue(const std::variant<cypher::NullValue, bool, int64_t, double, std::string>& val) {
@@ -116,6 +118,19 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
                     c->when_thens.emplace_back(cloneExpression(w), cloneExpression(t));
                 if (ptr->else_expr)
                     c->else_expr = cloneExpression(*ptr->else_expr);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                // Nested pattern predicates are cloned through this helper
+                // when an outer EXISTS rewrites its WHERE into the synthetic
+                // MATCH.  Dropping the node here replaced the inner EXISTS
+                // with a null literal, making the nested predicate always
+                // false.
+                auto c = std::make_unique<cypher::ExistsExpr>();
+                for (const auto& pattern : ptr->patterns)
+                    c->patterns.push_back(clonePatternPart(pattern));
+                if (ptr->where_pred)
+                    c->where_pred = cloneExpression(*ptr->where_pred);
+                c->is_bare_predicate = ptr->is_bare_predicate;
                 return c;
             } else {
                 return std::make_unique<cypher::Literal>();
@@ -704,6 +719,8 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 }
                 // P3: edge property filters (resolved after edge type binding below)
                 std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters;
+                std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, std::shared_ptr<BoundExpression>>>>
+                    edge_prop_filter_exprs;
 
                 // Extract min/max from range (both must be integer literals)
                 auto extractIntLiteral = [&](const cypher::Expression& expr, int64_t& out) -> bool {
@@ -754,18 +771,29 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 // P3: resolve inline edge property filters
                 if (rel_pat.properties.has_value()) {
                     for (const auto& [prop_name, prop_expr] : rel_pat.properties->entries) {
-                        if (!std::holds_alternative<std::unique_ptr<cypher::Literal>>(prop_expr)) {
-                            error("Variable-length edge property filter value must be a literal");
-                            return std::nullopt;
+                        std::shared_ptr<BoundExpression> bound_filter;
+                        PropertyValue prop_val;
+                        const bool is_literal = std::holds_alternative<std::unique_ptr<cypher::Literal>>(prop_expr);
+                        if (is_literal) {
+                            auto& lit = std::get<std::unique_ptr<cypher::Literal>>(prop_expr);
+                            prop_val = literalToPropertyValue(lit->value);
+                        } else {
+                            auto bound = bindExpression(prop_expr);
+                            if (!bound) {
+                                error("Failed to bind variable-length edge property filter");
+                                return std::nullopt;
+                            }
+                            bound_filter = std::make_shared<BoundExpression>(std::move(*bound));
                         }
-                        auto& lit = std::get<std::unique_ptr<cypher::Literal>>(prop_expr);
-                        PropertyValue prop_val = literalToPropertyValue(lit->value);
 
                         bool found = false;
                         for (auto lid : edge_label_ids) {
                             auto* def = catalog_.lookupEdgeLabelProperty(lid, prop_name);
                             if (def) {
-                                edge_prop_filters[lid].emplace_back(def->id, prop_val);
+                                if (is_literal)
+                                    edge_prop_filters[lid].emplace_back(def->id, prop_val);
+                                else
+                                    edge_prop_filter_exprs[lid].emplace_back(def->id, bound_filter);
                                 found = true;
                             }
                         }
@@ -853,6 +881,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
 
                 // P3: edge property filters
                 varlen->edge_prop_filters = std::move(edge_prop_filters);
+                varlen->edge_prop_filter_exprs = std::move(edge_prop_filter_exprs);
 
                 varlen->child = std::move(*current);
                 current = std::move(varlen);

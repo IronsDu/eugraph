@@ -74,6 +74,11 @@ struct BoundVarLenExpandOp {
     // P3: inline edge property filter [{prop: value}]
     // Per edge-label: list of (prop_id, expected_value) equality checks
     std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters;
+    /// Inline edge-property values that are expressions (e.g. {score: a.name}).
+    /// Shared per property so the same bound expression is evaluated once per
+    /// input chunk, not once per edge label.
+    std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, std::shared_ptr<BoundExpression>>>>
+        edge_prop_filter_exprs;
     BoundLogicalOperator child;
 };
 
