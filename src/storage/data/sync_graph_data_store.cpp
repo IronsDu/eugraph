@@ -5,10 +5,12 @@
 #include "storage/wt_table_ops.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <numeric>
 #include <spdlog/spdlog.h>
+#include <thread>
 #include <unordered_map>
 
 #include "storage/kv/index_key_codec.hpp"
@@ -287,6 +289,58 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
                                    SchemaDdl::DropMode::CheckpointFirst);
 }
 
+bool SyncGraphDataStore::invalidateVertexSummary(GraphSession& gs, VertexId vid) {
+    if (conn_ == nullptr)
+        return false;
+    const auto key = KeyCodec::encodeVertexSummaryKey(vid);
+    // A summary written earlier in this same user transaction is visible to
+    // gs but not to a separate session.  Do not call autocommit remove on that
+    // uncommitted key; remove it through gs instead.
+    if (gs.consumeSummaryWritten(vid))
+        return wt::table_del(gs, TABLE_VERTEX_SUMMARY, key);
+    if (!wt::table_get(gs, TABLE_VERTEX_SUMMARY, key).has_value())
+        return true;
+    std::lock_guard lock(summary_mu_);
+    auto fail_invalidation = [&](int wt_error, const char* what) {
+        gs.fail_from_wt(wt_error, what);
+        spdlog::error("[vertex_summary] {} for vertex {}: {} ({})", what, vid, wt_error, wiredtiger_strerror(wt_error));
+        return false;
+    };
+    constexpr int kAttempts = 3;
+    for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        auto session = conn_->make_session();
+        if (!session)
+            return fail_invalidation(EINVAL, "cannot open invalidation session");
+        const int ret = wt::table_remove_code(session.get(), TABLE_VERTEX_SUMMARY, key);
+        if (ret == 0)
+            return true;
+        if (ret == WT_NOTFOUND) {
+            // Another remover won.  Do NOT fall back to gs: deleting the
+            // already-deleted committed row through the user transaction would
+            // recreate the false write conflict we are removing.
+            return true;
+        }
+        if (ret == WT_ROLLBACK || ret == WT_PREPARE_CONFLICT) {
+            // Another writer is deleting the same disposable row.  Back off and
+            // retry; the next attempt normally observes WT_NOTFOUND.
+            std::this_thread::sleep_for(std::chrono::microseconds(200 * (attempt + 1)));
+            continue;
+        }
+        return fail_invalidation(ret, "invalidation failed");
+    }
+    // Retry budget exhausted: make one final attempt and distinguish a real
+    // remaining row from an already-deleted summary.
+    {
+        auto session = conn_->make_session();
+        if (!session)
+            return fail_invalidation(EINVAL, "cannot open final invalidation session");
+        const int ret = wt::table_remove_code(session.get(), TABLE_VERTEX_SUMMARY, key);
+        if (ret == 0 || ret == WT_NOTFOUND)
+            return true;
+        return fail_invalidation(ret, "invalidation still failing");
+    }
+}
+
 bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
                                       std::span<const std::pair<LabelId, Properties>> label_props) {
     WT_SESSION* session = gs.wt_session();
@@ -336,12 +390,19 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
     // back to the canonical rows.
     auto summary_key = KeyCodec::encodeVertexSummaryKey(vid);
     if (wt::table_get(gs, TABLE_VERTEX_SUMMARY, summary_key).has_value()) {
-        if (!wt::table_del(gs, TABLE_VERTEX_SUMMARY, summary_key))
+        // A second insert for the same vid adds label/property groups; the
+        // one-row summary cannot represent the merge.  Invalidate it outside
+        // the user transaction so concurrent different-property/edge writes do
+        // not contend on a shared summary key.
+        if (!invalidateVertexSummary(gs, vid))
             return false;
     } else {
         auto summary = encodeVertexSummary(label_props);
-        if (!summary.empty() && !wt::table_put(gs, TABLE_VERTEX_SUMMARY, summary_key, summary))
-            return false;
+        if (!summary.empty()) {
+            if (!wt::table_put(gs, TABLE_VERTEX_SUMMARY, summary_key, summary))
+                return false;
+            gs.markSummaryWritten(vid);
+        }
     }
 
     return true;
@@ -350,6 +411,8 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
 bool SyncGraphDataStore::deleteVertex(GraphSession& gs, VertexId vid) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
+        return false;
+    if (!invalidateVertexSummary(gs, vid))
         return false;
 
     auto labels = getVertexLabels(gs, vid);
@@ -375,7 +438,6 @@ bool SyncGraphDataStore::deleteVertex(GraphSession& gs, VertexId vid) {
         wt::table_del(gs, TABLE_VERTEX_DATA, key);
 
     wt::table_del(gs, TABLE_VERTEX_EXISTENCE, KeyCodec::encodeVertexExistenceKey(vid));
-    wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
 
     return true;
 }
@@ -483,11 +545,10 @@ bool SyncGraphDataStore::putVertexProperty(GraphSession& gs, VertexId vid, Label
     if (!session)
         return false;
 
-    auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
-    if (!wt::table_put(gs, TABLE_VERTEX_DATA, key, ValueCodec::encode(value)))
+    if (!invalidateVertexSummary(gs, vid))
         return false;
-    // The cached summary is now stale; drop it (readers fall back).
-    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
+    auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
+    return wt::table_put(gs, TABLE_VERTEX_DATA, key, ValueCodec::encode(value));
 }
 
 bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, LabelId label_id,
@@ -496,6 +557,8 @@ bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, Lab
     if (!session)
         return false;
 
+    if (!invalidateVertexSummary(gs, vid))
+        return false;
     for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
         if (props[prop_id].has_value()) {
             auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
@@ -503,7 +566,7 @@ bool SyncGraphDataStore::putVertexProperties(GraphSession& gs, VertexId vid, Lab
                 return false;
         }
     }
-    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
+    return true;
 }
 
 bool SyncGraphDataStore::deleteVertexProperty(GraphSession& gs, VertexId vid, LabelId label_id, uint16_t prop_id) {
@@ -511,10 +574,10 @@ bool SyncGraphDataStore::deleteVertexProperty(GraphSession& gs, VertexId vid, La
     if (!session)
         return false;
 
-    auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
-    if (!wt::table_del(gs, TABLE_VERTEX_DATA, key))
+    if (!invalidateVertexSummary(gs, vid))
         return false;
-    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
+    auto key = KeyCodec::encodeVertexDataPropKey(vid, label_id, prop_id);
+    return wt::table_del(gs, TABLE_VERTEX_DATA, key);
 }
 
 // ==================== Vertex Labels ====================
@@ -1022,14 +1085,14 @@ bool SyncGraphDataStore::addVertexLabel(GraphSession& gs, VertexId vid, LabelId 
     if (!session)
         return false;
 
+    if (!invalidateVertexSummary(gs, vid))
+        return false;
     auto lr_key = KeyCodec::encodeVertexDataLabelKey(vid, label_id);
     if (!wt::table_put(gs, TABLE_VERTEX_DATA, lr_key, {}))
         return false;
 
     auto lf_key = KeyCodec::encodeLabelForwardKey(vid);
-    if (!wt::table_put(gs, labelFwdTable(label_id), lf_key, {}))
-        return false;
-    return wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
+    return wt::table_put(gs, labelFwdTable(label_id), lf_key, {});
 }
 
 bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, LabelId label_id) {
@@ -1037,6 +1100,8 @@ bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, Label
     if (!session)
         return false;
 
+    if (!invalidateVertexSummary(gs, vid))
+        return false;
     wt::table_del(gs, TABLE_VERTEX_DATA, KeyCodec::encodeVertexDataLabelKey(vid, label_id));
     wt::table_del(gs, labelFwdTable(label_id), KeyCodec::encodeLabelForwardKey(vid));
 
@@ -1045,8 +1110,6 @@ bool SyncGraphDataStore::removeVertexLabel(GraphSession& gs, VertexId vid, Label
         wt::table_del(gs, TABLE_VERTEX_DATA, key);
         return true;
     });
-    wt::table_del(gs, TABLE_VERTEX_SUMMARY, KeyCodec::encodeVertexSummaryKey(vid));
-
     return true;
 }
 

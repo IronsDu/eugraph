@@ -35,6 +35,9 @@ namespace wt {
 bool table_put(WT_SESSION* session, const std::string& table, std::string_view key, std::string_view value);
 [[nodiscard]] std::optional<std::string> table_get(WT_SESSION* session, const std::string& table, std::string_view key);
 bool table_del(WT_SESSION* session, const std::string& table, std::string_view key);
+/// Raw delete result (0 / WT_NOTFOUND / WT_ROLLBACK / ...).  Cache
+/// invalidation needs to distinguish "already gone" from "retryable conflict".
+int table_remove_code(WT_SESSION* session, const std::string& table, std::string_view key);
 void table_scan(WT_SESSION* session, const std::string& table, std::string_view prefix,
                 folly::FunctionRef<bool(std::string_view, std::string_view)> callback);
 

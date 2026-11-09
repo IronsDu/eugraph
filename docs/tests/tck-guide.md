@@ -7,7 +7,9 @@ EuGraph 使用 [openCypher TCK](https://github.com/opencypher/openCypher/tree/ma
 （CREATE 写入、SET/REMOVE/标签增删/DELETE 失效、大属性回退、MERGE、多行重复顶点、null）；
 `path/self-loop-path.feature` 覆盖自环路径的节点/关系序列（`length`/`nodes`/`relationships`
 以及 Bolt 路径结构）；`string-index-boundaries.feature` 覆盖字符串索引的精确等值、前缀查询、
-复合索引 leading prefix，以及索引扫描返回多个字符串列时的值正确性。
+复合索引 leading prefix，以及索引扫描返回多个字符串列时的值正确性；
+`vertex-summary-invalidation.feature` 覆盖同一事务/跨事务属性更新、属性删除、标签增删后
+摘要缓存失效的 Cypher 可见结果。
 
 ## 构建
 

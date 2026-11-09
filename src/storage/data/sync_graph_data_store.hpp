@@ -224,6 +224,12 @@ private:
     bool deleteAdjacencyEdge(WT_SESSION* session, VertexId vid, Direction direction, EdgeLabelId label_id,
                              VertexId neighbor_id, uint64_t seq, EdgeId eid);
     bool promoteAdjacency(WT_SESSION* session, VertexId vid, Direction direction, uint32_t cached_count);
+    /// Invalidate the disposable vertex-summary cache in its own autocommit
+    /// transaction, before the caller mutates canonical vertex_data.  The
+    /// deletion is retried on WT_ROLLBACK/WT_PREPARE_CONFLICT; WT_NOTFOUND is
+    /// success.  Failure is reported so the caller can abort the user write
+    /// instead of leaving a stale summary.
+    bool invalidateVertexSummary(GraphSession& session, VertexId vid);
     bool collectCachedEdges(WT_SESSION* session, VertexId vid, Direction direction,
                             std::optional<EdgeLabelId> label_filter,
                             std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out);
@@ -236,6 +242,9 @@ private:
     WtConnectionStore* conn_ = nullptr;
     SchemaDdl schema_ddl_;
     uint32_t adjacency_cache_capacity_ = 0;
+    /// Serialize cache invalidation probes/removes; each call uses a short
+    /// lived autocommit session, never the user's GraphSession.
+    std::mutex summary_mu_;
 };
 
 // ==================== Scan Cursor Implementations ====================

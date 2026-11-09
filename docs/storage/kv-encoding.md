@@ -95,6 +95,18 @@ enum class AdjacencyCacheState : uint8_t { COMPLETE = 0, OVERFLOW = 1 };
 
 `N` 现在是 `SyncGraphDataStore` 的构造参数，默认 **0**（生产默认关闭缓存）。测试用小的 N 覆盖 COMPLETE/OVERFLOW；后续可以按 label/方向配置。
 
+#### 邻接缓存已知并发风险（默认 N=0，不触发）
+
+- state/count 存放在 `vertex_data` 的 `{vid}{OUT|IN}` key 上；`insertAdjacencyEdge` /
+  `deleteAdjacencyEdge` 对 `count` 做 **read-modify-write**。
+- 两个事务即使插入**不同边**，只要共享同一个源/目标顶点，也会读写同一个 state key，
+  WT snapshot isolation 可能让其中一个事务 `WT_ROLLBACK`；这不是边 key 冲突。
+- `insertVertex` 在 N>0 时写初始 state；并发创建顶点/边也会争这个 state。
+- loader 多连接（>1）同样可能因 state 写冲突失败；历史导入曾因此要求单连接。
+- 当前没有 per-vertex 锁、死锁检测或后台重建；**启用 N>0 前必须补写路径串行化/重试**，
+  否则不要把“边不同”误认为“事务不冲突”。
+- 这也是默认 N=0 的原因之一；不要为了局部读加速直接打开。
+
 当前默认 N=0 时：
 
 - `insertVertex` 不写 state/邻接 key；
@@ -192,13 +204,17 @@ value: u8  version = 1
 | 路径 | 处理 |
 |---|---|
 | 新建 `insertVertex` | 写摘要 |
-| 同一 vid 的第二次 `insertVertex`（补标签/属性） | **删**摘要（不合并） |
-| `putVertexProperty` / `putVertexProperties` / `deleteVertexProperty` | 删摘要 |
-| `addVertexLabel` / `removeVertexLabel` | 删摘要 |
-| `deleteVertex` | 删摘要 |
+| 同一 vid 的第二次 `insertVertex`（补标签/属性） | **独立 autocommit 失效**（不合并） |
+| `putVertexProperty` / `putVertexProperties` / `deleteVertexProperty` | **独立 autocommit 失效** |
+| `addVertexLabel` / `removeVertexLabel` | **独立 autocommit 失效** |
+| `deleteVertex` | **独立 autocommit 失效** |
 | `dropLabel`（DDL，直连本地 session） | **显式删摘要** |
-| 事务回滚 | 摘要删除与属性写同事务，一起回滚 |
+| 用户事务回滚 | 摘要已独立删除，**不随用户事务回滚**；只是 cache miss |
 
+- 失效在 canonical 写入**之前**执行，使用独立短生命周期 WT session 的 autocommit
+  `remove`，因此不同顶点/不同属性的并发写不再争同一个 summary key。
+- `WT_NOTFOUND` 视为成功；`WT_ROLLBACK` / `WT_PREPARE_CONFLICT` 退避重试，下一轮通常
+  观察到 `WT_NOTFOUND`；重试耗尽仍失败则**本次 canonical 写失败**，绝不留下 stale summary。
 - 更新路径不做 RMW：只删除整行，下一次读取回退 canonical 行。副作用是“被修改过的顶点
   永久失去加速”，但正确性不依赖摘要。
 - 所有摘要写/删都在 `SyncGraphDataStore` 内；外部代码没有直接写 `vertex_data` 的路径。
@@ -217,20 +233,25 @@ value: u8  version = 1
 
 #### 正确性不变量
 
-> 任何对 `vertex_data` 中某顶点 label/property 的写入或删除，都必须在**同一事务**内
-> 删除该顶点的 `vertex_summary` 行；读者遇到缺行/解码失败/候选未内联时一律回退
-> canonical 行。
+> 任何对 `vertex_data` 中某顶点 label/property 的写入或删除，都必须在**这次用户事务
+> commit 之前**完成该顶点 `vertex_summary` 的失效；删除失败则本次写入失败。属性/label
+> 路径在 canonical 写之前失效，`insertVertex` 的二次插入在数据写之后、commit 之前失效
+> （此时未提交数据对读者不可见）。读者遇到缺行/解码失败/候选未内联时一律回退 canonical 行。
 
+- 失效不再和用户事务一起提交：`WT_NOTFOUND` 是成功；`WT_ROLLBACK` /
+  `WT_PREPARE_CONFLICT` 退避重试，重试耗尽仍失败则本次写失败。
+- 用户事务回滚后摘要可能已经不在，只是 cache miss；读路径从 canonical 行恢复正确值。
 - 失败模式是**静默的错误结果**，不是崩溃：摘要若残留了已删除的 label/属性，读方会把它当成
   “确定存在”返回。因此每条写路径都要有回归测试：
   - `SummaryIsInvalidatedByPropertyUpdate`：`SET` 后 coalesce 必须拿到新值；
   - `SummaryIsInvalidatedByDropLabel`：`DROP LABEL` 后该 label 及其属性不得“复活”；
-  - `VarLenExpandMixedLabelChainReturnsDstProperty`：同一 vid 第二次 `insertVertex`
-    不得用新的一组 label/props 覆盖旧摘要（当前实现是删摘要）。
+  - `ConcurrentDifferentPropertyWritesDoNotConflict`：两个事务改不同属性都能提交；
+  - `SummaryInvalidationOnPropertyWriteRollbackIsSafe`：失效后 rollback 仍读到旧值；
+  - `RepeatedPropertyWriteWithoutSummarySucceeds`：摘要已缺失时删除是幂等 no-op。
 - **解码边界**：`decodeVertexSummary` 对 label_count/entry_count/len 都做长度检查；
   `len == 0` 的空编码只会被当成 omitted 而回退，不会误读。
-- **读一致性**：摘要点查与 canonical 回退都在语句的同一 WT snapshot 内；写者提交前
-  读者看不到摘要删除，提交后两者一起可见。
+- **读一致性**：失效删除发生在 canonical 写入之前；读者在失效前后看到的是
+  “旧摘要+旧 canonical”或“无摘要+旧/新 canonical”，不会看到“新 canonical+旧摘要”。
 - **无界增长**：每顶点至多一行；写路径只有 insert 时一次写、变更时一次删除。
 
 #### 标签定义事后增加属性
