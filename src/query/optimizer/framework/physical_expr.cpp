@@ -1,8 +1,8 @@
 #include "query/optimizer/framework/physical_expr.hpp"
 
 #include "query/optimizer/framework/memo.hpp"
-#include "query/optimizer/framework/operator_eq.hpp"
-#include "query/optimizer/framework/operator_hash.hpp"
+#include "query/optimizer/logical_model/operator_eq.hpp"
+#include "query/optimizer/logical_model/operator_hash.hpp"
 
 namespace eugraph {
 namespace optimizer {

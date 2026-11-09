@@ -1,4 +1,4 @@
-#include "query/optimizer/analysis/requirement_collector.hpp"
+#include "query/optimizer/logical_model/requirement_collector.hpp"
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_binary_op.hpp"

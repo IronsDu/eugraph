@@ -1,4 +1,4 @@
-#include "query/optimizer/framework/operator_eq.hpp"
+#include "query/optimizer/logical_model/operator_eq.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -43,6 +43,7 @@
 namespace eugraph {
 namespace optimizer {
 namespace {
+template <typename> inline constexpr bool always_false = false;
 
 bool eqBoundType(const binder::BoundType& a, const binder::BoundType& b) {
     if (a.kind != b.kind)
@@ -770,8 +771,9 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     if (!eqSetItem(av->on_match_items[i], bv->on_match_items[i]))
                         return false;
                 return true;
+            } else {
+                static_assert(always_false<T>, "unhandled BoundLogicalOperator in equalBoundLogicalOperator");
             }
-            return false;
         },
         a);
 }

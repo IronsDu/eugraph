@@ -1,9 +1,9 @@
 #include "query/optimizer/logical_model/logical_op_model.hpp"
 
 #include "query/optimizer/framework/memo.hpp"
-#include "query/optimizer/framework/operator_eq.hpp"
-#include "query/optimizer/framework/operator_hash.hpp"
 #include "query/optimizer/framework/opt_rule.hpp"
+#include "query/optimizer/logical_model/operator_eq.hpp"
+#include "query/optimizer/logical_model/operator_hash.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_call_op.hpp"

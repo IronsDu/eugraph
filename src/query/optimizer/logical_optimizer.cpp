@@ -2,8 +2,8 @@
 #include "common/config/env_vars.hpp"
 
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
-#include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
+#include "query/optimizer/logical_model/requirement_collector.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"

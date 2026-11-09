@@ -1,4 +1,4 @@
-#include "query/optimizer/framework/log_prop.hpp"
+#include "query/optimizer/logical_model/log_prop.hpp"
 
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"

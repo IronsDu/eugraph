@@ -1,4 +1,4 @@
-#include "query/optimizer/framework/operator_hash.hpp"
+#include "query/optimizer/logical_model/operator_hash.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -47,6 +47,7 @@
 namespace eugraph {
 namespace optimizer {
 namespace {
+template <typename> inline constexpr bool always_false = false;
 
 uint64_t combine(uint64_t seed, uint64_t v) {
     // FNV-1a
@@ -655,6 +656,8 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashSetItem(seed, item);
                 for (const auto& item : val->on_match_items)
                     seed = hashSetItem(seed, item);
+            } else {
+                static_assert(always_false<T>, "unhandled BoundLogicalOperator in hashBoundLogicalOperator");
             }
         },
         op);

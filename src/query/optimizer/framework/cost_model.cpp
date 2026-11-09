@@ -1,6 +1,6 @@
 #include "query/optimizer/framework/cost_model.hpp"
 
-#include "query/optimizer/framework/log_prop.hpp"
+#include "query/optimizer/logical_model/log_prop.hpp"
 
 #include <cmath>
 

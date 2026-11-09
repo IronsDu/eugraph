@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <unordered_set>
 
-#include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/logical_model/logical_op_model.hpp"
+#include "query/optimizer/logical_model/requirement_collector.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 
 namespace eugraph {
