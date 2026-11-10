@@ -37,6 +37,7 @@ struct BoundUnionOp;
 struct BoundPatternComprehensionApplyOp;
 struct BoundCallOp;
 struct BoundPathCountOp;
+struct BoundPatternComprehensionForkOp;
 
 using BoundLogicalOperator =
     std::variant<BoundSingletonOp, BoundCorrelatedSourceOp, BoundScanOp, BoundLabelScanOp,
@@ -52,7 +53,11 @@ using BoundLogicalOperator =
                  // Appended last on purpose: optimizer::nodeTypeFromVariantIndex maps
                  // variant index -> OptNodeType positionally, so inserting an operator
                  // anywhere but the end silently shifts every later entry.
-                 std::unique_ptr<BoundForeachOp>, std::unique_ptr<BoundPathCountOp>>;
+                 std::unique_ptr<BoundForeachOp>, std::unique_ptr<BoundPathCountOp>,
+                 // Shared-anchor pattern-comprehension fork. Created by the
+                 // optimizer's anchor-sharing rewrite after the PC applies have
+                 // been recognised; see bound_pattern_comprehension_fork_op.hpp.
+                 std::unique_ptr<BoundPatternComprehensionForkOp>>;
 
 struct BoundLogicalPlan;
 

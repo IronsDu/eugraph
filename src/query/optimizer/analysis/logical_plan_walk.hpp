@@ -2,6 +2,7 @@
 
 #include "query/planner/bound_logical_plan.hpp"
 
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -49,6 +50,14 @@ template <typename OpRef, typename Visit> void forEachLogicalChild(OpRef&& op, V
                 if (v) {
                     visit(v->left);
                     visit(v->right);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                // Shared-anchor fork: left, anchor, then one sub-plan per branch.
+                if (v) {
+                    visit(v->left);
+                    visit(v->anchor);
+                    for (auto& branch : v->branches)
+                        visit(branch);
                 }
             }
         },

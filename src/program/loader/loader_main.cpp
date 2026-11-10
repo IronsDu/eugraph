@@ -59,6 +59,8 @@ int main(int argc, char* argv[]) {
                                               1);
     args::ValueFlag<int> parallel_files_flag(parser, "n", "Max number of CSV files loaded in parallel",
                                              {"parallel-files"}, 1);
+    args::ValueFlag<int> rpc_timeout_flag(parser, "ms", "RPC timeout in milliseconds (index backfill needs more)",
+                                          {"rpc-timeout-ms"}, 30000);
     args::Flag no_strict_flag(parser, "no-schema-strict",
                               "Infer types for columns not declared in the schema (default: error)",
                               {"no-schema-strict"});
@@ -94,8 +96,9 @@ int main(int argc, char* argv[]) {
         std::cerr << parser;
         return 1;
     }
-    if (batch_size <= 0 || rpc_connections <= 0 || parallel_files <= 0) {
-        std::cerr << "Error: --batch-size/--rpc-connections/--parallel-files must be positive\n";
+    const int rpc_timeout_ms = args::get(rpc_timeout_flag);
+    if (batch_size <= 0 || rpc_connections <= 0 || parallel_files <= 0 || rpc_timeout_ms <= 0) {
+        std::cerr << "Error: --batch-size/--rpc-connections/--parallel-files/--rpc-timeout-ms must be positive\n";
         return 1;
     }
 
@@ -128,7 +131,7 @@ int main(int argc, char* argv[]) {
         }
     };
 
-    eugraph::shell::EuGraphRpcClient client(host, port);
+    eugraph::shell::EuGraphRpcClient client(host, port, rpc_timeout_ms);
     if (!client.connect() || !reachable(client, 1))
         return 1;
 
@@ -137,7 +140,7 @@ int main(int argc, char* argv[]) {
     clients.reserve(static_cast<size_t>(rpc_connections));
     clients.push_back(&client);
     for (int i = 1; i < rpc_connections; i++) {
-        auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port);
+        auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port, rpc_timeout_ms);
         if (!extra->connect() || !reachable(*extra, i + 1))
             return 1;
         extra_clients.push_back(std::move(extra));

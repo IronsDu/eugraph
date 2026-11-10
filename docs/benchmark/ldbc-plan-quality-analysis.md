@@ -90,6 +90,15 @@ neo4j 也是 89k 次关系展开，但邻接/属性内联在 node/rel record 里
 可做：语句内共享邻居缓存（跨 Expand 实例，按 (dir, edge labels, dst labels) 分组），
 预计再省 ~10–15 ms；彻底做法是把两个 PC 的公共前缀做 CSE/去相关 join，可到 ~50 ms。
 
+> **2026-11-10 已落地（计划层，非缓存）**：`PatternComprehensionFork` 把两个 PC 的
+> 公共前缀提升为 fork 的共享 anchor（anchor 行物化一次、两个 branch 消费）。
+> 随后同一轮里又修掉三处按行 IO：端点 id 提升成列、`b.id` 合并读取去重、
+> 预取只扫表达式引用的列。SF1 c14（933/1129）现在 **946–1,052 ms**（最初 ~2,750 ms），
+> scanRows 8,470,381 → 4,329,259（−49%），结果 12 行 pathWeight 不变；
+> 剩余瓶颈是两个分支的 Expand（~380 ms）。
+> 详见 [query/engine/pattern-comprehension-anchor-sharing.md](../query/engine/pattern-comprehension-anchor-sharing.md)
+> 与 [query/engine/expression-io-boundary.md](../query/engine/expression-io-boundary.md)。
+
 ## 6. 结论与优先级
 
 | 方向 | 受益查询 | 预计收益 | 风险/成本 |

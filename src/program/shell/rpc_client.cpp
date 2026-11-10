@@ -16,8 +16,8 @@ static int64_t nowMs() {
         .count();
 }
 
-EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port)
-    : host_(host), port_(port), evb_(std::make_unique<folly::EventBase>()),
+EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port, int timeout_ms)
+    : timeout_ms_(timeout_ms), host_(host), port_(port), evb_(std::make_unique<folly::EventBase>()),
       evb_thread_([this] { evb_->loopForever(); }) {
     evb_->waitUntilRunning();
 }
@@ -44,7 +44,7 @@ bool EuGraphRpcClient::connect() {
         evb_->runInEventBaseThreadAndWait([&] {
             auto socket = folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
             auto channel = apache::thrift::RocketClientChannel::newChannel(std::move(socket));
-            channel->setTimeout(30000);
+            channel->setTimeout(timeout_ms_);
             client_ = std::make_unique<apache::thrift::Client<thrift_service::EuGraphService>>(std::move(channel));
         });
         auto t1 = nowMs();

@@ -14,7 +14,7 @@
     "所有列类型显式声明、不依赖采样推断。",
     "用法：eugraph-loader --schema ldbc-sf01.schema.json --data-dir <语料目录> [--graph <图名>]",
     "顶层键：nodes = 顶点标签 → 文件列表；relationships = 边类型 → 文件列表。",
-    "after_load：点/边全部装完后执行 —— 这里为 Message.id 建索引（官方 short 查询依赖它）；on_error=ignore 让重跑幂等。",
+    "after_load：点/边全部装完后执行 —— 对齐官方 indices.cypher 的索引（Message.id、Country.name、Message/Post.creationDate、Person.firstName、Tag/TagClass.name，以及 City/Country id）；on_error=ignore 让重跑幂等。大索引回填需要配合 --rpc-timeout-ms 调大超时。",
     "ignore 列出属于本数据集但【不参与初始装载】的文件：LDBC 的 updateStream_*.csv 属于更新流，另行增量导入。",
     "声明只来自本文件：主键/类型/分隔符/时间格式都写在这里，命令行不再提供覆盖，因此同一份 schema 必然装出同一张图。",
     "本语料各文件都是 \"|\" 分隔、时间列都是 epoch 毫秒，故用顶层默认值（delimiter / date_format）；如需按文件区分，可在文件条目里写 \"delimiter\" / \"date_format\" 覆盖。",
@@ -24,7 +24,15 @@
   "date_format": "epoch_ms",
 
   "after_load": [
-    { "statement": "CREATE INDEX idx_Message_id FOR (n:Message) ON (n.id)", "on_error": "ignore" }
+    { "statement": "CREATE INDEX idx_Message_id FOR (n:Message) ON (n.id)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_City_id FOR (n:City) ON (n.id)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_Country_id FOR (n:Country) ON (n.id)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_Country_name FOR (n:Country) ON (n.name)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_Message_creationDate FOR (n:Message) ON (n.creationDate)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_Person_firstName FOR (n:Person) ON (n.firstName)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_Post_creationDate FOR (n:Post) ON (n.creationDate)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_Tag_name FOR (n:Tag) ON (n.name)", "on_error": "ignore" },
+    { "statement": "CREATE INDEX idx_TagClass_name FOR (n:TagClass) ON (n.name)", "on_error": "ignore" }
   ],
 
   "nodes": {
