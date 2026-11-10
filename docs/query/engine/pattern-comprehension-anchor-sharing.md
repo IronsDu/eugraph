@@ -1,6 +1,7 @@
 # Pattern comprehension anchor sharing
 
-Status: implemented (SF1 complex-14: 2.75 s -> ~1.0 s, scanRows −49%).
+Status: implemented (SF1 complex-14: 1,800.9 ms -> 1,101.7 ms, scanRows −49%;
+the endpoint-id hoisting and the prefetch fix below account for most of it).
 Remaining work: branch expansions (see the end of this document).
 
 ## Problem
@@ -102,10 +103,11 @@ built successfully.
 ## Related fixes this work depended on
 
 - `perf(compute): read coalesced vertex properties once per distinct vertex` —
-  `LoadVertexPropCoalesce` built its batch from per-row ids, so a vertex
-  repeated by a fan-out expand paid a fetch per row (76,836 + 75,604 -> 3,037 +
-  1,988). Dedup per chunk + the same query-lifetime cache the single-candidate
-  path already had.
+  tried and **reverted**: deduping `LoadVertexPropCoalesce` by distinct vertex
+  saved only ~6% on complex-14 but made complex-3 (1,256 -> 1,865 ms) and
+  complex-9 (1,430 -> 2,272 ms) much slower (the per-row fan-out copy of the
+  cached property vector dominates), located by an A/B on the same dataset.
+  Do not re-land it without fixing that copy path.
 - `perf(compute): prefetch only the columns an expression references` — the
   prefetch pass scanned **every** graph column of the chunk, so a Filter whose
   predicate reads one property also fetched the anonymous pattern vertices of
@@ -116,10 +118,10 @@ built successfully.
 
 | metric | before | after |
 |---|---:|---:|
-| wall time | ~2,750 ms | **946–1,052 ms** |
+| wall time | ~1,800 ms (pre-optimisation doc) | **1,101.7 ms** |
 | total scanRows | 8,470,381 | 4,329,259 (−48.9%) |
 | anchor Expand | 2 x 4,131,230 rows | 1 x 4,131,230 rows |
-| branch `b.id` fetches | 152,440 | 5,025 |
+| branch `b.id` fetches | 152,440 | 152,440 (dedup reverted, see above) |
 | endpoint dynamic lookups | ~307,000 | 0 |
 | branch predicate store reads | ~180,000 | 0 |
 | result | 12 rows | 12 rows, identical `pathWeight` |
