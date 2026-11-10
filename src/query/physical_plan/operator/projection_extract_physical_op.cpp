@@ -136,6 +136,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
     std::unordered_map<VertexId, VertexValuePtr> ctor_anon_ptrs;
     if (read_only_ && persistent_vertex_prop_cache_.size() != specs_.size())
         persistent_vertex_prop_cache_.resize(specs_.size());
+    if (read_only_ && persistent_vertex_coalesce_cache_.size() != specs_.size())
+        persistent_vertex_coalesce_cache_.resize(specs_.size());
 
     while (auto chunk = co_await child_gen.next()) {
         const size_t row_count = chunk->numRows();
@@ -352,9 +354,18 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             if (spec.kind != ColumnSpec::Kind::LoadVertexPropCoalesce)
                 continue;
             vertex_coalesce_cache[i].resize(row_count);
+            if (!spec.required_labels.empty())
+                label_filter_cache[i].resize(row_count);
 
-            std::vector<VertexId> ref_vids;
+            // Distinct vertices only. This used to fetch once per row, so a
+            // vertex repeated by a fan-out expand cost one store round trip per
+            // row — the dominant cost of complex-14 (the `b.id` predicate reads
+            // the same few creators ~77k times per branch).
+            std::vector<VertexId> unique_ids;
+            std::vector<size_t> slot_for_ref;
             std::vector<size_t> ref_rows;
+            std::unordered_map<VertexId, size_t> index_of;
+            index_of.reserve(row_count);
             for (size_t row = 0; row < row_count; ++row) {
                 // resolveVertexId caches only by source column, so the cache
                 // must be reset for each row to avoid reusing the previous
@@ -364,26 +375,60 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 VertexId vid = resolveVertexId(*chunk, spec.source_col, row, vid_cache_col, vid_cache);
                 if (vid == INVALID_VERTEX_ID)
                     continue;
-                ref_vids.push_back(vid);
+                auto [it, inserted] = index_of.try_emplace(vid, unique_ids.size());
+                if (inserted)
+                    unique_ids.push_back(vid);
+                slot_for_ref.push_back(it->second);
                 ref_rows.push_back(row);
             }
-            if (ref_vids.empty())
+            if (unique_ids.empty())
                 continue;
 
-            if (spec.required_labels.empty()) {
-                auto coalesced = co_await store_.batchGetVertexCoalesceProperties(ref_vids, spec.coalesce_candidates);
-                for (size_t j = 0; j < ref_vids.size() && j < coalesced.size(); ++j) {
-                    for (auto& value : coalesced[j])
-                        vertex_coalesce_cache[i][ref_rows[j]].push_back(std::move(value));
+            std::vector<CoalescedVertexProps> fetched(unique_ids.size());
+            std::vector<const CoalescedVertexProps*> resolved(unique_ids.size(), nullptr);
+            std::vector<VertexId> miss_ids;
+            std::vector<size_t> miss_slot;
+            auto* persistent = read_only_ ? &persistent_vertex_coalesce_cache_[i] : nullptr;
+            if (persistent) {
+                for (size_t idx = 0; idx < unique_ids.size(); ++idx) {
+                    auto it = persistent->find(unique_ids[idx]);
+                    if (it != persistent->end())
+                        resolved[idx] = &it->second;
                 }
-            } else {
-                auto data = co_await store_.batchGetVertexCoalesceData(ref_vids, spec.coalesce_candidates);
-                label_filter_cache[i].resize(row_count);
-                for (size_t j = 0; j < ref_vids.size() && j < data.size(); ++j) {
-                    for (auto& value : data[j].values)
-                        vertex_coalesce_cache[i][ref_rows[j]].push_back(std::move(value));
-                    label_filter_cache[i][ref_rows[j]] = std::move(data[j].labels);
+            }
+            for (size_t idx = 0; idx < unique_ids.size(); ++idx) {
+                if (resolved[idx] != nullptr)
+                    continue;
+                miss_ids.push_back(unique_ids[idx]);
+                miss_slot.push_back(idx);
+            }
+            if (!miss_ids.empty()) {
+                if (spec.required_labels.empty()) {
+                    auto values = co_await store_.batchGetVertexCoalesceProperties(miss_ids, spec.coalesce_candidates);
+                    for (size_t m = 0; m < miss_ids.size() && m < values.size(); ++m)
+                        fetched[miss_slot[m]].values = std::move(values[m]);
+                } else {
+                    auto data = co_await store_.batchGetVertexCoalesceData(miss_ids, spec.coalesce_candidates);
+                    for (size_t m = 0; m < miss_ids.size() && m < data.size(); ++m) {
+                        fetched[miss_slot[m]].values = std::move(data[m].values);
+                        fetched[miss_slot[m]].labels = std::move(data[m].labels);
+                    }
                 }
+                for (size_t m = 0; m < miss_ids.size(); ++m)
+                    resolved[miss_slot[m]] = &fetched[miss_slot[m]];
+                if (persistent && persistent->size() + miss_ids.size() <= kMaxPersistentPropCacheEntries) {
+                    for (size_t m = 0; m < miss_ids.size(); ++m)
+                        persistent->emplace(miss_ids[m], fetched[miss_slot[m]]);
+                }
+            }
+
+            for (size_t j = 0; j < ref_rows.size(); ++j) {
+                const auto* props = resolved[slot_for_ref[j]];
+                if (props == nullptr)
+                    continue;
+                vertex_coalesce_cache[i][ref_rows[j]] = props->values;
+                if (!spec.required_labels.empty())
+                    label_filter_cache[i][ref_rows[j]] = props->labels;
             }
         }
 

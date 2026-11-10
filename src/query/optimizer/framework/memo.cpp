@@ -10,6 +10,7 @@
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_semi_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
@@ -54,8 +55,11 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
-                // Binary operators have two inputs, not a single child — skip
+                // Binary/multi-input operators carry their inputs in their own
+                // fields (or several of them); a single `child` cannot be
+                // attached here.
             } else {
                 // All non-leaf operators are wrapped in unique_ptr
                 // BoundCreateNodeOp has optional<BoundLogicalOperator> child,
@@ -86,6 +90,11 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
                                  std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 return 2; // two inputs: FOREACH's (input row, body sub-plan)
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                // left + anchor + one child group per branch.
+                return val ? static_cast<int>(
+                                 binder::BoundPatternComprehensionForkOp::childCountFor(val->branches.size()))
+                           : 0;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 return (val && val->child.has_value()) ? 1 : 0;
             } else {
@@ -168,6 +177,7 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                                      std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
@@ -236,6 +246,23 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(uo->right));
             uo->right = binder::BoundScanOp{};
             child_groups.push_back(copyIn(*right));
+        }
+    } else if (n_children > 2) {
+        // Multi-input operators (currently only the shared-anchor pattern
+        // comprehension fork: left + anchor + one branch per comprehension).
+        // Children are canonicalised in the same order the physical planner
+        // reads them back in copyOut: left, anchor, branches...
+        if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(op)) {
+            auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(op);
+            auto take = [this, &child_groups](binder::BoundLogicalOperator& slot) {
+                auto owned = std::make_unique<binder::BoundLogicalOperator>(std::move(slot));
+                slot = binder::BoundScanOp{};
+                child_groups.push_back(copyIn(*owned));
+            };
+            take(fork->left);
+            take(fork->anchor);
+            for (auto& branch : fork->branches)
+                take(branch);
         }
     }
 
@@ -310,6 +337,16 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
             fe->child = copyOut(expr.child_groups[0]);
             fe->body = copyOut(expr.child_groups[1]);
         }
+    } else if (expr.child_groups.size() > 2) {
+        if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
+            auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
+            fork->left = copyOut(expr.child_groups[0]);
+            fork->anchor = copyOut(expr.child_groups[1]);
+            fork->branches.clear();
+            fork->branches.reserve(expr.child_groups.size() - 2);
+            for (size_t i = 2; i < expr.child_groups.size(); ++i)
+                fork->branches.push_back(copyOut(expr.child_groups[i]));
+        }
     }
 
     return result;
@@ -364,6 +401,16 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
                 auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(result);
                 fe->child = copyOut(expr.child_groups[0], PhysProp{});
                 fe->body = copyOut(expr.child_groups[1], PhysProp{});
+            }
+        } else if (expr.child_groups.size() > 2) {
+            if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
+                auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
+                fork->left = copyOut(expr.child_groups[0], PhysProp{});
+                fork->anchor = copyOut(expr.child_groups[1], PhysProp{});
+                fork->branches.clear();
+                fork->branches.reserve(expr.child_groups.size() - 2);
+                for (size_t i = 2; i < expr.child_groups.size(); ++i)
+                    fork->branches.push_back(copyOut(expr.child_groups[i], PhysProp{}));
             }
         }
         return result;
@@ -903,6 +950,17 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 auto c = std::make_unique<binder::BoundUnionOp>();
                 c->all = val->all;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                // Children (left/anchor/branches) are restored from child_groups
+                // by copyOut; only the scalar payload is cloned here.
+                auto c = std::make_unique<binder::BoundPatternComprehensionForkOp>();
+                c->correlation = val->correlation;
+                c->batch_enabled = val->batch_enabled;
+                c->batch_slot_id = val->batch_slot_id;
+                c->batch_var = val->batch_var;
+                for (const auto& out : val->outputs)
+                    c->outputs.push_back(out);
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 auto c = std::make_unique<binder::BoundPatternComprehensionApplyOp>();

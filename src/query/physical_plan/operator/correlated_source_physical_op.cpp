@@ -37,6 +37,16 @@ binder::BoundTypeKind kindFromValue(const Value& v) {
 } // namespace
 
 folly::coro::AsyncGenerator<DataChunk> CorrelatedSourcePhysicalOp::executeChunk() {
+    if (chunks_) {
+        // Replay the producer's materialised rows verbatim: the branch was
+        // planned against the anchor's schema, so no per-value re-packing is
+        // needed and the column buffers are shared.
+        while (chunk_index_ < chunks_->size()) {
+            DataChunk replay = (*chunks_)[chunk_index_++];
+            co_yield std::move(replay);
+        }
+        co_return;
+    }
     DataChunk chunk;
     if (view_chunk_ != nullptr) {
         // Read the row once and derive each column's runtime kind from the

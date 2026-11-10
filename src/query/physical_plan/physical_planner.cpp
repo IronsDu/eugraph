@@ -1,11 +1,13 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
+#include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/plan_analysis.hpp"
 #include "query/optimizer/analysis/property_demand.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
 #include "query/optimizer/framework/memo.hpp"
+#include "query/optimizer/rules/logical/pattern_comprehension_anchor_share.hpp"
 #include "query/physical_plan/operator/apply_physical_op.hpp"
 #include "query/physical_plan/operator/call_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
@@ -25,6 +27,7 @@
 #include "query/physical_plan/operator/path_count_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
 #include "query/physical_plan/operator/pattern_comprehension_apply_physical_op.hpp"
+#include "query/physical_plan/operator/pattern_comprehension_fork_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
@@ -38,6 +41,7 @@
 #include <functional>
 #include <set>
 
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -644,6 +648,19 @@ static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordere
                     collectOpSlots(v->left, out, has_write);
                     collectOpSlots(v->right, out, has_write);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                if (v) {
+                    for (const auto& corr : v->correlation) {
+                        if (corr.left_slot != binder::INVALID_SLOT_ID)
+                            out.insert(corr.left_slot);
+                        if (corr.right_slot != binder::INVALID_SLOT_ID)
+                            out.insert(corr.right_slot);
+                    }
+                    collectOpSlots(v->left, out, has_write);
+                    collectOpSlots(v->anchor, out, has_write);
+                    for (const auto& branch : v->branches)
+                        collectOpSlots(branch, out, has_write);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
@@ -729,7 +746,8 @@ static bool subtreeHasTrait(const binder::BoundLogicalOperator& op, SubtreeTrait
         std::visit(
             [&](const auto& v) {
                 using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
                     if (v && trait == SubtreeTrait::PatternComprehension)
                         found = true;
                 }
@@ -770,6 +788,13 @@ static bool subtreeHasTrait(const binder::BoundLogicalOperator& op, SubtreeTrait
                     if (v) {
                         visit(v->left);
                         visit(v->right);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                    if (v) {
+                        visit(v->left);
+                        visit(v->anchor);
+                        for (const auto& branch : v->branches)
+                            visit(branch);
                     }
                 }
             },
@@ -1310,6 +1335,11 @@ static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 remapLogicalOpColumnIndices(val->left, offset);
                 remapLogicalOpColumnIndices(val->right, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                // `left` shares the outer row numbering; the anchor and the
+                // branches are lateral sub-plans that start their own column
+                // numbering from 0, so they must not receive the outer offset.
+                remapLogicalOpColumnIndices(val->left, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 remapLogicalOpColumnIndices(val->child, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
@@ -2877,6 +2907,14 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // slot_ids are stable across schema-changing operators.
     optimizer::rewriteColumnIndices(bound_plan.root, ctx.extraction_info, ctx.resolver());
 
+    // Shared-anchor rewrite. It runs after the analysis/lowering phases above
+    // (slot allocation, PE plans, column-index lowering) so those passes see the
+    // same plan they always have; the fork only re-parents already-lowered
+    // subtrees, and the physical planner lowers it directly. A plan containing a
+    // PatternComprehensionApply can never have a CBO winner (there is no
+    // implementation rule for it), so this is the plan that executes.
+    optimizer::rewritePatternComprehensionAnchorShare(bound_plan.root, ctx.slot_allocator, ctx.var_slots);
+
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(bound_plan.root, store, meta, ctx, empty_schema, empty_types);
@@ -2984,6 +3022,15 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
             uo->left = materializeChosen(*chosen.children[0]);
             uo->right = materializeChosen(*chosen.children[1]);
         }
+    } else if (chosen.children.size() > 2) {
+        if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
+            auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
+            fork->left = materializeChosen(*chosen.children[0]);
+            fork->anchor = materializeChosen(*chosen.children[1]);
+            fork->branches.clear();
+            for (size_t i = 2; i < chosen.children.size(); ++i)
+                fork->branches.push_back(materializeChosen(*chosen.children[i]));
+        }
     }
     return result;
 }
@@ -3064,6 +3111,13 @@ void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, cons
                 if (v) {
                     applyEnrichInPlace(v->left, var, req);
                     applyEnrichInPlace(v->right, var, req);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                if (v) {
+                    applyEnrichInPlace(v->left, var, req);
+                    applyEnrichInPlace(v->anchor, var, req);
+                    for (auto& branch : v->branches)
+                        applyEnrichInPlace(branch, var, req);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
@@ -3164,6 +3218,26 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     compileOperatorTree(phys_op.get(), ctx);
     return phys_op;
 }
+
+namespace {
+
+/// Locate the `BoundCorrelatedSourceOp` leaf that a fork branch consumes.
+/// The anchor-sharing rewrite turns every branch tail into a rooted sub-plan
+/// whose bottom is an (initially empty) correlated source; the planner fills in
+/// the anchor's schema before planning the tail so downstream operators resolve
+/// their columns by name against the shared rows.
+binder::BoundCorrelatedSourceOp* findForkBranchSource(binder::BoundLogicalOperator& op) {
+    if (auto* cs = std::get_if<binder::BoundCorrelatedSourceOp>(&op))
+        return cs;
+    binder::BoundCorrelatedSourceOp* found = nullptr;
+    optimizer::forEachLogicalChild(op, [&found](binder::BoundLogicalOperator& child) {
+        if (!found)
+            found = findForkBranchSource(child);
+    });
+    return found;
+}
+
+} // namespace
 
 std::variant<PlanOperatorResult, std::string>
 PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store,
@@ -4586,6 +4660,203 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // `size(list) > 0`, so the operator may stop at the first
                     // correlated match instead of collecting every one of them.
                     result->setExistenceOnly(v.existence_only);
+                    result->setEvalContext(ctx.eval_ctx);
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                              std::move(out_layout)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundPatternComprehensionForkOp>) {
+                    auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(left_result))
+                        return std::get<std::string>(left_result);
+                    auto lr = extractChildResult(std::move(left_result));
+                    ensureSlotLayout(lr, ctx);
+
+                    // The anchor and the branch tails are lateral correlated
+                    // sub-plans: they carry their own demand model, exactly like
+                    // the right side of a PatternComprehensionApply.
+                    auto saved_deferred = std::move(ctx.deferred_slots);
+                    ctx.deferred_slots.reset();
+                    Schema sub_input_schema;
+                    std::vector<binder::BoundType> sub_input_types;
+                    ++ctx.correlated_subplan_depth;
+                    auto anchor_result =
+                        planBoundOperator(v.anchor, store, meta, ctx, sub_input_schema, sub_input_types);
+                    if (std::holds_alternative<std::string>(anchor_result)) {
+                        --ctx.correlated_subplan_depth;
+                        ctx.deferred_slots = std::move(saved_deferred);
+                        return std::get<std::string>(anchor_result);
+                    }
+                    auto ar = extractChildResult(std::move(anchor_result));
+
+                    if (v.correlation.empty()) {
+                        --ctx.correlated_subplan_depth;
+                        ctx.deferred_slots = std::move(saved_deferred);
+                        return std::string("PatternComprehensionFork: empty correlation is unsupported");
+                    }
+                    if (v.branches.size() != v.outputs.size()) {
+                        --ctx.correlated_subplan_depth;
+                        ctx.deferred_slots = std::move(saved_deferred);
+                        return std::string("PatternComprehensionFork: branch/output count mismatch");
+                    }
+
+                    std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> find_cs =
+                        [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
+                        if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
+                            return cs;
+                        for (auto* child : node->children()) {
+                            if (auto* cs = find_cs(const_cast<PhysicalOperator*>(child)))
+                                return cs;
+                        }
+                        return nullptr;
+                    };
+                    CorrelatedSourcePhysicalOp* anchor_source = find_cs(ar.op.get());
+                    if (!anchor_source) {
+                        --ctx.correlated_subplan_depth;
+                        ctx.deferred_slots = std::move(saved_deferred);
+                        return std::string("PatternComprehensionFork: no CorrelatedSource in anchor sub-plan");
+                    }
+
+                    // Build the anchor's injected-value plan from the anchor
+                    // sub-plan's own source schema: every correlated-source
+                    // column is either fed by a left output column (resolved by
+                    // name/slot) or is the batch key (-1). Deriving it from the
+                    // schema means the column order cannot drift from what the
+                    // anchor pipeline expects.
+                    auto* anchor_leaf = findForkBranchSource(v.anchor);
+                    if (!anchor_leaf) {
+                        --ctx.correlated_subplan_depth;
+                        ctx.deferred_slots = std::move(saved_deferred);
+                        return std::string("PatternComprehensionFork: no correlated source in anchor sub-plan");
+                    }
+                    static const bool fork_debug = std::getenv("EUGRAPH_ANCHOR_SHARE_DEBUG") != nullptr;
+                    if (fork_debug) {
+                        std::string vars;
+                        for (const auto& name : anchor_leaf->variables)
+                            vars += " " + name;
+                        spdlog::info("[anchor-share] fork: batch_var='{}' anchor source vars:{}", v.batch_var, vars);
+                    }
+                    std::vector<int32_t> anchor_value_columns;
+                    anchor_value_columns.reserve(anchor_leaf->variables.size());
+                    for (const auto& var : anchor_leaf->variables) {
+                        if (!v.batch_var.empty() && var == v.batch_var) {
+                            anchor_value_columns.push_back(-1); // batch index
+                            continue;
+                        }
+                        int pos = -1;
+                        for (const auto& corr : v.correlation) {
+                            if (corr.left_var != var)
+                                continue;
+                            pos = static_cast<int>(corr.left_column);
+                            if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size() ||
+                                lr.output_schema[pos] != corr.left_var)
+                                pos = lr.slot_layout.getColumnIndex(corr.left_slot);
+                            if (pos < 0)
+                                pos = findColumn(lr.output_schema, corr.left_var);
+                            break;
+                        }
+                        if (pos < 0) {
+                            // Computed columns (e.g. the hoisted endpoint ids) are
+                            // not correlation entries: they are produced by the
+                            // left pipeline under the same name.
+                            pos = findColumn(lr.output_schema, var);
+                        }
+                        if (pos < 0) {
+                            --ctx.correlated_subplan_depth;
+                            ctx.deferred_slots = std::move(saved_deferred);
+                            return std::string("PatternComprehensionFork: anchor source column '" + var +
+                                               "' is not correlated from the left input");
+                        }
+                        anchor_value_columns.push_back(pos);
+                    }
+                    if (fork_debug) {
+                        std::string cols;
+                        for (int32_t c : anchor_value_columns)
+                            cols += " " + std::to_string(c);
+                        spdlog::info("[anchor-share] fork: injection columns:{}", cols);
+                    }
+
+                    // Plan every branch against the anchor's output schema.
+                    std::vector<std::unique_ptr<PhysicalOperator>> branch_ops;
+                    std::vector<CorrelatedSourcePhysicalOp*> branch_sources;
+                    std::vector<int> branch_batch_cols;
+                    std::vector<size_t> branch_list_cols;
+                    branch_ops.reserve(v.branches.size());
+                    branch_sources.reserve(v.branches.size());
+                    branch_batch_cols.reserve(v.branches.size());
+                    branch_list_cols.reserve(v.branches.size());
+                    for (auto& branch : v.branches) {
+                        auto* leaf = findForkBranchSource(branch);
+                        if (!leaf) {
+                            --ctx.correlated_subplan_depth;
+                            ctx.deferred_slots = std::move(saved_deferred);
+                            return std::string("PatternComprehensionFork: branch has no correlated source leaf");
+                        }
+                        leaf->variables = ar.output_schema;
+                        leaf->types = ar.output_types;
+                        leaf->column_indices.resize(ar.output_schema.size());
+                        for (size_t i = 0; i < leaf->column_indices.size(); ++i)
+                            leaf->column_indices[i] = static_cast<uint32_t>(i);
+                        leaf->slot_ids.clear();
+                        leaf->slot_ids.reserve(ar.output_schema.size());
+                        for (const auto& name : ar.output_schema) {
+                            auto it = ctx.var_slots.find(name);
+                            leaf->slot_ids.push_back(it == ctx.var_slots.end() ? binder::INVALID_SLOT_ID : it->second);
+                        }
+
+                        Schema branch_input_schema;
+                        std::vector<binder::BoundType> branch_input_types;
+                        auto branch_result =
+                            planBoundOperator(branch, store, meta, ctx, branch_input_schema, branch_input_types);
+                        if (std::holds_alternative<std::string>(branch_result)) {
+                            --ctx.correlated_subplan_depth;
+                            ctx.deferred_slots = std::move(saved_deferred);
+                            return std::get<std::string>(branch_result);
+                        }
+                        auto br = extractChildResult(std::move(branch_result));
+                        CorrelatedSourcePhysicalOp* branch_source = find_cs(br.op.get());
+                        if (!branch_source) {
+                            --ctx.correlated_subplan_depth;
+                            ctx.deferred_slots = std::move(saved_deferred);
+                            return std::string("PatternComprehensionFork: branch has no correlated source");
+                        }
+                        int batch_col = v.batch_enabled ? findColumn(br.output_schema, v.batch_var) : -1;
+                        size_t list_col = batch_col >= 0 ? static_cast<size_t>(batch_col) + 1 : 0;
+                        if (list_col >= br.output_schema.size())
+                            list_col = br.output_schema.empty() ? 0 : br.output_schema.size() - 1;
+                        if (fork_debug) {
+                            std::string names;
+                            for (const auto& name : br.output_schema)
+                                names += " " + name;
+                            spdlog::info("[anchor-share] fork branch output:{} -> batch_col={} list_col={}", names,
+                                         batch_col, list_col);
+                        }
+                        branch_sources.push_back(branch_source);
+                        branch_batch_cols.push_back(batch_col);
+                        branch_list_cols.push_back(list_col);
+                        branch_ops.push_back(std::move(br.op));
+                    }
+                    --ctx.correlated_subplan_depth;
+                    ctx.deferred_slots = std::move(saved_deferred);
+
+                    // Output schema: left columns + one LIST column per branch.
+                    std::vector<binder::BoundType> list_elem_types;
+                    list_elem_types.reserve(v.outputs.size());
+                    Schema output_schema = lr.output_schema;
+                    std::vector<binder::BoundType> output_types = lr.output_types;
+                    TupleSlotLayout out_layout = lr.slot_layout;
+                    std::vector<binder::SlotId> output_slots;
+                    for (auto& out : v.outputs) {
+                        output_schema.push_back(out.name);
+                        output_types.push_back(binder::BoundType::List(out.element_type));
+                        list_elem_types.push_back(out.element_type);
+                        out_layout.append(out.slot_id);
+                        output_slots.push_back(out.slot_id);
+                    }
+
+                    auto result = std::make_unique<PatternComprehensionForkPhysicalOp>(
+                        std::move(lr.op), std::move(ar.op), anchor_source, std::move(branch_ops),
+                        std::move(branch_sources), std::move(anchor_value_columns), std::move(list_elem_types),
+                        std::move(branch_batch_cols), std::move(branch_list_cols));
+                    result->setOutputSlots(std::move(output_slots));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(out_layout)};

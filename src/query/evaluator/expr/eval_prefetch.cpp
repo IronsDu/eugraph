@@ -8,6 +8,7 @@
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
+#include <functional>
 #include <string>
 #include <unordered_set>
 
@@ -250,12 +251,41 @@ folly::coro::Task<void> ExpressionEvaluator::prefetch(const std::vector<const bi
             value);
     };
 
+    // Only the columns the expressions actually reference: the chunk also
+    // carries entities the predicate never touches, and loading them turns the
+    // prefetch into "read the whole row" (complex-14: the WHERE filter pulled
+    // the anonymous Comment/Post vertices of every row, ~100k vertex fetches
+    // per branch, purely to evaluate one endpoint comparison).
+    std::unordered_set<uint32_t> referenced_columns;
+    {
+        std::function<void(const binder::BoundExpression&)> collect = [&](const binder::BoundExpression& expr) {
+            if (auto* cref = std::get_if<binder::BoundColumnRef>(&expr))
+                referenced_columns.insert(cref->column_index);
+            binder::forEachSubExpr(expr, collect);
+            if (auto* p = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
+                if (*p)
+                    collect((*p)->object);
+            } else if (auto* d = std::get_if<std::unique_ptr<binder::BoundDynamicPropertyRef>>(&expr)) {
+                if (*d)
+                    collect((*d)->object);
+            } else if (auto* c = std::get_if<std::unique_ptr<binder::BoundLabelCast>>(&expr)) {
+                if (*c)
+                    collect((*c)->object);
+            }
+        };
+        for (const auto* expr : exprs)
+            if (expr)
+                collect(*expr);
+    }
+
     // Scalar columns cannot carry graph entities. Walking them through
     // Value/getValue copies every cell for nothing: complex-6's Filter scanned
     // 11 columns x 11.5K rows here and spent ~25 ms of self CPU. Visit graph
     // columns through their typed buffers and skip everything else.
     const size_t rows = input.numRows();
     for (size_t c = 0; c < input.numColumns(); ++c) {
+        if (!referenced_columns.empty() && referenced_columns.count(static_cast<uint32_t>(c)) == 0)
+            continue;
         const Column& col = input.columns[c];
         switch (col.type) {
         case binder::BoundTypeKind::BOOL:

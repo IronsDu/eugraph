@@ -10930,3 +10930,120 @@ TEST_F(QueryExecutorTest, ProfileCollectsOperatorMetricsAndTree) {
     EXPECT_TRUE(saw_io);
     EXPECT_TRUE(ctx->profile.has_value());
 }
+
+// ============================================================
+// Pattern comprehension / anchor sharing
+// ============================================================
+
+namespace {
+
+/// LDBC complex-14 shape: two list comprehensions over `rels_in_path`, each
+/// holding a pattern comprehension that differs only in the label of the
+/// `REPLY_OF` destination. The optimizer must collapse both into one
+/// shared-anchor fork.
+constexpr const char* kAnchorShareQuery = R"(
+MATCH path = allShortestPaths((p1:Person {id: 1})-[:KNOWS*0..]-(p2:Person {id: 2}))
+WITH collect(path) AS paths
+UNWIND paths AS path
+WITH path, relationships(path) AS rels_in_path
+WITH
+  [r IN rels_in_path | reduce(w = 0.0, v IN [
+      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
+      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id)
+         OR (a.id = endNode(r).id AND b.id = startNode(r).id)
+      | 1.0] | w + v)] AS weight1,
+  [r IN rels_in_path | reduce(w = 0.0, v IN [
+      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person)
+      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id)
+         OR (a.id = endNode(r).id AND b.id = startNode(r).id)
+      | 0.5] | w + v)] AS weight2
+RETURN reduce(w = 0.0, v IN weight1 | w + v) AS weight1,
+       reduce(w = 0.0, v IN weight2 | w + v) AS weight2
+)";
+
+} // namespace
+
+TEST_F(QueryExecutorTest, PatternComprehensionAnchorShareIsUsedForSharedPrefix) {
+    // Extra labels/edges for the complex-14 pattern.
+    auto comment = blockingWait(async_meta_->createLabel("Comment"));
+    auto post = blockingWait(async_meta_->createLabel("Post"));
+    auto has_creator = blockingWait(async_meta_->createEdgeLabel("HAS_CREATOR"));
+    auto reply_of = blockingWait(async_meta_->createEdgeLabel("REPLY_OF"));
+    ASSERT_NE(comment, INVALID_LABEL_ID);
+    ASSERT_NE(post, INVALID_LABEL_ID);
+    ASSERT_NE(has_creator, INVALID_EDGE_LABEL_ID);
+    ASSERT_NE(reply_of, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_meta_->addVertexLabelProperties("Comment", {{"id", PropertyType::INT64}}));
+    blockingWait(async_meta_->addVertexLabelProperties("Post", {{"id", PropertyType::INT64}}));
+    blockingWait(async_data_->createLabel(comment));
+    blockingWait(async_data_->createLabel(post));
+    blockingWait(async_data_->createEdgeLabel(has_creator));
+    blockingWait(async_data_->createEdgeLabel(reply_of));
+
+    // a=1, b=2 ; a-KNOWS->b ; a creates c1(Comment) replying to p1(Post) created by b ;
+    // a creates c2(Comment) replying to c3(Comment) created by b.
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {id: 1, name: 'a'}), (b:Person {id: 2, name: 'b'}), "
+                                     "(c1:Comment {id: 11}), (c2:Comment {id: 12}), (c3:Comment {id: 13}), "
+                                     "(p1:Post {id: 21})")
+                    .error.empty());
+    ASSERT_TRUE(
+        execSync(*executor_, "MATCH (a:Person {id: 1}), (b:Person {id: 2}) CREATE (a)-[:KNOWS]->(b)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (a:Person {id: 1}), (b:Person {id: 2}), (c1:Comment {id: 11}), "
+                                     "(c2:Comment {id: 12}), (c3:Comment {id: 13}), (p1:Post {id: 21}) "
+                                     "CREATE (c1)-[:HAS_CREATOR]->(a), (c2)-[:HAS_CREATOR]->(a), "
+                                     "(p1)-[:HAS_CREATOR]->(b), (c3)-[:HAS_CREATOR]->(b), "
+                                     "(c1)-[:REPLY_OF]->(p1), (c2)-[:REPLY_OF]->(c3)")
+                    .error.empty());
+
+    const std::string plan = getExplainPlanText(*executor_, kAnchorShareQuery);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("PatternComprehensionFork"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, kAnchorShareQuery);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 2u);
+    // One shared prefix expansion feeds both weights: 1.0 through :Post, 0.5
+    // through :Comment.
+    ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][0]));
+    ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][1]));
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 1.0);
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][1]), 0.5);
+}
+
+TEST_F(QueryExecutorTest, PatternComprehensionAnchorShareKeepsPlanWhenPrefixDiffers) {
+    // Same shape, but the two comprehensions disagree on the *first* hop's
+    // destination label, so there is no shared anchor subtree and the rewrite
+    // must leave the plan alone (fail closed).
+    auto comment = blockingWait(async_meta_->createLabel("Comment"));
+    auto post = blockingWait(async_meta_->createLabel("Post"));
+    auto has_creator = blockingWait(async_meta_->createEdgeLabel("HAS_CREATOR"));
+    auto reply_of = blockingWait(async_meta_->createEdgeLabel("REPLY_OF"));
+    ASSERT_NE(comment, INVALID_LABEL_ID);
+    ASSERT_NE(post, INVALID_LABEL_ID);
+    ASSERT_NE(has_creator, INVALID_EDGE_LABEL_ID);
+    ASSERT_NE(reply_of, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createLabel(comment));
+    blockingWait(async_data_->createLabel(post));
+    blockingWait(async_data_->createEdgeLabel(has_creator));
+    blockingWait(async_data_->createEdgeLabel(reply_of));
+
+    const std::string query = R"(
+MATCH path = allShortestPaths((p1:Person {id: 1})-[:KNOWS*0..]-(p2:Person {id: 2}))
+WITH collect(path) AS paths
+UNWIND paths AS path
+WITH path, relationships(path) AS rels_in_path
+WITH
+  [r IN rels_in_path | reduce(w = 0.0, v IN [
+      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
+      WHERE a.id = startNode(r).id | 1.0] | w + v)] AS weight1,
+  [r IN rels_in_path | reduce(w = 0.0, v IN [
+      (a:Person)<-[:HAS_CREATOR]-(:Post)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person)
+      WHERE a.id = startNode(r).id | 0.5] | w + v)] AS weight2
+RETURN weight1, weight2
+)";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_EQ(plan.find("PatternComprehensionFork"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("PatternComprehensionApply"), std::string::npos) << plan;
+}

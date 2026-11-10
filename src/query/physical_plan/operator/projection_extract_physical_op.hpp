@@ -146,6 +146,16 @@ private:
     /// times). Caching the decoded property turns ~50M vertex_data searches
     /// into ~#distinct vertices.
     std::vector<std::unordered_map<VertexId, std::optional<PropertyValue>>> persistent_vertex_prop_cache_;
+    /// Query-lifetime cache for LoadVertexPropCoalesce (read-only statements
+    /// only). That path used to issue one store round trip per *row*, so a
+    /// vertex repeated by a fan-out expand cost a fetch per row (complex-14:
+    /// ~77k rows per branch over a handful of distinct creators). Keyed by
+    /// VertexId, exactly like the single-candidate cache above.
+    struct CoalescedVertexProps {
+        std::vector<PropertyValue> values;
+        LabelIdSet labels;
+    };
+    std::vector<std::unordered_map<VertexId, CoalescedVertexProps>> persistent_vertex_coalesce_cache_;
     static constexpr size_t kMaxPersistentPropCacheEntries = 1'000'000;
     /// vid -> materialized vertex, reused across executeChunk() calls on
     /// read-only statements (bounded; see executeChunk).

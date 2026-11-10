@@ -23,6 +23,7 @@
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_set_op.hpp"
@@ -236,6 +237,14 @@ template <typename OpRef, typename Visit> void forEachChild(OpRef&& op, Visit&& 
                 if (v) {
                     visit(v->left);
                     visit(v->right);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                // Shared-anchor fork: left, anchor, one sub-plan per branch.
+                if (v) {
+                    visit(v->left);
+                    visit(v->anchor);
+                    for (auto& branch : v->branches)
+                        visit(branch);
                 }
             }
             // Leaves: BoundScanOp / BoundLabelScanOp / BoundSingletonOp /
@@ -488,6 +497,20 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                 if (v) {
                     allocateSlotsInOp(v->left, name_to_slot, alloc);
                     allocateSlotsInOp(v->right, name_to_slot, alloc);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                if (v) {
+                    allocateSlotsInOp(v->left, name_to_slot, alloc);
+                    allocateSlotsInOp(v->anchor, name_to_slot, alloc);
+                    for (auto& branch : v->branches)
+                        allocateSlotsInOp(branch, name_to_slot, alloc);
+                    for (auto& corr : v->correlation) {
+                        if (corr.left_slot != binder::INVALID_SLOT_ID && !corr.left_var.empty())
+                            name_to_slot[corr.left_var] = corr.left_slot;
+                    }
+                    for (auto& out : v->outputs)
+                        if (out.slot_id != binder::INVALID_SLOT_ID && !out.name.empty())
+                            name_to_slot[out.name] = out.slot_id;
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 if (v) {

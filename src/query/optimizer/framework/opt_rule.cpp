@@ -35,7 +35,8 @@ OptNodeType nodeTypeFromVariantIndex(size_t index) {
         OptNodeType::PatternComprehensionApply, // 25
         OptNodeType::Call,                      // 26
         OptNodeType::Foreach,                   // 27
-        OptNodeType::PathCount                  // 28
+        OptNodeType::PathCount,                 // 28
+        OptNodeType::PatternComprehensionFork   // 29
     };
     // The table is positional. Adding an operator in the middle of
     // BoundLogicalOperator used to shift every later entry silently -- FOREACH

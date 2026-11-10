@@ -19,6 +19,7 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_semi_join_op.hpp"

@@ -23,6 +23,7 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -612,6 +613,21 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashBytes(seed, o.name);
                     seed = hashBoundType(seed, o.element_type);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                if (!val)
+                    return;
+                for (const auto& c : val->correlation) {
+                    seed = combine(seed, c.left_slot);
+                    seed = combine(seed, c.left_column);
+                    seed = hashBytes(seed, c.left_var);
+                    seed = combine(seed, c.right_slot);
+                }
+                for (const auto& o : val->outputs) {
+                    seed = combine(seed, o.slot_id);
+                    seed = hashBytes(seed, o.name);
+                    seed = hashBoundType(seed, o.element_type);
+                }
+                seed = combine(seed, val->branches.size());
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (!val)
                     return;

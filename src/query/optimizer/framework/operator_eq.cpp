@@ -22,6 +22,7 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -696,6 +697,24 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                         return false;
                 }
                 return true;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                if (av->correlation != bv->correlation)
+                    return false;
+                if (av->outputs.size() != bv->outputs.size())
+                    return false;
+                for (size_t i = 0; i < av->outputs.size(); ++i) {
+                    if (av->outputs[i].slot_id != bv->outputs[i].slot_id)
+                        return false;
+                    if (av->outputs[i].name != bv->outputs[i].name)
+                        return false;
+                    if (!eqBoundType(av->outputs[i].element_type, bv->outputs[i].element_type))
+                        return false;
+                }
+                // Branch count is structural: child_groups already encodes it,
+                // but two forks with different arity must never compare equal.
+                return av->branches.size() == bv->branches.size();
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

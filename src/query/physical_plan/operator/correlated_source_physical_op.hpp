@@ -32,13 +32,28 @@ public:
     void setValues(const std::vector<Value>& values) {
         view_chunk_ = nullptr;
         view_cols_.clear();
+        chunks_ = nullptr;
         rows_.clear();
         rows_.push_back(values);
     }
     void setRows(std::vector<std::vector<Value>> rows) {
         view_chunk_ = nullptr;
         view_cols_.clear();
+        chunks_ = nullptr;
         rows_ = std::move(rows);
+    }
+
+    /// Replay a materialised producer's chunks verbatim (shared-anchor fork).
+    /// The chunks must match the schema this source was planned with; column
+    /// buffers are shared, not copied. Used by
+    /// PatternComprehensionForkPhysicalOp to feed the anchor's rows into every
+    /// branch without re-executing the anchor.
+    void setChunks(std::shared_ptr<const std::vector<DataChunk>> chunks) {
+        view_chunk_ = nullptr;
+        view_cols_.clear();
+        rows_.clear();
+        chunks_ = std::move(chunks);
+        chunk_index_ = 0;
     }
 
     /// Inject one row from an already-evaluated chunk without materialising a
@@ -47,6 +62,7 @@ public:
     /// has consumed the row (Apply/PCApply/LeftJoin/SemiJoin all guarantee
     /// this by draining the right side before advancing the left row).
     void setRowFromChunk(const DataChunk& chunk, size_t row, std::span<const uint32_t> columns) {
+        chunks_ = nullptr;
         rows_.clear();
         view_chunk_ = &chunk;
         view_row_ = row;
@@ -67,6 +83,8 @@ private:
     std::vector<std::string> variables_;
     std::vector<binder::BoundType> types_;
     std::vector<std::vector<Value>> rows_;
+    std::shared_ptr<const std::vector<DataChunk>> chunks_;
+    size_t chunk_index_ = 0;
     const DataChunk* view_chunk_ = nullptr;
     size_t view_row_ = 0;
     std::vector<uint32_t> view_cols_;
