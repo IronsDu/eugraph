@@ -15,7 +15,7 @@ namespace shell {
 
 class EuGraphRpcClient {
 public:
-    EuGraphRpcClient(const std::string& host, int port);
+    explicit EuGraphRpcClient(const std::string& host, int port, int timeout_ms = 30000);
     explicit EuGraphRpcClient(std::unique_ptr<apache::thrift::Client<thrift_service::EuGraphService>> client);
     ~EuGraphRpcClient();
 
@@ -63,6 +63,7 @@ public:
                                                             const std::string& graph_name);
 
 private:
+    int timeout_ms_ = 30000;
     std::string host_;
     int port_;
     std::unique_ptr<folly::EventBase> evb_;
