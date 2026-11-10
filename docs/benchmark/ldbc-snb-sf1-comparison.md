@@ -17,19 +17,20 @@
   取 min。客户端为官方 Bolt driver。
 - 参数：complex/short 用 `personId=933`、`messageId=3`；complex-13/14 用
   `person1Id=933, person2Id=1129`；complex-1 的 `firstName` 保持文件默认 `Jose`。
-- c1 结果说明：SF1 neo4j 的 `Person.firstName='Jose'` 为 95 人，eugraph 旧索引路径
-  为 147 人。根因已定位为字符串索引等值扫描缺少 value 边界（`Jose` 前缀误匹配
-  `Joseph` / `Josef` / `Jose Trinidad`），不是两份数据不一致。索引编码已改为
-  `0x04 + escaped bytes + 0x00 0x00` 并增加精确/前缀扫描；重建索引后 c1 的
-  行集与 `Jose` 人数（95）已对齐。c1 结果中仍可能出现 `[null,null,null]` 组织
-  元组，这是 LDBC driver 的 `asOrganization` 不处理 null tuple，属于独立的
-  driver 适配问题。下表 c1 耗时仍来自旧索引版本，仅作参考。
+- c1 结果说明（**差异已消除**）：曾经的差异是 eugraph 旧索引的等值扫描缺少 value
+  边界（`Jose` 前缀误匹配 `Joseph` / `Josef` / `Jose Trinidad`），c1 返回 147 行而
+  neo4j 返回 95 行。索引编码改为 `0x04 + escaped bytes + 0x00 0x00` 并区分精确/前缀
+  扫描后重建索引；2026-11-10 两侧同轮复核：`firstName = 'Jose'` → **95 / 95**，
+  `firstName STARTS WITH 'Jose'` → **147 / 147**，c1 返回的 20 行两侧逐行一致
+  （`verify_ldbc_results.py --only complex-1`：MATCH）。c1 因此不再有数据差异，
+  下表耗时为本轮实测并计入汇总。c1 结果中仍可能出现 `[null,null,null]` 组织元组，
+  这是 LDBC driver 的 `asOrganization` 不处理 null tuple，属于独立的 driver 适配问题。
 
 ## 2. 结果
 
 | 查询 | eugraph (ms) | neo4j (ms) | eugraph/neo4j |
 |---|---:|---:|---:|
-| complex-1* | 29.97 | 12.84 | 2.33× |
+| complex-1 | 29.97 | 12.84 | 2.33× |
 | complex-2 | 43.09 | 15.98 | 2.70× |
 | complex-3 | 1876.8 | 507.3 | 3.70× |
 | complex-4 | 58.62 | 16.65 | 3.52× |
@@ -51,7 +52,7 @@
 | short-6 | 1.47 | 1.77 | 0.83×（eugraph 快 1.21×） |
 | short-7 | 1.50 | 1.71 | 0.87×（eugraph 快 1.14×） |
 
-> `*` complex-1 存在上述 SF1 数据差异，不计入严格语义对比。
+> c1 的数据差异已消除（见 §1），其耗时计入下方汇总。
 
 **汇总（min 求和）：**
 
