@@ -1,6 +1,6 @@
 # LDBC SNB Interactive SF0.1 对照（最新状态）
 
-> 最新测量：2026-11-10，eugraph `7ec18854`（PC 共享 anchor + 端点 id 提升 + PE 合并读取去重 +
+> 最新测量：2026-11-10，eugraph `6bc12410`（PC 共享 anchor + 端点 id 提升 + PE 合并读取去重 +
 > 预取只扫表达式引用的列），Release。
 > **本轮数据目录**：`bench-sf01-latest`（可被当前 build 的 metadata codec 打开的最新副本）。
 > 旧目录 `eugraph-data-summary2-sf01` / `eugraph-data-summary-sf01` /
@@ -79,46 +79,45 @@
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
-| short-1 | 1.07 | 1.19 | 🟢 快 1.1× |
-| short-2 | 3.17 | 2.62 | 🟡 慢 1.2× |
-| short-3 | 1.33 | 1.55 | 🟢 快 1.2× |
-| short-4 | 0.76 | 1.06 | 🟢 快 1.4× |
-| short-5 | 0.83 | 1.06 | 🟢 快 1.3× |
-| short-6 | 1.24 | 1.22 | 🟡 慢 1.0× |
-| short-7 | 1.50 | 1.59 | 🟢 快 1.1× |
+| short-1 | 1.08 | 0.89 | 🟡 慢 1.20× |
+| short-2 | 2.78 | 1.74 | 🟡 慢 1.60× |
+| short-3 | 1.10 | 0.95 | 🟡 慢 1.16× |
+| short-4 | 0.86 | 0.96 | 🟢 快 1.13× |
+| short-5 | 0.82 | 0.86 | 🟢 快 1.05× |
+| short-6 | 1.14 | 0.91 | 🟡 慢 1.25× |
+| short-7 | 1.18 | 0.92 | 🟡 慢 1.28× |
 
-> 本轮 short 合计 **9.9 ms vs 10.3 ms（0.96×，eugraph 略快）**。除 short-2（1.2×）与
-> short-6（1.0×）外，eugraph 已全部追平或反超。
+> 本轮 short 合计 **9.0 ms vs 7.2 ms（1.24×）**。short-4/5 上 eugraph 略快，其余在 1.2–1.6×，
+> 主要仍是每查 0.3–0.5 ms 的固定开销（Bolt/执行器启动）。
 
 ### 2.2 Complex reads
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
-| complex-1 | 7.26 | 8.28 | 🟢 快 1.1× |
-| complex-2 | 5.22 | 4.76 | 🟡 慢 1.1× |
-| complex-3 | 70.17 | 26.91 | 🟡 慢 2.6×（0 行） |
-| complex-4 | 6.38 | 3.93 | 🟡 慢 1.6×（0 行） |
-| complex-5 | 212.8 | 88.84 | 🟡 慢 2.4×（89k posts × 2 expands） |
-| complex-6 | 3.68 | 28.16 | 🟢 快 7.7×（tag reorder） |
-| complex-7 | 5.78 | 3.10 | 🟡 慢 1.9× |
-| complex-8 | 3.83 | 3.13 | 🟡 慢 1.2× |
-| complex-9 | 74.67 | 29.01 | 🟡 慢 2.6×（coalesce 属性） |
-| complex-10 | 20.97 | 11.06 | 🟡 慢 1.9×（PC 批量化） |
-| complex-11 | 5.47 | 4.65 | 🟡 慢 1.2× |
-| complex-12 | 32.40 | 97.21 | 🟢 快 3.0×（VLE） |
-| complex-13 | 1.32 | 2.38 | 🟢 快 1.8×（shortestPath） |
-| complex-14 | **56.53** | 17.00 | 🟠 慢 3.3×（PC 共享 anchor；ORDER BY 并列同多重集） |
+| complex-1 | 6.89 | 4.36 | 🟡 慢 1.58× |
+| complex-2 | 4.79 | 3.32 | 🟡 慢 1.44× |
+| complex-3 | 71.95 | 25.78 | 🟡 慢 2.79× |
+| complex-4 | 6.29 | 2.72 | 🟡 慢 2.31× |
+| complex-5 | 212.5 | 87.47 | 🟡 慢 2.43× |
+| complex-6 | 3.75 | 26.81 | 🟢 快 7.15× |
+| complex-7 | 5.62 | 2.16 | 🟡 慢 2.60× |
+| complex-8 | 3.34 | 2.22 | 🟡 慢 1.51× |
+| complex-9 | 75.72 | 27.19 | 🟡 慢 2.78× |
+| complex-10 | 20.89 | 7.12 | 🟡 慢 2.93× |
+| complex-11 | 5.64 | 2.72 | 🟡 慢 2.07× |
+| complex-12 | 33.63 | 98.48 | 🟢 快 2.93× |
+| complex-13 | 1.10 | 1.38 | 🟢 快 1.26× |
+| complex-14 | 56.19 | 15.34 | 🟠 慢 3.66× |
 
 > 本轮为**同机交错 15 轮计时 + 3 轮 warmup，取 min**（两引擎每轮各一次）。
-> complex 合计 **506.5 ms vs 328.4 ms（1.54×）**；加 short 后 **516.4 ms vs 338.7 ms（1.52×）**。
+> complex 合计 **508.3 ms vs 307.1 ms（1.66×）**；加 short 后 **517.3 ms vs 314.3 ms（1.65×）**。
 > c3/c4、short-7 两边都是 0 行，耗时只代表扫描/过滤成本。c14 仅 `ORDER BY pathWeight desc`
 > 在权重 17.0 并列时输出顺序不同（同多重集，见 §4）。
 >
-> **与上一版（2026-11-08）的差异**：c14 78.6 → 56.5 ms（PC 共享 anchor + 端点 id 提升 +
-> 预取只扫表达式引用的列）；c12 119.6 → 32.4 ms；c6 33.0 → 3.7 ms。
-> `LoadVertexPropCoalesce` 的"按 distinct 顶点去重 + 查询级缓存"曾让 c3/c9 回退
-> （SF1：c3 1256→1865、c9 1430→2272），**已回退**，本表为回退后的数据。
-> c5/c9/c3 仍是剩余主缺口。
+> **与上一版（2026-11-08）的差异**：c14 78.6 → 56.2 ms（PC 共享 anchor + 端点 id 提升 +
+> 预取只扫表达式引用的列）；c12 119.6 → 33.6 ms；c6 33.0 → 3.8 ms。
+> `LoadVertexPropCoalesce` 的"按 distinct 顶点去重 + 查询级缓存"曾让 c3/c9 回退（SF1
+> 1256→1865 / 1430→2272 ms），**已回退**，本表为回退后的数据。c5/c9/c3 仍是剩余主缺口。
 
 ### 2.3 Updates
 
@@ -206,7 +205,7 @@ person/target；每条语句执行 3 次取 min，eugraph/neo4j 按 E→N→N→
 | 优先级 | 查询/范围 | 差距（稳态口径） | 已定位原因（2026-11-04 PROFILE） | 下一步思路 |
 |---|---|---|---|---|
 | P1 | 🔴 complex-10 | 40.35 ms vs 5.90 ms（6.8×） | 946 次按帖 `PatternComprehensionApply`（self 3.5 ms/946 次）；`CorrelatedSource` self 1.8 ms/946 行；HAS_TAG Expand 12.2 ms；PC 内 Aggregate 3.5 ms | 去相关为按组聚合/半连接；相关列注入已落地，下一步是 Apply 按 chunk 驱动 |
-| P1 | 🟠 complex-14 | 56.53 ms vs 17.00 ms（3.3×） | **PC 公共前缀已共享**（`PatternComprehensionFork`）；端点 id 已提升成列、分支谓词与 PE 的按行 IO 已消除；剩余是每分支一遍的 `REPLY_OF`/`HAS_CREATOR` Expand | 见 [anchor-sharing 文档的 "Next: branch expansions"](../query/engine/pattern-comprehension-anchor-sharing.md)：把 `REPLY_OF` 也并入共享段（目标标签集合 + 标签判定），或对 `HAS_CREATOR→b` 做顶点集合半连接 |
+| P1 | 🟠 complex-14 | 56.19 ms vs 15.34 ms（3.7×） | **PC 公共前缀已共享**（`PatternComprehensionFork`）；端点 id 已提升成列、分支谓词与 PE 的按行 IO 已消除；剩余是每分支一遍的 `REPLY_OF`/`HAS_CREATOR` Expand | 见 [anchor-sharing 文档的 "Next: branch expansions"](../query/engine/pattern-comprehension-anchor-sharing.md)：把 `REPLY_OF` 也并入共享段（目标标签集合 + 标签判定），或对 `HAS_CREATOR→b` 做顶点集合半连接 |
 | P2 | 🟠 complex-1 | 15.53 ms vs 3.44 ms（4.5×） | `shortestPath` self 1.75 ms/674 次 `scanNear`；后处理 LeftJoin/Aggregate 各 ~3 ms incl | 绝对值 ~15 ms；profile 后处理 |
 | P2 | 🟠 complex-4 | 8.90 ms vs 2.45 ms（3.6×，0 行） | 扫描/过滤成本；无结果也要全扫 | 低 ROI |
 | P2 | 🟠 complex-7 | 5.86 ms vs 1.80 ms（3.3×） | 大结果集 LIKES/HAS_CREATOR 展开 + `head(collect(...))` 聚合 | 排序/聚合前裁剪；增量 A/B −3.4% |
