@@ -4791,6 +4791,25 @@ TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilterNonLiteral) {
     EXPECT_EQ(result.rows.size(), 1u);
 }
 
+TEST_F(QueryExecutorTest, LeftJoinBatchOverflowsOutputChunk) {
+    // A single left row with more matches than DataChunk capacity must be
+    // flushed in multiple output chunks; the batch path used to emit all
+    // matches first and then check capacity, writing past the column buffers.
+    auto setup = execSync(*executor_, "CREATE (b:Person {name: 'b'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto bulk = execSync(*executor_, "MATCH (b:Person {name: 'b'}) "
+                                     "WITH b UNWIND range(1, 1500) AS i "
+                                     "CREATE (p:Post {id: i})-[:HAS_CREATOR]->(b)");
+    ASSERT_TRUE(bulk.error.empty()) << bulk.error;
+
+    auto result = execSync(*executor_, "MATCH (b:Person {name: 'b'}) "
+                                       "OPTIONAL MATCH (b)<-[:HAS_CREATOR]-(p:Post) "
+                                       "RETURN count(p) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1500);
+}
+
 // ==================== Path Predicate Tests (P3b) ====================
 
 TEST_F(QueryExecutorTest, PathPredicateAllNodes) {
