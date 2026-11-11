@@ -1,6 +1,6 @@
 ---
 name: eugraph-perf
-description: 当用户要求做性能优化、跑 benchmark、做 A/B、分析 PROFILE 或处理性能回归时使用（关键词：优化、性能、perf、benchmark、A/B、PROFILE、on-CPU、off-CPU、延迟、吞吐、c10、c14）。强制：多方法交叉验证、区分 on-CPU/off-CPU、禁止投机取巧、通用优先、特化/缓存需提案、方向受挫先修不立刻回滚、同二进制交错测量。
+description: 当用户要求做性能优化、跑 benchmark、做 A/B、分析 PROFILE 或处理性能回归时使用（关键词：优化、性能、perf、benchmark、A/B、PROFILE、on-CPU、off-CPU、gdb、协程栈、长采样、延迟、吞吐、c10、c14）。强制：多方法交叉验证、区分 on-CPU/off-CPU、禁止投机取巧、通用优先、特化/缓存需提案、方向受挫先修不立刻回滚、同二进制交错测量。
 ---
 
 # EuGraph 性能优化协议
@@ -32,7 +32,10 @@ description: 当用户要求做性能优化、跑 benchmark、做 A/B、分析 P
 - 先确认机器状态（本机 CPU 频率会漂移，可差 ~2×；`lscpu` 的 scaling MHz / 当前频率）；
 - 文档/收尾基准：**10 轮 + 3 warmup，取 min/p50**；探索期可用 3–5 轮微 A/B；
 - 记录数据目录、线程数、cache 大小、neo4j 版本；
-- 1–4 ms 级差异不写成优化/回归；报告绝对差。
+- 1–4 ms 级差异不写成优化/回归；报告绝对差；
+- **采样窗口 ≥ 10 s**（建议 20–30 s）：不要用一次 300 ms 查询的 profile 下结论；短查询用客户端循环持续压，
+  让 server 处于稳态；profile 与 A/B 计时分开跑（采样器有开销）；记录窗口、频率、样本数，样本太少就延长；
+  至少两个窗口确认稳定。
 
 ## 3. 瓶颈分析：多方法交叉 + On/Off-CPU
 
@@ -43,6 +46,7 @@ description: 当用户要求做性能优化、跑 benchmark、做 A/B、分析 P
 - `PROFILE` 会加插桩/改计划/改时序（PROFILE 与 plain run 的计划、耗时可能不同）；
 - 算子 `self` 可能把成本藏在子算子/`near` 计数里；`near`/`rows` 是“附近工作量”，不是该算子的纯耗时；
 - 采样 profiler 只看到 **on-CPU**；线程阻塞、等 IO、等锁、等调度完全看不见；
+- `perf -g` 对 folly 协程栈经常拿不到调用链（DWARF/CFI 与协程帧不匹配），需要 gdb 原生采样兜底（§3.9）；
 - 符号/inline/优化后的代码可能归因到错误函数；短查询采样点太少；
 - 计数器语义可能被误读（例如把“输入行数”当成“distinct 数”），一次读数不能当结论；
 - 单次运行、warm cache、CPU 频率漂移都会让数字不可比。
@@ -58,7 +62,8 @@ off-CPU 分析 + 差分实验）。只有一条时，把它标成假设，用 A/
 | 端到端 wall time + 结果行 | 是否真的变快、语义是否一致 | 不知道慢在哪 |
 | `PROFILE` 算子树 self/inclusive + `chunks`/`ioDispatches`/`near`/`scanRows` | 哪个算子/哪类工作量占主导；batching 是否生效 | 插桩影响、`near` 语义、阻塞不可见 |
 | `perf stat`（cycles/instructions/cache/branch/task-clock） | on-CPU 效率、是否 CPU-bound | 不告诉具体热点函数；off-CPU 不可见 |
-| `perf record`/`report`/`annotate` | on-CPU 热点函数/指令 | 只采样运行中的 CPU；符号/inline 偏差 |
+| `perf record`/`report`/`annotate` | on-CPU 热点函数/指令 | 只采样运行中的 CPU；符号/inline 偏差；协程栈常断 |
+| gdb 原生采样（`thread apply all bt`） | 协程/优化代码下仍能看到原生线程栈；能看到阻塞叶帧 | 暂停进程；只到原生栈（非逻辑协程链）；需人工聚合；不能用于计时 |
 | off-CPU 分析（`perf sched`、`offcputime`、`pidstat -w`、`wchan`） | 阻塞在 IO/锁/调度/网络的哪里、多久 | 需要权限/工具；对短事件分辨率有限 |
 | 资源指标（`vmstat`、`mpstat`、`iostat`、`ss`） | 系统是否 CPU/IO/内存/网络饱和 | 不告诉代码位置 |
 | 定向计时/计数器/`EUGRAPH_OP_TRACE`/`EUGRAPH_IO_TRACE` | 某个具体阶段的真实耗时/次数 | 需要改代码或开 trace；有开销 |
@@ -171,6 +176,37 @@ iostat -x 1 5
 - **off-CPU 信号**：wall time 高但 `%CPU` 低、`wchan` 是 `futex`/`io_schedule` 时，先看 WT/IO 统计、
   `perf sched`/`offcputime`，不要继续在算子 self time 里找；批量/预取/异步改完后再复测 on-CPU。
 
+### 3.9 协程栈：用 gdb 原生采样兜底
+
+folly 协程的栈与 DWARF/CFI 不匹配时，`perf -g` 常常只看到 `resume`/调度器。用 gdb 反复 attach 采样：
+
+```bash
+# 1) 持续压目标查询（单连接、出错重连）；不要只跑一次 300ms 查询
+python3 /tmp/c3_loop.py 120
+
+# 2) 选对 benchmark server 的 pid，attach 采样 60 次（约 12s，含 attach 开销）
+SPID=$(pgrep -x eugraph-server | head -1)
+for i in $(seq 1 60); do
+  gdb -p "$SPID" -batch -ex "set pagination off" -ex "thread apply all bt 60" -ex detach \
+    >> /tmp/c3_samples.txt 2>/dev/null
+  sleep 0.2
+done
+```
+
+要点：
+
+- **`bt 60` 以上**：物理算子在协程帧里很深；`bt 20` 常只看到 `resume`/调度器；
+- **排除阻塞叶帧**：`futex`、`pthread_cond_wait`、`epoll`、`__wt_cond_wait` 等是空闲/阻塞线程；
+  只统计真正在跑的线程；这些叶帧反过来是 off-CPU 的证据；
+- **区分 compute/IO 线程**：compute 线程栈里是算子；IO 线程栈里是
+  `IoScheduler::dispatch → SyncGraphDataStore::...`，IO 线程看不到算子的协程调用者，
+  要结合执行计划推断“哪个算子发起了这类存储调用”；
+- **gdb 会暂停进程**：只用于定位候选热点，不要和 A/B 计时同轮；最终结论仍用同二进制交错 A/B +
+  单变量改动验证；
+- 采样时长 ≥10 s；样本数太少就延长/增加采样；gdb 不可用（权限/容器）时，可试
+  `perf record --call-graph dwarf`，仍不完整则用应用层 trace/计数器，并明确标注局限。
+- gdb attach 需要 ptrace 权限；容器/生产环境先确认允许，采样窗口内不要同时跑重负载/其他 profiler。
+
 ## 4. 实现
 
 - 先选通用机制，并在方案里说明“为什么上一层不够”；
@@ -220,11 +256,61 @@ iostat -x 1 5
 - 按 `eugraph-verify` 的 L2（PR 前）验证；L3 全量 TCK 优先交给 CI；
 - PR 描述包含基线/目标/证据/未验证项。
 
+## 10. 本仓库性能复盘（经验清单）
+
+> 来源：complex-3 复盘、c10/c14、VLE、调度器与存储成本等文档。都是已经踩过的坑，优先复用，不要重复试错。
+> 详见 [query-performance-optimization-notes](../../../docs/benchmark/query-performance-optimization-notes.md)、
+> [storage-operation-costs](../../../docs/benchmark/storage-operation-costs.md)、
+> [correlated-endpoint-set-probe](../../../docs/query/engine/correlated-endpoint-set-probe.md)、
+> [late-materialization-design](../../../docs/query/engine/late-materialization-design.md)、
+> [expand-label-filter-optimization](../../../docs/query/expand-label-filter-optimization.md)、
+> [pattern-comprehension-anchor-sharing](../../../docs/query/engine/pattern-comprehension-anchor-sharing.md)、
+> [query-value-copy-profiling](../../../docs/benchmark/query-value-copy-profiling.md)、
+> [scheduler-hop-throughput](../../../docs/benchmark/scheduler-hop-throughput.md)、
+> [ldbc-snb-sf1-comparison](../../../docs/benchmark/ldbc-snb-sf1-comparison.md)。
+
+### 10.1 成本结构
+
+- **结果先对齐，0 行也可能慢**：complex-3 两边都 0 行，eugraph ~490 ms；空结果不代表计划走了捷径。
+- **计划相同 ≠ 成本相同**：c3 的 join 顺序/date 谓词位置与 neo4j 基本一致；差距在逐行深拷贝、
+  重复 vid 逐元素 seek、空 anon/eprop 查询。
+- **重复物化/深拷贝是隐形大头**：52k 行重复构造 VertexValue；批量 API 对重复 vid 仍逐元素查；
+  先做 distinct/批量化，但必须量化全局影响（见 10.2 dedup 反例）。
+- **IO dispatch 比 seek 贵一个数量级**：WT seek ~0.4–0.6 µs，跨线程 dispatch ~10 µs；
+  用 `io_dispatches` 估算，不要只数 seek；c14 批量后 91k→696 dispatch，wall 291→119.5 ms。
+- **整对象构造会藏在 `near`/self**：PE ConstructVertex ~65k B-tree reads / ~79 ms；
+  看 PE specs/dbHits、`near`，只取需要的列/拓扑。
+- **成本模型 > 固定阈值**：标签过滤用 distinct×12 vs label size；按边数/魔数会估错窄标签；
+  用标签基数/degree，保留未知时回退。
+
+### 10.2 方案选择
+
+- **去重/缓存/预取不是无条件赚**：LoadVertexPropCoalesce dedup 让 c3/c9 +50–60%，只给 c14 ~6%；已回退。
+- **改写 pass 的顺序是语义的一部分**：anchor rewrite 移到 requirements 前会识别失败；
+  保留位置 + 后续清理 `PEPlan.coalesce_vertices` 才是可行变体。
+- **大改前先估收益上界并实测**：VLE D 方案理论 ~107×，实测 `Expand` 只占 13%（634 ms / 4717 ms），
+  上界被大幅下修；先窄实现验证量级再推广。
+- **短查询 ROI 低**：4–11 ms 的 c1/c4/c7/short 不优先；先做 c14/c5/c9/c3 等大头。
+- **调度 hop 的固定成本**：并发只能填满管线，batch 才摊薄单位 hop 成本；scheduler 微基准见
+  [scheduler-hop-throughput](../../../docs/benchmark/scheduler-hop-throughput.md)，不要只加并发。
+
+### 10.3 取证与记录
+
+- **采样只定位，结论靠 A/B**：perf/gdb 只给候选热点；最终用同二进制交错 A/B + 单变量改动验证。
+- **可观测性/可测试性**：计数器、计划标记（如 `probe=set`）、可强制预算/回退；
+  否则无法证明路径生效、回退分支真的可执行（探针预算测试就是例子）。
+- **记录被否证方向**：dedup、prefetch skip、labels fuse、earlier anchor rewrite；没有新证据不要重试。
+- **基准口径固定**：同机/同二进制/交错/10 轮 + 3 warmup/取 min；记录 CPU 频率、缓存/线程/txn sync；
+  不混 powersave 轮次；结果先对 neo4j。
+- **协程栈单独处理**：`perf -g` 不完整时用 gdb（§3.9），bt 60+，排除阻塞叶帧，区分 compute/IO 线程。
+
 ## 检查清单
 
 - [ ] 基线/目标/判据已写，机器状态已记录
 - [ ] 至少两条独立证据确认瓶颈（没有只依赖 PROFILE 的 self time）
+- [ ] 采样窗口 ≥10s（短查询用循环持续压），样本数足够；profile 与 A/B 计时分开
 - [ ] 已判定 on-CPU / off-CPU（blocked 还是 runnable），并选了对应的分析/优化手段
+- [ ] 协程栈用 perf 不完整时，已用 gdb 原生采样/应用 trace 交叉验证
 - [ ] profile 有效性检查做过（观察者效应/计数器语义/符号/采样/冷热）
 - [ ] 走通用优先顺序；特化/缓存已提案（如需要）
 - [ ] 守卫/回退存在且可测
