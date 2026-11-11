@@ -1,0 +1,44 @@
+name: Task
+description: 一般任务/功能/重构（目标、范围、验收、风险）
+title: "[task] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标
+      description: 要解决什么问题？完成后用户/系统会有什么变化？
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围与非目标
+      description: 涉及模块/接口；明确不做什么，避免范围漂移
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收判据
+      description: 可度量/可验证的完成条件；需要的测试或对照
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: 风险与回退
+      description: 兼容面、数据/并发/安全影响、回退方式
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖 / 阻塞
+      description: 依赖的 Issue/PR、外部条件、需要维护者拍板的点
+    validations:
+      required: false
