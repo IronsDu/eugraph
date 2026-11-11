@@ -49,18 +49,18 @@ public:
     RulePowerExpression = 47, RuleUnaryAddSubExpression = 48, RuleAtomicExpression = 49, 
     RuleListExpression = 50, RuleStringExpression = 51, RuleStringExpPrefix = 52, 
     RuleNullExpression = 53, RulePropertyOrLabelExpression = 54, RulePropertyExpression = 55, 
-    RuleLabelCast = 56, RulePatternPart = 57, RuleShortestPathPattern = 58, 
-    RuleAllShortestPathsPattern = 59, RulePatternElem = 60, RulePatternElemChain = 61, 
-    RuleProperties = 62, RuleNodePattern = 63, RuleAtom = 64, RuleLhs = 65, 
-    RuleRelationshipPattern = 66, RuleRelationDetail = 67, RuleRelationshipTypes = 68, 
-    RuleUnionSt = 69, RuleSubqueryExist = 70, RuleInvocationName = 71, RuleFunctionInvocation = 72, 
-    RuleParenthesizedExpression = 73, RuleFilterWith = 74, RulePatternComprehension = 75, 
-    RuleRelationshipsChainPattern = 76, RuleListComprehension = 77, RuleReduceExpression = 78, 
-    RuleFilterExpression = 79, RuleCountAll = 80, RuleExpressionChain = 81, 
-    RuleCaseExpression = 82, RuleParameter = 83, RuleLiteral = 84, RuleRangeLit = 85, 
-    RuleBoolLit = 86, RuleNumLit = 87, RuleStringLit = 88, RuleCharLit = 89, 
-    RuleListLit = 90, RuleMapLit = 91, RuleMapPair = 92, RuleName = 93, 
-    RuleSymbol = 94, RuleReservedWord = 95
+    RulePostfix = 56, RuleLabelCast = 57, RulePatternPart = 58, RuleShortestPathPattern = 59, 
+    RuleAllShortestPathsPattern = 60, RulePatternElem = 61, RulePatternElemChain = 62, 
+    RuleProperties = 63, RuleNodePattern = 64, RuleAtom = 65, RuleLhs = 66, 
+    RuleRelationshipPattern = 67, RuleRelationDetail = 68, RuleRelationshipTypes = 69, 
+    RuleUnionSt = 70, RuleSubqueryExist = 71, RuleInvocationName = 72, RuleFunctionInvocation = 73, 
+    RuleParenthesizedExpression = 74, RuleFilterWith = 75, RulePatternComprehension = 76, 
+    RuleRelationshipsChainPattern = 77, RuleListComprehension = 78, RuleReduceExpression = 79, 
+    RuleFilterExpression = 80, RuleCountAll = 81, RuleExpressionChain = 82, 
+    RuleCaseExpression = 83, RuleParameter = 84, RuleLiteral = 85, RuleRangeLit = 86, 
+    RuleBoolLit = 87, RuleNumLit = 88, RuleStringLit = 89, RuleCharLit = 90, 
+    RuleListLit = 91, RuleMapLit = 92, RuleMapPair = 93, RuleName = 94, 
+    RuleSymbol = 95, RuleReservedWord = 96
   };
 
   explicit CypherParser(antlr4::TokenStream *input);
@@ -136,6 +136,7 @@ public:
   class NullExpressionContext;
   class PropertyOrLabelExpressionContext;
   class PropertyExpressionContext;
+  class PostfixContext;
   class LabelCastContext;
   class PatternPartContext;
   class ShortestPathPatternContext;
@@ -985,11 +986,6 @@ public:
     virtual size_t getRuleIndex() const override;
     antlr4::tree::TerminalNode *IN();
     PropertyOrLabelExpressionContext *propertyOrLabelExpression();
-    antlr4::tree::TerminalNode *LBRACK();
-    antlr4::tree::TerminalNode *RBRACK();
-    antlr4::tree::TerminalNode *RANGE();
-    std::vector<ExpressionContext *> expression();
-    ExpressionContext* expression(size_t i);
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -1062,10 +1058,8 @@ public:
     PropertyExpressionContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     AtomContext *atom();
-    std::vector<antlr4::tree::TerminalNode *> DOT();
-    antlr4::tree::TerminalNode* DOT(size_t i);
-    std::vector<NameContext *> name();
-    NameContext* name(size_t i);
+    std::vector<PostfixContext *> postfix();
+    PostfixContext* postfix(size_t i);
     antlr4::tree::TerminalNode *COLONCOLON();
     LabelCastContext *labelCast();
 
@@ -1075,6 +1069,25 @@ public:
   };
 
   PropertyExpressionContext* propertyExpression();
+
+  class  PostfixContext : public antlr4::ParserRuleContext {
+  public:
+    PostfixContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode *DOT();
+    NameContext *name();
+    antlr4::tree::TerminalNode *LBRACK();
+    antlr4::tree::TerminalNode *RBRACK();
+    antlr4::tree::TerminalNode *RANGE();
+    std::vector<ExpressionContext *> expression();
+    ExpressionContext* expression(size_t i);
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  PostfixContext* postfix();
 
   class  LabelCastContext : public antlr4::ParserRuleContext {
   public:

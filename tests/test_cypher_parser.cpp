@@ -71,6 +71,24 @@ TEST_F(CypherParserTest, WithPipeline) {
     auto stmt = parseSuccess("MATCH (n:Person) WITH n.name AS name RETURN name");
 }
 
+TEST_F(CypherParserTest, SubscriptThenPropertyPostfixChain) {
+    // Regression for #303: a subscript is a postfix of the same chain as
+    // `.name`, so `l[0].id` must parse like `(l[0]).id` instead of failing
+    // with UnexpectedSyntax.
+    const char* queries[] = {
+        "WITH [{id: 1}] AS l RETURN l[0].id AS x",     "WITH [{id: 1}] AS l RETURN (l[0]).id AS x",
+        "WITH [{id: 1}] AS l RETURN l[0]['id'] AS x",  "WITH [[{id: 1}]] AS l RETURN l[0][0].id AS x",
+        "WITH [{id: 1}] AS l RETURN l[0..1] AS x",     "WITH {a: 1} AS m RETURN m['a'] AS x",
+        "WITH [1, 2] AS l RETURN l[0] IN [1, 2] AS x", "WITH [{id: 1}] AS l RETURN l[0].id + 1 AS x",
+    };
+    for (const char* query : queries) {
+        auto result = parser.parse(query);
+        EXPECT_TRUE(std::holds_alternative<Statement>(result)) << query;
+        if (std::holds_alternative<ParseError>(result))
+            ADD_FAILURE() << std::get<ParseError>(result).message;
+    }
+}
+
 TEST_F(CypherParserTest, OrderByLimitSkip) {
     auto stmt = parseSuccess("MATCH (n) RETURN n ORDER BY n.age DESC SKIP 5 LIMIT 10");
 }

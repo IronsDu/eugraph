@@ -646,19 +646,17 @@ private:
         return e;
     }
 
-    // Apply a single listExpression context (subscript or slice) to `base`.
-    // Walks children to distinguish implicit-start (`[..N]`) from implicit-end
+    // Apply one bracketed postfix (subscript or slice) to `base`. Walks
+    // children to distinguish implicit-start (`[..N]`) from implicit-end
     // (`[N..]`) slices: any expression appearing before RANGE is `from`; any
     // expression after RANGE is `to`.
-    Expression applyListPostfix(AP::ListExpressionContext* le, Expression base) {
-        if (le->RANGE()) {
+    Expression applyBracketPostfix(AP::PostfixContext* postfix, Expression base) {
+        if (postfix->RANGE()) {
             auto slice = std::make_unique<SliceExpr>();
             slice->list = std::move(base);
-            // Walk children in source order to determine which expression is
-            // `from` (before RANGE) vs `to` (after RANGE).
             bool seen_range = false;
-            for (auto* child : le->children) {
-                if (child == le->RANGE()) {
+            for (auto* child : postfix->children) {
+                if (child == postfix->RANGE()) {
                     seen_range = true;
                     continue;
                 }
@@ -675,8 +673,8 @@ private:
         }
         auto sub = std::make_unique<SubscriptExpr>();
         sub->list = std::move(base);
-        if (!le->expression().empty())
-            sub->index = buildExpression(le->expression(0));
+        if (!postfix->expression().empty())
+            sub->index = buildExpression(postfix->expression(0));
         return Expression(std::move(sub));
     }
 
@@ -692,26 +690,12 @@ private:
             r = makeBinaryOp(op, std::move(r), std::move(right));
         }
 
-        // Cypher precedence: list subscript `[...]` binds tighter than `IN`.
-        // The grammar attaches both as sibling listExpressions to the same
-        // atomicExpression, so for `a IN b[i]` we must attach `[i]` to `b`
-        // (the IN's RHS) rather than to the IN result. We do this by folding
-        // trailing subscripts into the IN's RHS before building the IN.
-        auto list_exprs = ctx->listExpression();
-        for (size_t i = 0; i < list_exprs.size(); ++i) {
-            auto* le = list_exprs[i];
-            if (le->IN()) {
-                Expression right = buildPropOrLabelExpr(le->propertyOrLabelExpression());
-                // Consume any immediately-following subscripts/slices so they
-                // bind to the IN's RHS (correct Cypher precedence).
-                while (i + 1 < list_exprs.size() && !list_exprs[i + 1]->IN()) {
-                    right = applyListPostfix(list_exprs[i + 1], std::move(right));
-                    ++i;
-                }
-                r = makeBinaryOp(BinaryOperator::IN, std::move(r), std::move(right));
-            } else {
-                r = applyListPostfix(le, std::move(r));
-            }
+        // `[...]` now lives in the propertyExpression postfix chain, so it
+        // binds to the operand before IN; listExpression is only the IN
+        // predicate itself.
+        for (auto* le : ctx->listExpression()) {
+            auto right = buildPropOrLabelExpr(le->propertyOrLabelExpression());
+            r = makeBinaryOp(BinaryOperator::IN, std::move(r), std::move(right));
         }
 
         for (auto* ne : ctx->nullExpression()) {
@@ -753,11 +737,18 @@ private:
     Expression buildPropertyExpression(AP::PropertyExpressionContext* ctx) {
         auto* atom = ctx->atom();
         Expression r = buildAtomNode(atom);
-        // Process DOT name chains before ::
-        auto names = ctx->name();
-        for (auto* n : names) {
-            std::string name_text = normalizeIdentifier(n->getText());
-            r = makePropertyAccess(std::move(r), name_text);
+        // Apply postfixes in source order: `.name` becomes a property access,
+        // `[...]` becomes a subscript/slice. Keeping them in one chain is what
+        // lets `l[0].id` parse (previously the subscript ended the atomic
+        // expression and the following DOT was a syntax error).
+        for (auto* postfix : ctx->postfix()) {
+            if (postfix->DOT()) {
+                auto* n = postfix->name();
+                if (n)
+                    r = makePropertyAccess(std::move(r), normalizeIdentifier(n->getText()));
+            } else if (postfix->LBRACK()) {
+                r = applyBracketPostfix(postfix, std::move(r));
+            }
         }
         // Process COLONCOLON labelCast if present
         if (ctx->COLONCOLON()) {
