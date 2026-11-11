@@ -1,0 +1,52 @@
+name: Bug report
+description: 报告一个可复现的缺陷（最小复现 + 期望/实际）
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量提供最小复现；涉及查询语义时，先跑一次 neo4j 对照并附上结果。
+        如果这是安全/凭证问题，请不要贴敏感信息，先联系维护者。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 现象
+      description: 发生了什么？在哪个查询/模块/数据规模下出现？
+      placeholder: 例如：MATCH ... 返回 0 行，但 neo4j 返回 1 行
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 最小复现
+      description: 查询/步骤/fixture；尽量删到最小可复现集合
+      render: cypher
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望 vs 实际
+      description: 期望结果（含来源）；实际结果/错误；重数/顺序是否相关
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: commit、构建类型（debug/release/ASan）、数据目录/规模、neo4j 对照结果、相关日志
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响面 / 定位起点
+      description: 是否阻塞、是否兼容性问题、怀疑的代码路径/算子、可否回退
+    validations:
+      required: false

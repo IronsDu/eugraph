@@ -33,6 +33,8 @@ cmake --build build --target tck_tests
 python3 tests/tck/run_tck.py \
   --server-bin build/eugraph-server \
   --tck-bin build/tests/tck/tck_tests \
+  --features third_party/openCypher/tck/features \
+  --features tests/tck/features-eugraph \
   --timeout 60
 ```
 
@@ -41,6 +43,13 @@ python3 tests/tck/run_tck.py \
 2. 等待 server TCP 就绪
 3. 运行 `tck_tests` 执行所有 `.feature` 场景
 4. 停止 server 并清理临时数据
+
+> **全量 TCK 是 PR 合并门禁，不是开发循环工具。** 本地迭代只跑受影响 feature 子集；
+> PR 的 required check `Address Sanitizer (TCK)` 会跑全量。L3 前冻结代码；长任务后台运行。
+>
+> `--features` 必须显式传入：不传时默认 `features` 目录通常不存在，脚本会静默跑 0 场景（#304）。
+> 用 `--data-dir <磁盘目录>`（不要 tmpfs）、`--report` 和 `--step-results-file` 把产物写到指定位置，
+> 避免 `tck-step-results.json` 落在仓库根目录。
 
 > TCK feature 文件来自 git submodule `third_party/openCypher`（即 [openCypher/openCypher](https://github.com/opencypher/openCypher) 仓库的 `tck/features/` 目录）。更新 TCK 用例：
 > ```bash

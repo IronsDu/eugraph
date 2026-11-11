@@ -1,0 +1,66 @@
+name: Performance optimization
+description: 性能优化/回归的提案与跟踪（基线、目标、A/B 证据）
+title: "[perf] "
+labels: ["performance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先读仓库 `AGENTS.md` 的“性能工作协议”和 `.agents/skills/eugraph-perf`。
+        特化/缓存默认不做；如需要，请在这里先写提案，等维护者拍板。
+
+  - type: textarea
+    id: baseline
+    attributes:
+      label: 基线
+      description: 当前数值、命令、机器状态、数据目录、轮数/取 min 还是 p50
+    validations:
+      required: true
+
+  - type: textarea
+    id: target
+    attributes:
+      label: 目标与判据
+      description: 可度量目标（如 c10 ≤ 300 ms）；结果行/语义必须一致
+    validations:
+      required: true
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: 热点与假设
+      description: PROFILE 证据（self/inclusive、chunks、io、near、scanRows）；不要只靠猜
+    validations:
+      required: true
+
+  - type: textarea
+    id: approach
+    attributes:
+      label: 通用方案
+      description: 算法/计划 → 访问路径/IO → 执行效率；为什么上一层不够
+    validations:
+      required: true
+
+  - type: textarea
+    id: specialization
+    attributes:
+      label: 特化 / 缓存提案（如需要）
+      description: 适用面、为什么通用不够、失效/回退、内存/并发、收益/风险、冷热验证
+    validations:
+      required: false
+
+  - type: textarea
+    id: rejected
+    attributes:
+      label: 已否证的方向
+      description: 试过什么、证据、为什么放弃（避免重复）
+    validations:
+      required: false
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: 正确性与 A/B 计划
+      description: fail-before/反向测试、TCK 子集、neo4j 对照、同二进制交错 A/B
+    validations:
+      required: true

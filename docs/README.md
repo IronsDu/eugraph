@@ -234,3 +234,14 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [TCK 测试执行指南](tests/tck-guide.md) | 构建与运行 openCypher TCK 兼容性测试 |
 | [Bolt 驱动集成测试：设施与排查记录](tests/bolt-driver-integration-notes.md) | 三个官方驱动兼容性测试的设施约定（端口组/互斥/超时/日志保留/jar 探测）与一次完整根因链排查记录 |
 | [TCK 测试结果报告](tests/tck-results.md) | 测试结果分类、失败原因分析、修复进度 |
+
+## 流程与协作
+
+| 文档 | 说明 |
+|------|------|
+| [AGENTS.md](../AGENTS.md) | **工作契约**：T0/T1/T2 风险分级、预授权、DoD、性能协议、验证阶梯、PR/Issue 自动化 |
+| [eugraph-verify](../.agents/skills/eugraph-verify/SKILL.md) | 验证阶梯 L0–L3、构建/测试/TCK 子集选择、证据格式 |
+| [eugraph-perf](../.agents/skills/eugraph-perf/SKILL.md) | 性能协议：反投机、通用优先、特化/缓存提案、方向受挫、同二进制 A/B |
+| [eugraph-deliver](../.agents/skills/eugraph-deliver/SKILL.md) | 交付：自审、commit 折叠、push、PR 标题/描述/label、Issue、CI 状态 |
+| [PR 模板](../.github/pull_request_template.md) | PR 必填项：概要/范围/证据/性能/兼容性/未验证 |
+| [Issue 模板](../.github/ISSUE_TEMPLATE/) | bug / optimization / task 三种模板 |
