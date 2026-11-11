@@ -27,6 +27,8 @@
 | `EUGRAPH_LJ_BATCH` | 512 | LeftJoin 执行 | 相关 LeftJoin 的批大小；0 关闭批处理 | 建议 <1024；会受 chunk capacity 影响 |
 | `EUGRAPH_SJ_BATCH` | 512 | SemiJoin 执行 | 相关 SemiJoin 的批大小；0 关闭批处理 | 仅相关列可批处理时生效 |
 | `EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE` | 16384 | Expand 执行 | 单个 source 的邻接缓存上限；超过则绕过 | 0 或非法值回退默认 |
+| `EUGRAPH_PROBE_MAX_EDGES_PER_SOURCE` | 16384 | Expand 集合探针 | 单个目的端可物化的邻接边上限；超过则回退批量精确 seek | 0 或非法值回退默认；结果不变 |
+| `EUGRAPH_PROBE_MAX_CACHED_EDGES` | 262144 | Expand 集合探针 | 探针缓存的总边预算；超过后未缓存目的端回退批量精确 seek | 0 或非法值回退默认；结果不变 |
 | `EUGRAPH_EXPAND_INPUT_ROWS` | 128 | Expand 执行 | 一次 Expand 调用的最大输入行数；上限 4096 | 控制单次展开的 chunk 大小 |
 | `EUGRAPH_INDEX_BACKFILL_BATCH` | 20000 | 索引回填 | 索引回填事务的行数；上限 1,000,000 | 0 或非法值回退默认 |
 | `EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES` | 1,048,576 | PathCount 执行 | 每个 PathCount 算子的 `VertexId -> outdegree` 缓存上限；0 禁用缓存 | 超限后不再插入，改为重新计算 degree；结果不变 |

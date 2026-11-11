@@ -122,6 +122,8 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [Aggregate typed execution 设计](query/engine/aggregate-typed-execution-design.md) | 聚合参数 chunk 级 typed 列视图、函数指针回调、null/count(*)/DISTINCT 不变量与 DuckDB 对照 |
 | [Optimizer 架构与 Columbia 迁移](query/engine/optimizer-architecture.md) | binder/analysis/passes/rules/extraction/framework 分层、规则扩展点、Columbia 已迁移项与剩余缺口 |
 | [PatternComprehensionApply batching](query/engine/pattern-comprehension-batching.md) | 相关子计划按 batch key 分组、一次执行并分发列表；c10 sf0.1 41→20ms，existence-only 回退逐行 |
+| [Late materialization 设计](query/engine/late-materialization-design.md) | 输出/LIMIT 延迟物化；whole-object 需求规则（含 `collect` 列表仅 size/pattern 消费时保持拓扑阶段） |
+| [相关端点：绑定目的端与集合探针](query/engine/correlated-endpoint-set-probe.md) | c10 sf1 490→366ms：把 `id(dst)=id(saved)` 折进 Expand、批量精确 seek、按批物化目的端邻接做成员判定；预算回退与语义不变量 |
 | [c6 tag-anchored join reorder](query/engine/tag-anchored-c6-join-reorder.md) | 受基数门控的 c6 专用 join 重排：knownTag 锚点驱动 pattern，sf1 2.1s → 56ms；规则位置、守卫与 A/B |
 | [固定路径 count 融合](query/engine/path-count-fusion.md) | 末跳 Expand 不物化行，用 outdegree + 关系唯一性修正直接计数；范围、证明与验证 |
 | [Evaluator 临时对象复用设计](query/engine/evaluator-scratch-reuse-design.md) | 表达式求值的 scratch/temp column 复用、typed copy、list comprehension/quantifier/reduce 单行 chunk 复用与分配热点 |

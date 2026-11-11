@@ -163,3 +163,33 @@ loader: --batch-size 5000 --rpc-connections 4 --parallel-files 4
 - 无类型 Expand 显示 `labels=<any>`，不再输出 15 个 catalog id；
 - `count(m)` 不生成只用于属性/标签物化的 `ProjectionExtract`；
 - `count(m.name)` 才生成属性加载的 `ProjectionExtract`。
+
+## 5. 按标签规模+目的端数估价的成本模型（2026-11-11）
+
+`ffd1ffdd` 把固定阈值从 4096 提到 65,536（按**边数**），仍是单点折中：
+每邻居 fetch 的成本按**去重后的目的端数**增长，标签扫描的成本按**该标签顶点数**
+增长，用边数比较会把「多边指向少目的端」和「窄标签」两种情况估错。
+
+现在的选择（`ExpandPhysicalOp::filterDstLabels`）：
+
+```text
+distinct = 本批 list 里不同的 dst_id 数
+scan_rows = Σ ctx.label_vertex_counts[dst_label]        // planner 传入
+fetch     ≈ distinct × 1.3 us
+scan      ≈ scan_rows × 0.11 us
+prefer_fetch = scan_rows > 0 ? distinct × 12 <= scan_rows
+                             : distinct < 65536         // 计数未知时回退旧阈值
+```
+
+要点：
+
+- 条件用 **distinct** 而不是边数：同一目的端被多条边命中时不会重复计价；
+- 用标签规模定价后，窄标签（City/Country 只有 1k 级顶点）即使 10 万邻居也走扫描，
+  不会因为放大固定阈值而出现 100ms 级回归；
+- SF1 实测：80,607 条 `HAS_CREATOR` 边（80,607 个不同消息，过滤出 21,892 个 Post）
+  原来走标签扫描，Expand 自身约 121ms；fetch 路径约 109ms（扣除 9ms 邻接扫描后
+  约 100 vs 112ms）。complex-10 同会话采样由 360ms 降到 **345ms**；complex-14 在
+  同一时段由 755ms 降到 **713ms**。本机频率漂移下绝对值有 ±5% 波动。
+
+回归：`query_executor_tests` 635/635、`optimizer_tests` 124/124、
+`verify_ldbc_results.py` 21/21 语义一致。

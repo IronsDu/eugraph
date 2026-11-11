@@ -261,6 +261,20 @@ std::string getExplainPlanText(QueryExecutor& executor, const std::string& query
     return plan_text;
 }
 
+/// Set an environment variable for the duration of a test, restoring it even
+/// when a gtest assertion returns early from the test body.
+struct ScopedEnvVar {
+    ScopedEnvVar(const char* name, const char* value) : name_(name) {
+        ::setenv(name, value, 1);
+    }
+    ~ScopedEnvVar() {
+        ::unsetenv(name_);
+    }
+    ScopedEnvVar(const ScopedEnvVar&) = delete;
+    ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+    const char* name_;
+};
+
 } // anonymous namespace
 
 // ==================== Sourceless RETURN Tests ====================
@@ -5651,12 +5665,22 @@ TEST_F(QueryExecutorTest, ListComprehensionPatternPredicateAcrossWith) {
 
     // p and posts are both introduced by WITH, so the comprehension correlates on the
     // person while its Unwind list arrives the same way.
-    auto result = execSync(*executor_, "MATCH (p:P {id: 1}) WITH p "
-                                       "MATCH (p)-[:KNOWS]->(f:F) WITH p, f "
-                                       "MATCH (post:Post)-[:CREATED]->(f) WITH p, f, collect(post) AS posts "
-                                       "RETURN f.id AS fid, size(posts) AS n, "
-                                       "size([x IN posts WHERE (x)-[:HAS_TAG]->()<-[:INTEREST]-(p)]) AS matched "
-                                       "ORDER BY fid");
+    const std::string query = "MATCH (p:P {id: 1}) WITH p "
+                              "MATCH (p)-[:KNOWS]->(f:F) WITH p, f "
+                              "MATCH (post:Post)-[:CREATED]->(f) WITH p, f, collect(post) AS posts "
+                              "RETURN f.id AS fid, size(posts) AS n, "
+                              "size([x IN posts WHERE (x)-[:HAS_TAG]->()<-[:INTEREST]-(p)]) AS matched "
+                              "ORDER BY fid";
+    // The planner folds the binder's `id(dst) == id(saved)` filter into the
+    // Expand's destination (so the correlated endpoint is a column, not a
+    // post-join filter), and materialises that destination's adjacency once per
+    // batch instead of enumerating HAS_INTEREST from every post tag.
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("probe=set"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2u);
     for (size_t i = 0; i < result.rows.size(); ++i) {
@@ -5665,6 +5689,143 @@ TEST_F(QueryExecutorTest, ListComprehensionPatternPredicateAcrossWith) {
         ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][2]));
         EXPECT_EQ(std::get<int64_t>(result.rows[i][2]), 1) << "matched in group " << i;
     }
+
+    // Negative side of the same optimisation: when the collected list is
+    // observed as a list of vertices (`head(posts).id`), the elements must stay
+    // fully constructed VertexValues -- a topology-only ref has no properties.
+    // The planner's guard must therefore refuse to drop the construction here.
+    auto observed = execSync(
+        *executor_, "MATCH (p:P {id: 1}) WITH p "
+                    "MATCH (p)-[:KNOWS]->(f:F) WITH p, f "
+                    "MATCH (post:Post)-[:CREATED]->(f) WITH p, f, collect(post) AS posts "
+                    "RETURN f.id AS fid, size([x IN posts WHERE (x)-[:HAS_TAG]->()<-[:INTEREST]-(p)]) AS matched, "
+                    "head(posts).id AS firstPost ORDER BY fid");
+    ASSERT_TRUE(observed.error.empty()) << observed.error;
+    ASSERT_EQ(observed.rows.size(), 2u);
+    for (size_t i = 0; i < observed.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<int64_t>(observed.rows[i][1]));
+        EXPECT_EQ(std::get<int64_t>(observed.rows[i][1]), 1) << "matched in group " << i;
+        ASSERT_TRUE(std::holds_alternative<int64_t>(observed.rows[i][2]))
+            << "head(posts).id must come from a constructed vertex, got NULL";
+        const int64_t fid = std::get<int64_t>(observed.rows[i][0]);
+        const int64_t first_post = std::get<int64_t>(observed.rows[i][2]);
+        const bool belongs =
+            (fid == 2 && (first_post == 6 || first_post == 7)) || (fid == 3 && (first_post == 8 || first_post == 9));
+        EXPECT_TRUE(belongs) << "group " << i << " first post " << first_post;
+    }
+}
+
+// ── Correlated-endpoint optimizations: probe budget, label-filter cost model,
+//    and the negative side of the endpoint-filter fold ──
+
+TEST_F(QueryExecutorTest, CorrelatedEndpointProbeBudgetFallsBackToExactSeek) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:TckP {id: 1})-[:TCK_INTEREST]->(t10:TckT {id: 10})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (p:TckP {id: 1}) "
+                                     "CREATE (p)-[:TCK_INTEREST]->(:TckT {id: 11})")
+                    .error.empty());
+    ASSERT_TRUE(
+        execSync(*executor_, "CREATE (f:TckF {id: 2}), (post:TckPost {id: 20})-[:TCK_CREATED]->(f)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (post:TckPost {id: 20}), (t10:TckT {id: 10}) "
+                                     "CREATE (post)-[:TCK_HAS_TAG]->(t10)")
+                    .error.empty());
+
+    const std::string query = "MATCH (p:TckP {id: 1}), (f:TckF {id: 2}) "
+                              "OPTIONAL MATCH (f)<-[:TCK_CREATED]-(post:TckPost) "
+                              "WITH p, f, collect(post) AS posts "
+                              "RETURN f.id AS fid, size(posts) AS n, "
+                              "size([x IN posts WHERE (x)-[:TCK_HAS_TAG]->()<-[:TCK_INTEREST]-(p)]) AS matched";
+
+    auto expect_one_match = [&](const ExecutionResult& result) {
+        ASSERT_TRUE(result.error.empty()) << result.error;
+        ASSERT_EQ(result.rows.size(), 1u);
+        ASSERT_EQ(result.rows[0].size(), 3u);
+        EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+        EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1);
+        EXPECT_EQ(std::get<int64_t>(result.rows[0][2]), 1);
+    };
+
+    // Normal path: the destination probe answers the rows (no exact-seek fallback).
+    ExpandPhysicalOp::resetProbeFallbackCount();
+    auto result = execSync(*executor_, query);
+    expect_one_match(result);
+    EXPECT_EQ(ExpandPhysicalOp::probeFallbackCount(), 0u) << "probe path was not used";
+
+    {
+        // p has two interests; a per-source budget of one forces the overflow
+        // fallback. The answer must not change.
+        ScopedEnvVar per_source("EUGRAPH_PROBE_MAX_EDGES_PER_SOURCE", "1");
+        ExpandPhysicalOp::resetProbeFallbackCount();
+        result = execSync(*executor_, query);
+        expect_one_match(result);
+        EXPECT_GT(ExpandPhysicalOp::probeFallbackCount(), 0u) << "per-source overflow fallback not exercised";
+    }
+    {
+        // Total cache budget of one edge forces the budget-exceeded fallback.
+        ScopedEnvVar total("EUGRAPH_PROBE_MAX_CACHED_EDGES", "1");
+        ExpandPhysicalOp::resetProbeFallbackCount();
+        result = execSync(*executor_, query);
+        expect_one_match(result);
+        EXPECT_GT(ExpandPhysicalOp::probeFallbackCount(), 0u) << "total-budget fallback not exercised";
+    }
+}
+
+TEST_F(QueryExecutorTest, DestinationLabelFilterCostModelBothPathsAgree) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (f:TckF {id: 1})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "UNWIND range(1, 30) AS i CREATE (:TckX {id: i})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (f:TckF {id: 1}), (x:TckX {id: 1}) "
+                                     "CREATE (x)-[:TCK_C]->(f)")
+                    .error.empty());
+    // Planning uses graph-open label counts; CREATE does not refresh them, so
+    // seed the heuristic the same way the deferred-label tests do.
+    auto x_label = blockingWait(async_meta_->getLabelId("TckX"));
+    ASSERT_TRUE(x_label.has_value());
+    async_meta_->setLabelVertexCount(*x_label, 30);
+
+    const std::string query = "MATCH (f:TckF {id: 1})<-[:TCK_C]-(x:TckX) RETURN x.id AS id ORDER BY id";
+
+    // One distinct neighbour against a 30-vertex label: the cost model picks
+    // the per-neighbour label fetch.
+    ExpandPhysicalOp::resetLabelFilterCounts();
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    EXPECT_GT(ExpandPhysicalOp::labelFetchCount(), 0u) << "fetch path not taken";
+    EXPECT_EQ(ExpandPhysicalOp::labelScanCount(), 0u) << "scan path unexpectedly taken";
+
+    // Ten distinct neighbours against the same label: 10 * 12 > 30, so the
+    // forward label scan wins. Same rows, different implementation.
+    ASSERT_TRUE(execSync(*executor_, "MATCH (f:TckF {id: 1}), (x:TckX) "
+                                     "WHERE x.id >= 2 AND x.id <= 10 CREATE (x)-[:TCK_C]->(f)")
+                    .error.empty());
+    ExpandPhysicalOp::resetLabelFilterCounts();
+    result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 10u);
+    for (size_t i = 0; i < result.rows.size(); ++i)
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][0]), static_cast<int64_t>(i + 1));
+    EXPECT_GT(ExpandPhysicalOp::labelScanCount(), 0u) << "scan path not taken";
+    EXPECT_EQ(ExpandPhysicalOp::labelFetchCount(), 0u) << "fetch path unexpectedly taken";
+}
+
+TEST_F(QueryExecutorTest, UserWrittenEndpointIdEqualityIsNotFoldedIntoExpand) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:TckA {id: 1}), (b:TckB {id: 2}), "
+                                     "(a)-[:TCK_R]->(a), (a)-[:TCK_R]->(b)")
+                    .error.empty());
+    const std::string query = "MATCH (a:TckA {id: 1})-[r:TCK_R]->(b) WHERE id(a) = id(b) RETURN b.id AS id ORDER BY id";
+
+    // The binder-generated endpoint filter has a dedicated shape (VERTEX_REF
+    // refs plus a CorrelatedSource-provided saved value). A user-written id()
+    // comparison must not be folded: doing so would rename the Expand's
+    // destination and drop the user-visible `b` binding.
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_EQ(plan.find("dst=bound"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
 }
 
 // ── A negated pattern predicate must not disable a later comprehension ──

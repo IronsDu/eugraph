@@ -65,6 +65,15 @@ struct BoundPatternComprehensionApplyOp {
     /// Set only for existence-derived comprehensions; a user-visible
     /// comprehension (`[(a)-->(b) | b]` used as a list) always stays false.
     bool existence_only = false;
+
+    /// True when the produced list is consumed only as `size(<list>)`: the
+    /// caller never inspects an element, so the element columns may stay at the
+    /// topology stage (VERTEX_REF / EDGE_KEY) instead of materialising whole
+    /// VertexValue/EdgeValue objects. Set by the list-comprehension lowering
+    /// when the comprehension sits directly under a `size()` call; the planner
+    /// still verifies that no other expression observes the collected variable
+    /// before dropping its whole-object demand.
+    bool size_only_output = false;
 };
 
 } // namespace binder
