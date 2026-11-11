@@ -855,6 +855,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->edge_prop_ids = val->edge_prop_ids;
                 c->dst_label_prop_ids = val->dst_label_prop_ids;
                 c->dst_label_ids = val->dst_label_ids;
+                c->probe_bound_dst = val->probe_bound_dst;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
                 auto c = std::make_unique<binder::BoundSkipOp>();
@@ -968,6 +969,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->batch_enabled = val->batch_enabled;
                 c->batch_slot_id = val->batch_slot_id;
                 c->batch_var = val->batch_var;
+                c->size_only_output = val->size_only_output;
                 for (const auto& out : val->outputs) {
                     binder::BoundPatternComprehensionApplyOp::Output co;
                     co.slot_id = out.slot_id;

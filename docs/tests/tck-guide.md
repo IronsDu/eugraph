@@ -2,7 +2,7 @@
 
 ## 概述
 
-EuGraph 使用 [openCypher TCK](https://github.com/opencypher/openCypher/tree/master/tck)（Technology Compatibility Kit）作为 Cypher 查询语言的兼容性测试套件。TCK 基于 Cucumber BDD 框架，使用 `.feature` 文件描述测试场景。EuGraph 自己的扩展场景放在 `tests/tck/features-eugraph/`：`multi-label-strong-mode.feature`
+EuGraph 使用 [openCypher TCK](https://github.com/opencypher/openCypher/tree/master/tck)（Technology Compatibility Kit）作为 Cypher 查询语言的兼容性测试套件。TCK 基于 Cucumber BDD 框架，使用 `.feature` 文件描述测试场景。EuGraph 自己的扩展场景放在 `tests/tck/features-eugraph/`：`correlated-endpoint-and-size-list-regressions.feature`（相关端点/批量精确 seek/集合探针/目标标签过滤成本模型/`size([...])` 列表元素拓扑化，期望值以 neo4j SF1 为准）、`multi-label-strong-mode.feature`
 覆盖多标签 scoped cast 与强属性访问；`vertex-summary.feature` 覆盖顶点摘要缓存的正确性
 （CREATE 写入、SET/REMOVE/标签增删/DELETE 失效、大属性回退、MERGE、多行重复顶点、null）；
 `path/self-loop-path.feature` 覆盖自环路径的节点/关系序列（`length`/`nodes`/`relationships`
@@ -18,6 +18,12 @@ cmake --build build --target tck_tests
 ```
 
 依赖 `eugraph-server` 和 `ccr_ext`（cucumber-cpp 运行时）会自动构建。
+
+## 对照测试约定（neo4j）
+
+新增/修改 TCK 场景时，期望值**先在本机 neo4j 上用同一组 `CREATE` + 查询跑出来**，再写进 feature；
+不要凭推断填表。共享节点必须先 `CREATE` 一次、后续 `MATCH` 复用——两次 `CREATE` 相同
+`id`/属性会得到两个不同节点（本轮就因此得到过 `matched=0` 的假结果）。
 
 ## 运行 TCK 测试
 

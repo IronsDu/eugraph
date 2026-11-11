@@ -549,8 +549,9 @@ static bool patternPredicatesVariable(const cypher::Expression& expr, const std:
     return found;
 }
 
-/// Replace, in place, the ListComprehension node that `findListComprehensionUnderCalls`
-/// would return with a reference to the list variable `replacement`.
+/// Replace, in place, the ListComprehension node that
+/// `findListComprehensionWithSizeContext` would return with a reference to the
+/// list variable `replacement`.
 ///
 /// The item must keep its surrounding expression: for
 /// `size([x IN posts WHERE <pattern>])` the value returned to the user is the
@@ -572,13 +573,26 @@ static bool substituteListComprehensionUnderCalls(cypher::Expression& expr, cons
     return false;
 }
 
-static const cypher::ListComprehension* findListComprehensionUnderCalls(const cypher::Expression& expr) {
-    if (auto* lc = std::get_if<std::unique_ptr<cypher::ListComprehension>>(&expr))
-        return lc->get();
+/// Find the first list comprehension under a chain of function calls, and
+/// report whether it is a direct argument of `size(...)`. Only that call
+/// observes the list and it never looks at an element, so the lowering may keep
+/// the elements at the topology stage. `size` nested under another call is
+/// still fine: the LC's immediate parent is what matters.
+static const cypher::ListComprehension* findListComprehensionWithSizeContext(const cypher::Expression& expr,
+                                                                             bool& only_sized) {
+    if (std::holds_alternative<std::unique_ptr<cypher::ListComprehension>>(expr))
+        return std::get<std::unique_ptr<cypher::ListComprehension>>(expr).get();
     if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&expr)) {
         for (const auto& a : (*fc)->args) {
-            if (auto* lc = findListComprehensionUnderCalls(a))
-                return lc;
+            if (std::holds_alternative<std::unique_ptr<cypher::ListComprehension>>(a)) {
+                only_sized = ((*fc)->name == "size");
+                return std::get<std::unique_ptr<cypher::ListComprehension>>(a).get();
+            }
+            bool child_sized = false;
+            if (const auto* found = findListComprehensionWithSizeContext(a, child_sized)) {
+                only_sized = child_sized;
+                return found;
+            }
         }
     }
     return nullptr;
@@ -1428,7 +1442,8 @@ bool Binder::lowerPatternComprehensionOverList(const cypher::ReduceExpr& reduce,
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
 bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListComprehension& lc,
                                                             BoundLogicalOperator& child, SlotId& out_slot,
-                                                            std::string& out_name, BoundType& out_elem_type) {
+                                                            std::string& out_name, BoundType& out_elem_type,
+                                                            bool size_only_output) {
     auto saved = ctx_.save();
 
     // Variables referenced from outside the list comprehension (the loop
@@ -1635,6 +1650,7 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
     apply->left = std::move(child);
     apply->right = std::move(current);
     apply->correlation = std::move(correlation);
+    apply->size_only_output = size_only_output;
     BoundPatternComprehensionApplyOp::Output out;
     out.slot_id = out_slot;
     out.name = out_name;
@@ -2088,7 +2104,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     std::vector<ReturnItemView> items;
     items.reserve(ret.items.size());
     for (const auto& item : ret.items) {
-        const auto* lc = findListComprehensionUnderCalls(item.expr);
+        bool lc_only_sized = false;
+        const auto* lc = findListComprehensionWithSizeContext(item.expr, lc_only_sized);
         std::vector<const cypher::PatternComprehension*> pc_asts;
         if (lc) {
             if (lc->where_pred)
@@ -2125,7 +2142,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             SlotId out_slot = INVALID_SLOT_ID;
             std::string out_name;
             BoundType out_elem_type;
-            if (!lowerListComprehensionWithPatternComprehension(*lc, child, out_slot, out_name, out_elem_type))
+            if (!lowerListComprehensionWithPatternComprehension(*lc, child, out_slot, out_name, out_elem_type,
+                                                                lc_only_sized))
                 return std::nullopt;
             cypher::Expression rewritten = cloneAstExpression(item.expr);
             if (!substituteListComprehensionUnderCalls(rewritten, out_name))
@@ -2709,7 +2727,8 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // pattern correlates to the element column instead.
     std::vector<std::pair<std::string, ColumnInfo>> lowered_loop_bindings;
     for (const auto& item : wc.items) {
-        const auto* lc = findListComprehensionUnderCalls(item.expr);
+        bool lc_only_sized = false;
+        const auto* lc = findListComprehensionWithSizeContext(item.expr, lc_only_sized);
         std::vector<const cypher::PatternComprehension*> pc_asts;
         if (lc) {
             if (lc->where_pred)
@@ -2731,7 +2750,8 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             SlotId out_slot = INVALID_SLOT_ID;
             std::string out_name;
             BoundType out_elem_type;
-            if (!lowerListComprehensionWithPatternComprehension(*lc, child, out_slot, out_name, out_elem_type))
+            if (!lowerListComprehensionWithPatternComprehension(*lc, child, out_slot, out_name, out_elem_type,
+                                                                lc_only_sized))
                 return std::nullopt;
             // The lowering removed the loop variable from the context; capture it
             // so the hoisting pass can see it again.

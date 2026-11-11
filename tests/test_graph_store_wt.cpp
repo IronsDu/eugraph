@@ -1207,6 +1207,53 @@ TEST_F(WTGraphStoreTest, ScanEdgesBatchCoversSourcesAndDirections) {
     EXPECT_EQ(calls, 1u) << "callback false must stop the scan";
 }
 
+TEST_F(WTGraphStoreTest, ScanEdgesExactBatchReportsQueryIndex) {
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertEdge(txn, 13100, 970, 971, 1, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 13101, 970, 972, 2, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 13102, 973, 970, 1, Properties{}));
+    commit(txn);
+
+    GraphSession& session = store_->autoSession().get();
+    std::vector<ISyncGraphDataStore::ExactEdgeQuery> queries = {
+        {970, Direction::OUT, 1, 971},  // 0: hit 13100
+        {970, Direction::OUT, 1, 972},  // 1: wrong label
+        {970, Direction::OUT, 2, 972},  // 2: hit 13101
+        {970, Direction::IN, 1, 973},   // 3: hit 13102
+        {970, Direction::BOTH, 1, 973}, // 4: hit 13102 via IN
+        {970, Direction::OUT, 1, 999},  // 5: no such neighbour
+        {970, Direction::OUT, 1, 971},  // 6: duplicate of query 0
+    };
+    std::vector<std::pair<size_t, EdgeId>> hits;
+    store_->scanEdgesExactBatch(session, queries,
+                                [&](size_t query_index, const ISyncGraphDataStore::EdgeIndexEntry& entry) {
+                                    hits.emplace_back(query_index, entry.edge_id);
+                                    return true;
+                                });
+    EXPECT_EQ(hits, (std::vector<std::pair<size_t, EdgeId>>{
+                        {0, 13100},
+                        {2, 13101},
+                        {3, 13102},
+                        {4, 13102},
+                        {6, 13100},
+                    }));
+
+    size_t empty_calls = 0;
+    store_->scanEdgesExactBatch(session, {}, [&](size_t, const ISyncGraphDataStore::EdgeIndexEntry&) {
+        ++empty_calls;
+        return true;
+    });
+    EXPECT_EQ(empty_calls, 0u);
+
+    size_t calls = 0;
+    store_->scanEdgesExactBatch(session, queries, [&](size_t query_index, const ISyncGraphDataStore::EdgeIndexEntry&) {
+        EXPECT_EQ(query_index, 0u);
+        ++calls;
+        return false;
+    });
+    EXPECT_EQ(calls, 1u) << "callback false must stop the batch";
+}
+
 // ==================== adjacency cache (N=2) ====================
 
 TEST_F(WTGraphStoreAdjCacheTest, CompleteCacheDrivesScanAndCount) {

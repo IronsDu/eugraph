@@ -348,6 +348,34 @@ public:
         co_yield std::span<const ISyncGraphDataStore::EdgeIndexEntry>(out);
     }
 
+    folly::coro::AsyncGenerator<std::vector<BatchedExactEdge>>
+    scanEdgesExactBatch(const std::vector<ISyncGraphDataStore::ExactEdgeQuery>& queries) override {
+        // A per-row seek costs one IO dispatch each; keep the dispatches
+        // proportional to the batch, not to the rows.
+        constexpr size_t kChunkQueries = 4096;
+        auto all_queries = queries;
+        size_t offset = 0;
+        while (offset < all_queries.size()) {
+            const size_t n = std::min(kChunkQueries, all_queries.size() - offset);
+            std::vector<ISyncGraphDataStore::ExactEdgeQuery> chunk(
+                all_queries.begin() + static_cast<std::ptrdiff_t>(offset),
+                all_queries.begin() + static_cast<std::ptrdiff_t>(offset + n));
+            std::vector<BatchedExactEdge> batch;
+            batch.reserve(n);
+            co_await dispatchVoid([this, &chunk, &batch]() {
+                store_.scanEdgesExactBatch(
+                    session_, chunk, [&batch](size_t query_index, const ISyncGraphDataStore::EdgeIndexEntry& entry) {
+                        batch.push_back(BatchedExactEdge{query_index, entry});
+                        return true;
+                    });
+                recordWtScanRows(batch.size());
+            });
+            offset += n;
+            if (!batch.empty())
+                co_yield std::move(batch);
+        }
+    }
+
     // ==================== Edge Type Scan ====================
 
     folly::coro::AsyncGenerator<std::span<const ISyncGraphDataStore::EdgeTypeIndexEntry>>

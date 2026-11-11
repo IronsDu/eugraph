@@ -158,6 +158,14 @@ public:
     virtual folly::coro::AsyncGenerator<std::span<const ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdgesExact(VertexId vid, Direction direction, EdgeLabelId label_id, VertexId neighbor_id,
                    std::vector<ISyncGraphDataStore::EdgeIndexEntry>& out) = 0;
+    /// One hit of scanEdgesExactBatch, tagged with the query that produced it.
+    struct BatchedExactEdge {
+        size_t query_index;
+        ISyncGraphDataStore::EdgeIndexEntry entry;
+    };
+    /// Batch exact lookup: one IO dispatch (per chunk) for many point seeks.
+    virtual folly::coro::AsyncGenerator<std::vector<BatchedExactEdge>>
+    scanEdgesExactBatch(const std::vector<ISyncGraphDataStore::ExactEdgeQuery>& queries) = 0;
 
     // Edge Type Scan
     virtual folly::coro::AsyncGenerator<std::span<const ISyncGraphDataStore::EdgeTypeIndexEntry>>

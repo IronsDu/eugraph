@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace eugraph {
@@ -29,14 +30,16 @@ public:
                      std::vector<uint16_t> edge_prop_ids = {}, std::vector<LabelId> dst_label_ids = {},
                      bool dst_bound = false, bool edge_bound = false, int dst_col_idx = -1, int edge_col_idx = -1,
                      std::vector<EdgeLabelId> full_scan_labels = {}, bool full_edge_scan = false,
-                     bool neighbor_cache = false, bool all_edge_labels = false)
+                     bool neighbor_cache = false, bool all_edge_labels = false, bool probe_bound_dst = false,
+                     uint64_t dst_label_scan_rows = 0)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
           label_filters_(std::move(label_filters)), direction_(direction), store_(store),
           input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)),
           dst_label_prop_ids_(std::move(dst_label_prop_ids)), edge_prop_ids_(std::move(edge_prop_ids)),
           dst_label_ids_(std::move(dst_label_ids)), dst_bound_(dst_bound), edge_bound_(edge_bound),
           dst_col_idx_(dst_col_idx), edge_col_idx_(edge_col_idx), full_scan_labels_(std::move(full_scan_labels)),
-          full_edge_scan_(full_edge_scan), all_edge_labels_(all_edge_labels), neighbor_cache_enabled_(neighbor_cache) {
+          full_edge_scan_(full_edge_scan), all_edge_labels_(all_edge_labels), neighbor_cache_enabled_(neighbor_cache),
+          probe_bound_dst_(probe_bound_dst), dst_label_scan_rows_(dst_label_scan_rows) {
         for (size_t i = 0; i < input_schema_.size(); ++i) {
             if (input_schema_[i] == src_var_) {
                 src_col_idx_ = static_cast<int>(i);
@@ -97,6 +100,24 @@ public:
     static uint64_t cacheHitCount() noexcept;
     static void resetCacheHitCount() noexcept;
 
+    /// Probe budgets. Both default to the constants below and are overridable
+    /// per process so tests can force the exact-seek fallback on a small graph.
+    static size_t maxProbeEdgesPerSource();
+    static size_t maxProbeCachedEdges();
+
+    /// Diagnostics: how many times the destination-label filter took the
+    /// per-neighbour fetch path vs the forward label scan. Tests assert the
+    /// cost model picks the intended path and that both answer identically.
+    static uint64_t labelFetchCount() noexcept;
+    static uint64_t labelScanCount() noexcept;
+    static void resetLabelFilterCounts() noexcept;
+
+    /// Diagnostics: rows that could not be answered from the destination probe
+    /// and were sent to the batch exact-seek fallback. Tests use this to prove
+    /// the budget-overflow path is exercised.
+    static uint64_t probeFallbackCount() noexcept;
+    static void resetProbeFallbackCount() noexcept;
+
     void setLimitHint(size_t limit) override {
         limit_hint_ = limit_hint_.has_value() ? std::min(*limit_hint_, limit) : limit;
     }
@@ -121,6 +142,32 @@ private:
     /// the neighbour-cache path (which fills the cache with filtered entries).
     folly::coro::Task<void> filterDstLabels(std::vector<EdgeEntryScratch>& list);
 
+    /// Bounded-destination probe: materialise the bound destination's adjacency
+    /// once per batch (cached by destination id) and look up each row's source.
+    /// `row_src_ids` is the chunk's source id per row. Appends one edge per
+    /// matching adjacency entry so multiplicity and EdgeKey orientation match
+    /// the recursive destination-bound seek. Destinations whose degree exceeds
+    /// kMaxProbeEdgesPerSource are left out and seeked exactly instead.
+    folly::coro::Task<void> probeBoundDst(const DataChunk& chunk, size_t input_rows,
+                                          const std::vector<VertexId>& row_src_ids,
+                                          std::vector<EdgeEntryScratch>& edges);
+    struct ProbeEdge {
+        VertexId neighbor_id;
+        EdgeId edge_id;
+        EdgeLabelId edge_label_id;
+    };
+    static constexpr size_t kMaxProbeEdgesPerSource = 16'384;
+    static constexpr size_t kMaxProbeCachedEdges = 262'144;
+    static constexpr size_t kMaxProbeCachedSources = 65'536;
+    bool probe_bound_dst_ = false;
+    bool probe_cache_disabled_ = false;
+    size_t probe_cached_edge_count_ = 0;
+    /// destination id → (neighbour id → matching edges). The inner map makes a
+    /// row lookup O(1) even for a destination with thousands of neighbours.
+    std::unordered_map<VertexId, std::unordered_map<VertexId, std::vector<ProbeEdge>>> probe_cache_;
+    /// Destinations above the per-source edge budget; their rows seek exactly.
+    std::unordered_set<VertexId> probe_overflow_;
+
     std::string src_var_;
     std::string dst_var_;
     std::string edge_var_;
@@ -134,6 +181,9 @@ private:
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids_;
     std::vector<uint16_t> edge_prop_ids_;
     std::vector<LabelId> dst_label_ids_;
+    /// Total vertices across dst_label_ids_ (0 when unknown). Used to price the
+    /// per-neighbour label fetch against one forward label scan.
+    uint64_t dst_label_scan_rows_ = 0;
     bool dst_bound_ = false;
     bool edge_bound_ = false;
     int dst_col_idx_ = -1;
@@ -175,6 +225,9 @@ private:
     size_t cached_edge_count_ = 0;
     std::unordered_map<VertexId, std::vector<CachedNeighbor>> neighbor_cache_;
     static std::atomic<uint64_t> cache_hit_count_;
+    static std::atomic<uint64_t> label_fetch_count_;
+    static std::atomic<uint64_t> label_scan_count_;
+    static std::atomic<uint64_t> probe_fallback_count_;
 };
 
 } // namespace compute

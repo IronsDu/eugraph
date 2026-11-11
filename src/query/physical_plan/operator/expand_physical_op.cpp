@@ -14,6 +14,9 @@ namespace eugraph {
 namespace compute {
 
 std::atomic<uint64_t> ExpandPhysicalOp::cache_hit_count_{0};
+std::atomic<uint64_t> ExpandPhysicalOp::label_fetch_count_{0};
+std::atomic<uint64_t> ExpandPhysicalOp::label_scan_count_{0};
+std::atomic<uint64_t> ExpandPhysicalOp::probe_fallback_count_{0};
 
 uint64_t ExpandPhysicalOp::cacheHitCount() noexcept {
     return cache_hit_count_.load(std::memory_order_relaxed);
@@ -32,6 +35,48 @@ size_t ExpandPhysicalOp::maxCachedEdgesPerSource() {
 
 void ExpandPhysicalOp::resetCacheHitCount() noexcept {
     cache_hit_count_.store(0, std::memory_order_relaxed);
+}
+
+namespace {
+size_t envBudget(const char* name, size_t fallback) {
+    const char* env = std::getenv(name);
+    if (env == nullptr || *env == '\0')
+        return fallback;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0' || parsed == 0)
+        return fallback;
+    return static_cast<size_t>(parsed);
+}
+} // namespace
+
+size_t ExpandPhysicalOp::maxProbeEdgesPerSource() {
+    return envBudget(config::kEnvProbeMaxEdgesPerSource, kMaxProbeEdgesPerSource);
+}
+
+size_t ExpandPhysicalOp::maxProbeCachedEdges() {
+    return envBudget(config::kEnvProbeMaxCachedEdges, kMaxProbeCachedEdges);
+}
+
+uint64_t ExpandPhysicalOp::labelFetchCount() noexcept {
+    return label_fetch_count_.load(std::memory_order_relaxed);
+}
+
+uint64_t ExpandPhysicalOp::labelScanCount() noexcept {
+    return label_scan_count_.load(std::memory_order_relaxed);
+}
+
+void ExpandPhysicalOp::resetLabelFilterCounts() noexcept {
+    label_fetch_count_.store(0, std::memory_order_relaxed);
+    label_scan_count_.store(0, std::memory_order_relaxed);
+}
+
+uint64_t ExpandPhysicalOp::probeFallbackCount() noexcept {
+    return probe_fallback_count_.load(std::memory_order_relaxed);
+}
+
+void ExpandPhysicalOp::resetProbeFallbackCount() noexcept {
+    probe_fallback_count_.store(0, std::memory_order_relaxed);
 }
 
 namespace {
@@ -138,7 +183,160 @@ std::string ExpandPhysicalOp::toString() const {
         s += "]";
     }
     s += ", direction=" + dir + ")";
+    if (dst_bound_)
+        s += ", dst=bound";
+    if (probe_bound_dst_)
+        s += ", probe=set";
     return s;
+}
+
+folly::coro::Task<void> ExpandPhysicalOp::probeBoundDst(const DataChunk& chunk, size_t input_rows,
+                                                        const std::vector<VertexId>& row_src_ids,
+                                                        std::vector<EdgeEntryScratch>& edges) {
+    if (!label_filters_.has_value() || label_filters_->empty() || dst_col_idx_ < 0)
+        co_return;
+    // The destination is bound, so the stored edge runs from it to the source
+    // when the pattern is `(src)<-[r]-(dst)` (Expand direction IN). Scan the
+    // destination in that flipped direction; the edge set is identical to the
+    // per-row source seek.
+    const Direction scan_dir =
+        (direction_ == cypher::RelationshipDirection::LEFT_TO_RIGHT) ? Direction::IN : Direction::OUT;
+
+    std::vector<VertexId> miss_ids;
+    std::unordered_set<VertexId> seen;
+    for (size_t row = 0; row < input_rows; ++row) {
+        if (row_src_ids[row] == INVALID_VERTEX_ID)
+            continue;
+        const VertexId dst = columnVertexId(chunk.columns[dst_col_idx_], row);
+        if (dst == INVALID_VERTEX_ID)
+            continue;
+        if (probe_cache_.find(dst) != probe_cache_.end() || probe_overflow_.find(dst) != probe_overflow_.end())
+            continue;
+        if (seen.insert(dst).second)
+            miss_ids.push_back(dst);
+    }
+
+    // Freshly materialised adjacency for this chunk. A destination is kept only
+    // after its whole adjacency was scanned; incomplete entries never reach the
+    // probe set.
+    std::unordered_map<VertexId, std::unordered_map<VertexId, std::vector<ProbeEdge>>> fresh;
+    bool fresh_valid = false;
+    if (!miss_ids.empty() && !probe_cache_disabled_) {
+        std::unordered_map<VertexId, size_t> miss_index;
+        miss_index.reserve(miss_ids.size() * 2);
+        for (size_t i = 0; i < miss_ids.size(); ++i) {
+            miss_index.emplace(miss_ids[i], i);
+            fresh.emplace(miss_ids[i], std::unordered_map<VertexId, std::vector<ProbeEdge>>{});
+        }
+        std::vector<size_t> edge_counts(miss_ids.size(), 0);
+        bool budget_exceeded = false;
+        size_t fresh_total = 0;
+        for (EdgeLabelId label : *label_filters_) {
+            auto batch_gen = cancellable(store_.scanEdgesBatch(miss_ids, scan_dir, label));
+            while (auto batch = co_await batch_gen.next()) {
+                for (const auto& be : *batch) {
+                    auto index_it = miss_index.find(be.src_id);
+                    if (index_it == miss_index.end())
+                        continue;
+                    const size_t index = index_it->second;
+                    if (++edge_counts[index] > maxProbeEdgesPerSource()) {
+                        // Too large to materialise: this destination's rows
+                        // fall back to exact seeks.
+                        probe_overflow_.insert(be.src_id);
+                        fresh.erase(be.src_id);
+                        continue;
+                    }
+                    if (probe_cached_edge_count_ + ++fresh_total > maxProbeCachedEdges()) {
+                        budget_exceeded = true;
+                        break;
+                    }
+                    fresh[be.src_id][be.entry.neighbor_id].push_back(
+                        {be.entry.neighbor_id, be.entry.edge_id, be.entry.edge_label_id});
+                }
+                if (budget_exceeded)
+                    break;
+            }
+            if (budget_exceeded)
+                break;
+        }
+        if (budget_exceeded) {
+            for (VertexId id : miss_ids)
+                probe_overflow_.insert(id);
+            fresh.clear();
+        } else {
+            fresh_valid = true;
+        }
+    }
+
+    const Direction seek_dir =
+        (direction_ == cypher::RelationshipDirection::LEFT_TO_RIGHT) ? Direction::OUT : Direction::IN;
+    std::vector<ISyncGraphDataStore::ExactEdgeQuery> fallback_queries;
+    std::vector<size_t> fallback_rows;
+    for (size_t row = 0; row < input_rows; ++row) {
+        const VertexId src_id = row_src_ids[row];
+        if (src_id == INVALID_VERTEX_ID)
+            continue;
+        const VertexId dst = columnVertexId(chunk.columns[dst_col_idx_], row);
+        if (dst == INVALID_VERTEX_ID)
+            continue;
+        const std::unordered_map<VertexId, std::vector<ProbeEdge>>* probe_set = nullptr;
+        auto cached = probe_cache_.find(dst);
+        if (cached != probe_cache_.end()) {
+            probe_set = &cached->second;
+        } else {
+            auto materialised = fresh.find(dst);
+            if (materialised != fresh.end())
+                probe_set = &materialised->second;
+        }
+        if (!probe_set) {
+            for (EdgeLabelId label : *label_filters_) {
+                fallback_queries.push_back({src_id, seek_dir, label, dst});
+                fallback_rows.push_back(row);
+                probe_fallback_count_.fetch_add(1, std::memory_order_relaxed);
+            }
+            continue;
+        }
+        auto hit = probe_set->find(src_id);
+        if (hit == probe_set->end())
+            continue;
+        for (const auto& entry : hit->second) {
+            // The stored edge runs dst -> src for a RIGHT_TO_LEFT pattern and
+            // src -> dst for LEFT_TO_RIGHT; EdgeKey must keep that physical
+            // orientation (path rendering depends on it).
+            edges.push_back({row, dst, entry.edge_id, entry.edge_label_id,
+                             direction_ == cypher::RelationshipDirection::LEFT_TO_RIGHT});
+        }
+    }
+
+    if (!fallback_queries.empty()) {
+        auto edge_gen = cancellable(store_.scanEdgesExactBatch(fallback_queries));
+        while (auto edge_batch = co_await edge_gen.next()) {
+            for (const auto& hit : *edge_batch) {
+                if (hit.query_index >= fallback_rows.size())
+                    continue;
+                const auto& entry = hit.entry;
+                edges.push_back({fallback_rows[hit.query_index], entry.neighbor_id, entry.edge_id, entry.edge_label_id,
+                                 seek_dir == Direction::OUT});
+            }
+        }
+    }
+
+    if (fresh_valid && !fresh.empty()) {
+        size_t fresh_edges = 0;
+        for (const auto& [_, neighbours] : fresh)
+            for (const auto& [__, list] : neighbours)
+                fresh_edges += list.size();
+        if (probe_cache_.size() + fresh.size() <= kMaxProbeCachedSources) {
+            probe_cached_edge_count_ += fresh_edges;
+            for (auto& [id, neighbours] : fresh)
+                probe_cache_.emplace(id, std::move(neighbours));
+        } else {
+            // Keep the current chunk's data (above) but do not retain it; later
+            // chunks seek exactly rather than rescanning every time.
+            for (const auto& [id, _] : fresh)
+                probe_overflow_.insert(id);
+        }
+    }
 }
 
 folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
@@ -389,7 +587,94 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
 
         bool batched = false;
         bool labels_pre_filtered = false;
-        if (!allowed_filter && !dst_bound_ && !edge_bound_) {
+        if (!allowed_filter && dst_bound_ && probe_bound_dst_ && !edge_bound_ && dst_col_idx_ >= 0 &&
+            label_filters_.has_value() && !label_filters_->empty() &&
+            direction_ != cypher::RelationshipDirection::UNDIRECTED) {
+            // The correlated destination is usually one vertex per batch with a
+            // modest degree (person's interests / friends), while the source
+            // rows are many (posts' tags). Scan the destination once and probe
+            // the source ids in memory. Destinations over the edge budget fall
+            // back to batch exact seeks inside probeBoundDst.
+            co_await probeBoundDst(*chunk, input_rows, row_src_ids, edges);
+            batched = true;
+        } else if (!allowed_filter && dst_bound_ && !edge_bound_ && dst_col_idx_ >= 0 && !scan_filters.empty() &&
+                   std::all_of(scan_filters.begin(), scan_filters.end(),
+                               [](const std::optional<EdgeLabelId>& f) { return f.has_value(); })) {
+            // Correlated chain endpoint, batched: every row seeks the exact
+            // `{src}{dir}{label}{neighbor}` entry, but one edge_index cursor and
+            // one IO dispatch serve the whole chunk. The per-row path opens a
+            // cursor and dispatches twice per row (~28 us; c10 spent 556 ms on
+            // 19.5k rows).
+            std::vector<ISyncGraphDataStore::ExactEdgeQuery> queries;
+            std::vector<size_t> query_rows;
+            queries.reserve(input_rows * scan_filters.size() * (split_undirected ? 2 : 1));
+            query_rows.reserve(queries.capacity());
+            auto append_queries = [&](Direction scan_dir) {
+                for (size_t src_row = 0; src_row < input_rows; ++src_row) {
+                    const VertexId src_id = row_src_ids[src_row];
+                    if (src_id == INVALID_VERTEX_ID)
+                        continue;
+                    const VertexId bound = columnVertexId(chunk->columns[dst_col_idx_], src_row);
+                    if (bound == INVALID_VERTEX_ID)
+                        continue;
+                    for (const auto& label_filter : scan_filters) {
+                        queries.push_back({src_id, scan_dir, *label_filter, bound});
+                        query_rows.push_back(src_row);
+                    }
+                }
+            };
+            size_t out_query_count = 0;
+            if (split_undirected) {
+                // Same order as the per-row path: every OUT query first, then
+                // every IN query; the stable sort below restores per-row order.
+                append_queries(Direction::OUT);
+                out_query_count = queries.size();
+                append_queries(Direction::IN);
+            } else {
+                append_queries(dir);
+            }
+            if (!queries.empty()) {
+                auto edge_gen = cancellable(store_.scanEdgesExactBatch(queries));
+                while (auto edge_batch = co_await edge_gen.next()) {
+                    for (const auto& hit : *edge_batch) {
+                        if (hit.query_index >= query_rows.size())
+                            continue;
+                        const auto& entry = hit.entry;
+                        const bool physical_out =
+                            split_undirected ? hit.query_index < out_query_count : dir == Direction::OUT;
+                        edges.push_back({query_rows[hit.query_index], entry.neighbor_id, entry.edge_id,
+                                         entry.edge_label_id, physical_out});
+                    }
+                }
+            }
+            if (split_undirected && edges.size() > 1) {
+                std::stable_sort(edges.begin(), edges.end(), [](const EdgeEntryScratch& a, const EdgeEntryScratch& b) {
+                    return a.src_row < b.src_row;
+                });
+                // A self-loop is listed by both the OUT and IN adjacency; the
+                // OUT entry is the canonical one (matches the per-row path).
+                std::vector<EdgeEntryScratch> deduped;
+                deduped.reserve(edges.size());
+                size_t row_begin = 0;
+                while (row_begin < edges.size()) {
+                    const size_t row = edges[row_begin].src_row;
+                    size_t row_end = row_begin;
+                    std::unordered_set<EdgeId> out_ids;
+                    for (; row_end < edges.size() && edges[row_end].src_row == row; ++row_end) {
+                        const auto& entry = edges[row_end];
+                        if (entry.physical_out) {
+                            out_ids.insert(entry.edge_id);
+                            deduped.push_back(entry);
+                        } else if (out_ids.find(entry.edge_id) == out_ids.end()) {
+                            deduped.push_back(entry);
+                        }
+                    }
+                    row_begin = row_end;
+                }
+                edges.swap(deduped);
+            }
+            batched = true;
+        } else if (!allowed_filter && !dst_bound_ && !edge_bound_) {
             std::vector<VertexId> src_ids;
             std::unordered_map<VertexId, std::vector<size_t>> rows_of_src;
             std::unordered_set<VertexId> seen_src;
@@ -743,13 +1028,32 @@ folly::coro::Task<void> ExpandPhysicalOp::filterDstLabels(std::vector<EdgeEntryS
     if (list.empty() || dst_label_ids_.empty())
         co_return;
 
-    if (list.size() < 4096) {
-        std::vector<VertexId> label_neighbors;
-        std::unordered_set<VertexId> label_neighbors_seen;
+    // The fetch path costs one label lookup per **distinct destination**; the
+    // label-scan path costs one pass over every vertex of the label. The
+    // crossover therefore depends on the number of distinct destinations, not
+    // on the number of edges: a source with many edges to few destinations
+    // (e.g. friend -> 80k messages -> 22k posts) must not be charged the full
+    // label scan. Measured on SF1: 8,558 neighbours took 13.7 ms to fetch and
+    // 94 ms to scan (1,012,163 vertices); 21,892 distinct posts are ~35 ms to
+    // fetch, while 80,607 edges used to pick the 94 ms scan.
+    std::vector<VertexId> label_neighbors;
+    std::unordered_set<VertexId> label_neighbors_seen;
+    for (const auto& e : list)
+        if (label_neighbors_seen.insert(e.dst_id).second)
+            label_neighbors.push_back(e.dst_id);
+
+    // One forward label scan costs ~0.11 us/vertex; one per-neighbour label
+    // fetch ~1.3 us. Prefer the fetch only when the destination count times
+    // that ratio stays below the label's total size -- a small label (City,
+    // Country) is always cheaper to scan even for 100k neighbours. Fall back
+    // to the historical neighbour cap when the label size is unknown.
+    constexpr uint64_t kFetchVsScanCostRatio = 12;
+    const bool prefer_fetch = dst_label_scan_rows_ > 0
+                                  ? label_neighbors.size() * kFetchVsScanCostRatio <= dst_label_scan_rows_
+                                  : label_neighbors.size() < 65536;
+    if (prefer_fetch) {
+        label_fetch_count_.fetch_add(1, std::memory_order_relaxed);
         std::unordered_map<VertexId, LabelIdSet> label_map;
-        for (const auto& e : list)
-            if (label_neighbors_seen.insert(e.dst_id).second)
-                label_neighbors.push_back(e.dst_id);
         auto labels_batch = co_await store_.getVertexLabelsBatch(label_neighbors);
         for (size_t i = 0; i < label_neighbors.size() && i < labels_batch.size(); ++i)
             label_map[label_neighbors[i]] = std::move(labels_batch[i]);
@@ -767,10 +1071,8 @@ folly::coro::Task<void> ExpandPhysicalOp::filterDstLabels(std::vector<EdgeEntryS
         co_return;
     }
 
-    std::unordered_set<VertexId> neighbor_set;
-    neighbor_set.reserve(list.size() * 2);
-    for (const auto& e : list)
-        neighbor_set.insert(e.dst_id);
+    label_scan_count_.fetch_add(1, std::memory_order_relaxed);
+    const std::unordered_set<VertexId>& neighbor_set = label_neighbors_seen;
 
     std::unordered_set<VertexId> label_matches;
     std::unordered_set<VertexId> label_members;

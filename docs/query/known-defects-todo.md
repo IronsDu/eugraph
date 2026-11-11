@@ -178,3 +178,91 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
 - Release 全量 TCK：1306/1306 passed。
 
 ASan TCK 现在是绿色门禁。
+
+## 9. 解析器不接受「下标表达式后接属性访问」（`posts[0].id`）
+
+**现象**：`l[0].id` 报 `CypherSyntaxError: UnexpectedSyntax`，而 neo4j 接受同样写法。
+本轮补 TCK 时由 neo4j 对照发现（`size([...])` 列表元素守卫测试原计划用 `posts[0].id`）。
+
+**最小复现**（无需数据）：
+
+```cypher
+WITH [{id: 1}] AS l RETURN l[0].id AS x          // eugraph: SyntaxError；neo4j: 1
+WITH [{id: 1}] AS l RETURN (l[0]).id AS x        // eugraph: 1（可用写法）
+WITH [1, 2] AS l RETURN l[1] AS x                // eugraph: 2（纯下标没问题）
+WITH {a: 1} AS m RETURN m['a'] AS x              // eugraph: 1（map 下标没问题）
+WITH [{id: 1}] AS l RETURN l[0]['id'] AS x       // eugraph: 1（下标后接下标没问题）
+```
+
+**根因**（语法层）：`grammar/CypherParser.g4`
+
+```antlr
+atomicExpression
+    : propertyOrLabelExpression (stringExpression | listExpression | nullExpression)* ;
+propertyExpression
+    : atom (DOT name)* (COLONCOLON labelCast)? ;
+atom : ... | parenthesizedExpression | functionInvocation | symbol | ... ;
+```
+
+下标 `[0]` 属于 `atomicExpression` 的后缀，而 `.name` 只在 `propertyExpression` 里、
+并且其基座 `atom` 不包含「已下标表达式」。所以 `l[0]` 之后不能直接接 `.id`；
+`(l[0])` 是 parenthesized atom，才能继续 `.id`。`l[0]['id']` 能过是因为第二个 `[` 仍是
+`listExpression` 后缀。
+
+**影响**：Cypher 兼容性缺口；`posts[0].id` 这类写法在 LDBC/用户查询和 TCK 里很常见。
+本轮 TCK 用 `head(posts).id` 绕开，但用户查询会直接报语法错误。
+
+**修法方向**：把后缀链统一。建议把 `subscript` 提升为独立的 postfix 规则，让
+`propertyExpression` 变成 `atom postfix*`（`postfix := DOT name | LBRACK expression RBRACK`），
+`atomicExpression` 只保留 `IN / STARTS WITH / IS NULL` 这类中缀。改 `.g4` 后必须
+`./scripts/gen-grammar.sh` 重新生成，并核对生成代码 diff，不得手改生成文件。
+
+**验证**：
+
+- `tests/test_cypher_parser.cpp` 增加 `l[0].id` / `(l[0]).id` / `l[0]['id']` 三个正例；
+- 用 neo4j 跑同一组表达式对照（本轮已确认 neo4j 全部返回 1）；
+- 语法改动后跑 TCK（`expressions/list`、`clauses/match`）与全量 `query_executor_tests`。
+
+> GitHub issue: https://github.com/IronsDu/eugraph/issues/303
+
+## 10. TCK 对照测试基础设施：默认路径静默空跑、超时只覆盖启动、夹具复用节点
+
+**来源**：为本轮 4 项优化补 TCK 时实际踩到的问题（非产品语义缺陷，但会导致「验证看起来通过、其实什么都没跑」）。
+
+**(a) `run_tck.py` 默认 `--features features` 会静默跑 0 个场景**
+
+仓库根没有 `features/`；不传 `--features` 时命令行是 `tck_tests features`，tck_tests 以
+`0 scenarios / exit 0` 结束，`run_tck.py` 仍打印完成并把 exit code 当成功：
+
+```text
+[run_tck] Running: .../tck_tests features
+0 steps
+[run_tck] tck_tests finished in 0.0s (exit=0)
+[run_tck] tck_tests exit code: 0 (ignored)
+```
+
+**修法**：默认值改为 `third_party/openCypher/tck/features` + `tests/tck/features-eugraph`；
+或在启动前校验每个 feature 路径存在，并在解析到 0 个场景时以非 0 退出。
+
+**(b) `--timeout` 只用于等待 server 启动，不限制场景执行**
+
+`run_tck.py` 里 `--timeout` 只传给 `wait_for_server()`。本轮全量 TCK 跑到 **36 分钟、
+约 2380/3906 场景**仍未结束（无输出、无进度），只能手工 kill；`--timeout 60` 对卡住的
+场景不起作用。
+
+**修法**：增加 `--scenario-timeout`（或对 tck_tests 进程的整轮 wall-clock 上限）与定期
+进度输出；超时场景记失败而不是拖垮整轮。
+
+**(c) 对照夹具约定：同一逻辑节点必须 MATCH 复用，期望值先由 neo4j 产出（不是引擎缺陷）**
+
+第一版夹具用两次 `CREATE (:TckT {id: 10})` 想表达「同一个 tag」，实际建成了两个同
+`id` 属性的不同节点，导致 pattern 匹配为 0；neo4j 对照立刻暴露。正确写法是先
+`CREATE (t10:TckT {id: 10})`，后续用 `MATCH (t10:TckT {id: 10})` 复用。
+
+约定：**TCK/对照 feature 的期望值必须先在本机 neo4j 上跑同一组 `CREATE` + 查询得到**，
+再写入 feature；共享节点一律 `MATCH` 复用，不要用相同属性值重复 `CREATE`。
+本轮新增的 `correlated-endpoint-and-size-list-regressions.feature` 即按此流程产出
+（14/14 场景、84/84 步骤通过）。两次 `CREATE` 相同 `id` 属性得到两个不同节点，neo4j 同样如此
+（`id` 只是普通属性，没有隐式唯一性），所以这不是引擎问题。
+
+> GitHub issue: https://github.com/IronsDu/eugraph/issues/304

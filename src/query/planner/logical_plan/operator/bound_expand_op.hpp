@@ -40,6 +40,12 @@ struct BoundExpandOp {
     std::vector<uint16_t> edge_prop_ids;
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids;
     std::vector<LabelId> dst_label_ids;
+    /// Planner hint (dst_bound only): the destination is a batch-correlated
+    /// vertex with a modest degree, so materialise ITS adjacency once per batch
+    /// and probe the source ids in memory instead of seeking from every source
+    /// row. The physical operator falls back to exact seeks per source when the
+    /// destination's adjacency exceeds its budget.
+    bool probe_bound_dst = false;
     BoundLogicalOperator child;
 };
 

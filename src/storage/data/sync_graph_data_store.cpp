@@ -1533,6 +1533,83 @@ void SyncGraphDataStore::scanEdgesExact(GraphSession& gs, VertexId vid, Directio
     });
 }
 
+void SyncGraphDataStore::scanEdgesExactBatch(GraphSession& gs, const std::vector<ExactEdgeQuery>& queries,
+                                             folly::FunctionRef<bool(size_t, const EdgeIndexEntry&)> callback) {
+    WT_SESSION* session = gs.wt_session();
+    if (!session || queries.empty())
+        return;
+    if (adjacency_cache_capacity_ > 0) {
+        // COMPLETE adjacency lives outside edge_index; keep the scan path but
+        // still reject non-neighbours here instead of opening a cursor per row.
+        for (size_t i = 0; i < queries.size(); ++i) {
+            const auto& query = queries[i];
+            scanEdges(gs, query.src_id, query.direction, query.label_id, [&](const EdgeIndexEntry& entry) {
+                if (entry.neighbor_id != query.neighbor_id)
+                    return true;
+                return callback(i, entry);
+            });
+        }
+        return;
+    }
+
+    CursorHandle cursor = gs.acquire_scan_cursor(TABLE_EDGE_INDEX);
+    if (!cursor) {
+        const int error = cursor.error();
+        gs.fail_from_wt(error, "scanEdgesExactBatch: cannot open cursor on table:edge_index");
+        return;
+    }
+    auto* c = cursor.get();
+    auto seek = [&](size_t query_index, Direction direction) -> bool {
+        const auto& query = queries[query_index];
+        const std::string prefix =
+            KeyCodec::encodeEdgeIndexPrefix(query.src_id, direction, query.label_id, query.neighbor_id);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = (recordWtSearchNear(), c->search_near(c, &exact));
+        if (ret == WT_NOTFOUND)
+            return true;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "scanEdgesExactBatch: search_near failed");
+            return false;
+        }
+        if (exact < 0) {
+            // The cursor sits on the key just below the prefix range; the next
+            // key is the first candidate (if any).
+            ret = c->next(c);
+            if (ret == WT_NOTFOUND)
+                return true;
+            if (ret != 0) {
+                gs.fail_from_wt(ret, "scanEdgesExactBatch: next failed");
+                return false;
+            }
+        }
+        while (ret == 0) {
+            std::string_view key = getKeyViewFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            auto decoded = KeyCodec::decodeEdgeIndexKey(key);
+            EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.edge_id};
+            if (!callback(query_index, entry))
+                return false;
+            ret = c->next(c);
+        }
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "scanEdgesExactBatch: next failed");
+            return false;
+        }
+        return true;
+    };
+
+    for (size_t i = 0; i < queries.size(); ++i) {
+        if (queries[i].direction == Direction::BOTH) {
+            if (!seek(i, Direction::OUT) || !seek(i, Direction::IN))
+                return;
+        } else if (!seek(i, queries[i].direction)) {
+            return;
+        }
+    }
+}
+
 void SyncGraphDataStore::scanEdgesByType(GraphSession& gs, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                          std::optional<VertexId> dst_filter,
                                          folly::FunctionRef<bool(const EdgeTypeIndexEntry&)> callback) {
