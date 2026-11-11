@@ -134,6 +134,8 @@ public:
                         folly::FunctionRef<bool(VertexId, const EdgeIndexEntry&)> callback) override;
     void scanEdgesExact(GraphSession& session, VertexId vid, Direction direction, EdgeLabelId label_id,
                         VertexId neighbor_id, folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) override;
+    void scanEdgesExactBatch(GraphSession& session, const std::vector<ExactEdgeQuery>& queries,
+                             folly::FunctionRef<bool(size_t, const EdgeIndexEntry&)> callback) override;
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid, Direction direction,
                                                           std::optional<EdgeLabelId> label_filter) override;
     void scanEdgesByType(GraphSession& session, EdgeLabelId label_id, std::optional<VertexId> src_filter,

@@ -5,6 +5,7 @@
 #include <folly/Function.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <set>
@@ -139,6 +140,16 @@ public:
         EdgeId edge_id;
     };
 
+    /// One exact `{src}{dir}{label}{neighbor}` lookup for scanEdgesExactBatch.
+    /// The batch call reports each hit with its query index so a caller that
+    /// batches per-row point lookups can map the entry back to its input row.
+    struct ExactEdgeQuery {
+        VertexId src_id;
+        Direction direction;
+        EdgeLabelId label_id;
+        VertexId neighbor_id;
+    };
+
     // ==================== Scan Cursors ====================
 
     class IVertexScanCursor {
@@ -208,6 +219,11 @@ public:
     /// scanning every edge of `src` and filtering by neighbour.
     virtual void scanEdgesExact(GraphSession& session, VertexId vid, Direction direction, EdgeLabelId label_id,
                                 VertexId neighbor_id, folly::FunctionRef<bool(const EdgeIndexEntry&)> callback) = 0;
+    /// Batch exact lookup: one edge_index cursor serves the whole batch, which
+    /// removes the per-row cursor-open + IO-dispatch cost of scanEdgesExact.
+    /// `callback` receives the index of the query that produced the entry.
+    virtual void scanEdgesExactBatch(GraphSession& session, const std::vector<ExactEdgeQuery>& queries,
+                                     folly::FunctionRef<bool(size_t, const EdgeIndexEntry&)> callback) = 0;
     virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphSession& session, VertexId vid,
                                                                   Direction direction,
                                                                   std::optional<EdgeLabelId> label_filter) = 0;
