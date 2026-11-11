@@ -78,3 +78,32 @@ Status: 设计（未实施）。本文记录问题、证据、目标不变量与
 - 与现状等价的查询结果（既有测试 + TCK 全绿）；
 - 不得以"预取缓存"替代显式物化：缓存只能出现在 IO 算子内部，用于合并同一批
   顶点读取。
+
+## 已落地：`labels()` 读标签列（2026-11-11，提交 `5d023de8`）
+
+`labels(x)` / `n:Label` 只需要标签集合，却曾只能从**已构造的 VertexValue** 里取标签，
+于是需求收集把实参标成"整顶点"，`WHERE m:Comment` 就变成逐行 `ConstructVertex`
+（每顶点 3 次存储读：labels + 按标签的属性扫描）。
+
+三处一起改才成立：
+
+1. `rewriteExpr` 把 `labels(x)` 重写成 PE 的**标签列**（`labels_slot_id`，`LIST<STRING>`）；
+2. 需求收集只声明 `need_vertex_labels`，并让实参不再经通用递归产生整顶点需求；
+3. PE 计划在无整顶点需求时分配 `labels_slot_id`，算子用**一次** labels+values 融合扫描
+   同时喂给标签列与 coalesced 属性列。
+
+实测（SF1，同机同数据）：
+
+| 查询 | 指标 | 前 | 后 |
+|---|---|---:|---:|
+| `WHERE m:Comment AND m.creationDate > 0` | PE dbHits | 25,674 | **8,558** |
+| | 墙钟 | 47.8 ms | **24.1 ms** |
+| `WHERE m:Comment` | PE dbHits | 25,674 | **8,558** |
+| | 墙钟 | 50.4 ms | **13.6 ms** |
+| complex-14 | 墙钟 | 1,109 ms | **1,066–1,084 ms**（12 行不变） |
+
+回归：`query_executor_tests` 635/635、`optimizer_tests` 124/124、
+`verify_ldbc_results.py` 21/21 语义一致。
+
+这是"表达式不该自己取数、由算子物化"的第一个完整实例，可作为后续把
+`type()`、`keys()`、`properties()`、动态属性访问搬家时的模板。
