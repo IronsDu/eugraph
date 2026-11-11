@@ -171,3 +171,59 @@ Two directions, in increasing risk:
 
 Both need the same acceptance bar used here: SF1 wall time + scanRows, 12 rows
 with identical `pathWeight`, `query_executor_tests`, and TCK.
+
+## Current cost distribution (2026-11-11, after the labels-column change)
+
+```
+complex-14: 1,066-1,084 ms, 12 rows, pathWeight unchanged
+```
+
+| part | self ms | note |
+|---|---:|---|
+| anchor `Expand(a <-[:HAS_CREATOR]- msg)` | ~360 | destination-label filter makes it scan the whole HAS_CREATOR edge set (4.13M scan rows for 152k results) |
+| branch `PE(b.id)` | ~210 | one property fetch per expanded row (76k + 75k) |
+| branch `HAS_CREATOR -> b` expand | ~260 | `b` is not bound, so every target's creator is enumerated |
+| branch `REPLY_OF` | ~100 | runs once per branch |
+| shortestPath | ~28 | — |
+
+`labels()` now reads a materialised label column (see
+[expression-io-boundary.md](expression-io-boundary.md)), which is a 2-3x win for
+label-predicate queries but only ~3% here: complex-14's label constraints sit in
+the `Expand`'s `dst_label_ids`, not in a `labels()` expression.
+
+### The two levers that can still move complex-14
+
+1. **Anchor `b` to the path endpoints** (~-200..250 ms). Requires the
+   vertex-identity rewrite (`b.id = endNode(r).id` -> `b = endNode(r)`) *and*
+   removing the now-unused `b.id` materialisation. The rewrite itself works, but
+   it must run **after** the analysis phases to recognise the plan, while the
+   property demand is decided **before** them. Tried moving the pass earlier: the
+   recognition then fails ("payload differs at depth 0") and the fork is not
+   built at all (falls back to the pre-fork 1.78 s plan). The viable variant is
+   to keep the pass where it is and drop `PEPlan.coalesce_vertices["id"]` for the
+   rewritten variable afterwards.
+2. **Stop the destination-label expand from scanning the whole edge label**
+   (~-200..250 ms). Measured on the same traversal (8,558 neighbours):
+   `(m:Comment)` scans 2,060,727 edges (177 ms) while `(m) WHERE m:Comment` scans
+   8,558 adjacency entries (48 ms, of which the label fetch is most of the cost).
+   A cost-based choice (small source batch + downstream property demand -> walk
+   the adjacency and use the fused labels+values fetch) would recover most of it.
+
+Both keep the acceptance bar used for the work above: SF1 wall time and
+scanRows, 12 rows with identical `pathWeight`, `verify_ldbc_results.py`,
+`query_executor_tests`, and TCK.
+
+### Attempts that did not land (do not repeat without new evidence)
+
+- `LoadVertexPropCoalesce` dedup by distinct vertex: +50-60% on complex-3/9 for
+  ~6% on complex-14 (per-row copy of the cached vector); reverted.
+- Skipping the prefetch for "materialised" entity columns: 947 ms but wrong
+  results (a constructed vertex without properties reads as NULL).
+- Moving the anchor rewrite before requirement collection: recognition fails on
+  the pre-lowering tree (see lever 1).
+- Fusing labels into the coalesce fetch inside `ProjectionExtractPhysicalOp`:
+  no effect, because the plan used `ConstructVertex` rather than a
+  labels-spec/coalesce-spec pair.
+- `labels()` / `LabelCast` requirement checges without the column rewrite:
+  `TypeError: InvalidArgumentValue` (this is what proved the rewrite is a
+  prerequisite).
