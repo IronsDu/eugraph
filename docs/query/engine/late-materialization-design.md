@@ -87,3 +87,44 @@ next operator stores the ref into a VertexValue column and silently loses it.
   `split_pe_plans.deferred` can be empty and the physical planner still falls
   back to `computeDeferredSlots`. This does not affect the whole-object change;
   it is tracked as separate ownership work.
+
+## Collected-list element demand (2026-11-11)
+
+`collect(x)` used to raise whole-object demand on `x` unconditionally. For
+
+```cypher
+WITH friend, city, collect(post) AS posts, person
+RETURN size([p IN posts WHERE (p)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person)])
+```
+
+the list is only counted and its elements are only used as pattern endpoints, yet
+c10/SF1 built 21,892 posts into full `VertexValue`s (labels + all properties,
+three storage reads each, ~65k B-tree reads / ~79 ms).
+
+The binder now marks a lowered list comprehension whose result is a direct
+`size()` argument (`BoundPatternComprehensionApplyOp::size_only_output`). Before
+`collectPlanRequirements`, the physical planner verifies the whole bound plan:
+
+- the collected entity appears in exactly one expression (the `collect` argument),
+- the list variable appears in exactly one non-`size` expression (the `UNWIND`);
+  any number of direct `size(list)` calls is allowed,
+- the loop variable appears in exactly one expression (the comprehension's own
+  `collect(loop var)`),
+- neither the entity nor the loop variable is a path element,
+- the `collect` is not DISTINCT.
+
+Only then is `need_whole_vertex` cleared, so the PE passes the topology column
+(`VERTEX_REF` / `EDGE_KEY`) into the list. `collect` stores the values verbatim,
+`UNWIND` and the pattern endpoints read ids, and `size()` counts. The guard is
+conservative: observing the list (`head(posts).id`), reading a property in the
+comprehension body, returning the entity, using it in a path, or a DISTINCT
+collect all keep the constructed object.
+
+c10/SF1: 345–366 ms → **277–300 ms** (clean binary min 292 / p50 298); 10 rows unchanged.
+Correctness coverage: `QueryExecutorTest.ListComprehensionPatternPredicateAcrossWith`
+(positive + `head(posts).id` negative), and the TCK feature
+`tests/tck/features-eugraph/correlated-endpoint-and-size-list-regressions.feature`
+(14 scenarios whose expected rows were produced by neo4j SF1; includes two tags on
+one element, `head`, and a second UNWIND over the collected list). See
+[correlated-endpoint-set-probe.md](correlated-endpoint-set-probe.md) for the
+companion endpoint work.

@@ -249,7 +249,8 @@ public:
     /// after recording a binder error.
     bool lowerListComprehensionWithPatternComprehension(const cypher::ListComprehension& lc,
                                                         BoundLogicalOperator& child, SlotId& out_slot,
-                                                        std::string& out_name, BoundType& out_elem_type);
+                                                        std::string& out_name, BoundType& out_elem_type,
+                                                        bool size_only_output = false);
 
     /// A pattern comprehension in a reduce body depends on the current list
     /// element, so it cannot be hoisted above the reduce. Precompute one list
