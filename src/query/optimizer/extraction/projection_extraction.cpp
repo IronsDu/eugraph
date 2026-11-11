@@ -540,6 +540,9 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
     // introduces a fresh per-iteration variable — can update it before
     // forEachSubExpr recurses into the children below.
     std::string current_skip = loop_var_skip;
+    // Sub-expression whose demand is recorded by the enclosing arm (the object
+    // of labels()/n:Label needs the label set only, not the whole vertex).
+    const binder::BoundExpression* deferred_child = nullptr;
     std::visit(
         [&](const auto& ptr) {
             using T = std::decay_t<decltype(ptr)>;
@@ -643,7 +646,7 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                         binder::SlotId canon = resolver.canonicalForName(var);
                         if (canon != binder::INVALID_SLOT_ID) {
                             reqs[canon].need_vertex_labels = true;
-                            reqs[canon].need_whole_vertex = true;
+                            deferred_child = &ptr->args[0];
                         }
                     }
                 } else if (fname == "type" && ptr->args.size() == 1) {
@@ -748,6 +751,8 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
         },
         expr);
     forEachSubExpr(expr, [&](const binder::BoundExpression& child) {
+        if (deferred_child == &child)
+            return;
         collectExprReqs(child, reqs, resolver, current_skip, label_defs);
     });
 }
@@ -1239,6 +1244,27 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 }
                 changed_inner |= rewriteExpr(val->object, plans, resolver);
                 return changed_inner;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                // labels(x) reads the label set the PE already materialises
+                // (LoadVertexLabels). Without this the call keeps its vertex
+                // argument and the evaluator can only answer it by looking at a
+                // fully constructed VertexValue — which is what forced
+                // ConstructVertex (3 storage reads per vertex) for `WHERE m:Comment`.
+                if (!val || !val->func_def || val->func_def->name != "labels" || val->args.size() != 1)
+                    return false;
+                std::string var = varNameFromObject(val->args[0]);
+                if (var.empty())
+                    return false;
+                const PEPlan* pi = nullptr;
+                if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->args[0]))
+                    pi = planForRef(*cref);
+                if (!pi)
+                    pi = planForSlot(binder::INVALID_SLOT_ID, var);
+                if (!pi || pi->labels_slot_id == binder::INVALID_SLOT_ID)
+                    return false;
+                expr = binder::BoundColumnRef{0, binder::BoundType::List(binder::BoundType::String()), var,
+                                              pi->labels_slot_id};
+                return true;
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
                 if (!binder::isSemanticGraphKind(val.type.kind))
                     return false;
