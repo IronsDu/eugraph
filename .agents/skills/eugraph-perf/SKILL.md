@@ -73,7 +73,7 @@ off-CPU 分析 + 差分实验）。只有一条时，把它标成假设，用 A/
 
 | 观测 | 倾向 | 下一步 |
 |---|---|---|
-| `%CPU` 高，`task-clock/elapsed ≈ ncpu`，runqueue 低，cswch 低 | **on-CPU**：在算 | `perf record -g` + `perf annotate`；PROFILE self；看 cycles/instructions/cache/branch |
+| `%CPU` 高，`task-clock/elapsed` 接近实际并行工作的线程数（单线程 ≈ 1），runqueue 低，cswch 低 | **on-CPU**：在算 | `perf record -g` + `perf annotate`；PROFILE self；看 cycles/instructions/cache/branch |
 | `%CPU` 低，wall 高，cswch 高，`wchan` 是 `futex`/`io_schedule`/`ep_poll` | **off-CPU blocked**：等锁/IO/网络/定时器 | `offcputime`/`perf sched`/`perf trace`/`strace -c`；WT/IO 统计 |
 | `%CPU` 不高但 runqueue > ncpu，nonvoluntary cswch 高 | **off-CPU runnable**：等 CPU/过度订阅 | `perf sched`；线程数/亲和性/协程调度；再决定加不加并发 |
 | `%sys` 高、iowait 高 | 内核/IO 路径 | `perf trace`/`strace -c`/`iostat -x`；批量 syscall/IO、减少 fsync |
@@ -84,6 +84,7 @@ off-CPU 分析 + 差分实验）。只有一条时，把它标成假设，用 A/
 
 ```bash
 # task-clock vs elapsed + on-CPU 效率
+# -p 统计进程所有线程；只测某个线程用 -t <tid>
 perf stat -p <pid> -e task-clock,cycles,instructions,cache-misses,branch-misses,context-switches,page-faults -- sleep 10
 
 # on-CPU 热点
@@ -94,7 +95,8 @@ perf annotate <symbol>
 # off-CPU / 调度
 pidstat -p <pid> 1
 pidstat -w -p <pid> 1
-cat /proc/<pid>/wchan
+cat /proc/<pid>/wchan            # 主线程；多线程看 /proc/<pid>/task/<tid>/wchan
+ps -L -p <pid> -o pid,tid,stat,wchan:32,pcpu
 grep -E 'voluntary|nonvoluntary' /proc/<pid>/status
 perf sched record -- sleep 5 && perf sched latency
 offcputime -p <pid> 10        # bcc，需 root/内核支持；不可用则用 perf sched + pidstat
