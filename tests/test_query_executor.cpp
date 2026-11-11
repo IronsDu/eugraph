@@ -5828,6 +5828,58 @@ TEST_F(QueryExecutorTest, UserWrittenEndpointIdEqualityIsNotFoldedIntoExpand) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
 }
 
+TEST_F(QueryExecutorTest, LabelsOnCreatedNodeReadsTheCreatedVertex) {
+    // The labels-column optimisation must not fire for entities that already
+    // arrive as a VertexValue: CreateNode does not get a ProjectionExtract
+    // above it, so a labels column would be missing and labels(n) used to
+    // return the node itself.
+    auto result = execSync(*executor_, "CREATE (n:TckLbl) RETURN labels(n) AS l");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]));
+    EXPECT_TRUE((*std::get<ListValuePtr>(result.rows[0][0])).elements.empty());
+
+    // Pre-create the labels: this test targets the labels-column rewrite, not
+    // the separate CreateNode auto-label issue (a node created together with a
+    // brand-new label currently carries an empty label set in its VertexValue).
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:TckLblA), (:TckLblB)").error.empty());
+    result = execSync(*executor_, "CREATE (n:TckLblA:TckLblB {id: 1}) RETURN labels(n) AS l");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]));
+    const auto& lv = *std::get<ListValuePtr>(result.rows[0][0]);
+    std::vector<std::string> labels;
+    for (const auto& element : lv.elements) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(element.value));
+        labels.push_back(std::get<std::string>(element.value));
+    }
+    std::sort(labels.begin(), labels.end());
+    EXPECT_EQ(labels, (std::vector<std::string>{"TckLblA", "TckLblB"}));
+}
+
+TEST_F(QueryExecutorTest, NestedCorrelatedExistsKeepsChainedEndpointBinding) {
+    // Regression: the inner pattern's first hop (l)<-[:R]-(n) has its Expand
+    // destination referenced by the next hop (n)-[:R]->(m). Folding the
+    // endpoint filter into the first Expand renamed that destination and left
+    // the second Expand reading a column that no longer existed, so the
+    // EXISTS was always false. The fold must back off when the destination is
+    // referenced by another operator.
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:TckA {prop: 1})-[:TckR]->(b:TckB {prop: 1}), "
+                                     "(a)-[:TckR]->(:TckC {prop: 2}), (a)-[:TckR]->(:TckD {prop: 3})")
+                    .error.empty());
+    const std::string query = "MATCH (n:TckA) WHERE exists { "
+                              "  MATCH (m) WHERE exists { "
+                              "    MATCH (l) WHERE (l)<-[:TckR]-(n)-[:TckR]->(m) RETURN true "
+                              "  } RETURN true "
+                              "} RETURN n.prop AS prop";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+}
+
 // ── A negated pattern predicate must not disable a later comprehension ──
 //
 // Minimal reproduction of a defect confirmed against neo4j. `friend` is reached over

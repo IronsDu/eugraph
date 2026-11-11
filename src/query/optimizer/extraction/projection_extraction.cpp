@@ -1858,11 +1858,17 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
 
         PEPlan pi;
         pi.source_slot_id = slot;
+        // Created/Merged entities already arrive as VertexValue/EdgeValue; a
+        // labels/type column is only needed for topology sources that would
+        // otherwise have to construct the object. In particular, CREATE nodes
+        // never get a ProjectionExtract above them, so allocating a labels slot
+        // here would rewrite labels(n) to a column that does not exist.
+        auto source_type_it = source_types.find(slot);
+        const bool source_already_object =
+            source_type_it != source_types.end() && (source_type_it->second == binder::BoundTypeKind::VERTEX ||
+                                                     source_type_it->second == binder::BoundTypeKind::EDGE);
 
         if (r.need_whole_vertex || r.need_whole_edge) {
-            auto st = source_types.find(slot);
-            bool source_already_object = st != source_types.end() && (st->second == binder::BoundTypeKind::VERTEX ||
-                                                                      st->second == binder::BoundTypeKind::EDGE);
             if (source_already_object) {
                 pi.object_slot_id = pi.source_slot_id;
             } else {
@@ -1895,7 +1901,7 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
             pi.coalesce_vertices[prop] = std::move(co);
         }
 
-        if (r.need_vertex_labels)
+        if (r.need_vertex_labels && !source_already_object)
             pi.labels_slot_id = alloc.nextInternal();
         if (r.need_edge_type)
             pi.type_slot_id = alloc.nextInternal();

@@ -3159,7 +3159,63 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
     return result;
 }
 
-bool rewriteDstBoundExpandFilters(binder::BoundLogicalOperator& op, bool allow_probe) {
+/// Count variable names referenced by operator *fields* (Expand src/dst/edge,
+/// VarLen endpoints, Unwind variable, path elements, correlated columns). These
+/// are not expressions, so countExprRefs cannot see them. The endpoint rewrite
+/// must not rename a destination that a later operator still reads by name.
+void countPlanFieldRefs(const binder::BoundLogicalOperator& op, std::unordered_map<std::string, int>& refs) {
+    auto add = [&](const std::string& name) {
+        if (!name.empty())
+            ++refs[name];
+    };
+    std::visit(
+        [&](const auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                if (v) {
+                    add(v->src_variable);
+                    add(v->dst_variable);
+                    add(v->edge_variable);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (v) {
+                    add(v->src_variable);
+                    add(v->dst_variable);
+                    add(v->edge_variable);
+                    add(v->path_variable);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                if (v)
+                    add(v->variable);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                if (v) {
+                    add(v->path_variable);
+                    for (const auto& element : v->element_variables)
+                        add(element);
+                }
+            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
+                for (const auto& name : v.variables)
+                    add(name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                if (v)
+                    for (const auto& corr : v->correlation)
+                        add(corr.left_var);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                if (v)
+                    for (const auto& corr : v->correlation)
+                        add(corr.left_var);
+            }
+        },
+        op);
+    optimizer::forEachLogicalChild(op,
+                                   [&](const binder::BoundLogicalOperator& child) { countPlanFieldRefs(child, refs); });
+}
+
+bool rewriteDstBoundExpandFilters(binder::BoundLogicalOperator& op, bool allow_probe,
+                                  const std::unordered_map<std::string, int>* expr_refs,
+                                  const std::unordered_map<std::string, int>* field_refs) {
+    if (!expr_refs || !field_refs)
+        return false;
     if (auto* filter_holder = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&op)) {
         if (!*filter_holder)
             return false;
@@ -3178,7 +3234,23 @@ bool rewriteDstBoundExpandFilters(binder::BoundLogicalOperator& op, bool allow_p
                 else if (right->name == expand.dst_variable)
                     saved = left;
             }
-            if (saved && subtreeProvidesCorrelatedVariable(expand.child, saved->name)) {
+            // The destination may be read by another operator by name (the
+            // common case is the next hop of a chained pattern:
+            // Expand(dst=__exists_dst_0) then Expand(src=__exists_dst_0)).
+            // Renaming it to the saved column would leave that reference
+            // dangling. Require the id filter to be the only expression
+            // reference and the Expand itself the only field reference.
+            bool safe_to_fold = true;
+            if (saved) {
+                const std::string& dst_name = expand.dst_variable;
+                auto eit = expr_refs->find(dst_name);
+                auto fit = field_refs->find(dst_name);
+                const int expr_count = eit == expr_refs->end() ? 0 : eit->second;
+                const int field_count = fit == field_refs->end() ? 0 : fit->second;
+                if (expr_count != 1 || field_count != 1)
+                    safe_to_fold = false;
+            }
+            if (saved && safe_to_fold && subtreeProvidesCorrelatedVariable(expand.child, saved->name)) {
                 expand.dst_variable = saved->name;
                 expand.dst_column_index = saved->column_index;
                 expand.dst_slot_id = saved->slot_id;
@@ -3189,14 +3261,14 @@ bool rewriteDstBoundExpandFilters(binder::BoundLogicalOperator& op, bool allow_p
                 expand.probe_bound_dst = allow_probe && expand.direction != cypher::RelationshipDirection::UNDIRECTED;
                 binder::BoundLogicalOperator rewritten = std::move(filter.child);
                 op = std::move(rewritten);
-                rewriteDstBoundExpandFilters(op, allow_probe);
+                rewriteDstBoundExpandFilters(op, allow_probe, expr_refs, field_refs);
                 return true;
             }
         }
     }
     bool changed = false;
     optimizer::forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) {
-        changed = rewriteDstBoundExpandFilters(child, allow_probe) || changed;
+        changed = rewriteDstBoundExpandFilters(child, allow_probe, expr_refs, field_refs) || changed;
     });
     return changed;
 }
@@ -3233,7 +3305,13 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // `id(dst) == id(saved)` filter into a bound Expand destination, so the
     // Expand can do one exact seek per row instead of scanning every edge of
     // its source. Must precede requirements collection (see the helper).
-    rewriteDstBoundExpandFilters(bound_plan.root, ctx.read_only);
+    PlanRefIndex endpoint_expr_refs;
+    collectPlanRefsInto(bound_plan.root, endpoint_expr_refs);
+    std::unordered_map<std::string, int> endpoint_field_refs;
+    countPlanFieldRefs(bound_plan.root, endpoint_field_refs);
+    rewriteDstBoundExpandFilters(bound_plan.root, ctx.read_only,
+                                 endpoint_expr_refs.complete ? &endpoint_expr_refs.expr_refs : nullptr,
+                                 &endpoint_field_refs);
     ctx.alias_map = optimizer::collectAliasSlotMap(bound_plan.root, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(bound_plan.root, SubtreeTrait::PatternComprehension);
 
