@@ -743,7 +743,13 @@ folly::coro::Task<void> ExpandPhysicalOp::filterDstLabels(std::vector<EdgeEntryS
     if (list.empty() || dst_label_ids_.empty())
         co_return;
 
-    if (list.size() < 4096) {
+    // Per-neighbor label fetch vs one scan over the whole destination label.
+    // The scan is cheaper per row but pays for *every* vertex of the label, so
+    // it only wins when the edge list is comparable in size. Measured on SF1:
+    // 8,558 neighbors took 13.7 ms with the fetch path and 94 ms with the
+    // label scan (1,012,163 scanned vertices); the old 4096 cutoff picked the
+    // scan for every high-degree source.
+    if (list.size() < 65536) {
         std::vector<VertexId> label_neighbors;
         std::unordered_set<VertexId> label_neighbors_seen;
         std::unordered_map<VertexId, LabelIdSet> label_map;
