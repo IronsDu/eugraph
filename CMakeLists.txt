@@ -58,6 +58,47 @@ find_package(folly CONFIG REQUIRED)
 find_package(FBThrift CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
+# ==================== Process allocator ====================
+# tcmalloc (gperftools) is the default allocator. Concurrent query execution is
+# allocation-heavy and glibc malloc costs a measurable share of throughput at
+# low concurrency: on SF1 with the official LDBC driver, 2-thread complex-only
+# throughput 2.77 -> 2.89 op/s with tcmalloc (same binary, LD_PRELOAD A/B), and
+# Python c7 at 2 clients 237.9 -> 259.8 qps. It is a link-time replacement
+# (no code changes) applied to every executable defined below: server, shell,
+# loader and the test binaries.
+#
+# Disable with -DEUGRAPH_WITH_TCMALLOC=OFF. Sanitizer builds (-fsanitize=...)
+# disable it automatically: ASan owns malloc/free and must not be overridden.
+# Requires gperftools (libtcmalloc_minimal); when it is absent the build warns
+# and continues without it.
+option(EUGRAPH_WITH_TCMALLOC "Link tcmalloc (gperftools) as the process allocator" ON)
+if(EUGRAPH_WITH_TCMALLOC)
+    set(EUGRAPH_SANITIZER_BUILD OFF)
+    foreach(_eugraph_flags CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS)
+        if("${${_eugraph_flags}}" MATCHES "-fsanitize=")
+            set(EUGRAPH_SANITIZER_BUILD ON)
+        endif()
+    endforeach()
+    if(EUGRAPH_SANITIZER_BUILD)
+        message(STATUS "tcmalloc: disabled (sanitizer build owns malloc/free)")
+    else()
+        find_library(TCMALLOC_LIBRARY NAMES tcmalloc_minimal tcmalloc)
+        if(TCMALLOC_LIBRARY)
+            message(STATUS "tcmalloc: ${TCMALLOC_LIBRARY}")
+            add_library(eugraph_tcmalloc INTERFACE)
+            target_link_libraries(eugraph_tcmalloc INTERFACE "${TCMALLOC_LIBRARY}")
+            target_compile_definitions(eugraph_tcmalloc INTERFACE EUGRAPH_WITH_TCMALLOC=1)
+            # Directory-scoped: applies to every executable/library defined below
+            # in this directory, which is what "the whole project uses it" needs.
+            link_libraries(eugraph_tcmalloc)
+        else()
+            message(WARNING
+                "tcmalloc not found (install gperftools / libtcmalloc-minimal); building without it. "
+                "Pass -DEUGRAPH_WITH_TCMALLOC=OFF to silence this warning.")
+        endif()
+    endif()
+endif()
+
 if(EUGRAPH_ENABLE_WEB_CONSOLE)
     find_package(Drogon CONFIG REQUIRED)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
