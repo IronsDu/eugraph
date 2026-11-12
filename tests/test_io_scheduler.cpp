@@ -19,7 +19,10 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstdio>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -168,4 +171,48 @@ TEST(IoSchedulerTest, AbProductionDispatchMatchesReference) {
         << "production dispatch did not use the storage IO worker used by the reference";
     EXPECT_EQ(production.resume, production.caller) << "production did not resume on the caller executor";
     EXPECT_EQ(reference.value, 42);
+}
+
+// ==================== Hop scaling under concurrency (diagnostic) ====================
+//
+// A 4-thread LDBC driver run only reached 2.1x the single-thread throughput
+// while the machine stayed ~85% idle, and the storage microbenchmark
+// (eugraph_tests --gtest_filter='*PointReadScaling*') showed point reads
+// themselves scale. That leaves the compute->IO->compute hop: every storage
+// call pays one. This test measures the per-hop latency with 1, 2 and 4
+// concurrent coroutines on a 4-thread IO pool. Numbers are printed, not
+// asserted (CI noise), and only completion is checked.
+
+namespace {
+
+/// `workers` coroutines on the compute pool, each awaiting `hops` empty
+/// dispatches one at a time (the production shape: a statement serializes its
+/// storage calls).
+folly::coro::Task<void> hopLoop(eugraph::IoScheduler& io, unsigned hops) {
+    for (unsigned i = 0; i < hops; ++i)
+        co_await io.dispatchVoid([] {});
+}
+
+} // namespace
+
+TEST(IoSchedulerTest, DispatchHopScalingUnderConcurrency) {
+    constexpr unsigned kHops = 2000;
+    for (unsigned workers : {1u, 2u, 4u}) {
+        eugraph::IoScheduler io(4);
+        folly::CPUThreadPoolExecutor compute(8);
+        std::vector<std::thread> threads;
+        threads.reserve(workers);
+        const auto t0 = std::chrono::steady_clock::now();
+        for (unsigned w = 0; w < workers; ++w) {
+            threads.emplace_back([&] {
+                runOn(&compute, hopLoop(io, kHops));
+            });
+        }
+        for (auto& t : threads)
+            t.join();
+        const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
+        const double ns_per_hop = ns / kHops; // per worker: its hops are serialized
+        const double hops_per_sec = (static_cast<double>(workers) * kHops) / (ns / 1e9);
+        std::printf("[hop-scaling] %u worker(s): %.0f ns/hop, %.0f hops/s\n", workers, ns_per_hop, hops_per_sec);
+    }
 }
