@@ -4,8 +4,13 @@
 #include "test_sync_store.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace eugraph;
@@ -1445,4 +1450,147 @@ TEST_F(WTGraphStoreTest, GetVertexDataBatchKeepsDuplicateInputOrder) {
     EXPECT_TRUE(data[1].labels.contains(1));
     EXPECT_TRUE(data[2].labels.empty());
     EXPECT_TRUE(data[3].labels.contains(1));
+}
+
+// ==================== Concurrency scaling (diagnostic) ====================
+//
+// A 4-thread LDBC driver run reached only 2.1x the single-thread throughput
+// while the machine stayed ~85% idle, so this measures whether the storage
+// operations the LDBC complex queries lean on scale with concurrent sessions.
+// Production shape: one statement = one leased session, its storage calls
+// serialized; several statements run on different sessions/threads.
+//
+// Numbers are printed, not asserted: any threshold would be flaky on CI.
+// Run:
+//   ./build/release/eugraph_tests --gtest_filter='*StorageOperationScaling*'
+//
+// Companion diagnostic: `io_scheduler_tests --gtest_filter='*DispatchHopScaling*'`
+// measures the compute->IO->compute hop itself.
+
+namespace {
+
+constexpr uint32_t kScalingVertices = 10000;
+constexpr size_t kScalingBatch = 64;
+
+struct ScalingResult {
+    double units_per_sec = 0;
+    uint64_t checksum = 0;
+};
+
+/// `workers` threads, each with its own leased session in a read transaction,
+/// each performing `iters` units of `body`.
+template <typename Body>
+ScalingResult runScaling(eugraph::test::TestSyncGraphDataStore& store, unsigned workers, unsigned iters, Body& body) {
+    std::vector<std::unique_ptr<eugraph::SessionLease>> leases;
+    leases.reserve(workers);
+    for (unsigned w = 0; w < workers; ++w)
+        leases.push_back(store.acquireSession());
+
+    std::atomic<uint64_t> checksum{0};
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (unsigned w = 0; w < workers; ++w) {
+        threads.emplace_back([&, w] {
+            GraphSession& session = **leases[w];
+            if (!session.begin_read())
+                return;
+            uint64_t rng = 0x9E3779B97F4A7C15ull * (w + 1) + 12345;
+            uint64_t local = 0;
+            for (unsigned i = 0; i < iters; ++i) {
+                local += body(session, rng);
+                session.end_statement();
+            }
+            session.commit();
+            checksum.fetch_add(local, std::memory_order_relaxed);
+        });
+    }
+    for (auto& t : threads)
+        t.join();
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    ScalingResult out;
+    out.units_per_sec = secs > 0 ? static_cast<double>(workers) * iters / secs : 0.0;
+    out.checksum = checksum.load();
+    return out;
+}
+
+std::vector<VertexId> randomVids(uint64_t& rng) {
+    std::vector<VertexId> vids(kScalingBatch);
+    for (auto& v : vids) {
+        rng = rng * 6364136223846793005ull + 1442695040888963407ull;
+        v = static_cast<VertexId>((rng >> 33) % kScalingVertices);
+    }
+    return vids;
+}
+
+} // namespace
+
+TEST_F(WTGraphStoreTest, StorageOperationScalingAcrossSessions) {
+    constexpr uint32_t kInsertBatch = 1000;
+    for (uint32_t base = 0; base < kScalingVertices; base += kInsertBatch) {
+        auto txn = writeTxn();
+        for (VertexId v = base; v < base + kInsertBatch; ++v)
+            ASSERT_TRUE(store_->insertVertex(
+                txn, v, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, PropertyValue(int64_t{v})}})}}))
+                << "insertVertex failed at " << v;
+        commit(txn);
+    }
+    EdgeId eid = 1;
+    for (uint32_t base = 0; base < kScalingVertices; base += kInsertBatch) {
+        auto txn = writeTxn();
+        for (VertexId v = base; v < base + kInsertBatch; ++v) {
+            for (unsigned k = 1; k <= 4; ++k)
+                ASSERT_TRUE(store_->insertEdge(txn, eid++, v, static_cast<VertexId>((v + k * 97) % kScalingVertices),
+                                               EdgeLabelId{1}, Properties{}))
+                    << "insertEdge failed at " << v;
+        }
+        commit(txn);
+    }
+
+    constexpr unsigned kIters = 150;
+    auto measure = [&](const char* name, auto& body) {
+        // Warm the point-read pages once, then compare 1 vs 4 workers.
+        (void)runScaling(*store_, 1, kIters / 3, body);
+        const auto one = runScaling(*store_, 1, kIters, body);
+        const auto four = runScaling(*store_, 4, kIters, body);
+        std::printf("[storage-scaling] %-20s 1w=%10.0f/s  4w=%10.0f/s  scaling %.2fx   (units of %zu rows)\n",
+                    name, one.units_per_sec, four.units_per_sec,
+                    one.units_per_sec > 0 ? four.units_per_sec / one.units_per_sec : 0.0, kScalingBatch);
+        EXPECT_GT(one.checksum, 0u) << name << " produced no rows";
+        EXPECT_GT(four.checksum, 0u) << name << " produced no rows";
+    };
+
+    auto labels_body = [&](GraphSession& s, uint64_t& rng) -> uint64_t {
+        auto vids = randomVids(rng);
+        auto labels = store_->getVertexLabelsBatch(s, vids);
+        uint64_t n = 0;
+        for (const auto& set : labels)
+            n += set.contains(1) ? 1 : 0;
+        return n;
+    };
+    auto edges_body = [&](GraphSession& s, uint64_t& rng) -> uint64_t {
+        auto vids = randomVids(rng);
+        uint64_t edges = 0;
+        store_->scanEdgesBatch(s, vids, Direction::OUT, EdgeLabelId{1},
+                               [&](VertexId, const ISyncGraphDataStore::EdgeIndexEntry&) {
+                                   ++edges;
+                                   return true;
+                               });
+        return edges;
+    };
+    auto props_body = [&](GraphSession& s, uint64_t& rng) -> uint64_t {
+        auto vids = randomVids(rng);
+        auto props = store_->getVertexPropertiesBatchProjected(s, LabelId{1}, vids, std::vector<uint16_t>{0});
+        return props.size();
+    };
+    auto coalesce_body = [&](GraphSession& s, uint64_t& rng) -> uint64_t {
+        auto vids = randomVids(rng);
+        auto data = store_->getVertexCoalesceDataBatch(s, vids, std::vector<std::pair<LabelId, uint16_t>>{{1, 0}});
+        return data.size();
+    };
+
+    measure("labels(point)", labels_body);
+    measure("props(projected)", props_body);
+    measure("coalesce(labels+prop)", coalesce_body);
+    measure("edges(scanBatch)", edges_body);
 }

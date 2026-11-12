@@ -89,6 +89,15 @@ public:
         return std::ref(**auto_lease_);
     }
 
+    /// 借一个独立会话（并发基准用：每个 worker 一个会话，与生产「一条语句一个
+    /// 会话」同形；租约析构即归还池 ✓）。
+    [[nodiscard]] std::unique_ptr<SessionLease> acquireSession() {
+        auto lease = pool_->acquire();
+        if (!lease)
+            throw std::runtime_error("TestSyncGraphDataStore: session pool exhausted");
+        return std::make_unique<SessionLease>(std::move(*lease));
+    }
+
 private:
     struct Active {
         GraphSession* session;
