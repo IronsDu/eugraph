@@ -239,6 +239,10 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitPostfix(CypherParser::PostfixContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitLabelCast(CypherParser::LabelCastContext *ctx) override {
     return visitChildren(ctx);
   }

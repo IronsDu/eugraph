@@ -1036,6 +1036,30 @@ TEST_F(QueryExecutorTest, MatchPropertyMapSubscriptExpression) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 7);
 }
 
+TEST_F(QueryExecutorTest, SubscriptThenPropertyAccess) {
+    // #303: `rows[0].id` used to be a syntax error because the subscript ended
+    // the atomic expression. The postfix chain must keep `.name` attached to
+    // the subscripted value.
+    auto result = execSync(*executor_, "WITH [{id: 1}, {id: 2}] AS rows RETURN rows[0].id AS id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+
+    result = execSync(*executor_, "WITH [[1, 2]] AS rows RETURN rows[0][1] AS v");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+
+    result = execSync(*executor_, "WITH [{id: 1}] AS rows RETURN rows[0]['id'] + 1 AS v");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+}
+
 TEST_F(QueryExecutorTest, CreateNodeMultiLabelSharedProperty) {
     // LDBC update-6/7: `CREATE (p:Post:Message {id: ...})` shares `id` between
     // two labels. It is one node property, not an ambiguous reference; both

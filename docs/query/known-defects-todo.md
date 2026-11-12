@@ -179,7 +179,12 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
 
 ASan TCK 现在是绿色门禁。
 
-## 9. 解析器不接受「下标表达式后接属性访问」（`posts[0].id`）
+## 9. 解析器不接受「下标表达式后接属性访问」（`posts[0].id`）—— 已修复（2026-11-11）
+
+**状态**：已修复。`propertyExpression` 改为 `atom postfix*`，新增
+`postfix : DOT name | LBRACK (expression? RANGE expression? | expression) RBRACK`；
+`listExpression` 只保留 `IN` 谓词。生成代码由 `bash scripts/gen-grammar.sh` 重新生成
+（连续两次生成 sha256 一致，未手改生成文件）。
 
 **现象**：`l[0].id` 报 `CypherSyntaxError: UnexpectedSyntax`，而 neo4j 接受同样写法。
 本轮补 TCK 时由 neo4j 对照发现（`size([...])` 列表元素守卫测试原计划用 `posts[0].id`）。
@@ -212,16 +217,35 @@ atom : ... | parenthesizedExpression | functionInvocation | symbol | ... ;
 **影响**：Cypher 兼容性缺口；`posts[0].id` 这类写法在 LDBC/用户查询和 TCK 里很常见。
 本轮 TCK 用 `head(posts).id` 绕开，但用户查询会直接报语法错误。
 
-**修法方向**：把后缀链统一。建议把 `subscript` 提升为独立的 postfix 规则，让
-`propertyExpression` 变成 `atom postfix*`（`postfix := DOT name | LBRACK expression RBRACK`），
-`atomicExpression` 只保留 `IN / STARTS WITH / IS NULL` 这类中缀。改 `.g4` 后必须
-`./scripts/gen-grammar.sh` 重新生成，并核对生成代码 diff，不得手改生成文件。
+**修法（已实施）**：把后缀链统一到 `propertyExpression`：
+
+```antlr
+propertyExpression
+    : atom postfix* (COLONCOLON labelCast)? ;
+postfix
+    : DOT name
+    | LBRACK (expression? RANGE expression? | expression) RBRACK
+    ;
+listExpression
+    : IN propertyOrLabelExpression
+    ;
+```
+
+这样 `[0]` 和 `.id` 属于同一条 postfix 链，`l[0].id`、`l[0][1]`、`l[0].id[1]`、
+`[1,2][0]` 都按 `(l[0]).id` 的语义解析；`IN` 仍由 `atomicExpression` 的中缀处理，
+`a IN b[i]` 的下标自然绑定到 RHS。改 `.g4` 后用 `bash scripts/gen-grammar.sh`
+重新生成，生成代码 diff 与语法改动一致。
 
 **验证**：
 
-- `tests/test_cypher_parser.cpp` 增加 `l[0].id` / `(l[0]).id` / `l[0]['id']` 三个正例；
-- 用 neo4j 跑同一组表达式对照（本轮已确认 neo4j 全部返回 1）；
-- 语法改动后跑 TCK（`expressions/list`、`clauses/match`）与全量 `query_executor_tests`。
+- `cypher_parser_tests`：**93/93**，新增 `SubscriptThenPropertyPostfixChain`（覆盖
+  `l[0].id`、`(l[0]).id`、`l[0]['id']`、`l[0][0].id`、`l[0..1]`、`m['a']`、
+  `l[0] IN [1,2]`、`l[0].id + 1`）；修复前该测试报 `SyntaxError: UnexpectedSyntax`；
+- `query_executor_tests`：**641/641**，新增 `SubscriptThenPropertyAccess`（3 条真实查询）；
+- TCK `expressions/list` + `expressions/graph` + `clauses/match`：**627/627 场景、
+  2401/2401 步骤**通过；
+- 生成器幂等：连续两次生成后 5 个生成文件 sha256 一致；`scripts/check-format.sh` 通过；
+- neo4j 对照已在 issue 中确认（`l[0].id` / `(l[0]).id` / `l[0]['id']` 均为 1）。
 
 > GitHub issue: https://github.com/IronsDu/eugraph/issues/303
 

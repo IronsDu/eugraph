@@ -267,7 +267,6 @@ atomicExpression
 
 listExpression
     : IN propertyOrLabelExpression
-    | LBRACK (expression? RANGE expression? | expression) RBRACK
     ;
 
 stringExpression
@@ -289,7 +288,14 @@ propertyOrLabelExpression
     ;
 
 propertyExpression
-    : atom (DOT name)* (COLONCOLON labelCast)?
+    : atom postfix* (COLONCOLON labelCast)?
+    ;
+
+// All suffixes of an atom live in one chain so a subscript does not end the
+// expression: l[0].id, l[0][1], l[0].id[1] must parse like (l[0]).id.
+postfix
+    : DOT name
+    | LBRACK (expression? RANGE expression? | expression) RBRACK
     ;
 
 labelCast

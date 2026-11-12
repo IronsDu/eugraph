@@ -131,6 +131,8 @@ public:
 
     virtual std::any visitPropertyExpression(CypherParser::PropertyExpressionContext *context) = 0;
 
+    virtual std::any visitPostfix(CypherParser::PostfixContext *context) = 0;
+
     virtual std::any visitLabelCast(CypherParser::LabelCastContext *context) = 0;
 
     virtual std::any visitPatternPart(CypherParser::PatternPartContext *context) = 0;
