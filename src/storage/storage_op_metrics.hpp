@@ -36,19 +36,57 @@ inline std::shared_ptr<StorageOpCounters> pinStorageOpCounters(StorageOpCounters
 
 inline thread_local StorageOpCounters* tls_storage_op_counters = nullptr;
 
+/// Owning companion of `tls_storage_op_counters`.
+///
+/// SCOPE CONTRACT: this TLS is for **strictly nested, synchronous** scopes on
+/// the storage IO thread -- `StorageOpMetricsScope` is constructed and destroyed
+/// inside one dispatched lambda, never across a coroutine suspension, and the
+/// thread-local is only read by the sync store below it. Do NOT install it from
+/// coroutine code that can suspend: a coroutine resumes on a different compute
+/// thread and can outlive its statement, so a saved raw pointer there would be
+/// restored onto an unrelated thread and dangle (that crashed PROFILE +
+/// concurrent queries, #310). The owning companion keeps the raw mirror valid
+/// even if the scope's caller drops its reference first; it costs one refcount
+/// pair per dispatch, not per WT call.
+///
+/// Compute-side "current operator counters" do NOT use TLS: they live in
+/// `StorageProfileState`, which is owned per statement (see QueryContext).
+inline thread_local std::shared_ptr<StorageOpCounters> tls_storage_op_counters_owner;
+
+/// Per-statement holder for the counters a storage call issued *right now*
+/// should be charged to: the traced operator installs its own counters while it
+/// runs and restores the caller's when it suspends. A statement executes on one
+/// coroutine at a time, so this needs no TLS, no atomics and cannot leak across
+/// statements or threads -- which is exactly what the old thread-local design
+/// got wrong (#310).
+struct StorageProfileState {
+    std::shared_ptr<StorageOpCounters> current;
+};
+
 class StorageOpMetricsScope {
 public:
-    explicit StorageOpMetricsScope(StorageOpCounters* counters) noexcept : previous_(tls_storage_op_counters) {
+    explicit StorageOpMetricsScope(StorageOpCounters* counters) noexcept
+        : previous_(tls_storage_op_counters), previous_owner_(tls_storage_op_counters_owner) {
         tls_storage_op_counters = counters;
+        tls_storage_op_counters_owner.reset();
+    }
+    /// Preferred form whenever the counters are heap-owned (all PROFILE paths):
+    /// the scope then guarantees the counter object outlives the install.
+    explicit StorageOpMetricsScope(std::shared_ptr<StorageOpCounters> counters) noexcept
+        : previous_(tls_storage_op_counters), previous_owner_(tls_storage_op_counters_owner) {
+        tls_storage_op_counters = counters.get();
+        tls_storage_op_counters_owner = std::move(counters);
     }
     ~StorageOpMetricsScope() {
         tls_storage_op_counters = previous_;
+        tls_storage_op_counters_owner = std::move(previous_owner_);
     }
     StorageOpMetricsScope(const StorageOpMetricsScope&) = delete;
     StorageOpMetricsScope& operator=(const StorageOpMetricsScope&) = delete;
 
 private:
     StorageOpCounters* previous_;
+    std::shared_ptr<StorageOpCounters> previous_owner_;
 };
 
 inline void recordWtSearch() noexcept {
@@ -83,16 +121,16 @@ inline void recordIoDispatch(StorageOpCounters* counters) noexcept {
         counters->aggregate->io_dispatches.fetch_add(1, std::memory_order_relaxed);
 }
 
-inline void recordPrefetchHit() noexcept {
-    if (auto* counters = tls_storage_op_counters) {
+inline void recordPrefetchHit(StorageOpCounters* counters) noexcept {
+    if (counters != nullptr) {
         counters->prefetch_hits.fetch_add(1, std::memory_order_relaxed);
         if (counters->aggregate)
             counters->aggregate->prefetch_hits.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
-inline void recordPrefetchMiss() noexcept {
-    if (auto* counters = tls_storage_op_counters) {
+inline void recordPrefetchMiss(StorageOpCounters* counters) noexcept {
+    if (counters != nullptr) {
         counters->prefetch_misses.fetch_add(1, std::memory_order_relaxed);
         if (counters->aggregate)
             counters->aggregate->prefetch_misses.fetch_add(1, std::memory_order_relaxed);

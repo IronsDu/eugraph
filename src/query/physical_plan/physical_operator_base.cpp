@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <functional>
 #include <thread>
 
 namespace eugraph {
@@ -119,29 +120,50 @@ folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunkTraced() {
 }
 
 folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunkTracedImpl() {
-    auto* previous = tls_current_op_trace;
+    // The parent record comes from the statement context, not a thread-local:
+    // production builds attach the whole operator tree eagerly
+    // (setQueryContext -> attachQueryContext), so this only matters for a record
+    // created lazily, and either way a statement-scoped field cannot leak a
+    // destroyed record across threads (#310).
     if (!trace_record_)
-        trace_record_ = query_ctx_->addOpTrace(toString(), tls_current_op_trace);
-    tls_current_op_trace = trace_record_.get();
-    auto* previous_counters = tls_storage_op_counters;
-    auto* node_counters = trace_record_->counters.get();
-    if (node_counters)
-        tls_storage_op_counters = node_counters;
-    struct RestoreCurrentTrace {
-        OpTraceRecord* previous;
-        StorageOpCounters* previous_counters;
-        ~RestoreCurrentTrace() {
-            tls_current_op_trace = previous;
-            tls_storage_op_counters = previous_counters;
+        trace_record_ = query_ctx_->addOpTrace(toString(), query_ctx_->currentOpTrace());
+    std::shared_ptr<StorageOpCounters> const node_counters = trace_record_->counters;
+    OpTraceRecord* const self = trace_record_.get();
+    StorageProfileState* const state = query_ctx_->profileState();
+
+    // What the caller had installed, captured once: this operator restores it
+    // whenever it suspends so a sibling/caller's storage calls are not charged
+    // to us. The state is per statement and a statement runs one coroutine at a
+    // time, so plain LIFO save/restore is correct (no thread migration issue).
+    std::shared_ptr<StorageOpCounters> const caller_counters = state != nullptr ? state->current : nullptr;
+    OpTraceRecord* const caller_trace = query_ctx_->currentOpTrace();
+    auto install = [&] {
+        if (state != nullptr && node_counters)
+            state->current = node_counters;
+        query_ctx_->setCurrentOpTrace(self);
+    };
+    auto restore = [&] {
+        if (state != nullptr && node_counters)
+            state->current = caller_counters;
+        query_ctx_->setCurrentOpTrace(caller_trace);
+    };
+    // A cancelled query can drop the operator tree while the generator is
+    // suspended with its context installed; restore then.
+    struct RestoreOnDestroy {
+        std::function<void()> restore;
+        ~RestoreOnDestroy() {
+            restore();
         }
-    } restore{previous, previous_counters};
+    } restore_on_destroy{restore};
 
     auto start_wall = std::chrono::steady_clock::now();
     auto start_thread = std::this_thread::get_id();
     auto start_cpu = threadCpuNs();
     auto child_gen = executeChunk();
+    install();
     while (true) {
         auto chunk = co_await child_gen.next();
+        install();
         const auto now_wall = std::chrono::steady_clock::now();
         trace_record_->wall_ns +=
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now_wall - start_wall).count());
@@ -167,19 +189,16 @@ folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunkTracedImpl(
         // sibling's record is attached to this operator -- which made LeftJoin's
         // right sub-plan show up under its left child and inflated the join's
         // "self" time by the whole right side.
-        tls_current_op_trace = previous;
-        if (node_counters)
-            tls_storage_op_counters = previous_counters;
+        restore();
         co_yield std::move(*chunk);
-        tls_current_op_trace = trace_record_.get();
-        if (node_counters)
-            tls_storage_op_counters = node_counters;
+        install();
         // Do not charge time spent by downstream operators after this yield to
         // this operator: reset wall/CPU/thread when the generator is resumed.
         start_wall = std::chrono::steady_clock::now();
         start_thread = std::this_thread::get_id();
         start_cpu = threadCpuNs();
     }
+    restore();
 }
 
 } // namespace compute

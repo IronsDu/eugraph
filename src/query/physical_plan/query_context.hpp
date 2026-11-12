@@ -58,10 +58,10 @@ struct OpTraceRecord {
     std::shared_ptr<StorageOpCounters> counters;
 };
 
-/// Parent record of the operator currently being constructed. The traced
-/// wrapper installs it while executeChunk() runs, so a child can record which
-/// subtree it belongs to. Execution is single-threaded per statement.
-inline thread_local OpTraceRecord* tls_current_op_trace = nullptr;
+// Trace/counter context is statement-scoped and lives inside QueryContext (no
+// thread-local): a statement executes one coroutine at a time, so a plain field
+// is enough, and it cannot leak across statements/threads the way the old
+// thread-local did (#310).
 
 class QueryContext {
 public:
@@ -70,6 +70,10 @@ public:
           op_trace_log_(op_trace_) {
         if (profile_)
             statement_counters_ = std::make_shared<StorageOpCounters>();
+        // Storage calls issued between a traced operator's resume and suspend
+        // are charged here; the statement's AsyncGraphDataStore reads it per
+        // dispatch (#310).
+        profile_state_ = std::make_shared<StorageProfileState>();
     }
 
     /// Operator-level trace is opt-in: disabled means executeChunkTraced() returns
@@ -90,6 +94,21 @@ public:
 
     const std::shared_ptr<StorageOpCounters>& statementCounters() const noexcept {
         return statement_counters_;
+    }
+
+    /// Per-statement "current operator counters" slot (see StorageProfileState).
+    StorageProfileState* profileState() const noexcept {
+        return profile_state_.get();
+    }
+
+    /// Parent record for a lazily created trace record: the traced wrapper
+    /// installs its own record here while it runs and restores the caller's
+    /// when it suspends. Statement-scoped, so no thread-local is involved.
+    OpTraceRecord* currentOpTrace() const noexcept {
+        return current_op_trace_;
+    }
+    void setCurrentOpTrace(OpTraceRecord* record) noexcept {
+        current_op_trace_ = record;
     }
 
     /// Register one operator execution record. Execution is pull-based and
@@ -134,6 +153,8 @@ private:
     bool profile_ = false;
     bool op_trace_log_ = false;
     std::shared_ptr<StorageOpCounters> statement_counters_;
+    std::shared_ptr<StorageProfileState> profile_state_;
+    OpTraceRecord* current_op_trace_ = nullptr;
     std::vector<std::shared_ptr<OpTraceRecord>> op_trace_records_;
 };
 
