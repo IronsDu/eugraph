@@ -110,6 +110,9 @@ public:
     /// cost model picks the intended path and that both answer identically.
     static uint64_t labelFetchCount() noexcept;
     static uint64_t labelScanCount() noexcept;
+    /// Chunks whose destination-label test was answered from the per-operator
+    /// label memo instead of re-scanning the label. Proves the memo is live.
+    static uint64_t labelScanMemoHitCount() noexcept;
     static void resetLabelFilterCounts() noexcept;
 
     /// Diagnostics: rows that could not be answered from the destination probe
@@ -224,9 +227,24 @@ private:
     bool neighbor_cache_disabled_ = false;
     size_t cached_edge_count_ = 0;
     std::unordered_map<VertexId, std::vector<CachedNeighbor>> neighbor_cache_;
+
+    /// Destination-label membership memo for the forward-scan path of
+    /// filterDstLabels. An Expand filters its input chunk by chunk; the scan
+    /// path used to re-scan the whole label for every chunk (c11/SF1: 17 x
+    /// 1,575 Company rows to keep 4,580 edges). The full vid set of a label is
+    /// immutable within one statement, so it is scanned once and probed
+    /// afterwards. Only labels within the budget are memoised; larger labels
+    /// keep the per-chunk scan.
+    std::unordered_map<LabelId, std::unordered_set<VertexId>> label_scan_memo_;
+    size_t label_scan_memo_vids_ = 0;
+    static constexpr size_t kMaxMemoisedLabelVids = 65'536;
+    /// Memo budget, overridable per process so tests can force the uncached
+    /// branch (that label then keeps the pre-memo per-chunk scan).
+    static size_t maxMemoisedLabelVids();
     static std::atomic<uint64_t> cache_hit_count_;
     static std::atomic<uint64_t> label_fetch_count_;
     static std::atomic<uint64_t> label_scan_count_;
+    static std::atomic<uint64_t> label_scan_memo_hit_count_;
     static std::atomic<uint64_t> probe_fallback_count_;
 };
 
