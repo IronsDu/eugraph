@@ -16,6 +16,7 @@ namespace compute {
 std::atomic<uint64_t> ExpandPhysicalOp::cache_hit_count_{0};
 std::atomic<uint64_t> ExpandPhysicalOp::label_fetch_count_{0};
 std::atomic<uint64_t> ExpandPhysicalOp::label_scan_count_{0};
+std::atomic<uint64_t> ExpandPhysicalOp::label_scan_memo_hit_count_{0};
 std::atomic<uint64_t> ExpandPhysicalOp::probe_fallback_count_{0};
 
 uint64_t ExpandPhysicalOp::cacheHitCount() noexcept {
@@ -58,6 +59,10 @@ size_t ExpandPhysicalOp::maxProbeCachedEdges() {
     return envBudget(config::kEnvProbeMaxCachedEdges, kMaxProbeCachedEdges);
 }
 
+size_t ExpandPhysicalOp::maxMemoisedLabelVids() {
+    return envBudget(config::kEnvLabelMemoMaxVids, kMaxMemoisedLabelVids);
+}
+
 uint64_t ExpandPhysicalOp::labelFetchCount() noexcept {
     return label_fetch_count_.load(std::memory_order_relaxed);
 }
@@ -66,9 +71,14 @@ uint64_t ExpandPhysicalOp::labelScanCount() noexcept {
     return label_scan_count_.load(std::memory_order_relaxed);
 }
 
+uint64_t ExpandPhysicalOp::labelScanMemoHitCount() noexcept {
+    return label_scan_memo_hit_count_.load(std::memory_order_relaxed);
+}
+
 void ExpandPhysicalOp::resetLabelFilterCounts() noexcept {
     label_fetch_count_.store(0, std::memory_order_relaxed);
     label_scan_count_.store(0, std::memory_order_relaxed);
+    label_scan_memo_hit_count_.store(0, std::memory_order_relaxed);
 }
 
 uint64_t ExpandPhysicalOp::probeFallbackCount() noexcept {
@@ -1071,40 +1081,54 @@ folly::coro::Task<void> ExpandPhysicalOp::filterDstLabels(std::vector<EdgeEntryS
         co_return;
     }
 
-    label_scan_count_.fetch_add(1, std::memory_order_relaxed);
     const std::unordered_set<VertexId>& neighbor_set = label_neighbors_seen;
 
-    std::unordered_set<VertexId> label_matches;
-    std::unordered_set<VertexId> label_members;
-    bool first = true;
     std::vector<VertexId> label_batch;
+    // Resolve every required label to a membership set. A label small enough
+    // for the memo is scanned once per operator and probed from then on; an
+    // Expand normally runs the filter once per input chunk, so the same full
+    // scan used to repeat for every chunk (c11/SF1: 17 x 1,575 Company rows).
+    // Labels above the budget keep the old per-chunk scan restricted to this
+    // chunk's neighbours, so a huge label never materialises in memory.
+    std::vector<const std::unordered_set<VertexId>*> member_sets;
+    member_sets.reserve(dst_label_ids_.size());
+    std::vector<std::unique_ptr<std::unordered_set<VertexId>>> local_sets;
     for (LabelId need : dst_label_ids_) {
-        label_members.clear();
-        label_members.reserve(neighbor_set.size());
+        auto memo = label_scan_memo_.find(need);
+        if (memo != label_scan_memo_.end()) {
+            label_scan_memo_hit_count_.fetch_add(1, std::memory_order_relaxed);
+            member_sets.push_back(&memo->second);
+            continue;
+        }
+        label_scan_count_.fetch_add(1, std::memory_order_relaxed);
+        const size_t memo_budget = maxMemoisedLabelVids();
+        const bool memoise = label_scan_memo_vids_ < memo_budget;
+        std::unordered_set<VertexId> fresh;
         auto label_gen = cancellable(store_.scanVerticesByLabel(need, label_batch));
         while (auto batch = co_await label_gen.next()) {
             for (VertexId vid : *batch) {
-                if (neighbor_set.find(vid) != neighbor_set.end())
-                    label_members.insert(vid);
+                if (memoise)
+                    fresh.insert(vid);
+                else if (neighbor_set.find(vid) != neighbor_set.end())
+                    fresh.insert(vid);
             }
         }
-        if (first) {
-            label_matches.swap(label_members);
-            first = false;
+        if (memoise && label_scan_memo_vids_ + fresh.size() <= memo_budget) {
+            label_scan_memo_vids_ += fresh.size();
+            member_sets.push_back(&label_scan_memo_.emplace(need, std::move(fresh)).first->second);
         } else {
-            for (auto it = label_matches.begin(); it != label_matches.end();) {
-                if (!label_members.contains(*it))
-                    it = label_matches.erase(it);
-                else
-                    ++it;
-            }
+            local_sets.push_back(std::make_unique<std::unordered_set<VertexId>>(std::move(fresh)));
+            member_sets.push_back(local_sets.back().get());
         }
-        if (label_matches.empty())
-            break;
     }
 
     list.erase(std::remove_if(list.begin(), list.end(),
-                              [&](const EdgeEntryScratch& e) { return !label_matches.contains(e.dst_id); }),
+                              [&](const EdgeEntryScratch& e) {
+                                  for (const auto* members : member_sets)
+                                      if (members->find(e.dst_id) == members->end())
+                                          return true;
+                                  return false;
+                              }),
                list.end());
 }
 
