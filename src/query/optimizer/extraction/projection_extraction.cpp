@@ -640,7 +640,19 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                 auto reqVarIfPlan = [&](const std::string& var) -> std::string {
                     return (!var.empty() && var != current_skip) ? var : std::string{};
                 };
-                if (fname == "labels" && ptr->args.size() == 1) {
+                if ((fname == "id" || fname == "elementId" || fname == "element_id") && ptr->args.size() == 1) {
+                    // Identity-only consumer: id()/elementId() read the entity
+                    // id, which a VERTEX_REF / EDGE_KEY column already carries.
+                    // Raising whole-object demand here materialised the label
+                    // set and every property for each row: SF1
+                    //   MATCH (n:Person) RETURN count(id(n))  46.5 ms -> 5.0 ms
+                    // (9,892 rows x 2 extra storage reads). The scalar kernel
+                    // already has a dedicated VERTEX_REF/EDGE_KEY batch path
+                    // (idBatchFn), so no object is required.
+                    binder::BoundTypeKind kind = binder::BoundTypeKind::ANY;
+                    if (isDirectEntityRef(ptr->args[0], kind))
+                        deferred_child = &ptr->args[0];
+                } else if (fname == "labels" && ptr->args.size() == 1) {
                     std::string var = reqVarIfPlan(varNameFromObject(ptr->args[0]));
                     if (!var.empty()) {
                         binder::SlotId canon = resolver.canonicalForName(var);
