@@ -290,3 +290,44 @@ listExpression
 （`id` 只是普通属性，没有隐式唯一性），所以这不是引擎问题。
 
 > GitHub issue: https://github.com/IronsDu/eugraph/issues/304
+
+## 11. PROFILE + 并发查询崩溃（堆损坏 / SIGSEGV）—— 已修复（2026-11-12）
+
+**现象**：对服务端并发执行查询、其中至少一条走 `PROFILE` 时进程崩溃，两种签名：
+
+- `free(): chunks in smallbin corrupted` / `corrupted size vs. prev_size`，SIGABRT，
+  栈落在 Bolt PackStream 值路径（`vector<PackStreamValueStorage>` / `_Hashtable<std::string, ...>` 析构）；
+- SIGSEGV，栈顶 `pinStorageOpCounters(StorageOpCounters*)` ← `AsyncGraphDataStore::beginSession`。
+
+**最小复现**：3–4 条连接循环普通查询 + 1–2 条连接循环 `PROFILE` 同一查询（SF1、Release 构建），
+**main 基线二进制同样在数秒内崩溃**（Issue #310 记录了两份日志）。不带 PROFILE 的 4 连接
+普通负载跑 150–180 s 不崩。
+
+**根因**：算子 trace 用 **thread-local 裸指针**保存“当前算子的计数器 / 父记录”
+（`tls_storage_op_counters`、`tls_current_op_trace`），在 `executeChunkTracedImpl()` 协程里
+启动时保存一次、每次 yield/析构时恢复。但协程会**在 compute 线程池的不同线程上恢复**，
+traced generator 也可能在语句的 `QueryContext` 释放**之后**才析构；此时恢复动作把
+**已销毁**的记录指针装到某个线程的 TLS 上。只有 PROFILE 会安装非空计数器，所以只有
+PROFILE + 并发触发。之后任意一次 `dispatch()` 用 `raw->weak_from_this()` 取 shared_ptr
+就是 use-after-free（`pinStorageOpCounters`），或者 `recordWtSearch()` 写入已释放对象，
+表现为堆损坏 / SIGSEGV。
+
+**修法**（最终形态：compute 侧不再使用 TLS）：
+
+1. **算子上下文改为「语句作用域」状态**：`QueryContext` 持有 `StorageProfileState`
+   （当前算子计数器槽位）与 `current_op_trace`；traced 算子每次 resume 安装自己的值、
+   每次 suspend 还原调用方的值；`AsyncGraphDataStore::dispatch*` 只从该槽位取
+   `shared_ptr`（回退语句级 `profile_counters_`）。语句只由一个协程执行 ⇒ 普通成员字段足够，
+   **不存在跨线程保存/恢复**；计数器与记录都由语句上下文持所有权，协程晚于语句析构也不 UAF。
+2. **TLS 只保留给 IO 线程上严格嵌套的 `StorageOpMetricsScope`**（构造/析构都在同一个
+   dispatch lambda 内，不跨挂起点），并配持有所有权的伴随变量
+   （`tls_storage_op_counters_owner`）；头文件写明「不得从可挂起的协程代码安装」。
+3. 同步 store 的 `recordWt*` 热路径不变（仍读裸指针镜像）；evaluator 侧的
+   prefetch 计数改为显式传入语句当前计数器（`eval_ctx_.store->currentStorageCounters()`）。
+
+**验证**：4 条普通连接 + 2 条 PROFILE 连接混合压测 160 s（约 16k 次操作）**零崩溃、零错误**
+（修复前同负载数秒内必崩）；c4/c10/c1/c2 混合 60 s 无错误；`query_executor_tests` 644/644、
+`optimizer_tests` 124/124、`eugraph_tests` 113/113（含 2 个所有权用例）；PROFILE 计划树与
+逐算子在位计数（`scanRows`/`wtSearchNear`/`ioDispatches`）与修改前逐项一致。
+
+> GitHub issue: https://github.com/IronsDu/eugraph/issues/310
