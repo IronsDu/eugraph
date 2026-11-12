@@ -113,6 +113,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [LDBC c5/c9/c14 neo4j 计划对比](query/ldbc-neo4j-plan-comparison.md) | PROFILE 形状/dbHits、eugraph 对应计划与下一步优化方向 |
 | [LDBC 计划质量与剩余瓶颈](benchmark/ldbc-plan-quality-analysis.md) | c5/c6/c9/c14 的 EuGraph vs neo4j 逐算子 rows/dbHits 对照：计划形状是否一致、标签扫描/per-edge seek/PC 冗余的实测成本与优先级 |
 | [LDBC SNB SF1 对比测试](benchmark/ldbc-snb-sf1-comparison.md) | EuGraph vs Neo4j SF1 同源数据同机 A/B（3,181,724 顶点，10 轮 + 3 warmup）：21 条读查询与汇总；c6 9.12× 更快；c10 542→269 ms（5.58×→2.47×）、c14 1099→775 ms（3.89×→2.57×）仍为主要缺口；含 c1 SF1 数据差异说明 |
+| [LDBC SNB SF1 并发吞吐（driver，4 并发）](benchmark/ldbc-snb-concurrency.md) | 官方 driver 4 线程只读实测：4 并发 4.06 op/s（complex-only，2.10× 扩展）vs neo4j 16.83 op/s（3.84×）；存储点读 3.4–3.8×、调度 hop 无退化，排除单锁；剩余天花板=每查询 2 线程 + 并发下 CPU/op +22% + 内存压力；含 PROFILE+并发崩溃（Issue #310）与复现命令 |
 | [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 同源数据同机交错 A/B 耗时对比（最新 2026-11-08 稳态基准）、21/21 结果一致性验证（`scripts/verify_ldbc_results.py`）、并发 QPS（`scripts/bench_bolt_qps.py`）、慢查询与能力缺口、复现命令（`scripts/bench_ldbc_ab.py`）；§5 记录 2026-11-03/11-04 的存储/算子/evaluator 改动归因与下一步 |
 | [同步扫描回调设计](storage/scan-callback-design.md) | `std::function` → `folly::FunctionRef` 的同步 callback 边界、生命周期契约与不变量 |
 | [存储结构不变前提下的 LDBC 执行层优化计划](benchmark/ldbc-storage-unchanged-optimization-plan.md) | 不改 KV 布局、不加二级索引（与 neo4j 公平对比）前提下，c14/c5/c10/c6/c12 的可执行优化、预期收益、风险与验证判据 |
