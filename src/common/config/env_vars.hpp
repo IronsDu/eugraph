@@ -21,6 +21,7 @@ inline constexpr const char* kEnvProbeMaxEdgesPerSource = "EUGRAPH_PROBE_MAX_EDG
 inline constexpr const char* kEnvProbeMaxCachedEdges = "EUGRAPH_PROBE_MAX_CACHED_EDGES";
 inline constexpr const char* kEnvExpandInputRows = "EUGRAPH_EXPAND_INPUT_ROWS";
 inline constexpr const char* kEnvLabelMemoMaxVids = "EUGRAPH_LABEL_MEMO_MAX_VIDS";
+inline constexpr const char* kEnvIoInline = "EUGRAPH_IO_INLINE";
 inline constexpr const char* kEnvIndexBackfillBatch = "EUGRAPH_INDEX_BACKFILL_BATCH";
 inline constexpr const char* kEnvPathCountCacheMaxEntries = "EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES";
 

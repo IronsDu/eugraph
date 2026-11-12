@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/config/env_vars.hpp"
 #include "common/thread/numa_thread_factory.hpp"
 #include <folly/coro/CurrentExecutor.h>
 #include <folly/coro/Task.h>
@@ -35,9 +36,24 @@ public:
         return io_pool_.get();
     }
 
+    /// Diagnostic switch: run storage callables inline on the calling executor
+    /// instead of hopping to the storage IO pool. Removes the cross-thread hop
+    /// (~10 us) at the cost of doing the WT call on the query's compute thread;
+    /// used to measure how much of the concurrent throughput ceiling comes from
+    /// the hop itself. Read once (env is fixed for the process lifetime).
+    static bool inlineDispatchEnabled() {
+        static const bool enabled = [] {
+            const char* v = std::getenv(config::kEnvIoInline);
+            return v != nullptr && v[0] == '1';
+        }();
+        return enabled;
+    }
+
     /// Dispatch a callable returning non-void to the IO thread pool.
     template <typename F> folly::coro::Task<std::invoke_result_t<F>> dispatch(F func) {
         using R = std::invoke_result_t<F>;
+        if (inlineDispatchEnabled())
+            co_return func();
         auto ioTask =
             folly::coro::co_invoke([f = std::move(func)]() mutable -> folly::coro::Task<R> { co_return f(); });
         // A coroutine without an executor has nowhere to resume after the IO
@@ -52,6 +68,10 @@ public:
 
     /// Dispatch a void-returning callable to the IO thread pool.
     template <typename F> folly::coro::Task<void> dispatchVoid(F func) {
+        if (inlineDispatchEnabled()) {
+            func();
+            co_return;
+        }
         auto ioTask = folly::coro::co_invoke([f = std::move(func)]() mutable -> folly::coro::Task<void> {
             f();
             co_return;
