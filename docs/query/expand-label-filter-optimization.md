@@ -193,3 +193,42 @@ prefer_fetch = scan_rows > 0 ? distinct × 12 <= scan_rows
 
 回归：`query_executor_tests` 635/635、`optimizer_tests` 124/124、
 `verify_ldbc_results.py` 21/21 语义一致。
+
+## 6. 扫描路径按算子 memo（2026-11-12）
+
+`filterDstLabels` 每处理一个输入 chunk 调用一次，而扫描路径每次都会把**整张标签**
+从头扫一遍。c11/SF1 的 `(friend)-[workAt:WORK_AT]->(company:Company)` 有 2,089 个
+friend、18 个 chunk：4,580 条 WORK_AT 结果对应的却是 **17 × 1,575 = 26,775 行**
+Company 扫描；`(company)-[:IS_LOCATED_IN]->(:Country)` 又叠加 41 × 111 行。
+
+同一语句内一个标签的顶点集合不会变，因此改为按 operator 实例 memo：
+
+- 扫描路径首次遇到某标签时，把该标签的完整 vid 集合存进
+  `label_scan_memo_`（`unordered_map<LabelId, unordered_set<VertexId>>`），
+  之后的 chunk 只做内存成员判断；
+- memo 只缓存总量 ≤ `kMaxMemoisedLabelVids`（默认 65,536 vid，可用
+  `EUGRAPH_LABEL_MEMO_MAX_VIDS` 覆盖）的标签；超预算的标签保持旧行为——
+  只把自己 chunk 的邻居与扫描结果求交，不把大标签（如 100 万顶点的 Post）
+  常驻内存；
+- 判定逻辑不变（多标签仍要求全部命中），只是把「整标签扫描 + 求交」换成
+  「整标签扫描一次 + 逐 chunk 成员判断」。
+- 可观测性：`EXPAND` 的 `labelScanCount()` 只统计真实扫描次数，
+  新增 `labelScanMemoHitCount()` 统计由 memo 命中的 chunk 数；
+  两者与 `labelFetchCount()` 一起由 `resetLabelFilterCounts()` 清零。
+  回归 `QueryExecutorTest.DestinationLabelScanIsMemoisedAcrossChunks` 强制
+  `EUGRAPH_EXPAND_INPUT_ROWS=1`（10 个 chunk）断言扫描 1 次、memo 命中 > 0，
+  并用 `EUGRAPH_LABEL_MEMO_MAX_VIDS=1` 断言超预算分支回到 10 次扫描、结果不变。
+
+SF1 实测（同机交错 A/B，20 轮取 min，bench-sf1 数据）：
+
+| 查询 | 改前 min | 改后 min | 变化 |
+|---|---:|---:|---:|
+| complex-11 | 39.20 | 36.92 | −5.8%（重复测 −4.2% ~ −8.0%） |
+| complex-4 / complex-7 / complex-1 / complex-2 | — | — | ±1% 以内 |
+
+complex-11 的 PROFILE：`totalScanRows` 37,744 → 约 9,000（Company 26,775→1,575，
+Country 4,551→111），wall 35.8 → 29.9ms。
+
+注意：c11 剩余时间仍在 2,572 行 `friend` 的属性/顶点点读（9.3ms，实测换成 3 个扁平
+属性同样价）与 WORK_AT/IS_LOCATED_IN 两跳的逐源点查上；那部分属于「单次点读成本 +
+单 IO 线程串行」问题，不在本 memo 的覆盖范围。

@@ -30,6 +30,7 @@
 | `EUGRAPH_PROBE_MAX_EDGES_PER_SOURCE` | 16384 | Expand 集合探针 | 单个目的端可物化的邻接边上限；超过则回退批量精确 seek | 0 或非法值回退默认；结果不变 |
 | `EUGRAPH_PROBE_MAX_CACHED_EDGES` | 262144 | Expand 集合探针 | 探针缓存的总边预算；超过后未缓存目的端回退批量精确 seek | 0 或非法值回退默认；结果不变 |
 | `EUGRAPH_EXPAND_INPUT_ROWS` | 128 | Expand 执行 | 一次 Expand 调用的最大输入行数；上限 4096 | 控制单次展开的 chunk 大小 |
+| `EUGRAPH_LABEL_MEMO_MAX_VIDS` | 65536 | Expand 目的端标签过滤 | 扫描路径按算子 memo 的 vid 总预算；超过后该标签不缓存、逐 chunk 重扫 | 0 或非法值回退默认；只影响缓存，结果不变 |
 | `EUGRAPH_INDEX_BACKFILL_BATCH` | 20000 | 索引回填 | 索引回填事务的行数；上限 1,000,000 | 0 或非法值回退默认 |
 | `EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES` | 1,048,576 | PathCount 执行 | 每个 PathCount 算子的 `VertexId -> outdegree` 缓存上限；0 禁用缓存 | 超限后不再插入，改为重新计算 degree；结果不变 |
 | `EUGRAPH_NUMA_BIND` | 关闭 | 线程创建（启动时） | 值为 `1` 时启用 NUMA 绑定 | 单 NUMA 节点上是 no-op；绑定失败有日志 |

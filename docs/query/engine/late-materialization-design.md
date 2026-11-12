@@ -42,7 +42,18 @@ The split above partitions **flat PE columns** (props / labels / type). A whole
 must not raise whole-object demand for identity-only uses:
 
 - an intermediate `WITH n` / `WITH n AS m` forward,
-- an Aggregate group key that is a bare entity reference.
+- an Aggregate group key that is a bare entity reference,
+- `id(n)` / `elementId(n)` / `element_id(n)` (2026-11-12): the id lives in the
+  `VERTEX_REF` / `EDGE_KEY` column and `function::scalar::idBatchFn` has a
+  dedicated ref batch path, so the call is an identity consumer like the two
+  cases above. Before the rule, the function-call walk descended into the
+  argument and marked the entity `need_whole_vertex`, so
+  `MATCH (n:Person) RETURN count(id(n))` on SF1 built 9,892 `VertexValue`s
+  (2 extra storage reads each) and took **37.7 ms**; the same query now takes
+  **1.6 ms** with no `ProjectionExtract` in the plan. Regression:
+  `QueryExecutorTest.IdFunctionDoesNotConstructObject`, with
+  `PropertiesFunctionStillConstructsObject` as the guard that
+  `properties()/keys()` still materialise the object.
 
 Only true object consumers (statement output that returns the entity, SET /
 REMOVE / DELETE / MERGE, dynamic property access, labels()/type(), ...) raise it.
