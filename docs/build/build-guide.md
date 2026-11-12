@@ -66,6 +66,28 @@ cmake -B build -S . \
 cmake --build build
 ```
 
+### 3.4 内存分配器（默认 tcmalloc）
+
+Release/Debug 构建默认链接 **tcmalloc（gperftools）** 作为进程分配器（CMake 选项
+`EUGRAPH_WITH_TCMALLOC`，默认 `ON`）：并发查询执行是分配密集的，glibc malloc 在低并发下
+就吃掉可观的吞吐。它是**链接期替换**，不改任何代码，适用于 server / shell / loader / 测试二进制。
+
+- 依赖：系统安装 gperftools（RHEL 系 `gperftools-libs`，Debian/Ubuntu
+  `libtcmalloc-minimal4`）；CMake 用 `find_library(NAMES tcmalloc_minimal tcmalloc)` 定位。
+- 找不到时**只告警并继续**（不带 tcmalloc 构建），本地无该库、或 CI 镜像未装时不会卡构建；
+  要显式关闭：`-DEUGRAPH_WITH_TCMALLOC=OFF`。
+- **Sanitizer 构建自动禁用**：`-fsanitize=...` 出现在 `CMAKE_CXX_FLAGS` / `CMAKE_C_FLAGS` /
+  `CMAKE_EXE_LINKER_FLAGS` / `CMAKE_MODULE_LINKER_FLAGS` 时不链接 tcmalloc（ASan 自己接管
+  malloc/free，不能覆盖）。
+- 验证是否生效：`ldd build/release/eugraph-server | grep tcmalloc`，或
+  `LD_DEBUG=bindings ./build/release/eugraph-server --help 2>&1 | grep "symbol .malloc."`
+  应显示绑定到 `libtcmalloc_minimal`。
+
+实测（SF1、官方 LDBC driver、complex-only 只读混合、同机同轮、2 线程）：
+**2.77 → 2.89–3.00 op/s（约 +4~8%）**；Python c7 单查询 2 客户端 **237.9 → 259.8 qps（+9%）**，
+4 线程下收益随并发升高（与分配器竞争一致），但远小于“去掉 compute→IO hop”的收益
+（并发扩展的完整分析见 `perf/concurrency-diagnostics` 分支的 benchmark 文档）。
+
 ## 4. Sanitizer 构建
 
 ### 4.1 AddressSanitizer (ASan)
