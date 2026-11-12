@@ -6,6 +6,14 @@
 >
 > 源码：[benchmark/scheduler/executor_hop_bench.cpp](../../benchmark/scheduler/executor_hop_bench.cpp)
 
+
+> **注意（2026-11-12 补充）**：本 benchmark 的 compute/IO work 都是**自旋、无访存**，
+> 因此只能测 enqueue/wakeup 的固定成本。真实查询里 hop 的更大代价是**数据跨核**：
+> 存储调用在 IO 线程的核上把数据读进 cache，consume 它的 compute 线程在另一个核上，
+> 同一份数据要走两遍 cache。SF1 c7 上用 `perf stat` 实测：hop 模式 cache-miss/op
+> 206–272k，存储调用 inline 到 compute 线程后 143–167k（−25~45%），IPC 2.10–2.31 → 2.35–2.37。
+> 详见 [ldbc-snb-concurrency.md §8](ldbc-snb-concurrency.md)。
+
 ## 形状
 
 ```text
