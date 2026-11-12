@@ -15,12 +15,25 @@ option(EUGRAPH_ENABLE_CCACHE "Enable ccache for faster rebuilds" OFF)
 option(EUGRAPH_UNITY_BUILD "Enable unity builds to reduce compilation time" OFF)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 option(EUGRAPH_ENABLE_WEB_CONSOLE "Embed the EuGraph web console" ON)
+option(EUGRAPH_INLINE_STORAGE
+    "Run storage callables inline on the calling (compute) executor instead of hopping to the storage IO pool"
+    OFF)
 set(EUGRAPH_WEB_DIST "${PROJECT_SOURCE_DIR}/web/dist" CACHE PATH
     "Directory containing the built web console assets (committed to the repository)")
 
 if(ENABLE_COVERAGE)
     add_compile_options(--coverage)
     add_link_options(--coverage)
+endif()
+
+# Single-executor mode: storage calls run on the query's compute thread. This
+# removes the compute->IO->compute hop and the cross-core data handoff (SF1 c7
+# 4-client: cache-miss/op -25..45%, IPC +5..12%, qps +25..40%), at the cost of
+# blocking a compute thread for the duration of a storage call. Default OFF:
+# turn it on to size/validate the compute pool for a single-executor deployment.
+if(EUGRAPH_INLINE_STORAGE)
+    add_compile_definitions(EUGRAPH_INLINE_STORAGE=1)
+    message(STATUS "storage: inline on the compute executor (EUGRAPH_INLINE_STORAGE=ON)")
 endif()
 
 # clang 不会自动链接 libatomic：fbthrift/fizz 里的 std::atomic<T>::compare_exchange_weak
