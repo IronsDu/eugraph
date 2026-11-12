@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <sys/resource.h>
 #include <thread>
 #include <vector>
 
@@ -1475,6 +1476,9 @@ constexpr size_t kScalingBatch = 64;
 struct ScalingResult {
     double units_per_sec = 0;
     uint64_t checksum = 0;
+    /// Process CPU seconds consumed by this measurement (all worker threads),
+    /// so callers can compare CPU per unit at 1 vs N workers.
+    double cpu_seconds = 0;
 };
 
 /// `workers` threads, each with its own leased session in a read transaction,
@@ -1486,9 +1490,16 @@ ScalingResult runScaling(eugraph::test::TestSyncGraphDataStore& store, unsigned 
     for (unsigned w = 0; w < workers; ++w)
         leases.push_back(store.acquireSession());
 
+    auto cpu_now = [] {
+        struct rusage usage {};
+        ::getrusage(RUSAGE_SELF, &usage);
+        return static_cast<double>(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) +
+               static_cast<double>(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6;
+    };
     std::atomic<uint64_t> checksum{0};
     std::vector<std::thread> threads;
     threads.reserve(workers);
+    const double cpu_start = cpu_now();
     const auto t0 = std::chrono::steady_clock::now();
     for (unsigned w = 0; w < workers; ++w) {
         threads.emplace_back([&, w] {
@@ -1511,14 +1522,15 @@ ScalingResult runScaling(eugraph::test::TestSyncGraphDataStore& store, unsigned 
     ScalingResult out;
     out.units_per_sec = secs > 0 ? static_cast<double>(workers) * iters / secs : 0.0;
     out.checksum = checksum.load();
+    out.cpu_seconds = cpu_now() - cpu_start;
     return out;
 }
 
-std::vector<VertexId> randomVids(uint64_t& rng) {
+std::vector<VertexId> randomVids(uint64_t& rng, uint32_t vertex_count = kScalingVertices) {
     std::vector<VertexId> vids(kScalingBatch);
     for (auto& v : vids) {
         rng = rng * 6364136223846793005ull + 1442695040888963407ull;
-        v = static_cast<VertexId>((rng >> 33) % kScalingVertices);
+        v = static_cast<VertexId>((rng >> 33) % vertex_count);
     }
     return vids;
 }
@@ -1553,9 +1565,14 @@ TEST_F(WTGraphStoreTest, StorageOperationScalingAcrossSessions) {
         (void)runScaling(*store_, 1, kIters / 3, body);
         const auto one = runScaling(*store_, 1, kIters, body);
         const auto four = runScaling(*store_, 4, kIters, body);
-        std::printf("[storage-scaling] %-20s 1w=%10.0f/s  4w=%10.0f/s  scaling %.2fx   (units of %zu rows)\n",
+        const double one_us_per_unit = one.cpu_seconds * 1e6 / kIters;
+        const double four_us_per_unit = four.cpu_seconds * 1e6 / (4.0 * kIters);
+        std::printf("[storage-scaling] %-20s 1w=%10.0f/s  4w=%10.0f/s  scaling %.2fx  "
+                    "cpu/unit 1w=%.1fus 4w=%.1fus (%+.0f%%)\n",
                     name, one.units_per_sec, four.units_per_sec,
-                    one.units_per_sec > 0 ? four.units_per_sec / one.units_per_sec : 0.0, kScalingBatch);
+                    one.units_per_sec > 0 ? four.units_per_sec / one.units_per_sec : 0.0, one_us_per_unit,
+                    four_us_per_unit,
+                    one_us_per_unit > 0 ? 100.0 * (four_us_per_unit - one_us_per_unit) / one_us_per_unit : 0.0);
         EXPECT_GT(one.checksum, 0u) << name << " produced no rows";
         EXPECT_GT(four.checksum, 0u) << name << " produced no rows";
     };
@@ -1593,4 +1610,61 @@ TEST_F(WTGraphStoreTest, StorageOperationScalingAcrossSessions) {
     measure("props(projected)", props_body);
     measure("coalesce(labels+prop)", coalesce_body);
     measure("edges(scanBatch)", edges_body);
+}
+
+// Diagnostic: the same point-read scaling on a store that does NOT fit in L3.
+// The 10k-vertex test above is cache-resident; the LDBC SF1 stores are not
+// (3.2M vertices, 4.5 GB), so a cache-resident microbenchmark can hide the
+// memory-latency ceiling that dominates real concurrent reads.
+TEST_F(WTGraphStoreTest, PointReadScalingLargeStore) {
+    constexpr uint32_t kVertices = 300000;
+    constexpr uint32_t kInsertBatch = 10000;
+    for (uint32_t base = 0; base < kVertices; base += kInsertBatch) {
+        auto txn = writeTxn();
+        for (VertexId v = base; v < base + kInsertBatch; ++v)
+            ASSERT_TRUE(store_->insertVertex(
+                txn, v, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, PropertyValue(int64_t{v})}})}}))
+                << "insertVertex failed at " << v;
+        commit(txn);
+    }
+
+    constexpr unsigned kIters = 100;
+    auto cpu_now = [] {
+        struct rusage usage {};
+        ::getrusage(RUSAGE_SELF, &usage);
+        return static_cast<double>(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) +
+               static_cast<double>(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6;
+    };
+    auto measure = [&](const char* name, auto& body) {
+        (void)runScaling(*store_, 1, kIters / 2, body);
+        const auto one = runScaling(*store_, 1, kIters, body);
+        const auto four = runScaling(*store_, 4, kIters, body);
+        std::printf("[large-store] %-16s 1w=%9.0f/s 4w=%9.0f/s scaling %.2fx  cpu/unit 1w=%.1fus 4w=%.1fus (%+.0f%%)\n",
+                    name, one.units_per_sec, four.units_per_sec,
+                    one.units_per_sec > 0 ? four.units_per_sec / one.units_per_sec : 0.0,
+                    one.units_per_sec > 0 ? one.cpu_seconds * 1e6 / kIters : 0.0,
+                    four.units_per_sec > 0 ? four.cpu_seconds * 1e6 / (4.0 * kIters) : 0.0,
+                    (one.units_per_sec > 0 && four.units_per_sec > 0)
+                        ? 100.0 * ((four.cpu_seconds * 1e6 / (4.0 * kIters)) - (one.cpu_seconds * 1e6 / kIters)) /
+                              (one.cpu_seconds * 1e6 / kIters)
+                        : 0.0);
+        EXPECT_GT(one.checksum, 0u);
+        EXPECT_GT(four.checksum, 0u);
+    };
+
+    auto labels_body = [&](GraphSession& s, uint64_t& rng) -> uint64_t {
+        auto vids = randomVids(rng, kVertices);
+        auto labels = store_->getVertexLabelsBatch(s, vids);
+        uint64_t n = 0;
+        for (const auto& set : labels)
+            n += set.contains(1) ? 1 : 0;
+        return n;
+    };
+    auto coalesce_body = [&](GraphSession& s, uint64_t& rng) -> uint64_t {
+        auto vids = randomVids(rng, kVertices);
+        auto data = store_->getVertexCoalesceDataBatch(s, vids, std::vector<std::pair<LabelId, uint16_t>>{{1, 0}});
+        return data.size();
+    };
+    measure("labels(point)", labels_body);
+    measure("coalesce", coalesce_body);
 }
