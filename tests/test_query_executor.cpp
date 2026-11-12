@@ -5832,6 +5832,54 @@ TEST_F(QueryExecutorTest, DestinationLabelFilterCostModelBothPathsAgree) {
     EXPECT_EQ(ExpandPhysicalOp::labelFetchCount(), 0u) << "fetch path unexpectedly taken";
 }
 
+TEST_F(QueryExecutorTest, DestinationLabelScanIsMemoisedAcrossChunks) {
+    ASSERT_TRUE(execSync(*executor_, "UNWIND range(1, 10) AS i CREATE (:TckF {id: i})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "UNWIND range(1, 30) AS i CREATE (:TckX {id: i})").error.empty());
+    // Every TckF owns three TckX neighbours, so one input row per Expand chunk
+    // still prices the scan path (3 * 12 > 30) and repeats it once per chunk.
+    ASSERT_TRUE(execSync(*executor_, "MATCH (f:TckF), (x:TckX) WHERE x.id IN [f.id, f.id + 10, f.id + 20] "
+                                     "CREATE (x)-[:TCK_C]->(f)")
+                    .error.empty());
+    // Planning uses graph-open label counts; CREATE does not refresh them.
+    auto x_label = blockingWait(async_meta_->getLabelId("TckX"));
+    ASSERT_TRUE(x_label.has_value());
+    async_meta_->setLabelVertexCount(*x_label, 30);
+
+    const std::string query = "MATCH (f:TckF)<-[:TCK_C]-(x:TckX) RETURN f.id AS fid, x.id AS xid ORDER BY fid, xid";
+    auto expect_rows = [&](const ExecutionResult& result) {
+        ASSERT_TRUE(result.error.empty()) << result.error;
+        ASSERT_EQ(result.rows.size(), 30u);
+        for (size_t i = 0; i < result.rows.size(); ++i) {
+            const auto fid = static_cast<int64_t>(i / 3) + 1;
+            const auto xid = fid + 10 * static_cast<int64_t>(i % 3);
+            EXPECT_EQ(std::get<int64_t>(result.rows[i][0]), fid);
+            EXPECT_EQ(std::get<int64_t>(result.rows[i][1]), xid);
+        }
+    };
+
+    {
+        // One input row per chunk: the filter runs ten times. The label must be
+        // scanned once and probed from the per-operator memo afterwards.
+        ScopedEnvVar chunk("EUGRAPH_EXPAND_INPUT_ROWS", "1");
+        ExpandPhysicalOp::resetLabelFilterCounts();
+        auto result = execSync(*executor_, query);
+        expect_rows(result);
+        EXPECT_EQ(ExpandPhysicalOp::labelScanCount(), 1u) << "label re-scanned per chunk";
+        EXPECT_GT(ExpandPhysicalOp::labelScanMemoHitCount(), 0u) << "memo never reused";
+    }
+    {
+        // A one-vid budget forces the uncached branch: every chunk scans, and
+        // the answer must not change.
+        ScopedEnvVar chunk("EUGRAPH_EXPAND_INPUT_ROWS", "1");
+        ScopedEnvVar budget("EUGRAPH_LABEL_MEMO_MAX_VIDS", "1");
+        ExpandPhysicalOp::resetLabelFilterCounts();
+        auto result = execSync(*executor_, query);
+        expect_rows(result);
+        EXPECT_EQ(ExpandPhysicalOp::labelScanCount(), 10u) << "uncached branch must rescan per chunk";
+        EXPECT_EQ(ExpandPhysicalOp::labelScanMemoHitCount(), 0u);
+    }
+}
+
 TEST_F(QueryExecutorTest, UserWrittenEndpointIdEqualityIsNotFoldedIntoExpand) {
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:TckA {id: 1}), (b:TckB {id: 2}), "
                                      "(a)-[:TCK_R]->(a), (a)-[:TCK_R]->(b)")
@@ -11028,6 +11076,41 @@ TEST_F(QueryExecutorTest, WithForwardedVertexReturnedWholeKeepsObject) {
     ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(result.rows[0][0]));
     auto& vv = *std::get<VertexValuePtr>(result.rows[0][0]);
     EXPECT_FALSE(vv.properties.empty());
+}
+
+/// `id()` / `elementId()` are identity consumers: a VERTEX_REF column already
+/// carries the id and the scalar kernel has a ref batch path, so no
+/// VertexValue is needed. Demanding one constructed labels + every property
+/// per row (SF1 `MATCH (n:Person) RETURN count(id(n))`: 46.5 ms -> 5.0 ms).
+TEST_F(QueryExecutorTest, IdFunctionDoesNotConstructObject) {
+    ASSERT_TRUE(
+        execSync(*executor_, "CREATE (:Person {name: 'a', age: 1}), (:Person {name: 'b', age: 2})").error.empty());
+
+    const std::string query = "MATCH (n:Person) RETURN id(n) AS id ORDER BY id";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_EQ(plan.find("ctor-vertex"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_LT(std::get<int64_t>(result.rows[0][0]), std::get<int64_t>(result.rows[1][0]));
+
+    auto agg = execSync(*executor_, "MATCH (n:Person) RETURN count(id(n)) AS c");
+    ASSERT_TRUE(agg.error.empty()) << agg.error;
+    ASSERT_EQ(agg.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(agg.rows[0][0]), 2);
+}
+
+/// Guard: properties()/keys() still read the object, so the identity-only
+/// relaxation must stay scoped to id()/elementId().
+TEST_F(QueryExecutorTest, PropertiesFunctionStillConstructsObject) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:Person {name: 'a', age: 1})").error.empty());
+
+    const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person) RETURN properties(n)");
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("ctor-vertex"), std::string::npos) << plan;
 }
 
 /// c5 shape: `WITH forum, collect(friend)` / `WITH forum, count(post)` only
