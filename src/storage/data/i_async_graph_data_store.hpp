@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
+#include "storage/storage_op_metrics.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
@@ -16,6 +17,10 @@ namespace eugraph {
 
 class GraphSession;
 
+/// Per-statement holder for the counters storage calls are charged to right
+/// now (see StorageProfileState in storage/storage_op_metrics.hpp).
+struct StorageProfileState;
+
 /// Async graph data store interface.
 /// Compute layer depends on this interface instead of sync types.
 ///
@@ -25,6 +30,13 @@ class GraphSession;
 class IAsyncGraphDataStore {
 public:
     virtual ~IAsyncGraphDataStore() = default;
+
+    /// Counters the storage calls issued *now* are charged to. The traced
+    /// operator installs its own counters here while it runs; the statement's
+    /// async store reads them per dispatch. Statement-scoped, no TLS (#310).
+    virtual StorageOpCounters* currentStorageCounters() const {
+        return nullptr;
+    }
 
     // 数据 op 由**构造即绑定会话**的实现执行（见 AsyncGraphDataStore）：
     // 每个语句一个轻量实例，不共享会话；DDL 仍走内部 admin session ✓。

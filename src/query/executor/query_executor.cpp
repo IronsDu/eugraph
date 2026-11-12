@@ -199,6 +199,9 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // 显式事务分支：会话已由 BEGIN 开启，这里只构造绑定门面；自动提交分支已在上面构造。
     if (!ctx->query_store)
         ctx->query_store.emplace(async_data_.for_session(active_session->get()));
+    // Give the store the statement's "current operator counters" slot: traced
+    // operators install their counters there while they run (#310).
+    ctx->query_store->setProfileState(query_ctx->profileState());
     if (is_profile)
         ctx->query_store->setProfileCounters(query_ctx->statementCounters());
     IAsyncGraphDataStore& query_data = *ctx->query_store;

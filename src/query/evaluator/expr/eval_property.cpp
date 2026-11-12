@@ -10,6 +10,14 @@
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
 namespace eugraph {
+namespace {
+/// Counters a compute-side prefetch event is charged to: the statement's
+/// current operator counters (no TLS, see StorageProfileState).
+inline StorageOpCounters* currentCounters(const function::EvalContext& ctx) {
+    return ctx.store != nullptr ? ctx.store->currentStorageCounters() : nullptr;
+}
+} // namespace
+
 namespace compute {
 
 void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result,
@@ -92,12 +100,12 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 auto pit = prefetched_vertex_data_.find(vertex.id);
                 if (pit != prefetched_vertex_data_.end()) {
                     props = &pit->second.properties;
-                    recordPrefetchHit();
+                    recordPrefetchHit(currentCounters(eval_ctx_));
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vertex.id);
                 } else {
                     missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
-                    recordPrefetchMiss();
+                    recordPrefetchMiss(currentCounters(eval_ctx_));
                 }
             }
             // Most vertices have exactly one matching candidate. Keep the
@@ -164,7 +172,7 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 // prefetch(); evaluation stays storage-free.
                 auto pit = prefetched_vertex_data_.find(vref.id);
                 if (pit != prefetched_vertex_data_.end()) {
-                    recordPrefetchHit();
+                    recordPrefetchHit(currentCounters(eval_ctx_));
                     const auto& props = pit->second.properties;
                     for (const auto& candidate : ref.candidates) {
                         auto lit = props.find(candidate.label_id);
@@ -194,7 +202,7 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     prefetch_pending_ids_.push_back(vref.id);
                 } else {
                     missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
-                    recordPrefetchMiss();
+                    recordPrefetchMiss(currentCounters(eval_ctx_));
                 }
             }
         } else if (std::holds_alternative<EdgeKey>(ov)) {
@@ -392,12 +400,12 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 auto pit = prefetched_vertex_data_.find(vertex.id);
                 if (pit != prefetched_vertex_data_.end()) {
                     props = &pit->second.properties;
-                    recordPrefetchHit();
+                    recordPrefetchHit(currentCounters(eval_ctx_));
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vertex.id);
                 } else {
                     missing_prefetch_count_.fetch_add(1, std::memory_order_relaxed);
-                    recordPrefetchMiss();
+                    recordPrefetchMiss(currentCounters(eval_ctx_));
                 }
             }
             // __anon__ may exist only in the prefetch cache after REMOVE LABEL

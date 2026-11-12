@@ -266,3 +266,22 @@ grep '\[DPL\]' /tmp/server.log | grep 'whole_vertex=1'
 - [查询性能排查与优化笔记（GDB 采样、A/B 纪律）](../benchmark/query-performance-optimization-notes.md)
 - [ProjectionExtract 按需物化与 slot 体系](../query/engine/projection-extract-design.md)
 - [构建指南](../build/build-guide.md)（ASan/UBSan）
+
+## 10. 算子上下文归属：语句作用域，不用 TLS（2026-11-12）
+
+算子 trace（PROFILE / `EUGRAPH_OP_TRACE`）需要知道“当前算子的计数器”和“父记录”。**这两者
+都是语句级状态，不能放 thread-local**：traced generator 是协程，会在 compute 线程池的不同
+线程上恢复，甚至可能在语句的 `QueryContext` 释放之后才析构；把保存的裸指针恢复回去就会悬垂
+（Issue #310 的崩溃就是这么来的）。约定：
+
+- **compute 侧**：`QueryContext` 持有 `StorageProfileState`（当前计数器槽位）与
+  `current_op_trace`；traced 算子每次 resume 安装自己的值、每次 suspend 还原调用方的值。
+  语句只由一个协程执行，普通成员字段即可，无需原子/锁。
+- **`AsyncGraphDataStore::dispatch*`**：只从 `profile_state_->current`（回退语句级
+  `profile_counters_`）取 `shared_ptr`，**不要**从裸 TLS 指针 `weak_from_this()`。
+- **IO 线程侧**：`StorageOpMetricsScope` 仍是 TLS，但只允许**严格嵌套、同步**使用——
+  构造与析构都在同一个 dispatch lambda 内，绝不跨挂起点；它配有持有所有权的伴随变量
+  （`tls_storage_op_counters_owner`），同步 store 的 `recordWt*` 只读裸指针镜像。
+
+新增 trace/metrics 代码时按此契约写；修复记录与复现见
+[known-defects §11](../query/known-defects-todo.md)（Issue #310）。

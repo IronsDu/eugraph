@@ -42,11 +42,26 @@ public:
     [[nodiscard]] AsyncGraphDataStore for_session(GraphSession& session) const {
         AsyncGraphDataStore store(store_, io_, session);
         store.profile_counters_ = profile_counters_;
+        store.profile_state_ = profile_state_;
         return store;
     }
 
     void setProfileCounters(std::shared_ptr<StorageOpCounters> counters) {
         profile_counters_ = std::move(counters);
+    }
+
+    /// Per-statement slot the traced operator installs its counters into; see
+    /// StorageProfileState. The facade reads it per dispatch, on the statement's
+    /// execute thread, so no synchronization is needed (#310).
+    /// Borrow the statement's state (owned by its QueryContext). The facade and
+    /// the context share the statement's lifetime, and operators keep the
+    /// context alive, so a plain pointer is enough here.
+    void setProfileState(StorageProfileState* state) {
+        profile_state_ = state;
+    }
+
+    StorageOpCounters* currentStorageCounters() const override {
+        return profile_state_ && profile_state_->current ? profile_state_->current.get() : nullptr;
     }
 
     // ==================== Session transaction control ====================
@@ -887,28 +902,20 @@ private:
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
-        StorageOpCounters* raw_counters =
-            tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
-        // Keep the counter object alive until the queued IO lambda finishes.
-        // A cancelled query may destroy its operator/query context while the
-        // dispatch is still in flight; the raw counters pointer would otherwise
-        // dangle in recordIoDispatch / the IO-thread metrics scope.
+        // Which counter object this call is charged to: the counters the
+        // traced operator installed for this statement segment, else the
+        // statement-level counters. Statement-scoped shared_ptr, never TLS: the
+        // old thread-local carried another statement's (possibly destroyed)
+        // counters across thread migrations -- the PROFILE + concurrency crash
+        // (#310). Capturing the shared_ptr also keeps the object alive until the
+        // queued IO lambda finishes, even if the query is cancelled meanwhile.
         std::shared_ptr<StorageOpCounters> counters =
-            tls_storage_op_counters != nullptr ? pinStorageOpCounters(raw_counters) : profile_counters_;
+            (profile_state_ && profile_state_->current) ? profile_state_->current : profile_counters_;
         if (counters) {
             recordIoDispatch(counters.get());
             auto wrapped = [func = std::move(func),
                             counters = std::move(counters)]() mutable -> std::invoke_result_t<F> {
-                StorageOpMetricsScope scope(counters.get());
-                return func();
-            };
-            return io_.dispatch(std::move(wrapped));
-        }
-        if (raw_counters != nullptr) {
-            // Fallback for non-shared test/local counters.
-            recordIoDispatch(raw_counters);
-            auto wrapped = [func = std::move(func), raw_counters]() mutable -> std::invoke_result_t<F> {
-                StorageOpMetricsScope scope(raw_counters);
+                StorageOpMetricsScope scope(counters);
                 return func();
             };
             return io_.dispatch(std::move(wrapped));
@@ -930,22 +937,13 @@ private:
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
-        StorageOpCounters* raw_counters =
-            tls_storage_op_counters != nullptr ? tls_storage_op_counters : profile_counters_.get();
+        // Same rule as dispatch(): statement-scoped counters, never TLS (#310).
         std::shared_ptr<StorageOpCounters> counters =
-            tls_storage_op_counters != nullptr ? pinStorageOpCounters(raw_counters) : profile_counters_;
+            (profile_state_ && profile_state_->current) ? profile_state_->current : profile_counters_;
         if (counters) {
             recordIoDispatch(counters.get());
             auto wrapped = [func = std::move(func), counters = std::move(counters)]() mutable {
-                StorageOpMetricsScope scope(counters.get());
-                func();
-            };
-            return io_.dispatchVoid(std::move(wrapped));
-        }
-        if (raw_counters != nullptr) {
-            recordIoDispatch(raw_counters);
-            auto wrapped = [func = std::move(func), raw_counters]() mutable {
-                StorageOpMetricsScope scope(raw_counters);
+                StorageOpMetricsScope scope(counters);
                 func();
             };
             return io_.dispatchVoid(std::move(wrapped));
@@ -966,6 +964,9 @@ private:
     GraphSession& session_;
     IoStats io_stats_;
     std::shared_ptr<StorageOpCounters> profile_counters_;
+    /// Per-statement "current operator counters" slot (owned by QueryContext;
+    /// the facade only borrows it for the statement's lifetime).
+    StorageProfileState* profile_state_ = nullptr;
 };
 
 } // namespace eugraph
