@@ -71,16 +71,20 @@ public:
     // Thrift network/stream-loop thread. The session is used serially: the
     // caller awaits the dispatch before touching the session again.
 
+    // Session control always runs on the storage IO pool, never on the query
+    // slots: a commit can fsync, and that must not block the compute pool even
+    // when data calls run inline / on the same executor.
     folly::coro::Task<bool> beginSession(bool write) {
-        co_return co_await dispatch([this, write] { return write ? session_.begin_write() : session_.begin_read(); });
+        co_return co_await dispatchOnIoPool(
+            [this, write] { return write ? session_.begin_write() : session_.begin_read(); });
     }
 
     folly::coro::Task<TxnOutcome> commitSession() {
-        co_return co_await dispatch([this] { return session_.commit(); });
+        co_return co_await dispatchOnIoPool([this] { return session_.commit(); });
     }
 
     folly::coro::Task<void> rollbackSession() {
-        co_await dispatchVoid([this] { session_.rollback(); });
+        co_await dispatchVoidOnIoPool([this] { session_.rollback(); });
     }
 
     /// 本实例（一条语句）发起过的 io_.dispatch 次数。每次从一个 executor
@@ -899,6 +903,20 @@ private:
     template <typename F>
     folly::coro::Task<std::invoke_result_t<F>> dispatch(F func,
                                                         std::source_location loc = std::source_location::current()) {
+        return dispatchImpl(std::move(func), /*force_io_pool=*/false, loc);
+    }
+
+    /// Session control (BEGIN/COMMIT/ROLLBACK) must stay on the storage IO pool
+    /// even when data calls run inline or on the compute pool: a commit may
+    /// fsync and must not occupy a query slot.
+    template <typename F>
+    folly::coro::Task<std::invoke_result_t<F>>
+    dispatchOnIoPool(F func, std::source_location loc = std::source_location::current()) {
+        return dispatchImpl(std::move(func), /*force_io_pool=*/true, loc);
+    }
+
+    template <typename F>
+    folly::coro::Task<std::invoke_result_t<F>> dispatchImpl(F func, bool force_io_pool, std::source_location loc) {
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
@@ -918,10 +936,10 @@ private:
                 StorageOpMetricsScope scope(counters);
                 return func();
             };
-            return io_.dispatch(std::move(wrapped));
+            return force_io_pool ? io_.dispatchOnIoPool(std::move(wrapped)) : io_.dispatch(std::move(wrapped));
         }
         if (!trace)
-            return io_.dispatch(std::move(func));
+            return force_io_pool ? io_.dispatchOnIoPool(std::move(func)) : io_.dispatch(std::move(func));
 
         auto statement_counters = io_stats_.seeks;
         auto wrapped = [func = std::move(func),
@@ -929,11 +947,21 @@ private:
             StorageOpMetricsScope scope(statement_counters.get());
             return func();
         };
-        return io_.dispatch(std::move(wrapped));
+        return force_io_pool ? io_.dispatchOnIoPool(std::move(wrapped)) : io_.dispatch(std::move(wrapped));
     }
 
     template <typename F>
     folly::coro::Task<void> dispatchVoid(F func, std::source_location loc = std::source_location::current()) {
+        return dispatchVoidImpl(std::move(func), /*force_io_pool=*/false, loc);
+    }
+
+    template <typename F>
+    folly::coro::Task<void> dispatchVoidOnIoPool(F func, std::source_location loc = std::source_location::current()) {
+        return dispatchVoidImpl(std::move(func), /*force_io_pool=*/true, loc);
+    }
+
+    template <typename F>
+    folly::coro::Task<void> dispatchVoidImpl(F func, bool force_io_pool, std::source_location loc) {
         const bool trace = ioTraceEnabled();
         if (trace)
             recordDispatch(loc);
@@ -946,17 +974,17 @@ private:
                 StorageOpMetricsScope scope(counters);
                 func();
             };
-            return io_.dispatchVoid(std::move(wrapped));
+            return force_io_pool ? io_.dispatchVoidOnIoPool(std::move(wrapped)) : io_.dispatchVoid(std::move(wrapped));
         }
         if (!trace)
-            return io_.dispatchVoid(std::move(func));
+            return force_io_pool ? io_.dispatchVoidOnIoPool(std::move(func)) : io_.dispatchVoid(std::move(func));
 
         auto statement_counters = io_stats_.seeks;
         auto wrapped = [func = std::move(func), statement_counters = std::move(statement_counters)]() mutable {
             StorageOpMetricsScope scope(statement_counters.get());
             func();
         };
-        return io_.dispatchVoid(std::move(wrapped));
+        return force_io_pool ? io_.dispatchVoidOnIoPool(std::move(wrapped)) : io_.dispatchVoid(std::move(wrapped));
     }
 
     ISyncGraphDataStore& store_;
