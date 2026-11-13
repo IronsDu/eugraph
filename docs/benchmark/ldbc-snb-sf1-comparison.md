@@ -41,6 +41,14 @@
   下表耗时为本轮实测并计入汇总。c1 结果中仍可能出现 `[null,null,null]` 组织元组，
   这是 LDBC driver 的 `asOrganization` 不处理 null tuple，属于独立的 driver 适配问题。
 
+> **小查询（<5 ms）的 JVM 预热敏感性（2026-11-13 追加）**：同一台机器、同一 neo4j 实例，
+> c7 的延迟随 JVM 状态在 **1.0 → 3.0 → 8–9 ms** 之间摆动（刚重启后 7–9 ms，连续压测
+> ~40 min 后 1.0–1.3 ms，重启后再跑 5 轮 warmup 仍只有 3.0 ms）；short 系列同样从
+> 0.4–0.6 ms 摆到 1.5–2.7 ms。大查询（c3/c5/c9/c12/c14）在这些状态下只差 ~5%，因此
+> **complex 合计与比值可比，sub-5 ms 的逐条比值只作参考**。表中数据来自已连续服务约
+> 40 min 的 neo4j 实例；复现时请保证两边都经过足够长的预热（建议 ≥10 轮全量或 ≥5 min
+> 连续负载），并记录 uptime / CPU scaling / swap 状态。
+
 ## 2. 结果
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
