@@ -66,12 +66,6 @@ private:
     folly::coro::Task<void> prepareAnon_();
     folly::coro::Task<void> loadLabelDef_(LabelId lid);
     folly::coro::Task<void> createOrGetLabel_(const std::string& name, LabelId& out_lid);
-    folly::coro::Task<void> registerPropOnLabel_(const std::string& label_name, const std::string& prop_name);
-    folly::coro::Task<void> resolvePropOnLabel_(LabelId lid, const std::string& prop_name, LabelId& out_lid,
-                                                uint16_t& out_pid);
-    // Non-coroutine helper: keeps BoundExpression temporaries out of any
-    // coroutine frame (GCC 13 ICE workaround).
-    void appendPropExpr_(LabelId lid, uint16_t pid, binder::BoundExpression expr);
     std::vector<std::pair<LabelId, Properties>> buildLabelProps(ExpressionEvaluator& evaluator, const DataChunk* chunk,
                                                                 size_t row_idx);
     folly::coro::Task<bool> insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props);

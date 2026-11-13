@@ -38,15 +38,6 @@ eugraph::Value evaluateExpr(eugraph::compute::ExpressionEvaluator& evaluator,
     return result_col.getValue(0);
 }
 
-uint16_t findPropertyId_(const eugraph::LabelDef& def, const std::string& prop_name) {
-    for (const auto& pd : def.properties) {
-        if (pd.name == prop_name) {
-            return pd.id;
-        }
-    }
-    return UINT16_MAX;
-}
-
 } // namespace
 
 namespace eugraph {
@@ -65,17 +56,6 @@ std::string CreateNodePhysicalOp::toString() const {
         }
     }
     return "CreateNode(variable=" + variable_ + ", labels=[" + s + "])";
-}
-
-void CreateNodePhysicalOp::appendPropExpr_(LabelId lid, uint16_t pid, binder::BoundExpression expr) {
-    // Non-coroutine helper. BoundExpression is a variant of unique_ptrs;
-    // keeping temporaries of it inside a coroutine frame triggers
-    // GCC 13 ICE under -fsanitize=undefined (build_special_member_call at
-    // cp/call.cc:11096). Do the move/insertion here, from a normal stack
-    // frame, where GCC has no trouble.
-    PropExprs single;
-    single.emplace_back(pid, std::move(expr));
-    label_prop_exprs_.emplace_back(lid, std::move(single));
 }
 
 folly::coro::Task<void> CreateNodePhysicalOp::prepare_() {
@@ -116,34 +96,6 @@ folly::coro::Task<void> CreateNodePhysicalOp::createOrGetLabel_(const std::strin
     co_return;
 }
 
-folly::coro::Task<void> CreateNodePhysicalOp::registerPropOnLabel_(const std::string& label_name,
-                                                                   const std::string& prop_name) {
-    // Isolate the temporary vector<pair<string, PropertyType>> inside its own
-    // coroutine frame — letting it live in the caller's frame triggers the
-    // GCC 13 build_special_member_call ICE.
-    std::vector<std::pair<std::string, PropertyType>> prop_defs;
-    prop_defs.emplace_back(prop_name, PropertyType::ANY);
-    co_await meta_.addVertexLabelProperties(label_name, prop_defs);
-    co_return;
-}
-
-folly::coro::Task<void> CreateNodePhysicalOp::resolvePropOnLabel_(LabelId lid, const std::string& prop_name,
-                                                                  LabelId& out_lid, uint16_t& out_pid) {
-    out_lid = INVALID_LABEL_ID;
-    out_pid = UINT16_MAX;
-    uint16_t pid = findPropertyId_(label_defs_[lid], prop_name);
-    if (pid == UINT16_MAX) {
-        co_await registerPropOnLabel_(label_defs_[lid].name, prop_name);
-        co_await loadLabelDef_(lid);
-        pid = findPropertyId_(label_defs_[lid], prop_name);
-    }
-    if (pid != UINT16_MAX) {
-        out_lid = lid;
-        out_pid = pid;
-    }
-    co_return;
-}
-
 folly::coro::Task<void> CreateNodePhysicalOp::prepareLabels_() {
     // Phase 0: Auto-create labels that were specified in the AST but were not
     // in the catalog snapshot at bind time.
@@ -172,38 +124,11 @@ folly::coro::Task<void> CreateNodePhysicalOp::prepareLabels_() {
         if (std::find(label_ids_.begin(), label_ids_.end(), lid) == label_ids_.end())
             label_ids_.push_back(lid);
     }
-
-    // Phase 0b: re-resolve pending_props in place — no still_pending buffer.
-    if (resolved_ids.empty() || pending_props_.empty()) {
-        co_return;
-    }
-    spdlog::info("[CreateNode] Phase 0b: re-resolving {} pending props against {} new labels", pending_props_.size(),
-                 resolved_ids.size());
-    size_t write_idx = 0;
-    for (size_t read_idx = 0; read_idx < pending_props_.size(); ++read_idx) {
-        const std::string& prop_name = pending_props_[read_idx].first;
-        LabelId chosen_lid = INVALID_LABEL_ID;
-        uint16_t chosen_pid = UINT16_MAX;
-        for (auto lid : resolved_ids) {
-            LabelId resolved_lid = INVALID_LABEL_ID;
-            uint16_t resolved_pid = UINT16_MAX;
-            co_await resolvePropOnLabel_(lid, prop_name, resolved_lid, resolved_pid);
-            if (resolved_lid != INVALID_LABEL_ID) {
-                chosen_lid = resolved_lid;
-                chosen_pid = resolved_pid;
-                break;
-            }
-        }
-        if (chosen_lid != INVALID_LABEL_ID) {
-            appendPropExpr_(chosen_lid, chosen_pid, std::move(pending_props_[read_idx].second));
-        } else {
-            if (write_idx != read_idx) {
-                pending_props_[write_idx] = std::move(pending_props_[read_idx]);
-            }
-            ++write_idx;
-        }
-    }
-    pending_props_.resize(write_idx);
+    // Pending properties are NOT re-resolved against the labels here: an
+    // undeclared property always belongs to the weak space (__anon__).
+    // Registering it on a label here would make DML extend the declared
+    // schema, which property-ownership.md forbids (it also pins the type to
+    // ANY and makes `n::L.p` checks meaningless).
     co_return;
 }
 
@@ -221,8 +146,14 @@ folly::coro::Task<void> CreateNodePhysicalOp::ensureTables_() {
 }
 
 folly::coro::Task<void> CreateNodePhysicalOp::prepareAnon_() {
-    // Phase 1b: __anon__ attribute lightweight registration (only once).
-    if (anon_registered_ || (pending_props_.empty() && !label_ids_.empty())) {
+    // Phase 1b: weak-space (__anon__) registration. Every property that no
+    // label of this node declares lives here — never on a label (see
+    // docs/features/property-ownership.md).
+    if (anon_registered_) {
+        co_return;
+    }
+    if (pending_props_.empty() && !label_ids_.empty()) {
+        anon_registered_ = true;
         co_return;
     }
     LabelId anon_lid = getAnonLabelId(label_defs_);
@@ -239,10 +170,13 @@ folly::coro::Task<void> CreateNodePhysicalOp::prepareAnon_() {
             resolved_pending_.emplace_back(anon_lid, pid, std::move(expr));
         }
         co_await loadLabelDef_(anon_lid);
-        if (label_ids_.empty()) {
+        // Always attach the hidden label when the vertex owns weak properties:
+        // ProjectionExtract only prefetches __anon__ properties for vertices
+        // that carry the label, so a labelled vertex with weak properties must
+        // also carry it or later reads of those properties return null.
+        if (std::find(label_ids_.begin(), label_ids_.end(), anon_lid) == label_ids_.end())
             label_ids_.push_back(anon_lid);
-            co_await store_.createLabel(anon_lid);
-        }
+        co_await store_.createLabel(anon_lid);
     }
     anon_registered_ = true;
     co_return;
@@ -360,25 +294,6 @@ CreateNodePhysicalOp::buildLabelProps(ExpressionEvaluator& evaluator, const Data
         }
 
         result.emplace_back(lid, std::move(props));
-    }
-
-    if (!resolved_pending_.empty()) {
-        LabelId anon_lid = getAnonLabelId(label_defs_);
-        if (anon_lid != INVALID_LABEL_ID) {
-            Properties anon_props;
-            for (const auto& [plid, pid, expr] : resolved_pending_) {
-                if (plid != anon_lid)
-                    continue;
-                Value v = evaluateExpr(evaluator, expr, chunk, row_idx);
-                if (!std::holds_alternative<std::monostate>(v)) {
-                    if (anon_props.size() <= pid)
-                        anon_props.resize(pid + 1);
-                    anon_props[pid] = valueToPropertyValue(v);
-                }
-            }
-            if (!anon_props.empty())
-                result.emplace_back(anon_lid, std::move(anon_props));
-        }
     }
 
     return result;

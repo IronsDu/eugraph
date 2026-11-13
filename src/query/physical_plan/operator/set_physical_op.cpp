@@ -324,46 +324,62 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
                     // Cypher null semantics: SET n.p = null ≡ REMOVE n.p
                     if (std::holds_alternative<std::monostate>(v)) {
-                        std::optional<std::pair<LabelId, uint16_t>> removed_at;
-                        std::optional<PropertyValue> rollback_value;
+                        // Remove every copy: all declared columns plus the weak
+                        // space. Removal is the only write where touching both
+                        // spaces is correct (it is lossless w.r.t. "p is gone").
+                        struct RemovedProp {
+                            LabelId lid;
+                            uint16_t pid;
+                            std::optional<PropertyValue> old;
+                        };
+                        std::vector<RemovedProp> removed;
+                        auto remove_at = [&](LabelId lid, uint16_t pid) -> folly::coro::Task<void> {
+                            auto old_props = co_await store_.getVertexProperties(vid, lid);
+                            std::optional<PropertyValue> old;
+                            if (old_props && old_props->size() > pid && (*old_props)[pid].has_value())
+                                old = (*old_props)[pid].value();
+                            co_await store_.deleteVertexProperty(vid, lid, pid);
+                            removed.push_back(RemovedProp{lid, pid, std::move(old)});
+                        };
                         if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
-                            auto old_props = co_await store_.getVertexProperties(vid, *item.resolved_label_id);
-                            if (old_props && old_props->size() > *item.resolved_prop_id &&
-                                (*old_props)[*item.resolved_prop_id].has_value())
-                                rollback_value = (*old_props)[*item.resolved_prop_id].value();
-                            co_await store_.deleteVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id);
-                            removed_at = std::make_pair(*item.resolved_label_id, *item.resolved_prop_id);
+                            co_await remove_at(*item.resolved_label_id, *item.resolved_prop_id);
                         } else {
-                            std::vector<std::pair<LabelId, uint16_t>> matches;
+                            bool any_declared = false;
                             if (vertex.labels.has_value()) {
                                 for (LabelId lid : *vertex.labels) {
+                                    if (lid == anon_label_id_)
+                                        continue;
                                     auto def_it = label_defs_.find(lid);
                                     if (def_it == label_defs_.end())
                                         continue;
                                     for (const auto& pd : def_it->second.properties) {
+                                        if (pd.name != item.prop_name)
+                                            continue;
+                                        co_await remove_at(lid, pd.id);
+                                        any_declared = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!any_declared && anon_label_id_ != INVALID_LABEL_ID) {
+                                auto anon_it = label_defs_.find(anon_label_id_);
+                                if (anon_it != label_defs_.end()) {
+                                    for (const auto& pd : anon_it->second.properties) {
                                         if (pd.name == item.prop_name) {
-                                            matches.emplace_back(lid, pd.id);
+                                            co_await remove_at(anon_label_id_, pd.id);
                                             break;
                                         }
                                     }
                                 }
                             }
-                            if (matches.size() == 1) {
-                                auto old_props = co_await store_.getVertexProperties(vid, matches[0].first);
-                                if (old_props && old_props->size() > matches[0].second &&
-                                    (*old_props)[matches[0].second].has_value())
-                                    rollback_value = (*old_props)[matches[0].second].value();
-                                co_await store_.deleteVertexProperty(vid, matches[0].first, matches[0].second);
-                                removed_at = matches[0];
-                            }
-                            // 0 matches: no-op (REMOVE on non-existent is no-op)
-                            // >1 matches: ambiguous, no-op (consistent with non-null path)
                         }
-                        if (removed_at) {
+                        if (!removed.empty()) {
                             VertexValue updated = vertex;
-                            auto it = updated.properties.find(removed_at->first);
-                            if (it != updated.properties.end() && it->second.size() > removed_at->second)
-                                it->second[removed_at->second].reset();
+                            for (const auto& r : removed) {
+                                auto it = updated.properties.find(r.lid);
+                                if (it != updated.properties.end() && it->second.size() > r.pid)
+                                    it->second[r.pid].reset();
+                            }
                             mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
                                                         mk<VertexValue>(std::move(updated)));
                         }
@@ -371,12 +387,13 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
                         co_await deleteVertexIndexEntries(store_, *old_index_entries);
                         bool inserted = co_await insertVertexIndexEntriesChecked(store_, new_index_entries);
-                        if (!inserted && removed_at && old_index_entries) {
-                            if (rollback_value.has_value())
-                                co_await store_.putVertexProperty(vid, removed_at->first, removed_at->second,
-                                                                  *rollback_value);
-                            else
-                                co_await store_.deleteVertexProperty(vid, removed_at->first, removed_at->second);
+                        if (!inserted && !removed.empty() && old_index_entries) {
+                            for (const auto& r : removed) {
+                                if (r.old.has_value())
+                                    co_await store_.putVertexProperty(vid, r.lid, r.pid, *r.old);
+                                else
+                                    co_await store_.deleteVertexProperty(vid, r.lid, r.pid);
+                            }
                             auto restored =
                                 co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
                             co_await deleteVertexIndexEntries(store_, new_index_entries);
@@ -395,7 +412,23 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     std::optional<PropertyValue> rollback_value;
 
                     if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
-                        // Strong mode: use resolved IDs directly
+                        // Strong mode: the label scope is explicit, but the vertex
+                        // must actually carry that label. Writing a property row for
+                        // a missing label creates an orphan row: invisible to
+                        // MATCH (n:L) and properties(n), readable only through the
+                        // matching n::L.p accessor.
+                        LabelIdSet current_labels =
+                            vertex.labels.has_value() ? *vertex.labels : co_await store_.getVertexLabels(vid);
+                        if (!current_labels.count(*item.resolved_label_id)) {
+                            const auto def_it = label_defs_.find(*item.resolved_label_id);
+                            const std::string label_name = def_it != label_defs_.end()
+                                                               ? def_it->second.name
+                                                               : std::to_string(*item.resolved_label_id);
+                            throw std::runtime_error(
+                                "Cannot write property '" + item.prop_name + "' on label '" + label_name +
+                                "': the vertex does not have that label. Add it first with SET n:" + label_name +
+                                ", or write n." + item.prop_name + " (weak mode).");
+                        }
                         auto old_props = co_await store_.getVertexProperties(vid, *item.resolved_label_id);
                         if (old_props && old_props->size() > *item.resolved_prop_id &&
                             (*old_props)[*item.resolved_prop_id].has_value())
@@ -403,10 +436,15 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         co_await store_.putVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id, pv);
                         written_at = std::make_pair(*item.resolved_label_id, *item.resolved_prop_id);
                     } else {
-                        // Convenience mode: runtime inference based on actual labels
+                        // Convenience mode: declare-scope first, weak space as the
+                        // fallback. __anon__ is never a peer candidate (it holds the
+                        // weak keys of every vertex, so treating it as a peer would
+                        // make every declared key look ambiguous).
                         std::vector<std::pair<LabelId, uint16_t>> matches;
                         if (vertex.labels.has_value()) {
                             for (LabelId lid : *vertex.labels) {
+                                if (lid == anon_label_id_)
+                                    continue;
                                 auto def_it = label_defs_.find(lid);
                                 if (def_it == label_defs_.end())
                                     continue;
@@ -427,43 +465,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
                             written_at = matches[0];
                         } else if (matches.empty()) {
-                            // No match in actual labels: register on the first user label
-                            // (skip __anon__) so the new property shares the vertex's
-                            // primary label rather than being shunted to __anon__.
-                            // Falls back to __anon__ only when the vertex has no user labels.
-                            LabelId target_lid = INVALID_LABEL_ID;
-                            if (vertex.labels.has_value()) {
-                                for (LabelId lid : *vertex.labels) {
-                                    if (lid == anon_label_id_)
-                                        continue;
-                                    target_lid = lid;
-                                    break;
-                                }
-                            }
-                            if (target_lid != INVALID_LABEL_ID) {
-                                auto def_it = label_defs_.find(target_lid);
-                                if (def_it != label_defs_.end()) {
-                                    std::vector<std::pair<std::string, PropertyType>> prop_defs_new;
-                                    prop_defs_new.emplace_back(item.prop_name, propertyValueToPropertyType(pv));
-                                    co_await meta_.addVertexLabelProperties(def_it->second.name, prop_defs_new);
-                                    auto updated = co_await meta_.getLabelDefById(target_lid);
-                                    uint16_t new_pid = UINT16_MAX;
-                                    if (updated) {
-                                        label_defs_[target_lid] = std::move(*updated);
-                                        for (const auto& pd : label_defs_[target_lid].properties) {
-                                            if (pd.name == item.prop_name) {
-                                                new_pid = pd.id;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if (new_pid != UINT16_MAX) {
-                                        co_await store_.putVertexProperty(vid, target_lid, new_pid, pv);
-                                        written_at = std::make_pair(target_lid, new_pid);
-                                    }
-                                }
-                            } else if (anon_label_id_ != INVALID_LABEL_ID) {
-                                // Vertex has no user labels: write to __anon__.
+                            // No label declares this key: it belongs to the weak
+                            // space (docs/features/property-ownership.md).
+                            if (anon_label_id_ != INVALID_LABEL_ID) {
                                 uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(
                                     item.prop_name, propertyValueToPropertyType(pv));
                                 if (!vertex.labels.has_value() ||
@@ -475,7 +479,6 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 written_at = std::make_pair(anon_label_id_, anon_pid);
                             }
                         } else {
-                            // Multiple matches: runtime error
                             std::string label_names;
                             for (const auto& [lid, pid] : matches) {
                                 auto it = label_defs_.find(lid);
@@ -485,8 +488,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                     label_names += it->second.name;
                                 }
                             }
-                            spdlog::error("Ambiguous property '{}' found in labels: {}. Use ::Label to specify.",
-                                          item.prop_name, label_names);
+                            throw std::runtime_error("AmbiguousProperty: property '" + item.prop_name +
+                                                     "' is declared by multiple labels of this vertex (" + label_names +
+                                                     "). Use SET n::Label." + item.prop_name + " = ...");
                         }
                     }
 
@@ -586,40 +590,44 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         //           跳过 = 该 key 不存在，与规范一致）
                         if (std::holds_alternative<std::monostate>(entry_val)) {
                             if (item.is_add_assign) {
-                                std::vector<std::pair<LabelId, uint16_t>> matches;
+                                // Remove every copy of the key (declared columns,
+                                // then the weak space when no column declares it).
+                                bool any_declared = false;
                                 if (vertex.labels.has_value()) {
                                     for (LabelId lid : *vertex.labels) {
+                                        if (lid == anon_label_id_)
+                                            continue;
                                         auto def_it = label_defs_.find(lid);
                                         if (def_it == label_defs_.end())
                                             continue;
                                         for (const auto& pd : def_it->second.properties) {
-                                            if (pd.name == key) {
-                                                matches.emplace_back(lid, pd.id);
-                                                break;
-                                            }
+                                            if (pd.name != key)
+                                                continue;
+                                            co_await store_.deleteVertexProperty(vid, lid, pd.id);
+                                            auto& props_vec = updated_vertex.properties[lid];
+                                            if (props_vec.size() > pd.id)
+                                                props_vec[pd.id].reset();
+                                            vertex_modified = true;
+                                            any_declared = true;
+                                            break;
                                         }
                                     }
                                 }
-                                // 也检查 __anon__ 标签下是否定义了该属性
-                                if (anon_label_id_ != INVALID_LABEL_ID) {
+                                if (!any_declared && anon_label_id_ != INVALID_LABEL_ID) {
                                     auto anon_it = label_defs_.find(anon_label_id_);
                                     if (anon_it != label_defs_.end()) {
                                         for (const auto& pd : anon_it->second.properties) {
-                                            if (pd.name == key) {
-                                                matches.emplace_back(anon_label_id_, pd.id);
-                                                break;
-                                            }
+                                            if (pd.name != key)
+                                                continue;
+                                            co_await store_.deleteVertexProperty(vid, anon_label_id_, pd.id);
+                                            auto& props_vec = updated_vertex.properties[anon_label_id_];
+                                            if (props_vec.size() > pd.id)
+                                                props_vec[pd.id].reset();
+                                            vertex_modified = true;
+                                            break;
                                         }
                                     }
                                 }
-                                if (matches.size() == 1) {
-                                    co_await store_.deleteVertexProperty(vid, matches[0].first, matches[0].second);
-                                    auto& props_vec = updated_vertex.properties[matches[0].first];
-                                    if (props_vec.size() > matches[0].second)
-                                        props_vec[matches[0].second].reset();
-                                    vertex_modified = true;
-                                }
-                                // 0 matches: no-op; >1 matches: ambiguous, no-op
                             }
                             continue;
                         }
@@ -628,6 +636,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         std::vector<std::pair<LabelId, uint16_t>> matches;
                         if (vertex.labels.has_value()) {
                             for (LabelId lid : *vertex.labels) {
+                                if (lid == anon_label_id_)
+                                    continue;
                                 auto def_it = label_defs_.find(lid);
                                 if (def_it == label_defs_.end())
                                     continue;
@@ -648,45 +658,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             props_vec[matches[0].second] = pv;
                             vertex_modified = true;
                         } else if (matches.empty()) {
-                            // Register on the first user label (skip __anon__) so the new
-                            // property shares the vertex's primary label. Falls back to
-                            // __anon__ only when the vertex has no user labels.
-                            LabelId target_lid = INVALID_LABEL_ID;
-                            if (vertex.labels.has_value()) {
-                                for (LabelId lid : *vertex.labels) {
-                                    if (lid == anon_label_id_)
-                                        continue;
-                                    target_lid = lid;
-                                    break;
-                                }
-                            }
-                            if (target_lid != INVALID_LABEL_ID) {
-                                auto def_it = label_defs_.find(target_lid);
-                                if (def_it != label_defs_.end()) {
-                                    std::vector<std::pair<std::string, PropertyType>> prop_defs_key;
-                                    prop_defs_key.emplace_back(key, propertyValueToPropertyType(pv));
-                                    co_await meta_.addVertexLabelProperties(def_it->second.name, prop_defs_key);
-                                    auto updated = co_await meta_.getLabelDefById(target_lid);
-                                    uint16_t new_pid = UINT16_MAX;
-                                    if (updated) {
-                                        label_defs_[target_lid] = std::move(*updated);
-                                        for (const auto& pd : label_defs_[target_lid].properties) {
-                                            if (pd.name == key) {
-                                                new_pid = pd.id;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if (new_pid != UINT16_MAX) {
-                                        co_await store_.putVertexProperty(vid, target_lid, new_pid, pv);
-                                        auto& props_vec = updated_vertex.properties[target_lid];
-                                        if (props_vec.size() <= new_pid)
-                                            props_vec.resize(new_pid + 1);
-                                        props_vec[new_pid] = pv;
-                                        vertex_modified = true;
-                                    }
-                                }
-                            } else if (anon_label_id_ != INVALID_LABEL_ID) {
+                            // No label declares this key: weak space.
+                            if (anon_label_id_ != INVALID_LABEL_ID) {
                                 uint16_t anon_pid =
                                     co_await meta_.getOrCreateAnonPropId(key, propertyValueToPropertyType(pv));
                                 if (!vertex.labels.has_value() ||
@@ -714,8 +687,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                     label_names += it->second.name;
                                 }
                             }
-                            spdlog::error("Ambiguous property '{}' found in labels: {}. Use ::Label to specify.", key,
-                                          label_names);
+                            throw std::runtime_error("AmbiguousProperty: property '" + key +
+                                                     "' is declared by multiple labels of this vertex (" + label_names +
+                                                     "). Use SET n::Label." + key + " = ...");
                         }
                     }
 

@@ -30,9 +30,10 @@ Feature: Schema introspection
       | '__anon__' | true      |
       | 'Person'   | false     |
 
-  # Field types come from the label's declared schema. A bare CREATE registers
-  # newly-seen properties as ANY (see tck-guide.md), so this case asserts the
-  # field is reported and its shape, not a specific scalar type.
+  # Field types come from the label's declared schema. DML does not declare
+  # fields: a bare CREATE puts undeclared keys into the weak space (__anon__),
+  # so the label itself still declares nothing.
+  # See docs/features/property-ownership.md.
   Scenario: DESCRIBE LABEL reports the fields of one label
     When executing query:
       """
@@ -43,10 +44,22 @@ Feature: Schema introspection
       """
       DESCRIBE LABEL Person
       """
+    Then the result should be empty
+
+  Scenario: Undeclared properties are reported under the anonymous label
+    When executing query:
+      """
+      CREATE (:Person {name: 'Alice', age: 30})
+      """
+    Then the result should be empty
+    When executing query:
+      """
+      DESCRIBE LABEL __anon__
+      """
     Then the result should be, in any order:
-      | label    | propertyName | propertyType |
-      | 'Person' | 'age'        | 'ANY'        |
-      | 'Person' | 'name'        | 'ANY'        |
+      | label      | propertyName | propertyType |
+      | '__anon__' | 'age'        | 'ANY'        |
+      | '__anon__' | 'name'       | 'ANY'        |
 
   Scenario: DESCRIBE LABEL is case-sensitive on the label name
     When executing query:

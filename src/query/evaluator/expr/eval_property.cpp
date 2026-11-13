@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "common/types/constants.hpp"
 #include "storage/storage_op_metrics.hpp"
 
 #include "query/catalog/catalog.hpp"
@@ -111,8 +112,12 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             // Most vertices have exactly one matching candidate. Keep the
             // common case on the stack and only allocate the extra vector when
             // a vertex really defines the property under more than one label.
+            // The weak space (__anon__) is a fallback, never a peer: if a
+            // declared column holds a value, that value wins and the weak copy
+            // is ignored (docs/features/property-ownership.md §4).
             std::optional<Value> first_found;
             std::vector<Value> extra_found;
+            std::optional<Value> anon_found;
             auto add_found = [&](Value v) {
                 if (!first_found)
                     first_found = std::move(v);
@@ -121,20 +126,29 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             };
             for (const auto& candidate : ref.candidates) {
                 auto lit = props->find(candidate.label_id);
-                if (lit != props->end()) {
-                    const auto& candidate_props = lit->second;
-                    if (candidate.prop_id < candidate_props.size() && candidate_props[candidate.prop_id].has_value()) {
-                        add_found(pvToValue(*candidate_props[candidate.prop_id]));
-                    }
+                if (lit == props->end())
+                    continue;
+                const auto& candidate_props = lit->second;
+                if (candidate.prop_id >= candidate_props.size() || !candidate_props[candidate.prop_id].has_value())
+                    continue;
+                const LabelDef* ldef = findLabelDef(candidate.label_id);
+                if (ldef && ldef->name == kAnonLabelName) {
+                    if (!anon_found)
+                        anon_found = pvToValue(*candidate_props[candidate.prop_id]);
+                } else {
+                    add_found(pvToValue(*candidate_props[candidate.prop_id]));
                 }
             }
-            // Fallback: a property may be registered on __anon__ in the
-            // catalog but physically stored under the vertex's concrete
-            // label. Search all loaded labels by name.
+            if (!first_found && anon_found)
+                add_found(std::move(*anon_found));
+            // Fallback: only the weak space may answer a name-based lookup
+            // when none of the resolved candidates matched. Searching every
+            // loaded label here would let `n::Person.name` silently return
+            // another label's same-named value, defeating the cast.
             if (!first_found && !ref.property_name.empty()) {
                 for (const auto& [lid, props_vec] : *props) {
                     const LabelDef* ldef = findLabelDef(lid);
-                    if (!ldef)
+                    if (!ldef || ldef->name != kAnonLabelName)
                         continue;
                     for (const auto& pd : ldef->properties) {
                         if (pd.name == ref.property_name && pd.id < props_vec.size()) {
@@ -185,7 +199,7 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     if (std::holds_alternative<std::monostate>(r)) {
                         for (const auto& [lid, props_vec] : props) {
                             const LabelDef* ldef = findLabelDef(lid);
-                            if (!ldef)
+                            if (!ldef || ldef->name != kAnonLabelName)
                                 continue;
                             for (const auto& pd : ldef->properties) {
                                 if (pd.name == ref.property_name && pd.id < props_vec.size() &&

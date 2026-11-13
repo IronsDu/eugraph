@@ -181,19 +181,43 @@ MergePhysicalOp::registerPendingProps(const std::vector<std::pair<std::string, b
     if (anon_label_id_ == INVALID_LABEL_ID)
         co_return;
 
-    // Collect all property names that need registration with __anon__
+    // Collect all property names that will land in the weak space. Note that
+    // only node-scoped SET items are considered (edge properties are declared
+    // on the edge type) and that a name already declared by one of the node's
+    // labels is written to that column, so it must NOT be registered here --
+    // otherwise the weak key registry would accumulate strong keys.
+    auto declared_by = [&](const std::vector<LabelId>& labels, const std::string& name) {
+        for (auto lid : labels) {
+            if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
+                continue;
+            auto def_it = label_defs_.find(lid);
+            if (def_it == label_defs_.end())
+                continue;
+            for (const auto& pd : def_it->second.properties)
+                if (pd.name == name)
+                    return true;
+        }
+        return false;
+    };
     std::unordered_set<std::string> prop_names;
     for (const auto& [name, _] : start_pending)
-        prop_names.insert(name);
+        if (!declared_by(start_labels_, name))
+            prop_names.insert(name);
     for (const auto& [name, _] : end_pending)
-        prop_names.insert(name);
-    for (const auto& [name, _] : edge_pending)
-        prop_names.insert(name);
+        if (!declared_by(end_labels_, name))
+            prop_names.insert(name);
 
     auto collectSetItemProps = [&](const std::vector<SetPhysicalOp::BoundSetItem>& items) {
         for (const auto& item : items) {
-            if (item.kind == cypher::SetItemKind::SET_PROPERTY && !item.prop_name.empty())
-                prop_names.insert(item.prop_name);
+            if (item.kind != cypher::SetItemKind::SET_PROPERTY || item.prop_name.empty())
+                continue;
+            if (item.var_name == start_var_) {
+                if (!declared_by(start_labels_, item.prop_name))
+                    prop_names.insert(item.prop_name);
+            } else if (has_relationship_ && item.var_name == end_var_) {
+                if (!declared_by(end_labels_, item.prop_name))
+                    prop_names.insert(item.prop_name);
+            }
         }
     };
     collectSetItemProps(on_create_items);
@@ -921,6 +945,17 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertyItem(const SetPhysica
         co_return;
 
     if (item.strong_mode && item.resolved_prop_id && item.resolved_label_id) {
+        // Same guard as SET: a label-scoped write requires the vertex to carry
+        // that label, otherwise the row is orphaned (invisible to MATCH (n:L)).
+        auto labels = co_await store_.getVertexLabels(target_vid);
+        if (!labels.count(*item.resolved_label_id)) {
+            auto def_it = label_defs_.find(*item.resolved_label_id);
+            const std::string label_name =
+                def_it != label_defs_.end() ? def_it->second.name : std::to_string(*item.resolved_label_id);
+            throw std::runtime_error("Cannot write property '" + item.prop_name + "' on label '" + label_name +
+                                     "': the vertex does not have that label. Add it first with SET n:" + label_name +
+                                     ", or write n." + item.prop_name + " (weak mode).");
+        }
         co_await store_.putVertexProperty(target_vid, *item.resolved_label_id, *item.resolved_prop_id,
                                           valueToPropertyValue(val));
         co_return;
@@ -935,96 +970,53 @@ folly::coro::Task<void> MergePhysicalOp::resolveAndPutVertexProperty(VertexId ta
                                                                      const Value& val,
                                                                      const std::vector<LabelId>& search_labels) {
     // Search concrete labels for a declared property matching item.prop_name.
+    // __anon__ is a fallback space, never a peer candidate.
     LabelId resolved_lid = INVALID_LABEL_ID;
     uint16_t resolved_pid = 0;
+    std::vector<LabelId> declared;
     for (auto lid : search_labels) {
         if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
             continue;
         auto def_it = label_defs_.find(lid);
-        if (def_it != label_defs_.end()) {
-            for (const auto& pd : def_it->second.properties) {
-                if (pd.name == item.prop_name) {
-                    resolved_lid = lid;
-                    resolved_pid = pd.id;
-                    break;
-                }
+        if (def_it == label_defs_.end())
+            continue;
+        for (const auto& pd : def_it->second.properties) {
+            if (pd.name == item.prop_name) {
+                declared.push_back(lid);
+                resolved_lid = lid;
+                resolved_pid = pd.id;
+                break;
             }
         }
-        if (resolved_lid != INVALID_LABEL_ID)
-            break;
+    }
+    if (declared.size() > 1) {
+        std::string label_names;
+        for (auto lid : declared) {
+            auto it = label_defs_.find(lid);
+            if (it == label_defs_.end())
+                continue;
+            if (!label_names.empty())
+                label_names += ", ";
+            label_names += it->second.name;
+        }
+        throw std::runtime_error("AmbiguousProperty: property '" + item.prop_name +
+                                 "' is declared by multiple labels (" + label_names +
+                                 "). Use an explicit label scope or rename the property.");
     }
     if (resolved_lid != INVALID_LABEL_ID) {
         co_await store_.putVertexProperty(target_vid, resolved_lid, resolved_pid, valueToPropertyValue(val));
         co_return;
     }
 
-    // Pick the first concrete label; falls back to __anon__ if none exists.
-    LabelId fallback_lid = anon_label_id_;
-    for (auto lid : search_labels) {
-        if (lid != INVALID_LABEL_ID && lid != anon_label_id_) {
-            fallback_lid = lid;
-            break;
-        }
-    }
-    if (fallback_lid == INVALID_LABEL_ID)
+    // No label declares the key: it belongs to the weak space. Attach the
+    // hidden __anon__ label so ProjectionExtract prefetches it later.
+    if (anon_label_id_ == INVALID_LABEL_ID)
         co_return;
-
-    LabelId final_lid = fallback_lid;
-    uint16_t pid = 0;
-    co_await dynamicallyRegisterVertexProperty(fallback_lid, item.prop_name, final_lid, pid);
-    co_await store_.putVertexProperty(target_vid, final_lid, pid, valueToPropertyValue(val));
-}
-
-folly::coro::Task<bool> MergePhysicalOp::dynamicallyRegisterVertexProperty(LabelId fallback_lid,
-                                                                           const std::string& prop_name,
-                                                                           LabelId& out_lid, uint16_t& out_pid) {
-    std::string label_name;
-    auto def_it = label_defs_.find(fallback_lid);
-    if (def_it != label_defs_.end())
-        label_name = def_it->second.name;
-    if (label_name.empty()) {
-        for (auto it = label_name_to_id_.begin(); it != label_name_to_id_.end(); ++it) {
-            if (it->second == fallback_lid) {
-                label_name = it->first;
-                break;
-            }
-        }
-    }
-    uint16_t pid = 0;
-    bool found = false;
-    if (!label_name.empty()) {
-        std::vector<std::pair<std::string, PropertyType>> props;
-        props.emplace_back(prop_name, PropertyType::ANY);
-        co_await meta_.addVertexLabelProperties(label_name, props);
-        auto updated = co_await meta_.getLabelDefById(fallback_lid);
-        if (updated) {
-            label_defs_[fallback_lid] = std::move(*updated);
-            const auto& props_vec = label_defs_[fallback_lid].properties;
-            for (size_t i = 0; i < props_vec.size(); ++i) {
-                if (props_vec[i].name == prop_name) {
-                    pid = props_vec[i].id;
-                    found = true;
-                    break;
-                }
-            }
-        }
-    }
-    if (!found && fallback_lid != anon_label_id_) {
-        fallback_lid = anon_label_id_;
-        auto adef_it = label_defs_.find(anon_label_id_);
-        if (adef_it != label_defs_.end()) {
-            const auto& props_vec = adef_it->second.properties;
-            for (size_t i = 0; i < props_vec.size(); ++i) {
-                if (props_vec[i].name == prop_name) {
-                    pid = props_vec[i].id;
-                    break;
-                }
-            }
-        }
-    }
-    out_lid = fallback_lid;
-    out_pid = pid;
-    co_return true;
+    uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(item.prop_name, PropertyType::ANY);
+    auto label_set = co_await store_.getVertexLabels(target_vid);
+    if (!label_set.count(anon_label_id_))
+        co_await store_.addVertexLabel(target_vid, anon_label_id_);
+    co_await store_.putVertexProperty(target_vid, anon_label_id_, anon_pid, valueToPropertyValue(val));
 }
 
 folly::coro::Task<void> MergePhysicalOp::executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item,
@@ -1099,20 +1091,49 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
         vid = end_vid;
     if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValuePtr>(normalised)) {
         const auto& mv = (*std::get<MapValuePtr>(normalised));
+        auto* search_labels = (item.var_name == start_var_) ? &start_labels_ : &end_labels_;
         for (const auto& [k, vs] : mv.entries) {
-            if (anon_label_id_ != INVALID_LABEL_ID) {
-                uint16_t pid = 0;
-                auto def_it = label_defs_.find(anon_label_id_);
-                if (def_it != label_defs_.end()) {
-                    for (const auto& pd : def_it->second.properties) {
-                        if (pd.name == k) {
-                            pid = pd.id;
-                            break;
-                        }
+            // Same resolution as SET n += {k: v}: declared column when exactly
+            // one label declares k, error when several do, weak space otherwise.
+            std::vector<std::pair<LabelId, uint16_t>> declared;
+            for (auto lid : *search_labels) {
+                if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
+                    continue;
+                auto def_it = label_defs_.find(lid);
+                if (def_it == label_defs_.end())
+                    continue;
+                for (const auto& pd : def_it->second.properties) {
+                    if (pd.name == k) {
+                        declared.emplace_back(lid, pd.id);
+                        break;
                     }
                 }
-                co_await store_.putVertexProperty(vid, anon_label_id_, pid, valueToPropertyValue(vs.value));
             }
+            if (declared.size() > 1) {
+                std::string label_names;
+                for (const auto& [lid, pid] : declared) {
+                    auto it = label_defs_.find(lid);
+                    if (it == label_defs_.end())
+                        continue;
+                    if (!label_names.empty())
+                        label_names += ", ";
+                    label_names += it->second.name;
+                }
+                throw std::runtime_error("AmbiguousProperty: property '" + k + "' is declared by multiple labels (" +
+                                         label_names + ").");
+            }
+            if (declared.size() == 1) {
+                co_await store_.putVertexProperty(vid, declared[0].first, declared[0].second,
+                                                  valueToPropertyValue(vs.value));
+                continue;
+            }
+            if (anon_label_id_ == INVALID_LABEL_ID)
+                continue;
+            uint16_t pid = co_await meta_.getOrCreateAnonPropId(k, PropertyType::ANY);
+            auto labels = co_await store_.getVertexLabels(vid);
+            if (!labels.count(anon_label_id_))
+                co_await store_.addVertexLabel(vid, anon_label_id_);
+            co_await store_.putVertexProperty(vid, anon_label_id_, pid, valueToPropertyValue(vs.value));
         }
     }
 }

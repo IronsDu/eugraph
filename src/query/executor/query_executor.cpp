@@ -425,6 +425,36 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             co_return;
         }
 
+        // A weak accessor (`ON (n.p)` without ::Label) resolves against every
+        // label that declares p. If NO label declares it, the index would be
+        // created successfully but stay empty forever -- a silent no-op that
+        // only shows up as wrong (slow / empty) query results. Reject it here.
+        {
+            const auto& schema = async_meta_.schema();
+            for (const auto& acc : accessors) {
+                if (acc.is_strong)
+                    continue;
+                bool declared = false;
+                for (const auto& [lid, ldef] : schema.labels) {
+                    if (ldef.name == kAnonLabelName)
+                        continue;
+                    for (const auto& pd : ldef.properties) {
+                        if (pd.name == acc.property_name) {
+                            declared = true;
+                            break;
+                        }
+                    }
+                    if (declared)
+                        break;
+                }
+                if (!declared) {
+                    result.error = "Property '" + acc.property_name +
+                                   "' is not declared by any label; create it with DDL before indexing it.";
+                    co_return;
+                }
+            }
+        }
+
         bool ok = co_await async_meta_.createVertexIndexWithAccessors(stmt.index_name, stmt.label_name, accessors,
                                                                       stmt.unique);
         if (!ok) {

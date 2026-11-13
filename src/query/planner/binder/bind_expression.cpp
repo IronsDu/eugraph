@@ -316,7 +316,13 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         if (std::holds_alternative<BoundColumnRef>(lc->object)) {
                             saved_col_name = std::get<BoundColumnRef>(lc->object).name;
                         }
-                        prop_ref->object = std::move(*obj);
+                        // Unwrap the cast: the label scope is fully encoded by the
+                        // single candidate below, so the access is an ordinary
+                        // property read. Keeping the cast wrapper made the value
+                        // depend on whole-vertex materialization and return null
+                        // whenever the plan used a flat vprop column instead
+                        // (e.g. `RETURN n.name, n::Person.name`).
+                        prop_ref->object = std::move(lc->object);
                         BoundPropertyRef::ResolvedProperty rp;
                         rp.label_id = saved_label_id;
                         rp.prop_id = pd->id;

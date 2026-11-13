@@ -69,6 +69,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加优化规则 | [query/optimizer/cascades-optimizer.md] | `src/query/optimizer/` |
 | 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md], [query/engine/aggregate-typed-execution-design.md](query/engine/aggregate-typed-execution-design.md) | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
+| 属性写入归属（强空间 / 弱空间、`::`、REMOVE 标签） | [features/property-ownership.md](features/property-ownership.md) | `src/query/physical_plan/operator/create_node_physical_op.cpp`, `set_physical_op.cpp`, `merge_physical_op.cpp`, `remove_physical_op.cpp` |
 | 顶点标签/属性/邻接存储（vertex_data） | [storage/kv-encoding.md](storage/kv-encoding.md) | `src/storage/kv/key_codec.*`, `src/storage/data/sync_graph_data_store.*` |
 | Expand 目标标签过滤优化 | [query/expand-label-filter-optimization.md](query/expand-label-filter-optimization.md) | `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | PatternComprehension 锚点标签扫描 | [query/pattern-comprehension-anchor-label-scan.md](query/pattern-comprehension-anchor-label-scan.md) | `src/query/planner/binder/bind_match.cpp` |
