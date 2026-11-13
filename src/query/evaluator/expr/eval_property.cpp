@@ -1,5 +1,6 @@
 #include "query/evaluator/expression_evaluator.hpp"
 
+#include <algorithm>
 #include <optional>
 
 #include "common/types/constants.hpp"
@@ -109,20 +110,32 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     recordPrefetchMiss(currentCounters(eval_ctx_));
                 }
             }
-            // Most vertices have exactly one matching candidate. Keep the
-            // common case on the stack and only allocate the extra vector when
-            // a vertex really defines the property under more than one label.
-            // The weak space (__anon__) is a fallback, never a peer: if a
-            // declared column holds a value, that value wins and the weak copy
-            // is ignored (docs/features/property-ownership.md §4).
-            std::optional<Value> first_found;
-            std::vector<Value> extra_found;
-            std::optional<Value> anon_found;
-            auto add_found = [&](Value v) {
-                if (!first_found)
-                    first_found = std::move(v);
-                else
-                    extra_found.push_back(std::move(v));
+            // Weak access resolves by name across every source. All sources
+            // must agree on one value; a conflict is an error, never a list
+            // (docs/features/property-ownership.md §4). Keep the common case
+            // allocation-free and only build the label list on a conflict.
+            std::optional<PropertyValue> chosen;
+            std::vector<std::string> seen_labels;
+            auto consider = [&](const PropertyValue& pv, LabelId lid) {
+                if (!chosen) {
+                    chosen = pv;
+                    return;
+                }
+                if (*chosen == pv)
+                    return; // equal duplicates are harmless
+                const LabelDef* ldef = findLabelDef(lid);
+                std::string label_name = ldef ? ldef->name : std::to_string(lid);
+                if (std::find(seen_labels.begin(), seen_labels.end(), label_name) == seen_labels.end())
+                    seen_labels.push_back(label_name);
+                std::string labels;
+                for (const auto& n : seen_labels) {
+                    if (!labels.empty())
+                        labels += ", ";
+                    labels += n;
+                }
+                throw std::runtime_error("AmbiguousProperty: property '" + ref.property_name +
+                                         "' has conflicting values in labels (" + labels + "); use n::<Label>." +
+                                         ref.property_name + " to select a label scope");
             };
             for (const auto& candidate : ref.candidates) {
                 auto lit = props->find(candidate.label_id);
@@ -132,20 +145,18 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 if (candidate.prop_id >= candidate_props.size() || !candidate_props[candidate.prop_id].has_value())
                     continue;
                 const LabelDef* ldef = findLabelDef(candidate.label_id);
-                if (ldef && ldef->name == kAnonLabelName) {
-                    if (!anon_found)
-                        anon_found = pvToValue(*candidate_props[candidate.prop_id]);
-                } else {
-                    add_found(pvToValue(*candidate_props[candidate.prop_id]));
+                if (ldef) {
+                    auto it = std::find(seen_labels.begin(), seen_labels.end(), ldef->name);
+                    if (it == seen_labels.end())
+                        seen_labels.push_back(ldef->name);
                 }
+                consider(*candidate_props[candidate.prop_id], candidate.label_id);
             }
-            if (!first_found && anon_found)
-                add_found(std::move(*anon_found));
-            // Fallback: only the weak space may answer a name-based lookup
-            // when none of the resolved candidates matched. Searching every
-            // loaded label here would let `n::Person.name` silently return
-            // another label's same-named value, defeating the cast.
-            if (!first_found && !ref.property_name.empty()) {
+            // Fallback: only the weak space may answer a name-based lookup when
+            // none of the resolved candidates matched. Searching every loaded
+            // label here would let `n::Person.name` silently return another
+            // label's same-named value, defeating the cast.
+            if (!chosen && !ref.property_name.empty()) {
                 for (const auto& [lid, props_vec] : *props) {
                     const LabelDef* ldef = findLabelDef(lid);
                     if (!ldef || ldef->name != kAnonLabelName)
@@ -154,25 +165,20 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                         if (pd.name == ref.property_name && pd.id < props_vec.size()) {
                             const auto& pv = props_vec[pd.id];
                             if (pv.has_value()) {
-                                add_found(pvToValue(*pv));
+                                auto it = std::find(seen_labels.begin(), seen_labels.end(), ldef->name);
+                                if (it == seen_labels.end())
+                                    seen_labels.push_back(ldef->name);
+                                consider(*pv, lid);
                                 break;
                             }
                         }
                     }
-                    if (first_found)
+                    if (chosen)
                         break;
                 }
             }
-            if (first_found && extra_found.empty()) {
-                r = std::move(*first_found);
-            } else if (first_found) {
-                ListValue lv;
-                lv.elements.reserve(1 + extra_found.size());
-                lv.elements.push_back(ValueStorage{std::move(*first_found)});
-                for (auto& v : extra_found)
-                    lv.elements.push_back(ValueStorage{std::move(v)});
-                r = Value(mk<ListValue>(std::move(lv)));
-            }
+            if (chosen)
+                r = pvToValue(*chosen);
         } else if (std::holds_alternative<VertexRef>(ov)) {
             const auto& vref = std::get<VertexRef>(ov);
             // Structural field access on topology-form vertex (n.id).
@@ -188,15 +194,41 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 if (pit != prefetched_vertex_data_.end()) {
                     recordPrefetchHit(currentCounters(eval_ctx_));
                     const auto& props = pit->second.properties;
+                    std::optional<PropertyValue> chosen;
+                    std::vector<std::string> value_labels;
+                    auto consider = [&](const PropertyValue& pv, LabelId lid) {
+                        if (!chosen) {
+                            chosen = pv;
+                            return;
+                        }
+                        if (*chosen == pv)
+                            return;
+                        const LabelDef* ldef = findLabelDef(lid);
+                        std::string label_name = ldef ? ldef->name : std::to_string(lid);
+                        if (std::find(value_labels.begin(), value_labels.end(), label_name) == value_labels.end())
+                            value_labels.push_back(label_name);
+                        std::string labels;
+                        for (const auto& n : value_labels) {
+                            if (!labels.empty())
+                                labels += ", ";
+                            labels += n;
+                        }
+                        throw std::runtime_error("AmbiguousProperty: property '" + ref.property_name +
+                                                 "' has conflicting values in labels (" + labels +
+                                                 "); use n::<Label>." + ref.property_name + " to select a label scope");
+                    };
                     for (const auto& candidate : ref.candidates) {
                         auto lit = props.find(candidate.label_id);
-                        if (lit != props.end() && candidate.prop_id < lit->second.size() &&
-                            lit->second[candidate.prop_id].has_value()) {
-                            r = pvToValue(*lit->second[candidate.prop_id]);
-                            break;
-                        }
+                        if (lit == props.end() || candidate.prop_id >= lit->second.size() ||
+                            !lit->second[candidate.prop_id].has_value())
+                            continue;
+                        const LabelDef* ldef = findLabelDef(candidate.label_id);
+                        if (ldef &&
+                            std::find(value_labels.begin(), value_labels.end(), ldef->name) == value_labels.end())
+                            value_labels.push_back(ldef->name);
+                        consider(*lit->second[candidate.prop_id], candidate.label_id);
                     }
-                    if (std::holds_alternative<std::monostate>(r)) {
+                    if (!chosen) {
                         for (const auto& [lid, props_vec] : props) {
                             const LabelDef* ldef = findLabelDef(lid);
                             if (!ldef || ldef->name != kAnonLabelName)
@@ -204,14 +236,16 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                             for (const auto& pd : ldef->properties) {
                                 if (pd.name == ref.property_name && pd.id < props_vec.size() &&
                                     props_vec[pd.id].has_value()) {
-                                    r = pvToValue(*props_vec[pd.id]);
+                                    consider(*props_vec[pd.id], lid);
                                     break;
                                 }
                             }
-                            if (!std::holds_alternative<std::monostate>(r))
+                            if (chosen)
                                 break;
                         }
                     }
+                    if (chosen)
+                        r = pvToValue(*chosen);
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vref.id);
                 } else {

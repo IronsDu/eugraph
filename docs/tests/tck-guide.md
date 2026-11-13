@@ -229,6 +229,9 @@ python3 tests/tck/run_tck.py \
 `--features` 可以重复（runner 会把所有目录按顺序传给 cucumber），也接受单个 `.feature` 文件。
 
 写用例时：
+* 需要强模式 schema（声明列）时用我们自己的 step：
+  `Given a label "Person" with properties "name:STRING,age:INT64"`（走 RPC `createLabel`，因为 Cypher 侧没有 `CREATE LABEL`）；
+  属性归属/冲突/REMOVE/弱空间的用例见 `tests/tck/features-eugraph/property-ownership.feature`；
 * 用上游 TCK 已有的 step（`Given an empty graph` / `having executed` / `executing query` /
   `the result should be, in any order:` / `in order:` / `no side effects`），这些在
   `tests/tck/tck_steps.cpp` 里实现；

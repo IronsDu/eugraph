@@ -323,6 +323,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         // whenever the plan used a flat vprop column instead
                         // (e.g. `RETURN n.name, n::Person.name`).
                         prop_ref->object = std::move(lc->object);
+                        prop_ref->strong_mode = true;
                         BoundPropertyRef::ResolvedProperty rp;
                         rp.label_id = saved_label_id;
                         rp.prop_id = pd->id;

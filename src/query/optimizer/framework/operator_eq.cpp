@@ -219,6 +219,8 @@ bool equalBoundExpression(const binder::BoundExpression& a, const binder::BoundE
                     return !av && !bv;
                 if (av->property_name != bv->property_name)
                     return false;
+                if (av->strong_mode != bv->strong_mode)
+                    return false;
                 if (!equalBoundExpression(av->object, bv->object))
                     return false;
                 if (av->candidates.size() != bv->candidates.size())

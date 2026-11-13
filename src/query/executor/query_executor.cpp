@@ -411,48 +411,36 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             acc.is_strong = src.is_strong;
             acc.property_name = src.property_name;
             if (src.is_strong) {
+                // Strong accessor: the indexed value comes ONLY from the source
+                // label's declared column. It must exist before the index is
+                // created (and before any storage/table side effect).
                 auto source_opt = co_await async_meta_.getLabelId(src.source_label);
                 if (!source_opt.has_value()) {
                     result.error = "Source label not found: " + src.source_label;
                     co_return;
                 }
                 acc.source_label_id = *source_opt;
+                auto source_def = co_await async_meta_.getLabelDefById(*source_opt);
+                bool declared = false;
+                if (source_def.has_value()) {
+                    for (const auto& pd : source_def->properties) {
+                        if (pd.name == src.property_name) {
+                            declared = true;
+                            break;
+                        }
+                    }
+                }
+                if (!declared) {
+                    result.error = "Property '" + src.property_name + "' is not declared on label '" +
+                                   src.source_label + "'; declare it with DDL before indexing it.";
+                    co_return;
+                }
             }
             accessors.push_back(std::move(acc));
         }
         if (accessors.empty()) {
             result.error = "Index has no property accessors";
             co_return;
-        }
-
-        // A weak accessor (`ON (n.p)` without ::Label) resolves against every
-        // label that declares p. If NO label declares it, the index would be
-        // created successfully but stay empty forever -- a silent no-op that
-        // only shows up as wrong (slow / empty) query results. Reject it here.
-        {
-            const auto& schema = async_meta_.schema();
-            for (const auto& acc : accessors) {
-                if (acc.is_strong)
-                    continue;
-                bool declared = false;
-                for (const auto& [lid, ldef] : schema.labels) {
-                    if (ldef.name == kAnonLabelName)
-                        continue;
-                    for (const auto& pd : ldef.properties) {
-                        if (pd.name == acc.property_name) {
-                            declared = true;
-                            break;
-                        }
-                    }
-                    if (declared)
-                        break;
-                }
-                if (!declared) {
-                    result.error = "Property '" + acc.property_name +
-                                   "' is not declared by any label; create it with DDL before indexing it.";
-                    co_return;
-                }
-            }
         }
 
         bool ok = co_await async_meta_.createVertexIndexWithAccessors(stmt.index_name, stmt.label_name, accessors,
