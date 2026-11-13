@@ -45,7 +45,7 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
         static_cast<size_t>(compute_threads_), std::make_shared<folly::NamedThreadFactory>("eugraph-compute"));
     {
         const char* mode_name = "same";
-        switch (IoScheduler::storageDispatchMode()) {
+        switch (io_scheduler_->mode()) {
         case IoScheduler::DispatchMode::Pool:
             mode_name = "pool";
             break;

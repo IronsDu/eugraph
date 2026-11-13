@@ -27,16 +27,6 @@ namespace eugraph {
 /// afterwards (Task::await_transform adds the return hop).
 class IoScheduler {
 public:
-    explicit IoScheduler(size_t num_threads = 4)
-        : io_pool_(std::make_shared<folly::IOThreadPoolExecutor>(num_threads,
-                                                                 eugraph::common::makeThreadFactory("eugraph-io"))),
-          io_ka_(io_pool_.get()) {}
-
-    /// Get the underlying folly executor.
-    folly::Executor* executor() const {
-        return io_pool_.get();
-    }
-
     /// Where a storage data call runs.
     ///
     ///   Pool         - dedicated storage IO pool (historical design);
@@ -59,6 +49,16 @@ public:
         SameExecutor
     };
 
+    explicit IoScheduler(size_t num_threads = 4, DispatchMode mode = resolveDispatchMode())
+        : io_pool_(std::make_shared<folly::IOThreadPoolExecutor>(num_threads,
+                                                                 eugraph::common::makeThreadFactory("eugraph-io"))),
+          io_ka_(io_pool_.get()), mode_(mode) {}
+
+    /// Get the underlying folly executor.
+    folly::Executor* executor() const {
+        return io_pool_.get();
+    }
+
     /// Compile-time default from EUGRAPH_STORAGE_DISPATCH_MODE (CMake).
     static constexpr DispatchMode compiledDispatchMode() {
 #if defined(EUGRAPH_STORAGE_DISPATCH_MODE_INLINE)
@@ -71,7 +71,8 @@ public:
     }
 
     /// Runtime override for A/B runs: EUGRAPH_IO_MODE=pool|inline|same.
-    static DispatchMode storageDispatchMode() {
+    /// Resolved once per process; use mode() for the mode this scheduler uses.
+    static DispatchMode resolveDispatchMode() {
         static const DispatchMode mode = [] {
             const char* v = std::getenv(config::kEnvIoMode);
             if (v != nullptr && *v != '\0') {
@@ -88,8 +89,13 @@ public:
         return mode;
     }
 
+    /// Mode this scheduler was constructed with (production: resolveDispatchMode()).
+    DispatchMode mode() const {
+        return mode_;
+    }
+
     /// Dispatch a callable returning non-void to the storage executor (see
-    /// storageDispatchMode()).
+    /// resolveDispatchMode() / mode()).
     template <typename F> folly::coro::Task<std::invoke_result_t<F>> dispatch(F func) {
         return dispatchImpl(std::move(func), /*force_io_pool=*/false);
     }
@@ -100,7 +106,7 @@ public:
         return dispatchImpl(std::move(func), /*force_io_pool=*/true);
     }
 
-    /// Dispatch a void-returning callable (see storageDispatchMode()).
+    /// Dispatch a void-returning callable (see resolveDispatchMode() / mode()).
     template <typename F> folly::coro::Task<void> dispatchVoid(F func) {
         return dispatchVoidImpl(std::move(func), /*force_io_pool=*/false);
     }
@@ -112,7 +118,7 @@ public:
 private:
     template <typename F> folly::coro::Task<std::invoke_result_t<F>> dispatchImpl(F func, bool force_io_pool) {
         using R = std::invoke_result_t<F>;
-        const DispatchMode mode = force_io_pool ? DispatchMode::Pool : storageDispatchMode();
+        const DispatchMode mode = force_io_pool ? DispatchMode::Pool : mode_;
         if (mode == DispatchMode::Inline)
             co_return func();
         auto ioTask =
@@ -134,7 +140,7 @@ private:
     }
 
     template <typename F> folly::coro::Task<void> dispatchVoidImpl(F func, bool force_io_pool) {
-        const DispatchMode mode = force_io_pool ? DispatchMode::Pool : storageDispatchMode();
+        const DispatchMode mode = force_io_pool ? DispatchMode::Pool : mode_;
         if (mode == DispatchMode::Inline) {
             func();
             co_return;
@@ -159,6 +165,7 @@ private:
 
     std::shared_ptr<folly::IOThreadPoolExecutor> io_pool_;
     folly::Executor::KeepAlive<> io_ka_;
+    DispatchMode mode_;
 };
 
 } // namespace eugraph

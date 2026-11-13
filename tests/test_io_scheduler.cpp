@@ -70,7 +70,7 @@ template <typename Task> void runOn(folly::Executor* executor, Task&& task) {
 /// Exceptions thrown by the storage callable must cross the executor hop and
 /// surface in the caller, not terminate the IO worker.
 TEST(IoSchedulerTest, DispatchPropagatesExceptionToCaller) {
-    eugraph::IoScheduler io(1);
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Pool);
     folly::CPUThreadPoolExecutor compute(1);
     bool caught = false;
     std::string message;
@@ -90,7 +90,7 @@ TEST(IoSchedulerTest, DispatchPropagatesExceptionToCaller) {
 
 /// The storage callable must not run on the caller's compute thread.
 TEST(IoSchedulerTest, DispatchVoidRunsOnIoPoolNotCaller) {
-    eugraph::IoScheduler io(1);
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Pool);
     folly::CPUThreadPoolExecutor compute(1);
     ThreadTrace trace;
 
@@ -104,7 +104,7 @@ TEST(IoSchedulerTest, DispatchVoidRunsOnIoPoolNotCaller) {
 }
 
 TEST(IoSchedulerTest, DispatchValueRunsOnIoPoolNotCaller) {
-    eugraph::IoScheduler io(1);
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Pool);
     folly::CPUThreadPoolExecutor compute(1);
     ThreadTrace trace;
 
@@ -120,7 +120,7 @@ TEST(IoSchedulerTest, DispatchValueRunsOnIoPoolNotCaller) {
 /// Thrift-like setup: the caller runs on a separate IO pool (the handler
 /// executor), which must still be distinct from the storage IO pool.
 TEST(IoSchedulerTest, DispatchFromHandlerIoPoolRunsOnStorageIoPool) {
-    eugraph::IoScheduler io(1);
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Pool);
     folly::IOThreadPoolExecutor handler_pool(1);
     ThreadTrace trace;
 
@@ -136,7 +136,7 @@ TEST(IoSchedulerTest, DispatchFromHandlerIoPoolRunsOnStorageIoPool) {
 /// The callable must still go to the IO pool and the continuation must come
 /// back to the thread that entered blockingWait.
 TEST(IoSchedulerTest, DispatchFromBlockingWaitStillReturnsToCaller) {
-    eugraph::IoScheduler io(1);
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Pool);
     ThreadTrace trace;
 
     folly::coro::blockingWait(runDispatchVoid(io, trace));
@@ -149,7 +149,7 @@ TEST(IoSchedulerTest, DispatchFromBlockingWaitStillReturnsToCaller) {
 /// A/B: production dispatch must have the same observable thread behaviour as
 /// the co_withExecutor reference. Both dispatch to the same single IO worker.
 TEST(IoSchedulerTest, AbProductionDispatchMatchesReference) {
-    eugraph::IoScheduler io(1);
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Pool);
     folly::CPUThreadPoolExecutor compute(1);
     ThreadTrace production;
     ThreadTrace reference;
@@ -168,4 +168,55 @@ TEST(IoSchedulerTest, AbProductionDispatchMatchesReference) {
         << "production dispatch did not use the storage IO worker used by the reference";
     EXPECT_EQ(production.resume, production.caller) << "production did not resume on the caller executor";
     EXPECT_EQ(reference.value, 42);
+}
+
+/// Inline mode: the callable runs on the caller's own thread (no hop), which is
+/// the whole point of the mode (cache locality), and the caller continues there.
+TEST(IoSchedulerTest, InlineModeRunsCallableOnCallerThread) {
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Inline);
+    folly::CPUThreadPoolExecutor compute(1);
+    ThreadTrace trace;
+
+    runOn(&compute, runDispatchValue(io, trace));
+
+    EXPECT_EQ(trace.value, 42);
+    EXPECT_EQ(trace.work, trace.caller) << "inline mode must not hop to another thread";
+    EXPECT_EQ(trace.resume, trace.caller);
+}
+
+/// Same-executor mode: the callable is posted to the caller's own executor, so
+/// it runs on a worker of that pool (never on the caller's thread while the
+/// caller is suspended), and the caller resumes on its executor.
+TEST(IoSchedulerTest, SameExecutorModeRunsOnCallerPool) {
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::SameExecutor);
+    folly::CPUThreadPoolExecutor compute(2);
+    ThreadTrace trace;
+
+    runOn(&compute, runDispatchValue(io, trace));
+
+    EXPECT_EQ(trace.value, 42);
+    EXPECT_NE(trace.work, ThreadId{}) << "callable never ran";
+    EXPECT_NE(trace.work, trace.caller) << "same-executor mode blocked the caller instead of posting";
+    EXPECT_EQ(trace.resume, trace.caller) << "caller did not resume on its own executor";
+}
+
+/// Session control must stay on the storage IO pool in every mode: a commit may
+/// fsync and must never occupy a query slot, even when data calls run inline.
+TEST(IoSchedulerTest, SessionControlStaysOnIoPoolInInlineMode) {
+    eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::Inline);
+    folly::CPUThreadPoolExecutor compute(1);
+    ThreadTrace data;
+    ThreadTrace control;
+
+    runOn(&compute, [&]() -> folly::coro::Task<void> {
+        co_await runDispatchValue(io, data);
+        control.caller = std::this_thread::get_id();
+        co_await io.dispatchVoidOnIoPool([&control] { control.work = std::this_thread::get_id(); });
+        control.resume = std::this_thread::get_id();
+    }());
+
+    EXPECT_EQ(data.work, data.caller) << "inline mode should run data calls on the caller";
+    EXPECT_NE(control.work, control.caller)
+        << "session control must not run on the query thread even when data calls are inline";
+    EXPECT_EQ(control.resume, control.caller);
 }
