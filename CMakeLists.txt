@@ -15,6 +15,24 @@ option(EUGRAPH_ENABLE_CCACHE "Enable ccache for faster rebuilds" OFF)
 option(EUGRAPH_UNITY_BUILD "Enable unity builds to reduce compilation time" OFF)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 option(EUGRAPH_ENABLE_WEB_CONSOLE "Embed the EuGraph web console" ON)
+# Where storage calls run (see IoScheduler::DispatchMode and
+# docs/benchmark/ldbc-snb-concurrency.md §9):
+#   pool   - dedicated storage IO pool (historical two-executor design);
+#   inline - synchronously on the query's compute thread;
+#   same   - posted to the same compute pool (default: the caller is freed while
+#            the storage call runs, and both phases share one capacity pool);
+# Session control (BEGIN/COMMIT/ROLLBACK) always uses the IO pool so a commit
+# fsync cannot occupy a query slot.
+set(EUGRAPH_STORAGE_DISPATCH_MODE "same" CACHE STRING
+    "Where storage data calls run: pool | inline | same")
+string(TOLOWER "${EUGRAPH_STORAGE_DISPATCH_MODE}" _eugraph_storage_mode)
+if(NOT _eugraph_storage_mode MATCHES "^(pool|inline|same)$")
+    message(FATAL_ERROR
+        "EUGRAPH_STORAGE_DISPATCH_MODE must be pool, inline or same (got '${EUGRAPH_STORAGE_DISPATCH_MODE}')")
+endif()
+string(TOUPPER "${_eugraph_storage_mode}" _eugraph_storage_mode_upper)
+add_compile_definitions(EUGRAPH_STORAGE_DISPATCH_MODE_${_eugraph_storage_mode_upper}=1)
+message(STATUS "storage dispatch mode: ${_eugraph_storage_mode}")
 set(EUGRAPH_WEB_DIST "${PROJECT_SOURCE_DIR}/web/dist" CACHE PATH
     "Directory containing the built web console assets (committed to the repository)")
 

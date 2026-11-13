@@ -28,7 +28,33 @@ eugraph-server --thrift-port 9090 --data-dir ./eugraph-data --compute-threads 4
 
 `--compute-threads` 控制查询计算线程池；`--storage-io-threads` 与 `--thrift-io-threads` 分别控制存储 IO 池和 Thrift IO/handler 池（均默认 4）。数据文件分别在 `{data_dir}/data` 和 `{data_dir}/meta`。
 
-线程归属：Thrift IO、Storage IO、Compute 是**三个独立线程池**。Thrift / RPC 模式下网络 IO、fbthrift 流循环与序列化在 `--thrift-io-threads` 池；全部 RPC handler body 经 `async_tm_*` 调度到 `--compute-threads` 池，完成回调显式投回连接 EventBase（否则请求-响应 RPC 会因 fbthrift WriteBatcher 停顿 5–7s）。每次存储调用跳到 `--storage-io-threads` 池并回到 Compute 池。Bolt 模式下 session 处理也被调度到 Compute 池。详见 [运行时执行模型](../../query/engine/execution-model.md)。
+### 存储调度模式（`EUGRAPH_STORAGE_DISPATCH_MODE` / `EUGRAPH_IO_MODE`）
+
+数据操作的存储调用落在哪个执行器上由构建期 `EUGRAPH_STORAGE_DISPATCH_MODE`（CMake cache，
+默认 **`same`**）决定，运行时可用 `EUGRAPH_IO_MODE=pool|inline|same` 覆盖做 A/B：
+
+| 模式 | 语义 | 适用 |
+|---|---|---|
+| `same`（默认） | 投递到**调用方自己的 compute 池**：调用者在存储调用期间被挂起、不占 slot，计算与存储共享同一个容量池 | 默认；容量按 `--compute-threads` 计算 |
+| `pool` | 投递到独立的 `--storage-io-threads` 池（历史设计） | 需要把存储与计算线程硬隔离时 |
+| `inline` | 在调用线程上同步执行，无 hop、cache 局部性最好，但整段存储调用阻塞该 compute 线程 | 每查询独占核的部署 |
+
+要点：
+
+- **容量账**：一条查询任一时刻只占 1 个 worker，所以单池模式的并发上限 ≈ `--compute-threads`。
+  建议 `--compute-threads ≈ 预期峰值并发 × 1.5`（实测 8 线程可跑 8~16 并发；再往上加线程收益递减，
+  因为瓶颈转为 CPU/缓存带宽）。
+- **`BEGIN/COMMIT/ROLLBACK` 始终走 `--storage-io-threads` 池**：commit 可能触发 fsync，
+  不能占用查询 slot。因此即使数据操作全内联，`--storage-io-threads` 仍建议保留 ≥1。
+- 快慢混合：慢查询只占 1 个 slot，快查询的损失近似其容量份额（2/16 ≈ 12%），不会把快查询卡死；
+  线程数不足（在飞查询 > 线程数）时才明显排队。
+- 启动日志会打印生效模式：`Storage dispatch: same (compute threads 8, storage IO threads 4; ...)`。
+- 实测（SF1 complex-only、官方 LDBC driver、同二进制 `EUGRAPH_IO_MODE` 交错两轮）：
+  **2 线程 3.71–3.79 vs 2.93 op/s（+27%）；4 线程 6.44–6.60 vs 3.90–3.99 op/s（+66%）**。
+  分析细节见 `docs/benchmark/ldbc-snb-concurrency.md`（PR #311 分支）。
+
+线程归属：Thrift IO、Storage IO、Compute 是**三个独立线程池**。Thrift / RPC 模式下网络 IO、fbthrift 流循环与序列化在 `--thrift-io-threads` 池；全部 RPC handler body 经 `async_tm_*` 调度到 `--compute-threads` 池，完成回调显式投回连接 EventBase（否则请求-响应 RPC 会因 fbthrift WriteBatcher 停顿 5–7s）。数据操作的存储调用按上面的“存储调度模式”执行（默认回到 Compute 池）；会话控制
+（BEGIN/COMMIT/ROLLBACK）固定在 `--storage-io-threads` 池。Bolt 模式下 session 处理也被调度到 Compute 池。详见 [运行时执行模型](../../query/engine/execution-model.md)。
 
 > `--wt-txn-sync none` 会关闭 WiredTiger commit 级 fsync，写入更快，但崩溃时可能丢失最近一段事务。
 > 适合纯导入场景；正式在线服务建议保持默认 `fsync`。

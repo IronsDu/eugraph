@@ -43,6 +43,23 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     io_scheduler_ = std::make_shared<IoScheduler>(io_threads_);
     compute_pool_ = std::make_shared<folly::CPUThreadPoolExecutor>(
         static_cast<size_t>(compute_threads_), std::make_shared<folly::NamedThreadFactory>("eugraph-compute"));
+    {
+        const char* mode_name = "same";
+        switch (io_scheduler_->mode()) {
+        case IoScheduler::DispatchMode::Pool:
+            mode_name = "pool";
+            break;
+        case IoScheduler::DispatchMode::Inline:
+            mode_name = "inline";
+            break;
+        case IoScheduler::DispatchMode::SameExecutor:
+            mode_name = "same";
+            break;
+        }
+        spdlog::info("Storage dispatch: {} (compute threads {}, storage IO threads {}; session control stays on the "
+                     "IO pool)",
+                     mode_name, compute_threads_, io_threads_);
+    }
 
     auto entries = catalog_.listGraphs();
     spdlog::info("Found {} graph(s) in catalog, opening...", entries.size());

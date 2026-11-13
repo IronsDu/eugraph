@@ -55,6 +55,13 @@ cmake --build --preset=debug
 
 所有 preset 自动使用 `${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake` 作为 toolchain，无需手动指定。
 
+### 3.3 构建期默认存储调度模式
+
+`-DEUGRAPH_STORAGE_DISPATCH_MODE=same|pool|inline`（默认 `same`）选择数据操作存储调用的落点，
+运行时可被 `EUGRAPH_IO_MODE` 覆盖；语义、容量与实测见
+[server 使用指南 §存储调度模式](../program/usage/server.md)。`BEGIN/COMMIT/ROLLBACK` 不受该选项影响，
+始终使用 storage IO 池（commit 的 fsync 不能占用查询 slot）。
+
 ### 3.3 手动 CMake 配置
 
 如果不使用 preset：
