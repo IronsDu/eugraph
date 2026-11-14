@@ -1280,7 +1280,17 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                 }
                 if (!anon_props.empty()) {
-                    vv.properties[anon_label_id_] = std::move(anon_props);
+                    // Merge into the anon bag instead of replacing it: the bag
+                    // may already hold values written by ON CREATE SET (which
+                    // now store undeclared keys in the weak space). Replacing
+                    // would drop them for the RETURN in the same statement.
+                    auto& dst = vv.properties[anon_label_id_];
+                    if (dst.size() < anon_props.size())
+                        dst.resize(anon_props.size());
+                    for (size_t i = 0; i < anon_props.size(); ++i) {
+                        if (anon_props[i].has_value())
+                            dst[i] = std::move(anon_props[i]);
+                    }
                     vv.labels->insert(anon_label_id_);
                 }
             };
