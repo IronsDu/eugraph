@@ -1,6 +1,8 @@
 // Step definitions for openCypher TCK
 #include "tck_context.hpp"
 
+#include "service/thrift/result_format.hpp"
+
 #include <cucumber_cpp/library/Context.hpp>
 #include <cucumber_cpp/library/Hooks.hpp>
 #include <cucumber_cpp/library/Steps.hpp>
@@ -279,6 +281,28 @@ GIVEN("^an empty graph$") {
 GIVEN("^any graph$") {
     gCurrentStepText = "any graph";
     gCtx->createGraph(gCtx->graphName);
+}
+
+// Declare a label with its strong-schema properties, e.g.
+//   Given a label "Person" with properties "name:STRING,age:INT64"
+// Needed by the property-ownership scenarios: without DDL a label has no
+// declared columns (DML never adds them).
+GIVEN(R"re(^a label "([^"]+)" with properties "([^"]+)"$)re", (const std::string& label, const std::string& spec)) {
+    gCurrentStepText = "a label with properties";
+    std::vector<eugraph::thrift_service::PropertyDefThrift> props;
+    std::stringstream ss(spec);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        const size_t colon = item.find(':');
+        if (colon == std::string::npos)
+            continue;
+        eugraph::thrift_service::PropertyDefThrift pd;
+        pd.name() = item.substr(0, colon);
+        pd.type() = eugraph::service::thrift::parsePropertyType(item.substr(colon + 1));
+        props.push_back(std::move(pd));
+    }
+    gCtx->createLabel(label, props, gCtx->graphName);
+    gCtx->lastQueryHadError = false;
 }
 
 GIVEN("^the (.+) graph$", (const std::string& graph_name)) {

@@ -621,7 +621,7 @@ TEST_F(RpcIntegrationTest, ParameterizedQueryEmptyParams) {
 /// Regression: the shell skipped the stream entirely when the result had no columns,
 /// so nothing pulled the server-side generator and the statement's side effects had
 /// not run yet when the next statement went out. A bare CREATE reported OK while its
-/// schema registration was still pending.
+/// weak-key registration was still pending.
 /// A write-only statement's work happens inside its result stream, not before the
 /// response is returned -- so a caller only sees a fully applied statement once it has
 /// drained that stream.
@@ -629,22 +629,36 @@ TEST_F(RpcIntegrationTest, ParameterizedQueryEmptyParams) {
 /// This pins the mechanism behind the "schema looks asynchronous" symptom. The server
 /// hands back a lazy generator; whether/when its side effects run is tied to the
 /// stream's lifetime, not to the response. The old shell printed OK without
-/// subscribing, so the next statement could race the previous one's DDL registration.
+/// subscribing, so the next statement could race the previous one's weak-key
+/// registration.
+///
+/// Note the property ownership contract (docs/features/property-ownership.md): DML
+/// never declares label columns, so `p` must show up in `__anon__`, not in `Race`.
 TEST_F(RpcIntegrationTest, WriteOnlyStatementRunsInsideItsStream) {
     auto [meta, stream] = client_->executeCypher("CREATE (:Race {p: 1})", "default");
     ASSERT_TRUE(meta.columns()->empty()) << "a bare CREATE must report no result columns";
 
-    // Draining it is what guarantees the work is done; the DESCRIBE below is the
-    // observable proof, and is also exactly what the shell now does before reporting OK.
+    // Draining it is what guarantees the work is done; the queries below are the
+    // observable proof, and are also exactly what the shell now does before reporting OK.
     std::move(stream).subscribeInline([](folly::Try<ResultRowBatch>) {});
 
-    auto described = execCypher("DESCRIBE LABEL Race");
+    auto described = execCypher("DESCRIBE LABEL __anon__");
     ASSERT_TRUE(described.error.empty()) << described.error;
-    EXPECT_FALSE(described.rows.empty())
-        << "DESCRIBE LABEL Race returned nothing: the CREATE had not registered its property yet";
-    if (!described.rows.empty()) {
-        EXPECT_EQ(described.rows[0].values()->at(1).get_string_val(), "p");
+    bool has_p = false;
+    for (const auto& row : described.rows) {
+        if (row.values()->size() > 1 && row.values()->at(1).get_string_val() == "p")
+            has_p = true;
     }
+    EXPECT_TRUE(has_p) << "DESCRIBE LABEL __anon__ has no 'p': the CREATE had not registered its weak key yet";
+
+    auto label = execCypher("DESCRIBE LABEL Race");
+    ASSERT_TRUE(label.error.empty()) << label.error;
+    EXPECT_TRUE(label.rows.empty()) << "DML must not declare label columns";
+
+    auto value = execCypher("MATCH (n:Race) RETURN n.p");
+    ASSERT_TRUE(value.error.empty()) << value.error;
+    ASSERT_EQ(value.rows.size(), 1u);
+    EXPECT_EQ(value.rows[0].values()->at(0).get_int_val(), 1);
 }
 
 /// Property type names accepted on the declaration path (shell `:create-label`,

@@ -634,12 +634,9 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
                     if (row < vertex_coalesce_cache[i].size()) {
                         const auto& values = vertex_coalesce_cache[i][row];
-                        // A multi-label CREATE writes a shared property to every
-                        // label that declares it. UNWIND/coalesce must still
-                        // produce one Cypher property value, not a duplicate
-                        // list; collapse identical per-label values (genuinely
-                        // conflicting values stay a list, matching multi-label
-                        // property semantics).
+                        // One Cypher property value is required. Collapse
+                        // identical per-label values; genuinely conflicting
+                        // values are an error (property-ownership.md §4).
                         if (values.empty()) {
                             output.columns[i].setNull(dst_row);
                         } else if (values.size() == 1) {
@@ -666,11 +663,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                                 if (!setColumnFromPropertyValue(output.columns[i], dst_row, unique_values[0]))
                                     output.columns[i].setValue(dst_row, propertyValueToValue(unique_values[0]));
                             } else {
-                                ListValue lv;
-                                lv.elements.reserve(unique_values.size());
-                                for (const auto& pv : unique_values)
-                                    lv.elements.push_back(ValueStorage{propertyValueToValue(pv)});
-                                output.columns[i].setValue(dst_row, Value(mk<ListValue>(std::move(lv))));
+                                // Weak access requires a single value: different
+                                // values across labels are a conflict, not a list
+                                // (docs/features/property-ownership.md §4).
+                                throw std::runtime_error("AmbiguousProperty: property '" + spec.property_name +
+                                                         "' has conflicting values across labels; use n::<Label>." +
+                                                         spec.property_name + " to select a label scope");
                             }
                         }
                     } else {

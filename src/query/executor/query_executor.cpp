@@ -411,12 +411,30 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             acc.is_strong = src.is_strong;
             acc.property_name = src.property_name;
             if (src.is_strong) {
+                // Strong accessor: the indexed value comes ONLY from the source
+                // label's declared column. It must exist before the index is
+                // created (and before any storage/table side effect).
                 auto source_opt = co_await async_meta_.getLabelId(src.source_label);
                 if (!source_opt.has_value()) {
                     result.error = "Source label not found: " + src.source_label;
                     co_return;
                 }
                 acc.source_label_id = *source_opt;
+                auto source_def = co_await async_meta_.getLabelDefById(*source_opt);
+                bool declared = false;
+                if (source_def.has_value()) {
+                    for (const auto& pd : source_def->properties) {
+                        if (pd.name == src.property_name) {
+                            declared = true;
+                            break;
+                        }
+                    }
+                }
+                if (!declared) {
+                    result.error = "Property '" + src.property_name + "' is not declared on label '" +
+                                   src.source_label + "'; declare it with DDL before indexing it.";
+                    co_return;
+                }
             }
             accessors.push_back(std::move(acc));
         }

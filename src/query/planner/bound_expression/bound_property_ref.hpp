@@ -36,6 +36,12 @@ struct BoundPropertyRef {
     std::vector<ResolvedProperty> candidates;
     BoundType result_type = BoundType::Any();
 
+    /// True when the access was written as `n::Label.p`. The label scope is
+    /// encoded by `candidates` (exactly one), but index selection must also
+    /// know the access MODE: a strong access may only use a strong index, a
+    /// convenience access may only use a weak index (property-ownership.md).
+    bool strong_mode = false;
+
     bool isStrongTyped() const {
         return candidates.size() == 1;
     }

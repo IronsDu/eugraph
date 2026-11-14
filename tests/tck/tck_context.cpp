@@ -64,6 +64,11 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
     } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
+    } else if (errMsg.find("AmbiguousProperty") != std::string::npos) {
+        // Write/read ambiguity: binder rejects a multi-label CREATE/MERGE
+        // (compile time), the evaluator rejects conflicting values at runtime.
+        errorType = "SemanticError";
+        errorPhase = errMsg.find("Binding failed") != std::string::npos ? "compile time" : "runtime";
     } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
         errorType = "ConstraintVerificationFailed";
         errorPhase = "runtime";
@@ -508,6 +513,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "UnknownFunction";
                 } else if (errMsg.find("InvalidRelationshipPattern") != std::string::npos) {
                     lastErrorDetail = "InvalidRelationshipPattern";
+                } else if (errMsg.find("AmbiguousProperty") != std::string::npos) {
+                    lastErrorDetail = "AmbiguousProperty";
                 } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
                     lastErrorDetail = "DeleteConnectedNode";
                 } else if (errMsg.find("InvalidDelete") != std::string::npos) {
@@ -569,6 +576,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "UnknownFunction";
         } else if (errMsg.find("InvalidRelationshipPattern") != std::string::npos) {
             lastErrorDetail = "InvalidRelationshipPattern";
+        } else if (errMsg.find("AmbiguousProperty") != std::string::npos) {
+            lastErrorDetail = "AmbiguousProperty";
         } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
             lastErrorDetail = "DeleteConnectedNode";
         } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {

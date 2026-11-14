@@ -229,6 +229,9 @@ python3 tests/tck/run_tck.py \
 `--features` 可以重复（runner 会把所有目录按顺序传给 cucumber），也接受单个 `.feature` 文件。
 
 写用例时：
+* 需要强模式 schema（声明列）时用我们自己的 step：
+  `Given a label "Person" with properties "name:STRING,age:INT64"`（走 RPC `createLabel`，因为 Cypher 侧没有 `CREATE LABEL`）；
+  属性归属/冲突/REMOVE/弱空间的用例见 `tests/tck/features-eugraph/property-ownership.feature`；
 * 用上游 TCK 已有的 step（`Given an empty graph` / `having executed` / `executing query` /
   `the result should be, in any order:` / `in order:` / `no side effects`），这些在
   `tests/tck/tck_steps.cpp` 里实现；
@@ -266,8 +269,9 @@ python3 tests/tck/run_tck.py \
 
 另外，**新建的图一定带匿名标签 `__anon__`**（`GraphManager` 建图时安装，用于承载无标签节点的属性），
 所以 `DESCRIBE LABELS` 在空图上就有 1 行 —— 断言空图标签列表时可以直接写全量期望值。
-裸 `CREATE` 首次看到的属性登记为 `ANY`（见 `cypher-syntax.md` 8.4），所以 schema 用例断言
-`propertyTypes` 时不要预期推断出的具体标量类型。
+裸 `CREATE` 不登记 label 字段：未声明的属性写入弱空间 `__anon__`（见 `cypher-syntax.md` 8.4 与
+[property-ownership.md](../features/property-ownership.md)）。schema 用例断言 `DESCRIBE LABEL <label>` 时
+应预期空结果，断言弱键请用 `DESCRIBE LABEL __anon__`。
 
 ### ⚠️ `tck_tests` 偶发失败：WiredTiger 在 teardown 时 panic（与用例无关）
 

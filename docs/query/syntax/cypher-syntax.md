@@ -614,15 +614,23 @@ CALL db.schema.visualization()       RETURN nodes, relationships
 
 ### 8.4 已声明的类型 vs 实际写入
 
-`propertyType` 来自 label 的**声明 schema**，而声明由写入路径决定：
+`propertyType` 来自 label 的**声明 schema**，而声明**只来自 DDL**：
 
-* `CREATE (:Person {name: 'Alice'})` 首次看到属性时登记为 **`ANY`**（值本身按实际类型存储）；
-* `SET n.name = 'Alice'` **只写数据、不登记 schema**，不会让字段出现在 `DESCRIBE` 结果里；
+* `CREATE (:Person {name: 'Alice'})` / `SET n.name = 'Alice'` **只写数据、不登记 schema**：
+  标签没有声明该字段时，值写入弱空间 `__anon__`（`DESCRIBE LABEL __anon__` 可见该键）；
+* 自动创建标签只创建空标签，`CREATE` 不会给标签补列；
 * 通过 `createLabel` / `createEdgeLabel` 声明了类型（如 `name: STRING`）时，`DESCRIBE` 报声明的类型。
+
+读取：`n.p` 要求唯一值——同一顶点的多个来源（声明列 / `__anon__` / 其他标签）给出不同值时，
+运行时报 `AmbiguousProperty`，需用 `n::Label.p` 选择作用域；值相等或只有一个值则返回标量。
+索引：`ON (n::L.p)` 只覆盖 L 的声明列（p 必须已声明）；`ON (n.p)` 覆盖所有来源，
+键尚不存在时也允许创建（弱列在首次写入时自动创建）。
+
+完整规则见 [property-ownership.md](../../features/property-ownership.md)。
 
 ⚠️ **写语句返回即代表已生效**（客户端契约）：服务端把写语句的副作用放在结果流的生成器里，
 调用方**必须把流读完**才能认为语句执行完毕。历史上 `eugraph-shell` 在"结果无列"时直接打印
-`OK` 而不订阅流，于是裸 `CREATE` 会在 schema 登记尚未落定时就报告成功，紧随其后的
+`OK` 而不订阅流，于是裸 `CREATE` 会在弱空间登记尚未落定时就报告成功，紧随其后的
 `DESCRIBE` 可能看不到刚登记的字段。已修：shell 现在无论有无列都排空结果流。
 
 也就是说 `DESCRIBE` 反映的是**元数据里登记了什么**，不保证等于数据里实际出现的类型。

@@ -93,7 +93,7 @@ CREATE (n:Person:Employee {age: 30, salary: 50000, tag: 'x'})  -- 多标签 CREA
 | **物理计划（LabelScanPhysicalOp）** | 多 LabelId，加载全部指定标签属性，获取完整 `LabelIdSet` |
 | **物理计划（AllNodeScanPhysicalOp）** | 按 `VertexId` 去重，同一顶点多标签合并为一行。流式实现：单标签直接转发该标签前向表游标；不限标签走 `createAllVertexScanCursor`；多标签对各自前向表做 k 路归并（各路按 vid 升序且内部唯一，取最小并推进所有相等者），内存为 O(label 数 × 批)，不再预先收集全图顶点 |
 | **物理计划（ExpandPhysicalOp）** | per-label 属性存储（`map<LabelId, Properties>`） |
-| **表达式求值（PropertyAccess）** | 便捷模式遍历所有 label（冲突时合并为列表），转型模式定位指定 label |
+| **表达式求值（PropertyAccess）** | 便捷模式遍历所有 label（多来源不同值 → 报 `AmbiguousProperty`），转型模式定位指定 label |
 | **CREATE** | 支持多标签 CREATE，属性按标签解析，未匹配属性写入 `__anon__` |
 | **SET/REMOVE** | 支持 `SET n:Label` / `SET n::Label.prop = val`（强模式）/ `SET n.prop = val`（便捷模式）/ `REMOVE n:Label` / `REMOVE n::Label.prop`（强模式）/ `REMOVE n.prop`（便捷模式） |
 
@@ -114,12 +114,14 @@ CREATE (n:Person:Employee {age: 30, salary: 50000, tag: 'x'})  -- 多标签 CREA
 
 ## 四、设计决策
 
-### 4.1 属性冲突解决策略：合并为列表
+### 4.1 属性冲突解决策略：报错
 
-仅一个标签定义了该属性 → 返回**标量**；多个标签都有同名属性 → 合并为**列表**返回。
+仅一个来源有该属性（或所有来源的值相等）→ 返回**标量**；多个来源给出**不同**值 → 报
+`AmbiguousProperty`，要求用 `n::Label.prop` 显式选择作用域。
 
-- 优点：最灵活，不丢信息，大多数场景下单标签命中返回标量
-- 缺点：同一属性名在不同场景下返回类型可能不同，调用方需处理
+- 优点：返回类型稳定（永远是标量）；`WHERE n.p = v` 不会因为值是列表而静默不匹配；与写入/索引规则一致
+- 代价：`Person.name='A'` + `Employee.name='B'` 这类"按标签存不同值"的场景必须用 `::` 分别读
+- 规则见 [property-ownership.md](property-ownership.md) §4
 
 ### 4.2 转型语法：`n::B.name`
 
@@ -148,7 +150,7 @@ CREATE (n:Person:Employee {age: 30, salary: 50000, tag: 'x'})  -- 多标签 CREA
 - 运行时直接使用已解析的 `(label_id, prop_id)` 精确读写
 
 **便捷模式**（`n.prop`，无 `::`）：
-- **读取**：搜索所有标签（含 `__anon__`），单标签命中返回标量，多标签合并为列表
+- **读取**：按名搜索所有来源（含 `__anon__`）；唯一值返回标量，不同值报 `AmbiguousProperty`
 - **写入**（SET/CREATE）：运行时根据节点实际标签推断归属
   - 单标签命中 → 写入该标签
   - 无标签命中 → 写入 `__anon__`（轻量分配 prop_id）
@@ -165,7 +167,7 @@ CREATE (n:Person:Employee {age: 30, salary: 50000, tag: 'x'})  -- 多标签 CREA
 | AST | 新增 `LabelCastExpr` |
 | Binder | BoundLabelScanOp 支持多标签；BoundSetOp/BoundRemoveOp |
 | PhysicalPlanner | 多 LabelId 传递；新增 SetPhysicalOp/RemovePhysicalOp |
-| ExpressionEvaluator | 转型属性访问、便捷模式冲突合并为列表 |
+| ExpressionEvaluator | 转型属性访问；便捷模式冲突报错 |
 | PhysicalOperator (Scan/Expand/Set/Remove) | 多标签属性加载与 per-label 存储 |
 | VertexValue | properties 改为 `map<LabelId, Properties>` |
 | IAsyncGraphDataStore | 新增 addVertexLabel/removeVertexLabel/putVertexProperty 等接口 |

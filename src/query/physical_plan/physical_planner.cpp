@@ -319,6 +319,7 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
             s.slot_id = co.slot_id;
             s.output_type = co.type;
             s.coalesce_candidates = co.candidates;
+            s.property_name = prop;
             ctx.var_slots[s.output_name] = co.slot_id;
             emitSpec(std::move(s));
             emitted_slots.insert(co.slot_id);
@@ -1570,6 +1571,10 @@ struct BoundIndexableCondition {
     std::string property_name;
     cypher::BinaryOperator op;
     PropertyValue value;
+    /// Written as `n::Label.p`. A strong condition may only use a strong
+    /// index; a weak condition may only use a weak index (see
+    /// docs/features/property-ownership.md §7).
+    bool is_strong = false;
 };
 
 /// Resolve a BoundColumnRef produced by ProjectionExtract lowering back to
@@ -1626,6 +1631,7 @@ static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const bin
         cond.label_id = prop_ref->candidates[0].label_id;
         cond.prop_id = prop_ref->candidates[0].prop_id;
         cond.property_name = prop_ref->property_name;
+        cond.is_strong = prop_ref->strong_mode;
         return cond;
     }
 
@@ -1839,8 +1845,16 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             if (it == prop_conditions.end())
                 break;
             auto& cond = it->second;
-            if (acc.is_strong && cond.label_id != acc.source_label_id)
+            // Index and access must use the SAME view: a strong index only sees
+            // the source label's column, a weak index sees every source. Mixing
+            // them would return false positives (weak index answering a strong
+            // access) or miss values (strong index answering a weak access).
+            if (acc.is_strong) {
+                if (!cond.is_strong || cond.label_id != acc.source_label_id)
+                    break;
+            } else if (cond.is_strong) {
                 break;
+            }
 
             if (i < idx.accessors.size() - 1) {
                 if (cond.op == cypher::BinaryOperator::EQ) {

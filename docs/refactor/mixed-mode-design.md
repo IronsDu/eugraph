@@ -1,5 +1,9 @@
 # 图数据库混合模式：标签作用域属性访问设计
 
+> **本文是设计方案；属性写入/读取归属的权威规则见 [property-ownership.md](../features/property-ownership.md)**：
+> DML 不扩列（未声明属性一律写 `__anon__`），`REMOVE n:L` 删除该标签的列，`::` 只接受已声明的列。
+
+
 ## 1. 设计动机与核心问题
 
 在强弱混合模式的图数据库中，一个实体可同时拥有多个标签（包括用于兜底弱模式的隐藏标签），但属性在不同标签间并无物理隔离。这导致数据操纵语言（DML）在写入属性时，面临"属性归属不清"的严重歧义。
@@ -65,7 +69,7 @@ CREATE (n:User:Employee {name: 'Alice'})
 - Binder 校验属性是否存在于 LabelDef，不存在则报错
 - Schema 变更通过独立 DDL 语句完成
 
-**读取规则**：保持现有便捷模式行为不变（跨所有标签搜索，单标签返回标量，多标签合并为列表）。
+**读取规则**：跨所有来源按名搜索；唯一值返回标量，多个来源给出不同值时报 `AmbiguousProperty`（见 [property-ownership.md](../features/property-ownership.md) §4）。
 
 ### 1.5 设计约束
 
@@ -132,7 +136,7 @@ SET n::User.salary = 5000
 - Binder 通过 `lookupPropertyAcrossLabels(all_labels, prop_name)` 搜索所有标签（包括 `__anon__`）
 - 找到候选 → 产出 `BoundPropertyRef`，携带所有匹配标签的 `(label_id, prop_id)` 候选列表
   - 仅一个标签命中 → 运行时返回标量
-  - 多个标签命中 → 运行时合并为列表
+  - 多个标签命中且值不同 → 运行时报 `AmbiguousProperty`
 - 无候选 → 产出 `BoundDynamicPropertyRef`（运行时按名匹配，兜底 `__anon__`）
 
 **写入**（SET / CREATE 等）——运行时自动推断归属：
@@ -147,7 +151,7 @@ SET n::User.salary = 5000
 
 | 场景 | 有 `::` | 无 `::` |
 |------|---------|---------|
-| 读取 | 直接定位到指定标签的 `prop_id` | 搜索所有标签，单标签返回标量，多标签合并为列表 |
+| 读取 | 直接定位到指定标签的 `prop_id` | 按名搜索所有来源；唯一值返回标量，冲突报错 |
 | 写入 | 写入指定标签，属性不存在则 binder 报错 | 运行时推断：单标签命中→该标签，多标签命中→运行时报错，无命中→`__anon__` |
 | 类型 | 从 `PropertyDef.type` 推导具体类型 | 候选类型一致则推导具体类型，否则 `ANY` |
 
@@ -516,7 +520,7 @@ RETURN n["salary"]
 
 ## 7. ORDER BY 与聚合函数的歧义处理
 
-**设计原则**：便捷模式（无 `::`）下，多标签同名属性合并为列表。但 ORDER BY 和聚合函数需要标量输入，列表会导致语义不确定。此时应通过 `::` 显式指定使用哪个标签下的属性。
+**设计原则**：便捷模式（无 `::`）要求唯一值：多个来源给出不同值时报 `AmbiguousProperty`（而不是合并成列表）。ORDER BY 和聚合函数因此总是拿到标量；需要按标签取值时用 `::` 显式指定。
 
 ### 7.1 ORDER BY 的歧义
 
@@ -525,7 +529,7 @@ MATCH (n:User:Employee)
 ORDER BY n.created_at
 ```
 
-若 `created_at` 在 User 和 Employee 标签下都存在，便捷模式会合并为列表，但 ORDER BY 需要标量，应报错：
+若 `created_at` 在 User 和 Employee 标签下都存在且值不同，便捷读取本身就会报错：
 
 ```
 Ambiguous property 'created_at' found in multiple labels: User, Employee.

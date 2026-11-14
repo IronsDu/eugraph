@@ -283,7 +283,9 @@ Bolt v5.1 使用分块传输编码进行消息帧定界：
 
 ### 6. 自动创建 Label
 
-`CreateNodePhysicalOp::prepareLabels_()` 在 CREATE 节点时自动创建 AST 中指定但 catalog 中不存在的 label（Phase 0）。与 Neo4j 行为一致：无需预先执行 DDL。
+`CreateNodePhysicalOp::prepareLabels_()` 在 CREATE 节点时自动创建 AST 中指定但 catalog 中不存在的 label（Phase 0）。
+与 Neo4j 一样无需预先执行 DDL。区别：自动创建的是**空标签**，CREATE 语句里的属性不会变成该标签的列——
+未声明的键写入弱空间 `__anon__`（见 [property-ownership.md](../features/property-ownership.md)）。
 
 ### 7. CALL 存储过程
 
