@@ -1,7 +1,10 @@
 #include "query/evaluator/expression_evaluator.hpp"
 
+#include <algorithm>
 #include <optional>
 
+#include "common/types/constants.hpp"
+#include "common/types/property_home.hpp"
 #include "storage/storage_op_metrics.hpp"
 
 #include "query/catalog/catalog.hpp"
@@ -108,56 +111,44 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     recordPrefetchMiss(currentCounters(eval_ctx_));
                 }
             }
-            // Most vertices have exactly one matching candidate. Keep the
-            // common case on the stack and only allocate the extra vector when
-            // a vertex really defines the property under more than one label.
-            std::optional<Value> first_found;
-            std::vector<Value> extra_found;
-            auto add_found = [&](Value v) {
-                if (!first_found)
-                    first_found = std::move(v);
-                else
-                    extra_found.push_back(std::move(v));
-            };
-            for (const auto& candidate : ref.candidates) {
-                auto lit = props->find(candidate.label_id);
-                if (lit != props->end()) {
-                    const auto& candidate_props = lit->second;
-                    if (candidate.prop_id < candidate_props.size() && candidate_props[candidate.prop_id].has_value()) {
-                        add_found(pvToValue(*candidate_props[candidate.prop_id]));
-                    }
+            // Strong access reads ONLY the cast label's declared column.
+            // Weak access resolves the property's "homes": each held label that
+            // declares it, plus __anon__ when it holds a value. More than one
+            // home is ambiguity (docs/features/strong-weak-hybrid.md §4).
+            if (ref.strong_mode && ref.candidates.size() == 1) {
+                const auto& cand = ref.candidates[0];
+                auto lit = props->find(cand.label_id);
+                if (lit != props->end() && cand.prop_id < lit->second.size() && lit->second[cand.prop_id].has_value())
+                    r = pvToValue(*lit->second[cand.prop_id]);
+            } else {
+                LabelIdSet held;
+                if (vertex.labels.has_value()) {
+                    held = *vertex.labels;
+                } else {
+                    for (const auto& [lid, _] : *props)
+                        held.insert(lid);
                 }
-            }
-            // Fallback: a property may be registered on __anon__ in the
-            // catalog but physically stored under the vertex's concrete
-            // label. Search all loaded labels by name.
-            if (!first_found && !ref.property_name.empty()) {
-                for (const auto& [lid, props_vec] : *props) {
-                    const LabelDef* ldef = findLabelDef(lid);
-                    if (!ldef)
-                        continue;
-                    for (const auto& pd : ldef->properties) {
-                        if (pd.name == ref.property_name && pd.id < props_vec.size()) {
-                            const auto& pv = props_vec[pd.id];
-                            if (pv.has_value()) {
-                                add_found(pvToValue(*pv));
-                                break;
-                            }
+                LabelId anon_id = INVALID_LABEL_ID;
+                if (eval_ctx_.catalog) {
+                    anon_id = eval_ctx_.catalog->getAnonLabelId();
+                } else if (eval_ctx_.label_defs) {
+                    for (const auto& [lid, def] : *eval_ctx_.label_defs) {
+                        if (def.name == kAnonLabelName) {
+                            anon_id = lid;
+                            break;
                         }
                     }
-                    if (first_found)
-                        break;
                 }
-            }
-            if (first_found && extra_found.empty()) {
-                r = std::move(*first_found);
-            } else if (first_found) {
-                ListValue lv;
-                lv.elements.reserve(1 + extra_found.size());
-                lv.elements.push_back(ValueStorage{std::move(*first_found)});
-                for (auto& v : extra_found)
-                    lv.elements.push_back(ValueStorage{std::move(v)});
-                r = Value(mk<ListValue>(std::move(lv)));
+                auto home = resolvePropertyHome([this](LabelId lid) { return findLabelDef(lid); }, held, *props,
+                                                ref.property_name, anon_id);
+                if (home.count > 1) {
+                    throw std::runtime_error("AmbiguousProperty: property '" + ref.property_name +
+                                             "' exists in multiple places on this vertex (" +
+                                             joinHomeNames(home.names) + "); use n::<Label>." + ref.property_name +
+                                             " to select one");
+                }
+                if (home.count == 1 && home.value.has_value())
+                    r = pvToValue(*home.value);
             }
         } else if (std::holds_alternative<VertexRef>(ov)) {
             const auto& vref = std::get<VertexRef>(ov);
@@ -174,29 +165,34 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 if (pit != prefetched_vertex_data_.end()) {
                     recordPrefetchHit(currentCounters(eval_ctx_));
                     const auto& props = pit->second.properties;
-                    for (const auto& candidate : ref.candidates) {
-                        auto lit = props.find(candidate.label_id);
-                        if (lit != props.end() && candidate.prop_id < lit->second.size() &&
-                            lit->second[candidate.prop_id].has_value()) {
-                            r = pvToValue(*lit->second[candidate.prop_id]);
-                            break;
-                        }
-                    }
-                    if (std::holds_alternative<std::monostate>(r)) {
-                        for (const auto& [lid, props_vec] : props) {
-                            const LabelDef* ldef = findLabelDef(lid);
-                            if (!ldef)
-                                continue;
-                            for (const auto& pd : ldef->properties) {
-                                if (pd.name == ref.property_name && pd.id < props_vec.size() &&
-                                    props_vec[pd.id].has_value()) {
-                                    r = pvToValue(*props_vec[pd.id]);
+                    if (ref.strong_mode && ref.candidates.size() == 1) {
+                        const auto& cand = ref.candidates[0];
+                        auto lit = props.find(cand.label_id);
+                        if (lit != props.end() && cand.prop_id < lit->second.size() &&
+                            lit->second[cand.prop_id].has_value())
+                            r = pvToValue(*lit->second[cand.prop_id]);
+                    } else {
+                        LabelId anon_id = INVALID_LABEL_ID;
+                        if (eval_ctx_.catalog) {
+                            anon_id = eval_ctx_.catalog->getAnonLabelId();
+                        } else if (eval_ctx_.label_defs) {
+                            for (const auto& [lid, def] : *eval_ctx_.label_defs) {
+                                if (def.name == kAnonLabelName) {
+                                    anon_id = lid;
                                     break;
                                 }
                             }
-                            if (!std::holds_alternative<std::monostate>(r))
-                                break;
                         }
+                        auto home = resolvePropertyHome([this](LabelId lid) { return findLabelDef(lid); },
+                                                        pit->second.labels, props, ref.property_name, anon_id);
+                        if (home.count > 1) {
+                            throw std::runtime_error("AmbiguousProperty: property '" + ref.property_name +
+                                                     "' exists in multiple places on this vertex (" +
+                                                     joinHomeNames(home.names) + "); use n::<Label>." +
+                                                     ref.property_name + " to select one");
+                        }
+                        if (home.count == 1 && home.value.has_value())
+                            r = pvToValue(*home.value);
                     }
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vref.id);
@@ -423,40 +419,116 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 }
             }
 
-            auto read_props = [&](LabelId label_id, const Properties& props_vec) {
-                const uint16_t prop_id = propIdFor(label_id);
-                if (prop_id != kMissingProp && prop_id < props_vec.size()) {
-                    const auto& pv = props_vec[prop_id];
-                    if (pv.has_value())
-                        r = pvToValue(*pv);
-                }
-            };
-            for (const auto& [label_id, props_vec] : *props)
-                read_props(label_id, props_vec);
-            if (anon_props)
-                read_props(anon_lid, *anon_props);
-
-            // Fallback: DDL may have created the property mid-query after the
-            // static LabelDef snapshot was taken. Reload from meta to preserve
-            // dynamic-property visibility for freshly created labels/props.
-            if (std::holds_alternative<std::monostate>(r) && eval_ctx_.meta) {
-                auto read_fallback = [&](LabelId label_id, const Properties& props_vec) {
-                    if (!std::holds_alternative<std::monostate>(r) || props_vec.empty())
-                        return;
-                    const auto* fresh_ldef = findLabelDef(label_id);
-                    if (!fresh_ldef)
-                        return;
-                    for (const auto& pd : fresh_ldef->properties) {
-                        if (pd.name == ref.property && pd.id < props_vec.size() && props_vec[pd.id].has_value()) {
-                            r = pvToValue(*props_vec[pd.id]);
-                            break;
-                        }
-                    }
-                };
-                for (const auto& [label_id, props_vec] : *props)
-                    read_fallback(label_id, props_vec);
+            // Held labels: prefer the loaded set; fall back to the materialized
+            // property map (topology-form entities may not carry labels).
+            LabelIdSet held_labels;
+            if (vertex.labels.has_value()) {
+                held_labels = *vertex.labels;
+            } else {
+                for (const auto& [lid, _] : *props)
+                    held_labels.insert(lid);
                 if (anon_props)
-                    read_fallback(anon_lid, *anon_props);
+                    held_labels.insert(anon_lid);
+            }
+            auto lookup_def = [&](LabelId lid) -> const LabelDef* {
+                const LabelDef* def = findLabelDef(lid);
+                if (!def && eval_ctx_.catalog)
+                    def = eval_ctx_.catalog->lookupLabel(lid);
+                return def;
+            };
+            auto declares = [&](const LabelDef* def, const std::string& name) -> bool {
+                if (!def)
+                    return false;
+                for (const auto& pd : def->properties) {
+                    if (pd.name == name)
+                        return true;
+                }
+                return false;
+            };
+            auto read_value = [&](const LabelDef* def, const Properties& props_vec,
+                                  std::optional<PropertyValue>& out) -> bool {
+                if (!def)
+                    return false;
+                for (const auto& pd : def->properties) {
+                    if (pd.name != ref.property)
+                        continue;
+                    if (pd.id < props_vec.size() && props_vec[pd.id].has_value()) {
+                        out = props_vec[pd.id].value();
+                        return true;
+                    }
+                    return false;
+                }
+                return false;
+            };
+
+            // Same home rule as n.p: count declaring labels (value irrelevant)
+            // plus an anon value; 2+ homes is ambiguous.
+            int homes = 0;
+            std::optional<PropertyValue> home_value;
+            std::string home_names;
+            for (LabelId lid : held_labels) {
+                if (lid == anon_lid)
+                    continue;
+                auto pit = props->find(lid);
+                if (pit == props->end())
+                    continue;
+                const LabelDef* def = lookup_def(lid);
+                if (!declares(def, ref.property))
+                    continue;
+                homes++;
+                read_value(def, pit->second, home_value);
+                if (!home_names.empty())
+                    home_names += ", ";
+                home_names += def ? def->name : std::to_string(lid);
+            }
+            if (anon_lid != INVALID_LABEL_ID) {
+                const Properties* ap = nullptr;
+                auto ait = props->find(anon_lid);
+                if (ait != props->end())
+                    ap = &ait->second;
+                else if (anon_props)
+                    ap = anon_props;
+                const LabelDef* def = lookup_def(anon_lid);
+                std::optional<PropertyValue> anon_value;
+                if (ap && read_value(def, *ap, anon_value)) {
+                    homes++;
+                    home_value = anon_value;
+                    if (!home_names.empty())
+                        home_names += ", ";
+                    home_names += kAnonLabelName;
+                }
+            }
+            if (homes > 1) {
+                throw std::runtime_error("AmbiguousProperty: property '" + ref.property +
+                                         "' exists in multiple places on this vertex (" + home_names +
+                                         "); use n::<Label>." + ref.property + " to select one");
+            }
+            if (homes == 1) {
+                if (home_value.has_value())
+                    r = pvToValue(*home_value);
+            } else if (eval_ctx_.meta) {
+                // Fallback: DDL may have created the property mid-query after
+                // the static LabelDef snapshot was taken. Rescan fresh defs and
+                // still reject multiple homes.
+                int fresh_homes = 0;
+                std::optional<PropertyValue> fresh_value;
+                for (LabelId lid : held_labels) {
+                    auto pit = props->find(lid);
+                    if (pit == props->end())
+                        continue;
+                    const LabelDef* def = lookup_def(lid);
+                    if (!declares(def, ref.property))
+                        continue;
+                    fresh_homes++;
+                    read_value(def, pit->second, fresh_value);
+                }
+                if (fresh_homes > 1) {
+                    throw std::runtime_error("AmbiguousProperty: property '" + ref.property +
+                                             "' exists in multiple places on this vertex; use n::<Label>." +
+                                             ref.property + " to select one");
+                }
+                if (fresh_homes == 1 && fresh_value.has_value())
+                    r = pvToValue(*fresh_value);
             }
         } else if (std::holds_alternative<EdgeValuePtr>(ov)) {
             const auto& edge = (*std::get<EdgeValuePtr>(ov));

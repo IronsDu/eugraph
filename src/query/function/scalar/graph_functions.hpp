@@ -1,9 +1,12 @@
 #pragma once
 
+#include "common/types/property_home.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
+
 #include "query/function/function_def.hpp"
+#include <algorithm>
 
 namespace eugraph {
 namespace function {
@@ -56,6 +59,49 @@ inline void labelsBatchFn(const std::vector<const Column*>& args, Column& result
     }
 }
 
+/// Labels the vertex actually holds (falls back to materialized labels when
+/// the label set was not requested).
+inline LabelIdSet heldLabelsOf(const VertexValue& vv) {
+    if (vv.labels.has_value())
+        return *vv.labels;
+    LabelIdSet held;
+    for (const auto& [lid, _] : vv.properties)
+        held.insert(lid);
+    return held;
+}
+
+/// Flatten a vertex's per-label properties into a name -> value map.
+/// Ambiguity (two homes for the same key, regardless of the values) is an
+/// error: a Cypher MAP cannot hold two entries with the same key, and the
+/// weak view already refuses to pick a scope.
+template <typename Lookup>
+inline std::vector<std::pair<std::string, PropertyValue>>
+flattenVertexProperties(const VertexValue& vv, Lookup&& lookup, LabelId anon_label_id) {
+    LabelIdSet held = heldLabelsOf(vv);
+    std::vector<std::string> names;
+    for (LabelId lid : held) {
+        const LabelDef* def = lookup(lid);
+        if (!def)
+            continue;
+        for (const auto& pd : def->properties) {
+            if (std::find(names.begin(), names.end(), pd.name) == names.end())
+                names.push_back(pd.name);
+        }
+    }
+    std::vector<std::pair<std::string, PropertyValue>> out;
+    for (const auto& name : names) {
+        auto home = resolvePropertyHome(lookup, held, vv.properties, name, anon_label_id);
+        if (home.count > 1) {
+            throw std::runtime_error("AmbiguousProperty: property '" + name +
+                                     "' exists in multiple places on this vertex (" + joinHomeNames(home.names) +
+                                     "); use n::<Label>." + name + " to select one");
+        }
+        if (home.count == 1 && home.value.has_value())
+            out.emplace_back(name, *home.value);
+    }
+    return out;
+}
+
 // --- keys(Vertex) ---
 
 inline Value keysVertexImpl(const Value& arg, const EvalContext& ctx) {
@@ -65,13 +111,17 @@ inline Value keysVertexImpl(const Value& arg, const EvalContext& ctx) {
     if (!ctx.catalog)
         return Value(mk<ListValue>());
     ListValue lv;
+    std::vector<std::string> names;
     for (const auto& [lid, props] : vv.properties) {
         auto* label_def = ctx.catalog->lookupLabel(lid);
         if (!label_def)
             continue;
         for (const auto& pd : label_def->properties) {
-            if (pd.id < props.size() && props[pd.id].has_value())
+            if (pd.id < props.size() && props[pd.id].has_value() &&
+                std::find(names.begin(), names.end(), pd.name) == names.end()) {
+                names.push_back(pd.name);
                 lv.elements.push_back(ValueStorage{Value(pd.name)});
+            }
         }
     }
     return Value(mk<ListValue>(std::move(lv)));
@@ -203,17 +253,10 @@ inline Value propertiesVertexImpl(const Value& arg, const EvalContext& ctx) {
     if (!ctx.catalog)
         return Value(mk<MapValue>());
     MapValue mv;
-    for (const auto& [lid, props] : vv.properties) {
-        auto* label_def = ctx.catalog->lookupLabel(lid);
-        if (!label_def)
-            continue;
-        for (const auto& pd : label_def->properties) {
-            if (pd.id < props.size() && props[pd.id].has_value()) {
-                Value val = propertyValueToRuntimeValue(*props[pd.id]);
-                mv.entries.push_back({pd.name, ValueStorage{std::move(val)}});
-            }
-        }
-    }
+    LabelId anon_id = ctx.catalog->getAnonLabelId();
+    auto flattened = flattenVertexProperties(vv, [&](LabelId lid) { return ctx.catalog->lookupLabel(lid); }, anon_id);
+    for (auto& [name, pv] : flattened)
+        mv.entries.push_back({std::move(name), ValueStorage{propertyValueToRuntimeValue(pv)}});
     return Value(mk<MapValue>(std::move(mv)));
 }
 

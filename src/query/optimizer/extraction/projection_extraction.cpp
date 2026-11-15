@@ -543,6 +543,50 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
     // Sub-expression whose demand is recorded by the enclosing arm (the object
     // of labels()/n:Label needs the label set only, not the whole vertex).
     const binder::BoundExpression* deferred_child = nullptr;
+    // A weak access to a key that exists in the weak-space registry may see an
+    // __anon__ value on the row; the flat/coalesced column paths cannot count
+    // homes, so force whole-vertex evaluation (home resolution) for those keys.
+    LabelId anonLabelId = INVALID_LABEL_ID;
+    if (label_defs) {
+        for (const auto& [lid, ldef] : *label_defs) {
+            if (ldef.name == kAnonLabelName) {
+                anonLabelId = lid;
+                break;
+            }
+        }
+    }
+    auto anonHasProp = [&](const std::string& name) -> bool {
+        if (!label_defs)
+            return false;
+        for (const auto& [lid, ldef] : *label_defs) {
+            if (ldef.name != kAnonLabelName)
+                continue;
+            for (const auto& pd : ldef.properties) {
+                if (pd.name == name)
+                    return true;
+            }
+            return false;
+        }
+        return false;
+    };
+    auto declaredAnywhere = [&](const std::string& name) -> bool {
+        if (!label_defs)
+            return false;
+        for (const auto& [lid, ldef] : *label_defs) {
+            if (ldef.name == kAnonLabelName)
+                continue;
+            for (const auto& pd : ldef.properties) {
+                if (pd.name == name)
+                    return true;
+            }
+        }
+        return false;
+    };
+    // Whole-vertex home resolution is only required when BOTH a declaring label
+    // and the weak space can hold the key (the only way to get 2+ homes). An
+    // anon-only key has at most one home, so the regular flat/coalesced column
+    // path stays valid (and preserves post-WITH scope carry).
+    auto needsHomeCheck = [&](const std::string& name) -> bool { return anonHasProp(name) && declaredAnywhere(name); };
     std::visit(
         [&](const auto& ptr) {
             using T = std::decay_t<decltype(ptr)>;
@@ -574,15 +618,60 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                     for (const auto& cand : ptr->candidates)
                         vr.edge_props.emplace_back(EdgeLabelId{cand.label_id}, cand.prop_id);
                 } else if (ptr->candidates.size() > 1) {
+                    if (!ptr->strong_mode && needsHomeCheck(ptr->property_name)) {
+                        vr.need_whole_vertex = true;
+                        return;
+                    }
                     // Multi-candidate vertex property access (e.g. n.name on
                     // an unlabeled n with name present on Person and City).
                     // Lower to one coalesced flat column that picks the value
                     // whose label is actually present on the row.
-                    for (const auto& cand : ptr->candidates)
+                    int declared = 0;
+                    for (const auto& cand : ptr->candidates) {
+                        if (cand.label_id != INVALID_LABEL_ID && cand.label_id != anonLabelId)
+                            declared++;
+                    }
+                    auto mark = [&](LabelId lid, uint16_t pid) {
+                        if (lid == INVALID_LABEL_ID || lid == anonLabelId)
+                            return;
+                        auto key = std::make_pair(lid, pid);
+                        auto it = vr.prop_strong.find(key);
+                        if (it == vr.prop_strong.end()) {
+                            vr.prop_strong[key] = false;
+                            vr.prop_declared_count[key] = declared;
+                        } else {
+                            it->second = false;
+                            vr.prop_declared_count[key] = std::max(vr.prop_declared_count[key], declared);
+                        }
+                    };
+                    for (const auto& cand : ptr->candidates) {
                         vr.coalesce_vertex_props[ptr->property_name].emplace_back(cand.label_id, cand.prop_id);
+                        mark(cand.label_id, cand.prop_id);
+                    }
                 } else {
-                    for (const auto& cand : ptr->candidates)
+                    if (!ptr->strong_mode && needsHomeCheck(ptr->property_name)) {
+                        vr.need_whole_vertex = true;
+                        return;
+                    }
+                    int declared = 0;
+                    for (const auto& cand : ptr->candidates) {
+                        if (cand.label_id != INVALID_LABEL_ID && cand.label_id != anonLabelId)
+                            declared++;
+                    }
+                    for (const auto& cand : ptr->candidates) {
                         vr.vertex_props.emplace_back(cand.label_id, cand.prop_id);
+                        if (cand.label_id == INVALID_LABEL_ID || cand.label_id == anonLabelId)
+                            continue;
+                        auto key = std::make_pair(cand.label_id, cand.prop_id);
+                        auto it = vr.prop_strong.find(key);
+                        if (it == vr.prop_strong.end()) {
+                            vr.prop_strong[key] = ptr->strong_mode;
+                            vr.prop_declared_count[key] = declared;
+                        } else {
+                            it->second = it->second && ptr->strong_mode;
+                            vr.prop_declared_count[key] = std::max(vr.prop_declared_count[key], declared);
+                        }
+                    }
                 }
                 // NB: do NOT recurse into ptr->object — that would set
                 // need_whole_vertex/edge on the variable ref, which is
@@ -616,6 +705,11 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                             reqs[canon].need_whole_edge = true;
                         } else if (obj_kind == binder::BoundTypeKind::VERTEX ||
                                    obj_kind == binder::BoundTypeKind::VERTEX_REF) {
+                            if (needsHomeCheck(ptr->property)) {
+                                reqs[canon].need_whole_vertex = true;
+                                collectExprReqs(ptr->object, reqs, resolver, current_skip, label_defs);
+                                return;
+                            }
                             bool resolved = false;
                             if (label_defs) {
                                 for (const auto& [lid, ldef] : *label_defs) {
@@ -1897,8 +1991,15 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
 
         pi.prop_order = r.vertex_props;
         pi.prop_slot_ids.reserve(pi.prop_order.size());
-        for (size_t i = 0; i < pi.prop_order.size(); ++i)
+        pi.prop_strong.reserve(pi.prop_order.size());
+        pi.prop_declared_count.reserve(pi.prop_order.size());
+        for (size_t i = 0; i < pi.prop_order.size(); ++i) {
             pi.prop_slot_ids.push_back(alloc.nextInternal());
+            auto it = r.prop_strong.find(pi.prop_order[i]);
+            pi.prop_strong.push_back(it != r.prop_strong.end() && it->second);
+            auto cit = r.prop_declared_count.find(pi.prop_order[i]);
+            pi.prop_declared_count.push_back(cit != r.prop_declared_count.end() ? cit->second : 0);
+        }
 
         pi.edge_prop_order = r.edge_props;
         pi.edge_prop_slot_ids.reserve(pi.edge_prop_order.size());
@@ -2051,11 +2152,15 @@ SplitPEPlans splitPEPlans(const PEPlans& plans, const PropertyDemand& demand, co
         PEPlan pre = plan;
         pre.prop_order.clear();
         pre.prop_slot_ids.clear();
+        pre.prop_strong.clear();
+        pre.prop_declared_count.clear();
         for (size_t i = 0; i < plan.prop_slot_ids.size(); ++i) {
             if (is_deferred(plan.prop_slot_ids[i]))
                 continue;
             pre.prop_order.push_back(plan.prop_order[i]);
             pre.prop_slot_ids.push_back(plan.prop_slot_ids[i]);
+            pre.prop_strong.push_back(i < plan.prop_strong.size() ? plan.prop_strong[i] : false);
+            pre.prop_declared_count.push_back(i < plan.prop_declared_count.size() ? plan.prop_declared_count[i] : 0);
         }
         pre.edge_prop_order.clear();
         pre.edge_prop_slot_ids.clear();

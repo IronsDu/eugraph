@@ -76,6 +76,8 @@ struct ColumnSpec {
     uint16_t prop_id = 0;
     /// Candidates for LoadVertexPropCoalesce.
     std::vector<std::pair<LabelId, uint16_t>> coalesce_candidates;
+    /// Property name for LoadVertexPropCoalesce (conflict diagnostics).
+    std::string property_name;
     /// Non-empty: the coalesce prefetch also loads labels in the same prefix
     /// scan and rows lacking any of them are dropped (deferred destination
     /// label filter; see docs/query/engine/deferred-label-filter-design.md).

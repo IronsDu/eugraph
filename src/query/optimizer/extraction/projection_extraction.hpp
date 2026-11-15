@@ -57,6 +57,9 @@ struct PEPlan {
     /// prop_order[i] = (label_id, prop_id).
     std::vector<std::pair<LabelId, uint16_t>> prop_order;
     std::vector<binder::SlotId> prop_slot_ids;
+    /// Parallel metadata for prop_order: access mode and declaring-label count.
+    std::vector<bool> prop_strong;
+    std::vector<int> prop_declared_count;
 
     /// Flat edge property columns appended by PE (parallel arrays).
     std::vector<std::pair<EdgeLabelId, uint16_t>> edge_prop_order;
@@ -98,6 +101,13 @@ struct VariableRequirement {
     bool need_edge_type = false;
     /// (label_id, prop_id) list for vertex property access. De-duplicated.
     std::vector<std::pair<LabelId, uint16_t>> vertex_props;
+    /// Access mode for a flat property slot: true only when every access to
+    /// this (label_id, prop_id) was strong (`n::L.p`). Mixed/weak -> false.
+    std::map<std::pair<LabelId, uint16_t>, bool> prop_strong;
+    /// Number of labels declaring the slot's property (weak-space excluded).
+    /// Carried through lowering so index selection knows whether a weak access
+    /// is unambiguous (single declarer).
+    std::map<std::pair<LabelId, uint16_t>, int> prop_declared_count;
     /// Multi-candidate vertex properties grouped by property name.
     std::map<std::string, std::vector<std::pair<LabelId, uint16_t>>> coalesce_vertex_props;
     /// (edge_label_id, prop_id) list for edge property access. De-duplicated.

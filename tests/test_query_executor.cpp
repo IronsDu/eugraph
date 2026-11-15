@@ -923,10 +923,24 @@ TEST_F(QueryExecutorTest, SetPropertiesAddAssignNullRemoves) {
 }
 
 TEST_F(QueryExecutorTest, CreateNodeAutoCreatesLabel) {
-    // Phase 11: CREATE (:NewLabel {p: 1}) should auto-create NewLabel and
-    // store p under NewLabel (not __anon__).
+    // CREATE (:Z {p: 1}) auto-creates Z as an EMPTY label; p is undeclared, so
+    // it belongs to the weak space (__anon__), not to Z. See
+    // docs/features/strong-weak-hybrid.md.
     auto setup = execSync(*executor_, "CREATE (:Z {p: 1}) RETURN 1");
     ASSERT_TRUE(setup.error.empty()) << "setup: " << setup.error;
+
+    auto z_def = blockingWait(async_meta_->getLabelDef("Z"));
+    ASSERT_TRUE(z_def.has_value()) << "Z must be auto-created";
+    EXPECT_TRUE(z_def->properties.empty()) << "DML must not extend the declared schema of Z";
+
+    auto anon_def = blockingWait(async_meta_->getLabelDef(std::string(kAnonLabelName)));
+    ASSERT_TRUE(anon_def.has_value());
+    bool anon_has_p = false;
+    for (const auto& pd : anon_def->properties)
+        if (pd.name == "p")
+            anon_has_p = true;
+    EXPECT_TRUE(anon_has_p) << "undeclared property must be registered in the weak space";
+
     auto match = execSync(*executor_, "MATCH (n:Z) RETURN n.p");
     ASSERT_TRUE(match.error.empty()) << "match: " << match.error;
     ASSERT_EQ(match.rows.size(), 1u) << "Z should have 1 node";
@@ -1985,6 +1999,7 @@ TEST_F(QueryExecutorTest, ExplainUntypedExpandAndCountWithoutProperties) {
 /// CrossProduct + LabelScan（LDBC update 的 Tag 循环会为每个 tag 扫 16k 行），
 /// 应改写成 Apply + IndexScanValues 的逐行索引探测。
 TEST_F(QueryExecutorTest, UnwindMatchPlansCorrelatedIndexProbe) {
+    blockingWait(async_meta_->addVertexLabelProperties("Person", {{"id", PropertyType::INT64}}));
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {id: 7}), (b:Person {id: 8})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_probe FOR (n:Person) ON (n.id)").error.empty());
 
@@ -2011,6 +2026,7 @@ TEST_F(QueryExecutorTest, UnwindMatchPlansCorrelatedIndexProbe) {
 /// update-7 的 `Message.id = $a + $b + 1`：参数在 Binder 里已是 literal，
 /// 再把 literal 算术折叠成单个 literal 后，索引选择才能看到常量并走 IndexScan。
 TEST_F(QueryExecutorTest, ParameterArithmeticFoldsIntoIndexSeek) {
+    blockingWait(async_meta_->addVertexLabelProperties("Person", {{"id", PropertyType::INT64}}));
     ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {id: 42, name: 'folded'})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_fold FOR (n:Person) ON (n.id)").error.empty());
 
@@ -2039,6 +2055,7 @@ TEST_F(QueryExecutorTest, ParameterArithmeticFoldsIntoIndexSeek) {
 
 /// 常量折叠不只覆盖 `+`：嵌套的 `-` / `*` 也要在绑定期折叠，索引才能命中。
 TEST_F(QueryExecutorTest, ParameterArithmeticFoldsNestedSubtractionAndMultiplication) {
+    blockingWait(async_meta_->addVertexLabelProperties("Person", {{"id", PropertyType::INT64}}));
     ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {id: 42, name: 'nested'})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_nested FOR (n:Person) ON (n.id)").error.empty());
 
@@ -2111,6 +2128,7 @@ TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeSupportsStringKeysAndLe
 
 /// 参数列表（不是字面量）也要逐行探测；NULL key 不匹配；没有索引时保持 LabelScan 回退。
 TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeHandlesParamsNullAndFallback) {
+    blockingWait(async_meta_->addVertexLabelProperties("Person", {{"id", PropertyType::INT64}}));
     ASSERT_TRUE(
         execSync(*executor_, "CREATE (a:Person {id: 7, name: 'x'}), (b:Person {id: 8, name: 'y'})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_param_probe FOR (n:Person) ON (n.id)").error.empty());
@@ -2790,23 +2808,16 @@ TEST_F(QueryExecutorMultiLabelTest, PropertyNoConflictScalar) {
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
 }
 
-TEST_F(QueryExecutorMultiLabelTest, PropertyConflictToList) {
-    // Vertex with Person{name: "Alice"} AND Employee{name: "Engineer"}
-    // n.name should return ["Alice", "Engineer"] since both labels define "name"
+TEST_F(QueryExecutorMultiLabelTest, PropertyConflictReadErrors) {
+    // Same key with two DIFFERENT values under two labels is a conflict: the
+    // weak view must report it, not silently return a list. Use :: to read a
+    // single scope.
     auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
-    ASSERT_TRUE(person_def.has_value());
     auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
     ASSERT_TRUE(employee_def.has_value());
-
-    uint16_t person_name_pid = UINT16_MAX, employee_name_pid = UINT16_MAX;
-    for (const auto& pd : person_def->properties) {
-        if (pd.name == "name")
-            person_name_pid = pd.id;
-    }
-    for (const auto& pd : employee_def->properties) {
-        if (pd.name == "name")
-            employee_name_pid = pd.id;
-    }
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    uint16_t employee_name_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "name");
     ASSERT_NE(person_name_pid, UINT16_MAX);
     ASSERT_NE(employee_name_pid, UINT16_MAX);
 
@@ -2815,19 +2826,49 @@ TEST_F(QueryExecutorMultiLabelTest, PropertyConflictToList) {
     person_props[person_name_pid] = PropertyValue(std::string("Alice"));
     employee_props.resize(employee_name_pid + 1);
     employee_props[employee_name_pid] = PropertyValue(std::string("Engineer"));
-
     insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
 
-    // Use MATCH (n) (AllNodeScan) to load ALL labels' properties, triggering conflict
     auto result = execSync(*executor_, "MATCH (n) RETURN n.name");
-    ASSERT_TRUE(result.error.empty()) << result.error;
-    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("AmbiguousProperty"), std::string::npos) << result.error;
 
-    // Should be a ListValue with both names
-    auto& val = result.rows[0][0];
-    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(val)) << "Expected ListValue, got variant index " << val.index();
-    auto& lv = (*std::get<ListValuePtr>(val));
-    ASSERT_EQ(lv.elements.size(), 2);
+    // Explicit scopes still read each value.
+    auto scoped = execSync(*executor_, "MATCH (n) RETURN n::Person.name, n::Employee.name");
+    ASSERT_TRUE(scoped.error.empty()) << scoped.error;
+    ASSERT_EQ(scoped.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(scoped.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<std::string>(scoped.rows[0][1]), "Engineer");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, PropertyConflictEqualValuesStillAmbiguous) {
+    // Ambiguity is HOME-based: two labels declaring the key are two homes,
+    // even when the values are equal (or one side is NULL).
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
+    ASSERT_TRUE(employee_def.has_value());
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    uint16_t employee_name_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "name");
+    ASSERT_NE(person_name_pid, UINT16_MAX);
+    ASSERT_NE(employee_name_pid, UINT16_MAX);
+
+    Properties person_props, employee_props;
+    person_props.resize(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Same"));
+    employee_props.resize(employee_name_pid + 1);
+    employee_props[employee_name_pid] = PropertyValue(std::string("Same"));
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    auto result = execSync(*executor_, "MATCH (n) RETURN n.name");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("AmbiguousProperty"), std::string::npos) << result.error;
+
+    // Strong access still selects one scope.
+    auto scoped = execSync(*executor_, "MATCH (n) RETURN n::Person.name, n::Employee.name");
+    ASSERT_TRUE(scoped.error.empty()) << scoped.error;
+    ASSERT_EQ(scoped.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(scoped.rows[0][0]), "Same");
+    EXPECT_EQ(std::get<std::string>(scoped.rows[0][1]), "Same");
 }
 
 TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyAccess) {
@@ -3022,30 +3063,28 @@ TEST_F(QueryExecutorMultiLabelTest, NoPropertyLabel) {
 }
 
 TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelSharedProperty) {
-    // `name` exists on both Person and Employee. A CREATE node has one property
-    // value, not an ambiguous reference: write it to both label tables and make
-    // it readable through either typed accessor in a following MATCH.
+    // `name` is declared by both Person and Employee. One CREATE value cannot
+    // be written into two label scopes without guessing, so the statement is
+    // rejected instead of fanning out (which made `n.name` read back as [v, v]).
     auto created = execSync(*executor_, "CREATE (n:Person:Employee {name: 'Bob'})");
-    ASSERT_TRUE(created.error.empty()) << created.error;
+    EXPECT_FALSE(created.error.empty());
+    EXPECT_NE(created.error.find("AmbiguousProperty"), std::string::npos) << created.error;
 
-    auto result = execSync(*executor_, "MATCH (n:Person) "
-                                       "RETURN n::Person.name AS p, n::Employee.name AS e");
+    auto count = execSync(*executor_, "MATCH (n) RETURN count(*) AS c");
+    ASSERT_TRUE(count.error.empty()) << count.error;
+    ASSERT_EQ(count.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(count.rows[0][0]), 0) << "a rejected CREATE must not create a node";
+
+    // Per-label values remain expressible with explicit scopes.
+    auto ok = execSync(*executor_, "CREATE (n:Person:Employee)");
+    ASSERT_TRUE(ok.error.empty()) << ok.error;
+    auto set_p = execSync(*executor_, "MATCH (n) SET n::Person.name = 'Bob'");
+    ASSERT_TRUE(set_p.error.empty()) << set_p.error;
+    auto result = execSync(*executor_, "MATCH (n) RETURN n::Person.name, n::Employee.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
-    ASSERT_EQ(result.rows[0].size(), 2u);
-    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]))
-        << "first value variant index=" << result.rows[0][0].index();
-    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][1]))
-        << "second value variant index=" << result.rows[0][1].index();
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Bob");
-    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "Bob");
-
-    auto untyped = execSync(*executor_, "MATCH (n:Person) RETURN n.name AS name");
-    ASSERT_TRUE(untyped.error.empty()) << untyped.error;
-    ASSERT_EQ(untyped.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<std::string>(untyped.rows[0][0]))
-        << "untyped shared property variant index=" << untyped.rows[0][0].index();
-    EXPECT_EQ(std::get<std::string>(untyped.rows[0][0]), "Bob");
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][1]));
 }
 
 TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyConvenienceFallback) {
@@ -3129,19 +3168,21 @@ TEST_F(QueryExecutorMultiLabelTest, ScanByLabelLoadsAllLabelProperties) {
     uint16_t name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
     ASSERT_NE(name_pid, UINT16_MAX);
 
-    // Create vertex with Person label
-    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    // Create vertex with Person label. `age` is declared only by Person, so
+    // the weak read stays unambiguous after Employee is added (Employee also
+    // declares `name`, which would make n.name ambiguous).
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', age: 30})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
     // Add Employee label (has different properties: salary, name)
     auto r2 = execSync(*executor_, "MATCH (n:Person) SET n:Employee");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
 
-    // Query by Employee label — should still see name from Person label
-    auto r3 = execSync(*executor_, "MATCH (n:Employee) RETURN n.name");
+    // Query by Employee label — should still see Person's properties
+    auto r3 = execSync(*executor_, "MATCH (n:Employee) RETURN n.age");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
-    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 30);
 
     // Query by Employee label — full vertex should include all properties
     auto r4 = execSync(*executor_, "MATCH (n:Employee) RETURN n");
@@ -4382,29 +4423,19 @@ TEST_F(QueryExecutorTest, VarLenExpandMixedLabelChainReturnsDstProperty) {
     }
     // c at end of *2 chain from anon (= vertex 2 after first expand from a=1):
     //   2 -> 3 -> 4. c = 4 has both Person.name="name4" and City.name="city4".
-    // Multi-candidate property resolution returns a ListValue with both.
+    // The weak view requires a single value: different values across labels are
+    // a conflict, not a list (strong-weak-hybrid.md §4).
     auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS*2]->(c) RETURN c.name");
-    ASSERT_TRUE(result.error.empty()) << result.error;
-    ASSERT_EQ(result.rows.size(), 1u);
-    ASSERT_EQ(result.rows[0].size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]))
-        << "expected ListValue, got variant idx=" << result.rows[0][0].index();
-    {
-        const auto& lv = (*std::get<ListValuePtr>(result.rows[0][0]));
-        EXPECT_EQ(lv.elements.size(), 2u);
-        bool has_name4 = false, has_city4 = false;
-        for (const auto& elem : lv.elements) {
-            if (std::holds_alternative<std::string>(elem.value)) {
-                const auto& s = std::get<std::string>(elem.value);
-                if (s == "name4")
-                    has_name4 = true;
-                if (s == "city4")
-                    has_city4 = true;
-            }
-        }
-        EXPECT_TRUE(has_name4) << "expected 'name4' in result list";
-        EXPECT_TRUE(has_city4) << "expected 'city4' in result list";
-    }
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("AmbiguousProperty"), std::string::npos) << result.error;
+
+    auto scoped = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS*2]->(c) "
+                                       "RETURN c::Person.name AS p, c::City.name AS city");
+    ASSERT_TRUE(scoped.error.empty()) << scoped.error;
+    ASSERT_EQ(scoped.rows.size(), 1u);
+    ASSERT_EQ(scoped.rows[0].size(), 2u);
+    EXPECT_EQ(std::get<std::string>(scoped.rows[0][0]), "name4");
+    EXPECT_EQ(std::get<std::string>(scoped.rows[0][1]), "city4");
 }
 
 TEST_F(QueryExecutorTest, VarLenExpandNoMatch) {
@@ -7512,11 +7543,20 @@ TEST_F(QueryExecutorMultiLabelTest, SetConvenienceModeAmbiguousPropertyErrors) {
 
     insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
 
-    // SET n.name (convenience) — ambiguous, should log error and skip the item
-    // Note: ambiguity is reported via spdlog::error, not as a query error.
-    // The SET itself succeeds but skips the ambiguous property.
+    // SET n.name (convenience) — ambiguous => runtime error (used to be a
+    // silent no-op). docs/features/strong-weak-hybrid.md §1.
     auto r = execSync(*executor_, "MATCH (n) SET n.name = 'Bob'");
-    ASSERT_TRUE(r.error.empty()) << r.error;
+    EXPECT_FALSE(r.error.empty());
+    EXPECT_NE(r.error.find("AmbiguousProperty"), std::string::npos) << r.error;
+
+    // Strong mode resolves it explicitly, per label.
+    auto r2 = execSync(*executor_, "MATCH (n) SET n::Person.name = 'Bob'");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n::Person.name, n::Employee.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Bob");
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][1]), "Worker");
 }
 
 // --- Resolve SET ambiguity with strong mode ---
@@ -7668,6 +7708,531 @@ TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelWithEmptyLabelVip) {
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
     EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "vip-tag");
+}
+
+// ==================== Property ownership (strong vs weak space) ====================
+// Contract: docs/features/strong-weak-hybrid.md — DML never extends a label's
+// declared schema; undeclared keys live in __anon__.
+
+TEST_F(QueryExecutorMultiLabelTest, CreateUndeclaredPropertyGoesToWeakSpace) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', nickname: 'Ali'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Declared schema of Person must stay untouched.
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    for (const auto& pd : person_def->properties)
+        EXPECT_NE(pd.name, "nickname") << "CREATE must not add columns to Person";
+
+    // The weak space registered the key; both spaces are readable by name.
+    auto anon_def = blockingWait(async_meta_->getLabelDef(std::string(kAnonLabelName)));
+    ASSERT_TRUE(anon_def.has_value());
+    bool anon_has_nickname = false;
+    for (const auto& pd : anon_def->properties)
+        if (pd.name == "nickname")
+            anon_has_nickname = true;
+    EXPECT_TRUE(anon_has_nickname);
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n.name, n.nickname, n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][1]), "Ali");
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][2]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, RemoveLabelDeletesOnlyThatLabelScope) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', nickname: 'Ali'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Person's declared property is deleted with the label; the weak copy of
+    // `nickname` belongs to the vertex and survives.
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n.name, n.nickname, labels(n)");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][0])) << "Person.name must be gone";
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][1]), "Ali");
+    auto labels = std::get<ListValuePtr>(r3.rows[0][2]);
+    EXPECT_TRUE(labels->elements.empty()) << "only __anon__ remains, which is hidden";
+
+    auto r4 = execSync(*executor_, "MATCH (n:Person) RETURN count(*) AS c");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    EXPECT_EQ(std::get<int64_t>(r4.rows[0][0]), 0);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, RemoveLastLabelKeepsBareVertex) {
+    auto r1 = execSync(*executor_, "CREATE (n:VIP)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n:VIP) REMOVE n:VIP");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN count(*) AS c, labels(n)");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u) << "a label-less vertex must stay visible to MATCH (n)";
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 1);
+    auto labels = std::get<ListValuePtr>(r3.rows[0][1]);
+    EXPECT_TRUE(labels->elements.empty());
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastReadAlongsidePlainProperty) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Regression: when the same projection also reads n.name, the cast access
+    // used to evaluate against a topology-only vertex and return null.
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n.name, n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][1]), "Alice");
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) WHERE n::Person.name = 'Alice' RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, SetAddAssignUndeclaredGoesToWeakSpace) {
+    auto r1 = execSync(*executor_, "CREATE (n:VIP)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n:VIP) SET n += {tag: 'vip-tag'}");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto vip_def = blockingWait(async_meta_->getLabelDef("VIP"));
+    ASSERT_TRUE(vip_def.has_value());
+    EXPECT_TRUE(vip_def->properties.empty()) << "SET += must not add columns to VIP";
+
+    auto r3 = execSync(*executor_, "MATCH (n:VIP) RETURN n.tag");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "vip-tag");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, SetDeclaredPropertyWritesLabelColumn) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // `age` is declared on Person: both SET forms must write that column, and
+    // the strong accessor must see the value (regression: the convenience path
+    // must not divert declared keys into the weak space).
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n.age = 33");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.age");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 33);
+
+    auto r4 = execSync(*executor_, "MATCH (n:Person) SET n += {age: 44}");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    auto r5 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.age");
+    ASSERT_TRUE(r5.error.empty()) << r5.error;
+    EXPECT_EQ(std::get<int64_t>(r5.rows[0][0]), 44);
+
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    EXPECT_EQ(person_def->properties.size(), 2u) << "Person declares name and age only";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, MergeUndeclaredPropertyGoesToWeakSpace) {
+    // `name` is declared (prop filter), `nickname` is not (weak space).
+    auto r1 = execSync(*executor_, "MERGE (n:Person {name: 'MergeA', nickname: 'Nick'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Re-running the same MERGE must match the existing node, including the
+    // weak-space part of the pattern (no duplicate).
+    auto r2 = execSync(*executor_, "MERGE (n:Person {name: 'MergeA', nickname: 'Nick'})");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN count(*) AS c");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 1);
+
+    auto r4 = execSync(*executor_, "MATCH (n:Person) RETURN n.name, n.nickname");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    ASSERT_EQ(r4.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r4.rows[0][0]), "MergeA");
+    EXPECT_EQ(std::get<std::string>(r4.rows[0][1]), "Nick");
+
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    for (const auto& pd : person_def->properties)
+        EXPECT_NE(pd.name, "nickname") << "MERGE must not add columns to Person";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, MergeOnCreateSetUndeclaredGoesToWeakSpace) {
+    auto r1 = execSync(*executor_, "MERGE (n:Person {name: 'OnCreate'}) ON CREATE SET n.extra = 42");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // The matched branch must not fire on a second run.
+    auto r2 = execSync(*executor_, "MERGE (n:Person {name: 'OnCreate'}) ON CREATE SET n.extra = 99");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.extra");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 42) << "ON MATCH must not overwrite the ON CREATE value";
+
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    for (const auto& pd : person_def->properties)
+        EXPECT_NE(pd.name, "extra") << "ON CREATE SET must not add columns to Person";
+}
+
+// ==================== Index access modes ====================
+// Weak indexes may be created before the key exists and cover every source;
+// strong indexes only cover the source label's declared column, and an index
+// is only selected by an access of the same mode (strong-weak-hybrid.md §7).
+
+TEST_F(QueryExecutorMultiLabelTest, WeakIndexAllowedBeforePropertyExists) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'idx-a'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // `nickname` is declared nowhere yet: weak index must be allowed because
+    // the weak column is created lazily on first write.
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_weak_nick FOR (n:Person) ON (n.nickname)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) SET n.nickname = 'nick'");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+
+    // The index is populated by the later weak write and can be used.
+    auto plan = getExplainPlanText(*executor_, "MATCH (n:Person {nickname: 'nick'}) RETURN n.name");
+    EXPECT_NE(plan.find("IndexScan"), std::string::npos) << plan;
+    auto r4 = execSync(*executor_, "MATCH (n:Person {nickname: 'nick'}) RETURN n.name");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    ASSERT_EQ(r4.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r4.rows[0][0]), "idx-a");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, WeakIndexCoversWeakSpaceOnLabeledVertex) {
+    // Weak value lives in __anon__ while the vertex carries Person.
+    auto r1 = execSync(*executor_, "CREATE (n {shared: 7})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "CREATE INDEX idx_weak_shared FOR (n:Person) ON (n.shared)");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+
+    auto r4 = execSync(*executor_, "MATCH (n:Person {shared: 7}) RETURN count(*) AS c");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    ASSERT_EQ(r4.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r4.rows[0][0]), 1);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, StrongIndexDoesNotSeeWeakSpace) {
+    // `name` is declared on Person but this vertex only has it in __anon__.
+    auto r1 = execSync(*executor_, "CREATE (n {name: 'weak-name'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "CREATE INDEX idx_strong_name FOR (n:Person) ON (n::Person.name)");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+
+    // `name` lives in __anon__ while Person also declares it: two homes, so the
+    // weak read is ambiguous. The query must error (and must not be silently
+    // answered by the strong index).
+    auto weak = execSync(*executor_, "MATCH (n:Person {name: 'weak-name'}) RETURN count(*) AS c");
+    EXPECT_FALSE(weak.error.empty());
+    EXPECT_NE(weak.error.find("AmbiguousProperty"), std::string::npos) << weak.error;
+
+    // Strong read stays null; its plan may use the strong index.
+    auto strong = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.name");
+    ASSERT_TRUE(strong.error.empty()) << strong.error;
+    ASSERT_EQ(strong.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(strong.rows[0][0]));
+
+    auto strong_plan =
+        getExplainPlanText(*executor_, "MATCH (n:Person) WHERE n::Person.name = 'weak-name' RETURN n.name");
+    EXPECT_NE(strong_plan.find("IndexScan"), std::string::npos) << strong_plan;
+    auto weak_plan = getExplainPlanText(*executor_, "MATCH (n:Person) WHERE n.name = 'weak-name' RETURN n.name");
+    EXPECT_EQ(weak_plan.find("IndexScan"), std::string::npos) << "a weak access must not use the strong index:\n"
+                                                              << weak_plan;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, WeakIndexBuildRejectsConflictingValues) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person:Employee)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n::Person.name = 'A', n::Employee.name = 'B'");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "CREATE INDEX idx_weak_name FOR (n:Person) ON (n.name)");
+    EXPECT_FALSE(r3.error.empty());
+    EXPECT_NE(r3.error.find("conflict"), std::string::npos) << r3.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, StrongIndexRequiresDeclaredPropertyBeforeCreate) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'x'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_bad_strong FOR (n:Person) ON (n::Person.zz)");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("not declared"), std::string::npos) << r2.error;
+    EXPECT_FALSE(blockingWait(async_meta_->getIndex("idx_bad_strong")).has_value())
+        << "a rejected strong index must not leave metadata behind";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, AnonPlusDeclaredIsAmbiguous) {
+    // p lives in __anon__; adding Person (which declares name) creates a second
+    // home. L.p is NULL but the weak read is still ambiguous.
+    auto r1 = execSync(*executor_, "CREATE (n {name: 'weak-name'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto weak = execSync(*executor_, "MATCH (n:Person) RETURN n.name");
+    EXPECT_FALSE(weak.error.empty());
+    EXPECT_NE(weak.error.find("AmbiguousProperty"), std::string::npos) << weak.error;
+
+    auto strong = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.name");
+    ASSERT_TRUE(strong.error.empty()) << strong.error;
+    ASSERT_EQ(strong.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(strong.rows[0][0]));
+}
+
+TEST_F(QueryExecutorMultiLabelTest, MultiLabelOneNullIsStillAmbiguous) {
+    // Person + Employee both declare name; only Person has a value.
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n:Employee");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto weak = execSync(*executor_, "MATCH (n) RETURN n.name");
+    EXPECT_FALSE(weak.error.empty());
+    EXPECT_NE(weak.error.find("AmbiguousProperty"), std::string::npos) << weak.error;
+
+    auto scoped = execSync(*executor_, "MATCH (n) RETURN n::Person.name, n::Employee.name");
+    ASSERT_TRUE(scoped.error.empty()) << scoped.error;
+    ASSERT_EQ(scoped.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(scoped.rows[0][0]), "Alice");
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(scoped.rows[0][1]));
+}
+
+TEST_F(QueryExecutorTest, DynamicEdgePropertyFromList) {
+    // Regression: a duplicate empty EdgeValuePtr branch used to swallow dynamic
+    // edge property access, so (list[1]).prop and quantifier x.name returned
+    // null. Keep a direct guard in addition to the upstream Graph6/Quantifier
+    // scenarios.
+    ASSERT_TRUE(execSync(*executor_, "CREATE ()-[:REL_DYN {existing: 42}]->()").error.empty());
+
+    auto direct = execSync(*executor_, "MATCH ()-[r]->() RETURN r.existing AS v");
+    ASSERT_TRUE(direct.error.empty()) << direct.error;
+    ASSERT_EQ(direct.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(direct.rows[0][0]), 42);
+
+    auto list_subscript = execSync(*executor_, "MATCH ()-[r]->() WITH [123, r] AS list RETURN (list[1]).existing AS v");
+    ASSERT_TRUE(list_subscript.error.empty()) << list_subscript.error;
+    ASSERT_EQ(list_subscript.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(list_subscript.rows[0][0]), 42);
+
+    auto unwind = execSync(*executor_, "MATCH ()-[r]->() WITH [r] AS list UNWIND list AS e RETURN e.existing AS v");
+    ASSERT_TRUE(unwind.error.empty()) << unwind.error;
+    ASSERT_EQ(unwind.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(unwind.rows[0][0]), 42);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, DynamicAccessUsesHomeRule) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto single = execSync(*executor_, "MATCH (n:Person) RETURN n['name'] AS v");
+    ASSERT_TRUE(single.error.empty()) << single.error;
+    ASSERT_EQ(single.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(single.rows[0][0]), "Alice");
+
+    auto r2 = execSync(*executor_, "CREATE (n:Person:Employee)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    auto r3 = execSync(*executor_, "MATCH (n:Employee) SET n::Person.name = 'a', n::Employee.name = 'b'");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+
+    auto ambiguous = execSync(*executor_, "MATCH (n:Employee) RETURN n['name']");
+    EXPECT_FALSE(ambiguous.error.empty());
+    EXPECT_NE(ambiguous.error.find("AmbiguousProperty"), std::string::npos) << ambiguous.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, PropertiesRejectsAmbiguousHomes) {
+    // Two labels declare `name` with EQUAL values: still two homes, so the
+    // flattened map cannot be produced. keys(n) is a name set and stays usable.
+    auto r1 = execSync(*executor_, "CREATE (n:Person:Employee)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n::Person.name = 'v', n::Employee.name = 'v'");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto props = execSync(*executor_, "MATCH (n) RETURN properties(n)");
+    EXPECT_FALSE(props.error.empty());
+    EXPECT_NE(props.error.find("AmbiguousProperty"), std::string::npos) << props.error;
+
+    auto keys = execSync(*executor_, "MATCH (n) RETURN keys(n)");
+    ASSERT_TRUE(keys.error.empty()) << keys.error;
+    ASSERT_EQ(keys.rows.size(), 1u);
+    auto list = std::get<ListValuePtr>(keys.rows[0][0]);
+    EXPECT_EQ(list->elements.size(), 1u) << "keys(n) must de-duplicate names";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, PropertiesRejectsAnonPlusDeclared) {
+    auto r1 = execSync(*executor_, "CREATE (n {name: 'weak'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto props = execSync(*executor_, "MATCH (n:Person) RETURN properties(n)");
+    EXPECT_FALSE(props.error.empty());
+    EXPECT_NE(props.error.find("AmbiguousProperty"), std::string::npos) << props.error;
+
+    auto keys = execSync(*executor_, "MATCH (n:Person) RETURN keys(n)");
+    ASSERT_TRUE(keys.error.empty()) << keys.error;
+    auto list = std::get<ListValuePtr>(keys.rows[0][0]);
+    EXPECT_EQ(list->elements.size(), 1u);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, PropertiesSingleHome) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN properties(n).name AS n, keys(n) AS k");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+    auto list = std::get<ListValuePtr>(r2.rows[0][1]);
+    ASSERT_EQ(list->elements.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(list->elements[0].value), "name");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, RemovePropertyClearsAmbiguity) {
+    auto r1 = execSync(*executor_, "CREATE (n {name: 'weak-name'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n:Person");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // REMOVE deletes every home -> ambiguity gone.
+    auto r3 = execSync(*executor_, "MATCH (n:Person) REMOVE n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+
+    auto r4 = execSync(*executor_, "MATCH (n:Person) SET n::Person.name = 'strong'");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    auto r5 = execSync(*executor_, "MATCH (n:Person) RETURN n.name");
+    ASSERT_TRUE(r5.error.empty()) << r5.error;
+    ASSERT_EQ(r5.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r5.rows[0][0]), "strong");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, WeakIndexBackfillRejectsAmbiguousVertex) {
+    // Two declaring labels on one vertex = two homes -> weak index cannot
+    // represent it; creation must fail.
+    auto r1 = execSync(*executor_, "CREATE (n:Person:Employee)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "MATCH (n) SET n::Person.name = 'A'");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "CREATE INDEX idx_weak_amb FOR (n:Person) ON (n.name)");
+    EXPECT_FALSE(r3.error.empty());
+    EXPECT_NE(r3.error.find("conflict"), std::string::npos) << r3.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, WeakIndexBlocksAmbiguityCreatingWrite) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_weak_guard FOR (n:Person) ON (n.name)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Adding Employee makes name ambiguous; the weak index cannot be
+    // maintained, so the write fails.
+    auto r3 = execSync(*executor_, "MATCH (n:Person) SET n:Employee");
+    EXPECT_FALSE(r3.error.empty());
+    EXPECT_NE(r3.error.find("AmbiguousProperty"), std::string::npos) << r3.error;
+
+    auto r4 = execSync(*executor_, "MATCH (n:Employee) RETURN count(*) AS c");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    EXPECT_EQ(std::get<int64_t>(r4.rows[0][0]), 0) << "the failed SET must roll the label back";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, MergeSetLabelsWithWeakIndexRejectsAmbiguity) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_merge_weak FOR (n:Person) ON (n.name)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // ON MATCH SET n:Employee would create a second home for name; the weak
+    // index cannot represent it, so the MERGE write fails.
+    auto r3 = execSync(*executor_, "MERGE (n:Person {name: 'Alice'}) ON MATCH SET n:Employee");
+    EXPECT_FALSE(r3.error.empty());
+    EXPECT_NE(r3.error.find("AmbiguousProperty"), std::string::npos) << r3.error;
+
+    auto r4 = execSync(*executor_, "MATCH (n:Employee) RETURN count(*) AS c");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    EXPECT_EQ(std::get<int64_t>(r4.rows[0][0]), 0) << "the failed label add must roll back";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, StrongIndexAllowsAmbiguityCreatingWrite) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_strong_guard FOR (n:Person) ON (n::Person.name)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // The strong index only covers Person's column; adding Employee is allowed,
+    // but the weak read becomes ambiguous.
+    auto r3 = execSync(*executor_, "MATCH (n:Person) SET n:Employee");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    auto r4 = execSync(*executor_, "MATCH (n) RETURN n.name");
+    EXPECT_FALSE(r4.error.empty());
+    EXPECT_NE(r4.error.find("AmbiguousProperty"), std::string::npos) << r4.error;
+    auto r5 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.name");
+    ASSERT_TRUE(r5.error.empty()) << r5.error;
+    EXPECT_EQ(std::get<std::string>(r5.rows[0][0]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, StrongIndexServesWeakQueryWhenUnambiguous) {
+    // `age` is declared by Person only and is not in the weak registry: the
+    // weak read is exactly Person.age, so the strong index may be used.
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', age: 30})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_strong_weak FOR (n:Person) ON (n::Person.age)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto plan = getExplainPlanText(*executor_, "MATCH (n:Person) WHERE n.age = 30 RETURN n.name");
+    EXPECT_NE(plan.find("IndexScan"), std::string::npos) << plan;
+    auto r3 = execSync(*executor_, "MATCH (n:Person) WHERE n.age = 30 RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, StrongIndexNotUsedForMultiDeclaredWeakQuery) {
+    // `name` is declared by Person and Employee: a single strong index cannot
+    // answer the weak view, so the weak query must not use it.
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_strong_multi FOR (n:Person) ON (n::Person.name)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto plan = getExplainPlanText(*executor_, "MATCH (n:Person {name: 'Alice'}) RETURN n.age");
+    EXPECT_EQ(plan.find("IndexScan"), std::string::npos) << plan;
+    auto r3 = execSync(*executor_, "MATCH (n:Person {name: 'Alice'}) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, WeakQuerySkipsStrongIndexWhenAnonMayExist) {
+    // Weak-space registry contains `age` (another vertex wrote it weakly), so a
+    // weak query must not use the strong index: a conflict row could be skipped
+    // instead of raising AmbiguousProperty.
+    auto r0 = execSync(*executor_, "CREATE (n {age: 7})");
+    ASSERT_TRUE(r0.error.empty()) << r0.error;
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', age: 30})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    auto r2 = execSync(*executor_, "CREATE INDEX idx_strong_skip FOR (n:Person) ON (n::Person.age)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto plan = getExplainPlanText(*executor_, "MATCH (n:Person {age: 30}) RETURN n.name");
+    EXPECT_EQ(plan.find("IndexScan"), std::string::npos) << plan;
+    auto r3 = execSync(*executor_, "MATCH (n:Person {age: 30}) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
 }
 
 // --- MATCH then CREATE: MATCH a node, then CREATE a multi-label node in the same query ---
@@ -7834,29 +8399,27 @@ TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabelVerifyRemoved) {
 }
 
 // --- REMOVE last label: properties must survive in __anon__ and stay visible ---
-TEST_F(QueryExecutorMultiLabelTest, RemoveLastLabelKeepsPropertiesAccessible) {
+TEST_F(QueryExecutorMultiLabelTest, RemoveLastLabelDeletesItsProperties) {
     auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    // No RETURN here: the Remove op cannot rely on a projected property map.
     auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n:Person");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
 
+    // Person.name is a declared column of Person: removing the label deletes
+    // it (it is NOT migrated into the weak space). The vertex itself survives.
     auto r3 = execSync(*executor_, "MATCH (n) RETURN n.name, keys(n), labels(n)");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<std::string>(r3.rows[0][0]));
-    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
-
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][0])) << "Person.name must be gone";
     const auto& keys = *std::get<ListValuePtr>(r3.rows[0][1]);
-    ASSERT_EQ(keys.elements.size(), 1u);
-    EXPECT_EQ(std::get<std::string>(keys.elements[0].value), "name");
+    EXPECT_TRUE(keys.elements.empty());
     const auto& labels = *std::get<ListValuePtr>(r3.rows[0][2]);
     EXPECT_TRUE(labels.elements.empty()) << "internal __anon__ must not leak into labels(n)";
 }
 
-// --- REMOVE one of several labels: migrated anon properties must stay visible ---
-TEST_F(QueryExecutorMultiLabelTest, RemoveOneOfMultipleLabelsKeepsPropertiesAccessible) {
+// --- REMOVE one of several labels: only that label's scope is deleted ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveOneOfMultipleLabelsDropsThatScope) {
     auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'}) SET n:Employee");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
@@ -7866,12 +8429,9 @@ TEST_F(QueryExecutorMultiLabelTest, RemoveOneOfMultipleLabelsKeepsPropertiesAcce
     auto r3 = execSync(*executor_, "MATCH (n:Employee) RETURN n.name, keys(n), labels(n)");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<std::string>(r3.rows[0][0]));
-    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
-
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][0])) << "Person.name must be gone";
     const auto& keys = *std::get<ListValuePtr>(r3.rows[0][1]);
-    ASSERT_EQ(keys.elements.size(), 1u);
-    EXPECT_EQ(std::get<std::string>(keys.elements[0].value), "name");
+    EXPECT_TRUE(keys.elements.empty());
     const auto& labels = *std::get<ListValuePtr>(r3.rows[0][2]);
     ASSERT_EQ(labels.elements.size(), 1u);
     EXPECT_EQ(std::get<std::string>(labels.elements[0].value), "Employee");
@@ -10405,6 +10965,13 @@ TEST_F(QueryExecutorTest, AllNodeScanStreamsInVidOrderAndDedupsLabels) {
 TEST_F(QueryExecutorTest, Complex12ShapePlansIndexScanValues) {
     // (:Person{id:1})-[:KNOWS]-(:Person{id:2})<-[:HAS_CREATOR]-(:Comment{id:10})
     //   -[:REPLY_OF]->(:Post{id:20})-[:HAS_TAG]->(:Tag{id:1, name:'Actor'})
+    // Tag is indexed on id, so id/name must be declared columns before the row
+    // is written (DML does not create columns anymore).
+    blockingWait(async_meta_->addVertexLabelProperties("Person", {{"id", PropertyType::INT64}}));
+    auto tag_lid = blockingWait(async_meta_->createLabel("Tag"));
+    ASSERT_NE(tag_lid, INVALID_LABEL_ID);
+    blockingWait(
+        async_meta_->addVertexLabelProperties("Tag", {{"id", PropertyType::INT64}, {"name", PropertyType::STRING}}));
     ASSERT_TRUE(execSync(*executor_, "CREATE (t:Tag {id: 1, name: 'Actor'})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {id: 1})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE (f:Person {id: 2})").error.empty());
@@ -11117,6 +11684,16 @@ TEST_F(QueryExecutorTest, PropertiesFunctionStillConstructsObject) {
 /// group by the forum's identity. The PE above the HAS_MEMBER Expand must not
 /// construct a forum VertexValue (friend's collect object may remain).
 TEST_F(QueryExecutorTest, C5LikeGroupKeyDoesNotConstructForumBeforeMembershipFilter) {
+    // LDBC-style schemas: the plan this test pins only makes sense when the
+    // accessed keys are declared columns (weak keys force home resolution).
+    blockingWait(async_meta_->addVertexLabelProperties("Person", {{"id", PropertyType::INT64}}));
+    for (const auto& label : {"Forum", "Post"}) {
+        ASSERT_NE(blockingWait(async_meta_->createLabel(label)), INVALID_LABEL_ID);
+    }
+    blockingWait(
+        async_meta_->addVertexLabelProperties("Forum", {{"id", PropertyType::INT64}, {"title", PropertyType::STRING}}));
+    blockingWait(async_meta_->addVertexLabelProperties("Post", {{"id", PropertyType::INT64}}));
+
     ASSERT_TRUE(execSync(*executor_,
                          "CREATE (p:Person {id: 1}), (f1:Person {id: 2}), (f2:Person {id: 3}), "
                          "(forum1:Forum {id: 10, title: 'forum-a'}), (forum2:Forum {id: 11, title: 'forum-b'}), "

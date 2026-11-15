@@ -22,7 +22,7 @@ bool isDeleteLabelPredicate(const cypher::Expression& expr);
 std::pair<std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>>,
           std::vector<std::pair<std::string, BoundExpression>>>
 bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<LabelId>& label_ids,
-                         const catalog::Catalog& catalog, Binder& binder, std::string* /*error_out*/) {
+                         const catalog::Catalog& catalog, Binder& binder, std::string* error_out) {
     std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>> label_properties;
     std::vector<std::pair<std::string, BoundExpression>> pending_props;
 
@@ -34,11 +34,17 @@ bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<Labe
     if (!node.properties)
         return {std::move(label_properties), std::move(pending_props)};
 
+    // __anon__ is the weak-space fallback, never a declaring scope: a key it
+    // happens to have registered must still be treated as pending on the node
+    // (otherwise a CREATE with an auto-created label would silently drop it).
+    const LabelId anon_lid = catalog.getAnonLabelId();
     for (const auto& [prop_name, prop_expr] : node.properties->entries) {
         // Count how many specified labels define this property (without binding yet).
         LabelId matched_lid = INVALID_LABEL_ID;
         int match_count = 0;
         for (const auto& [lid, props_vec] : label_properties) {
+            if (lid == anon_lid)
+                continue;
             if (catalog.lookupProperty(lid, prop_name)) {
                 if (match_count == 0)
                     matched_lid = lid;
@@ -47,18 +53,28 @@ bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<Labe
         }
 
         if (match_count > 1) {
-            // A property name shared by multiple labels of the same CREATE node
-            // (e.g. `CREATE (p:Post:Message {id: ...})`) is not ambiguous: the
-            // node has one property value and each label's property table needs
-            // it. Bind once per label so each BoundExpression is independent.
-            for (auto& [lid, props_vec] : label_properties) {
-                auto* pd = catalog.lookupProperty(lid, prop_name);
-                if (!pd)
-                    continue;
-                auto bound_val = binder.bindExpression(prop_expr);
-                if (!bound_val)
-                    continue;
-                props_vec.emplace_back(pd->id, std::move(*bound_val));
+            // One value cannot be written to two label scopes unambiguously.
+            // The old fan-out wrote a copy into every declaring label, which
+            // made `RETURN n.p` come back as [v, v]. Require the user to split
+            // the statement / use per-label writes instead.
+            if (error_out) {
+                std::vector<std::string> names;
+                for (const auto& [lid, props_vec] : label_properties) {
+                    if (lid == anon_lid || !catalog.lookupProperty(lid, prop_name))
+                        continue;
+                    const auto* ldef = catalog.lookupLabel(lid);
+                    names.push_back(ldef ? ldef->name : std::to_string(lid));
+                }
+                std::string labels;
+                for (const auto& name : names) {
+                    if (!labels.empty())
+                        labels += ", ";
+                    labels += name;
+                }
+                *error_out = "AmbiguousProperty: property '" + prop_name + "' is declared by multiple labels (" +
+                             labels + ") of the same CREATE node; cannot tell which label scope owns the value. " +
+                             "Create the node with one label and write the other scope explicitly, e.g. SET n::" +
+                             (names.empty() ? std::string("Label") : names.front()) + "." + prop_name + " = ...";
             }
             continue;
         }
