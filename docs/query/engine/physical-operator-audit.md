@@ -880,7 +880,7 @@ Project        → name
 - `EdgeKey { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; }` — 与现有 `EdgeValue` 的区别是不含 `optional<Properties>` 和 type name。对应 `BoundTypeKind::EDGE_KEY`
 - `PathTopology` — 路径骨架，元素序列为 `[(vid, eid, label_id), ...]`，不含 labels 和 properties。对应 `BoundTypeKind::PATH_TOPOLOGY`
 
-### BoundDynamicPropertyRef 的消除（与 `multi-label-design.md` 协调）
+### BoundDynamicPropertyRef 的消除（与 `strong-weak-hybrid.md` 协调）
 
 `BoundDynamicPropertyRef` 是弱模式属性访问（`n.prop`），在运行时遍历 `VertexValue.labels` 来按名称匹配属性。这强制要求 `need_labels = true`，与按需加载理念矛盾。
 
@@ -896,7 +896,7 @@ Project        → name
 
 这样 `VertexEnrichPhysicalOp` 的常规路径是：`need_labels = false`，`need_props = {label_id: [prop_id, ...]}`。labels 只在显式请求时加载（`labels(n)` 函数、弱模式退化等边缘场景）。
 
-### SET/REMOVE 便利模式（与 `mixed-mode-design.md` 协调）
+### SET/REMOVE 便利模式（与 `strong-weak-hybrid.md` 协调）
 
 便利模式 SET/REMOVE（`n.prop = val`）运行时可从 `VertexValue.labels` 推断目标 label。但如果 binder 在绑定阶段就从上下文解析出 `(label_id, prop_id)`（与属性读相同逻辑），则直接走强模式，不需要 labels。
 
