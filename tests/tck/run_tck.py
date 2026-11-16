@@ -14,6 +14,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import threading
 import sys
 import time
 from collections import Counter
@@ -556,9 +557,30 @@ def main():
     print(f"[run_tck] Running: {' '.join(tck_cmd)}", flush=True)
     sys.stdout.flush()
     tck_start = time.monotonic()
-    tck_result = subprocess.run(tck_cmd, env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True)
+
+    class _Result:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    tck_result = _Result()
+    tck_proc = subprocess.Popen(tck_cmd, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat() -> None:
+        # Long ASan TCK runs are silent for tens of minutes; a periodic line
+        # keeps the CI log alive and makes an external SIGTERM diagnosable.
+        while not stop_heartbeat.wait(60):
+            print(f"[run_tck] TCK still running ({time.monotonic() - tck_start:.0f}s)", flush=True)
+
+    heartbeat = threading.Thread(target=_heartbeat, daemon=True)
+    heartbeat.start()
+    try:
+        tck_result.stdout, tck_result.stderr = tck_proc.communicate()
+        tck_result.returncode = tck_proc.returncode
+    finally:
+        stop_heartbeat.set()
     tck_elapsed = time.monotonic() - tck_start
 
     # Print captured output
