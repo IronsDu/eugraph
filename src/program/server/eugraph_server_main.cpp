@@ -23,6 +23,9 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <sys/resource.h>
+
+#include <pthread.h>
 #include <thread>
 #include <vector>
 
@@ -110,7 +113,47 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
     return config;
 }
 
+namespace {
+
+/// Long logical plans (for example a query with hundreds of chained CREATE
+/// clauses) recurse through Memo::copyOut and the physical operator tree. With
+/// sanitizer frame sizes the 8 MiB default pthread stack can overflow, and the
+/// process dies with a SEGV far from the real cause. Raise the soft stack limit
+/// before any worker thread is created; the main thread stack is unaffected.
+void raiseThreadStackLimit(size_t desired_mb = 32) {
+    rlimit rl{};
+    if (getrlimit(RLIMIT_STACK, &rl) != 0)
+        return;
+    if (rl.rlim_cur == RLIM_INFINITY)
+        return;
+    rlim_t desired = static_cast<rlim_t>(desired_mb) * 1024 * 1024;
+    if (rl.rlim_max != RLIM_INFINITY)
+        desired = std::min(desired, rl.rlim_max);
+    if (rl.rlim_cur >= desired)
+        return;
+    rl.rlim_cur = desired;
+    if (setrlimit(RLIMIT_STACK, &rl) == 0)
+        std::fprintf(stderr, "[eugraph] stack rlimit raised to %zu MiB\n", desired_mb);
+
+#ifdef __GLIBC__
+    // glibc caches the pthread default stack size before main(), so changing
+    // RLIMIT_STACK here does not affect std::thread. pthread_setattr_default_np
+    // updates the cached default attributes for every thread created later.
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) == 0) {
+        if (pthread_attr_setstacksize(&attr, static_cast<size_t>(desired)) == 0 &&
+            pthread_setattr_default_np(&attr) == 0) {
+            std::fprintf(stderr, "[eugraph] thread stack size set to %zu MiB\n", desired_mb);
+        }
+        pthread_attr_destroy(&attr);
+    }
+#endif
+}
+
+} // namespace
+
 int main(int argc, char* argv[]) {
+    raiseThreadStackLimit();
     auto config = parseArgs(argc, argv);
     int folly_argc = 1;
     folly::Init init(&folly_argc, &argv);
