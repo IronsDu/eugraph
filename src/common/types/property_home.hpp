@@ -6,7 +6,6 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 namespace eugraph {
 
@@ -27,8 +26,6 @@ struct PropertyHome {
     bool anon = false;
     /// Value observed for the single home (nullopt when absent / ambiguous).
     std::optional<PropertyValue> value;
-    /// Human-readable home names, for conflict diagnostics.
-    std::vector<std::string> names;
 };
 
 inline const PropertyDef* findPropertyDefByName(const LabelDef& def, const std::string& prop_name) {
@@ -61,7 +58,6 @@ inline PropertyHome resolvePropertyHome(LabelDefLookup&& lookup, const LabelIdSe
             continue;
         home.count++;
         home.label = lid;
-        home.names.push_back(def->name);
         auto pit = props.find(lid);
         if (pit != props.end() && pd->id < pit->second.size() && pit->second[pd->id].has_value())
             home.value = pit->second[pd->id].value();
@@ -75,22 +71,11 @@ inline PropertyHome resolvePropertyHome(LabelDefLookup&& lookup, const LabelIdSe
                 home.count++;
                 home.label = anon_label_id;
                 home.anon = true;
-                home.names.push_back(std::string(kAnonLabelName));
                 home.value = pit->second[pd->id].value();
             }
         }
     }
     return home;
-}
-
-inline std::string joinHomeNames(const std::vector<std::string>& names) {
-    std::string out;
-    for (const auto& n : names) {
-        if (!out.empty())
-            out += ", ";
-        out += n;
-    }
-    return out;
 }
 
 } // namespace eugraph

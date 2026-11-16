@@ -455,8 +455,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             held, vertex.properties, item.prop_name, anon_label_id_);
                         if (home.count > 1) {
                             throw std::runtime_error("AmbiguousProperty: property '" + item.prop_name +
-                                                     "' exists in multiple places on this vertex (" +
-                                                     joinHomeNames(home.names) + "); use SET n::<Label>." +
+                                                     "' exists in multiple places on this vertex; use SET n::<Label>." +
                                                      item.prop_name + " = ...");
                         }
                         if (home.count == 1 && !home.anon) {
@@ -649,9 +648,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             },
                             held, updated_vertex.properties, key, anon_label_id_);
                         if (home.count > 1) {
-                            throw std::runtime_error(
-                                "AmbiguousProperty: property '" + key + "' exists in multiple places on this vertex (" +
-                                joinHomeNames(home.names) + "); use SET n::<Label>." + key + " = ...");
+                            throw std::runtime_error("AmbiguousProperty: property '" + key +
+                                                     "' exists in multiple places on this vertex; use SET n::<Label>." +
+                                                     key + " = ...");
                         }
                         if (home.count == 1 && !home.anon) {
                             auto def_it = label_defs_.find(home.label);

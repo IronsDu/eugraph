@@ -1,6 +1,7 @@
 #include "query/evaluator/expression_evaluator.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 
 #include "common/types/constants.hpp"
@@ -85,6 +86,73 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
         return Value{};
     };
 
+    LabelId anon_id = INVALID_LABEL_ID;
+    if (eval_ctx_.catalog) {
+        anon_id = eval_ctx_.catalog->getAnonLabelId();
+    } else if (eval_ctx_.label_defs) {
+        for (const auto& [lid, def] : *eval_ctx_.label_defs) {
+            if (def.name == kAnonLabelName) {
+                anon_id = lid;
+                break;
+            }
+        }
+    }
+    // Candidate-based weak resolution: the binder already resolved every label
+    // that declares the property, so counting homes is O(candidates) and does
+    // not scan label schemas or allocate per row (ASan builds were paying a
+    // large allocation tax for the old vector-of-names path).
+    uint16_t anon_pid_from_def = UINT16_MAX;
+    if (anon_id != INVALID_LABEL_ID) {
+        const LabelDef* adef = findLabelDef(anon_id);
+        if (adef) {
+            const PropertyDef* apd = findPropertyDefByName(*adef, ref.property_name);
+            if (apd)
+                anon_pid_from_def = apd->id;
+        }
+    }
+    auto resolveWeak = [&](const LabelIdSet& held, const std::unordered_map<LabelId, Properties>& props,
+                           const Properties* anon_override) -> std::optional<PropertyValue> {
+        int homes = 0;
+        std::optional<PropertyValue> value;
+        for (const auto& cand : ref.candidates) {
+            if (cand.label_id == anon_id || cand.label_id == INVALID_LABEL_ID)
+                continue;
+            if (held.count(cand.label_id) == 0)
+                continue;
+            ++homes;
+            auto pit = props.find(cand.label_id);
+            if (pit != props.end() && cand.prop_id < pit->second.size() && pit->second[cand.prop_id].has_value())
+                value = pit->second[cand.prop_id].value();
+        }
+        uint16_t anon_pid = UINT16_MAX;
+        for (const auto& cand : ref.candidates) {
+            if (cand.label_id == anon_id) {
+                anon_pid = cand.prop_id;
+                break;
+            }
+        }
+        if (anon_pid == UINT16_MAX)
+            anon_pid = anon_pid_from_def;
+        if (anon_id != INVALID_LABEL_ID && anon_pid != UINT16_MAX && held.count(anon_id) != 0) {
+            const Properties* ap = nullptr;
+            auto it = props.find(anon_id);
+            if (it != props.end())
+                ap = &it->second;
+            else if (anon_override)
+                ap = anon_override;
+            if (ap && anon_pid < ap->size() && (*ap)[anon_pid].has_value()) {
+                ++homes;
+                value = (*ap)[anon_pid].value();
+            }
+        }
+        if (homes > 1) {
+            throw std::runtime_error("AmbiguousProperty: property '" + ref.property_name +
+                                     "' exists in multiple places on this vertex; use n::<Label>." + ref.property_name +
+                                     " to select one");
+        }
+        return value;
+    };
+
     for (size_t i = 0; i < count; ++i) {
         Value ov = obj.column->getValue(i);
         Value r;
@@ -121,34 +189,17 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 if (lit != props->end() && cand.prop_id < lit->second.size() && lit->second[cand.prop_id].has_value())
                     r = pvToValue(*lit->second[cand.prop_id]);
             } else {
-                LabelIdSet held;
+                LabelIdSet derived;
+                const LabelIdSet* held = nullptr;
                 if (vertex.labels.has_value()) {
-                    held = *vertex.labels;
+                    held = &*vertex.labels;
                 } else {
                     for (const auto& [lid, _] : *props)
-                        held.insert(lid);
+                        derived.insert(lid);
+                    held = &derived;
                 }
-                LabelId anon_id = INVALID_LABEL_ID;
-                if (eval_ctx_.catalog) {
-                    anon_id = eval_ctx_.catalog->getAnonLabelId();
-                } else if (eval_ctx_.label_defs) {
-                    for (const auto& [lid, def] : *eval_ctx_.label_defs) {
-                        if (def.name == kAnonLabelName) {
-                            anon_id = lid;
-                            break;
-                        }
-                    }
-                }
-                auto home = resolvePropertyHome([this](LabelId lid) { return findLabelDef(lid); }, held, *props,
-                                                ref.property_name, anon_id);
-                if (home.count > 1) {
-                    throw std::runtime_error("AmbiguousProperty: property '" + ref.property_name +
-                                             "' exists in multiple places on this vertex (" +
-                                             joinHomeNames(home.names) + "); use n::<Label>." + ref.property_name +
-                                             " to select one");
-                }
-                if (home.count == 1 && home.value.has_value())
-                    r = pvToValue(*home.value);
+                if (auto value = resolveWeak(*held, *props, nullptr); value.has_value())
+                    r = pvToValue(*value);
             }
         } else if (std::holds_alternative<VertexRef>(ov)) {
             const auto& vref = std::get<VertexRef>(ov);
@@ -172,27 +223,8 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                             lit->second[cand.prop_id].has_value())
                             r = pvToValue(*lit->second[cand.prop_id]);
                     } else {
-                        LabelId anon_id = INVALID_LABEL_ID;
-                        if (eval_ctx_.catalog) {
-                            anon_id = eval_ctx_.catalog->getAnonLabelId();
-                        } else if (eval_ctx_.label_defs) {
-                            for (const auto& [lid, def] : *eval_ctx_.label_defs) {
-                                if (def.name == kAnonLabelName) {
-                                    anon_id = lid;
-                                    break;
-                                }
-                            }
-                        }
-                        auto home = resolvePropertyHome([this](LabelId lid) { return findLabelDef(lid); },
-                                                        pit->second.labels, props, ref.property_name, anon_id);
-                        if (home.count > 1) {
-                            throw std::runtime_error("AmbiguousProperty: property '" + ref.property_name +
-                                                     "' exists in multiple places on this vertex (" +
-                                                     joinHomeNames(home.names) + "); use n::<Label>." +
-                                                     ref.property_name + " to select one");
-                        }
-                        if (home.count == 1 && home.value.has_value())
-                            r = pvToValue(*home.value);
+                        if (auto value = resolveWeak(pit->second.labels, props, nullptr); value.has_value())
+                            r = pvToValue(*value);
                     }
                 } else if (prefetching_) {
                     prefetch_pending_ids_.push_back(vref.id);
@@ -421,15 +453,18 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
 
             // Held labels: prefer the loaded set; fall back to the materialized
             // property map (topology-form entities may not carry labels).
-            LabelIdSet held_labels;
+            LabelIdSet derived_labels;
+            const LabelIdSet* held_ptr = nullptr;
             if (vertex.labels.has_value()) {
-                held_labels = *vertex.labels;
+                held_ptr = &*vertex.labels;
             } else {
                 for (const auto& [lid, _] : *props)
-                    held_labels.insert(lid);
+                    derived_labels.insert(lid);
                 if (anon_props)
-                    held_labels.insert(anon_lid);
+                    derived_labels.insert(anon_lid);
+                held_ptr = &derived_labels;
             }
+            const LabelIdSet& held_labels = *held_ptr;
             auto lookup_def = [&](LabelId lid) -> const LabelDef* {
                 const LabelDef* def = findLabelDef(lid);
                 if (!def && eval_ctx_.catalog)
@@ -465,7 +500,6 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
             // plus an anon value; 2+ homes is ambiguous.
             int homes = 0;
             std::optional<PropertyValue> home_value;
-            std::string home_names;
             for (LabelId lid : held_labels) {
                 if (lid == anon_lid)
                     continue;
@@ -477,9 +511,6 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     continue;
                 homes++;
                 read_value(def, pit->second, home_value);
-                if (!home_names.empty())
-                    home_names += ", ";
-                home_names += def ? def->name : std::to_string(lid);
             }
             if (anon_lid != INVALID_LABEL_ID) {
                 const Properties* ap = nullptr;
@@ -493,15 +524,12 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 if (ap && read_value(def, *ap, anon_value)) {
                     homes++;
                     home_value = anon_value;
-                    if (!home_names.empty())
-                        home_names += ", ";
-                    home_names += kAnonLabelName;
                 }
             }
             if (homes > 1) {
                 throw std::runtime_error("AmbiguousProperty: property '" + ref.property +
-                                         "' exists in multiple places on this vertex (" + home_names +
-                                         "); use n::<Label>." + ref.property + " to select one");
+                                         "' exists in multiple places on this vertex; use n::<Label>." + ref.property +
+                                         " to select one");
             }
             if (homes == 1) {
                 if (home_value.has_value())

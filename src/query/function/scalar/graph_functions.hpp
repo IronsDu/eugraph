@@ -93,8 +93,8 @@ flattenVertexProperties(const VertexValue& vv, Lookup&& lookup, LabelId anon_lab
         auto home = resolvePropertyHome(lookup, held, vv.properties, name, anon_label_id);
         if (home.count > 1) {
             throw std::runtime_error("AmbiguousProperty: property '" + name +
-                                     "' exists in multiple places on this vertex (" + joinHomeNames(home.names) +
-                                     "); use n::<Label>." + name + " to select one");
+                                     "' exists in multiple places on this vertex; use n::<Label>." + name +
+                                     " to select one");
         }
         if (home.count == 1 && home.value.has_value())
             out.emplace_back(name, *home.value);
