@@ -184,9 +184,11 @@ TEST(IoSchedulerTest, InlineModeRunsCallableOnCallerThread) {
     EXPECT_EQ(trace.resume, trace.caller);
 }
 
-/// Same-executor mode: the callable is posted to the caller's own executor, so
-/// it runs on a worker of that pool (never on the caller's thread while the
-/// caller is suspended), and the caller resumes on its executor.
+/// Same-executor mode: the callable is dispatched to the caller's own executor
+/// (the compute pool) and the caller resumes on its executor. A pool worker is
+/// not pinned: after the caller coroutine suspends, the same worker may dequeue
+/// the callable, so thread id is not asserted here (inline mode is covered by
+/// the test above).
 TEST(IoSchedulerTest, SameExecutorModeRunsOnCallerPool) {
     eugraph::IoScheduler io(1, eugraph::IoScheduler::DispatchMode::SameExecutor);
     folly::CPUThreadPoolExecutor compute(2);
@@ -196,11 +198,11 @@ TEST(IoSchedulerTest, SameExecutorModeRunsOnCallerPool) {
 
     EXPECT_EQ(trace.value, 42);
     EXPECT_NE(trace.work, ThreadId{}) << "callable never ran";
-    EXPECT_NE(trace.work, trace.caller) << "same-executor mode blocked the caller instead of posting";
-    // A pool executor may resume the continuation on *any* of its workers: the
-    // caller coroutine is not pinned to a thread. Assert that it resumed (a hang
-    // or resume on a foreign executor would either time out or lose `value`),
-    // not that it came back to the exact thread that started it.
+    // A CPUThreadPoolExecutor worker is not pinned: after the caller coroutine
+    // suspends, the same worker can dequeue the dispatched callable. Thread id
+    // cannot distinguish a post from inline execution, so assert the functional
+    // contract (callable ran, caller resumed); the inline/post distinction is
+    // covered by InlineModeRunsCallableOnCallerThread and the mode's benchmark.
     EXPECT_NE(trace.resume, ThreadId{}) << "caller never resumed";
 }
 

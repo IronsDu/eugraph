@@ -319,6 +319,7 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
             s.slot_id = co.slot_id;
             s.output_type = co.type;
             s.coalesce_candidates = co.candidates;
+            s.property_name = prop;
             ctx.var_slots[s.output_name] = co.slot_id;
             emitSpec(std::move(s));
             emitted_slots.insert(co.slot_id);
@@ -1570,33 +1571,60 @@ struct BoundIndexableCondition {
     std::string property_name;
     cypher::BinaryOperator op;
     PropertyValue value;
+    /// Written as `n::Label.p`. A strong condition may only use a strong
+    /// index; a weak condition may only use a weak index (see
+    /// docs/features/strong-weak-hybrid.md §7).
+    bool is_strong = false;
+    /// Number of LABELS that declare this property (the weak-space registry is
+    /// not counted). A weak condition may use a strong index only when this is
+    /// exactly 1 and no anon value can exist.
+    int declared_label_count = 0;
 };
 
 /// Resolve a BoundColumnRef produced by ProjectionExtract lowering back to
-/// the property name / (label_id, prop_id) it was derived from.
-static std::optional<std::pair<std::string, std::pair<LabelId, uint16_t>>>
-resolveColumnProperty(const PlanContext& ctx, const binder::BoundColumnRef& ref) {
+/// the property name / (label_id, prop_id) and the original access mode.
+struct ResolvedColumnProperty {
+    std::string name;
+    LabelId label_id = INVALID_LABEL_ID;
+    uint16_t prop_id = 0;
+    bool is_strong = false;
+    int declared_label_count = 0;
+};
+
+static std::optional<ResolvedColumnProperty> resolveColumnProperty(const PlanContext& ctx,
+                                                                   const binder::BoundColumnRef& ref) {
     for (const auto& [canonical_slot, pe] : ctx.extraction_info) {
         (void)canonical_slot;
         for (size_t i = 0; i < pe.prop_slot_ids.size(); ++i) {
-            if (pe.prop_slot_ids[i] == ref.slot_id) {
-                const auto& [lid, pid] = pe.prop_order[i];
-                auto lit = ctx.label_defs.find(lid);
-                if (lit == ctx.label_defs.end())
-                    return std::nullopt;
-                for (const auto& pd : lit->second.properties) {
-                    if (pd.id == pid)
-                        return std::make_pair(pd.name, std::make_pair(lid, pid));
-                }
+            if (pe.prop_slot_ids[i] != ref.slot_id)
+                continue;
+            const auto& [lid, pid] = pe.prop_order[i];
+            auto lit = ctx.label_defs.find(lid);
+            if (lit == ctx.label_defs.end())
                 return std::nullopt;
+            for (const auto& pd : lit->second.properties) {
+                if (pd.id != pid)
+                    continue;
+                ResolvedColumnProperty out;
+                out.name = pd.name;
+                out.label_id = lid;
+                out.prop_id = pid;
+                out.is_strong = i < pe.prop_strong.size() && pe.prop_strong[i];
+                out.declared_label_count = i < pe.prop_declared_count.size() ? pe.prop_declared_count[i] : 0;
+                return out;
             }
+            return std::nullopt;
         }
         for (const auto& [prop_name, co] : pe.coalesce_vertices) {
-            if (co.slot_id == ref.slot_id) {
-                LabelId lid = co.candidates.empty() ? INVALID_LABEL_ID : co.candidates[0].first;
-                uint16_t pid = co.candidates.empty() ? 0 : co.candidates[0].second;
-                return std::make_pair(prop_name, std::make_pair(lid, pid));
-            }
+            if (co.slot_id != ref.slot_id)
+                continue;
+            ResolvedColumnProperty out;
+            out.name = prop_name;
+            out.label_id = co.candidates.empty() ? INVALID_LABEL_ID : co.candidates[0].first;
+            out.prop_id = co.candidates.empty() ? 0 : co.candidates[0].second;
+            out.is_strong = false;
+            out.declared_label_count = static_cast<int>(co.candidates.size());
+            return out;
         }
     }
     return std::nullopt;
@@ -1623,9 +1651,29 @@ static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const bin
         auto& prop_ref = std::get<std::unique_ptr<binder::BoundPropertyRef>>(binop.left);
         if (prop_ref->candidates.empty())
             return std::nullopt;
-        cond.label_id = prop_ref->candidates[0].label_id;
-        cond.prop_id = prop_ref->candidates[0].prop_id;
+        LabelId anon_id = INVALID_LABEL_ID;
+        for (const auto& [lid, ldef] : ctx.label_defs) {
+            if (ldef.name == kAnonLabelName) {
+                anon_id = lid;
+                break;
+            }
+        }
+        LabelId first_label = INVALID_LABEL_ID;
+        int declared = 0;
+        for (const auto& cand : prop_ref->candidates) {
+            if (cand.label_id == anon_id || cand.label_id == INVALID_LABEL_ID)
+                continue;
+            if (declared == 0) {
+                first_label = cand.label_id;
+                cond.prop_id = cand.prop_id;
+            }
+            declared++;
+        }
+        cond.declared_label_count = declared;
+        cond.label_id = declared == 1 ? first_label : prop_ref->candidates[0].label_id;
+        cond.prop_id = declared == 1 ? cond.prop_id : prop_ref->candidates[0].prop_id;
         cond.property_name = prop_ref->property_name;
+        cond.is_strong = prop_ref->strong_mode;
         return cond;
     }
 
@@ -1633,9 +1681,11 @@ static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const bin
         auto resolved = resolveColumnProperty(ctx, std::get<binder::BoundColumnRef>(binop.left));
         if (!resolved)
             return std::nullopt;
-        cond.property_name = resolved->first;
-        cond.label_id = resolved->second.first;
-        cond.prop_id = resolved->second.second;
+        cond.property_name = resolved->name;
+        cond.label_id = resolved->label_id;
+        cond.prop_id = resolved->prop_id;
+        cond.is_strong = resolved->is_strong;
+        cond.declared_label_count = resolved->declared_label_count;
         return cond;
     }
 
@@ -1839,8 +1889,38 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             if (it == prop_conditions.end())
                 break;
             auto& cond = it->second;
-            if (acc.is_strong && cond.label_id != acc.source_label_id)
+            // Index and access must use the SAME view: a strong index only sees
+            // the source label's column, a weak index sees every source. Mixing
+            // them would return false positives (weak index answering a strong
+            // access) or miss values (strong index answering a weak access).
+            if (acc.is_strong) {
+                if (cond.is_strong) {
+                    if (cond.label_id != acc.source_label_id)
+                        break;
+                } else {
+                    // A weak read may use a strong index only when NO ambiguity
+                    // is possible: exactly one label declares the key, and the
+                    // weak space has never registered it (no anon values).
+                    if (cond.declared_label_count != 1 || cond.label_id != acc.source_label_id)
+                        break;
+                    bool anon_has_key = false;
+                    for (const auto& [lid, ldef] : ctx.label_defs) {
+                        if (ldef.name != kAnonLabelName)
+                            continue;
+                        for (const auto& pd : ldef.properties) {
+                            if (pd.name == acc.property_name) {
+                                anon_has_key = true;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    if (anon_has_key)
+                        break;
+                }
+            } else if (cond.is_strong) {
                 break;
+            }
 
             if (i < idx.accessors.size() - 1) {
                 if (cond.op == cypher::BinaryOperator::EQ) {
@@ -2144,7 +2224,7 @@ PhysicalPlanner::tryPlanCorrelatedIndexProbe(const binder::BoundFilterOp& filter
             auto resolved = resolveColumnProperty(ctx, *cr);
             if (!resolved)
                 return false;
-            prop_name = resolved->first;
+            prop_name = resolved->name;
             return true;
         }
         return false;
@@ -2258,8 +2338,8 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
         auto resolved = resolveColumnProperty(ctx, std::get<binder::BoundColumnRef>(in_op->left));
         if (!resolved)
             return std::nullopt;
-        prop_name = resolved->first;
-        prop_label = resolved->second.first;
+        prop_name = resolved->name;
+        prop_label = resolved->label_id;
         dst_var = std::get<binder::BoundColumnRef>(in_op->left).name;
     } else {
         return std::nullopt;

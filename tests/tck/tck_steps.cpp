@@ -1,6 +1,8 @@
 // Step definitions for openCypher TCK
 #include "tck_context.hpp"
 
+#include "service/thrift/result_format.hpp"
+
 #include <cucumber_cpp/library/Context.hpp>
 #include <cucumber_cpp/library/Hooks.hpp>
 #include <cucumber_cpp/library/Steps.hpp>
@@ -17,6 +19,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 
@@ -46,6 +49,7 @@ std::vector<std::string> gSkippedScenarios;
 // Per-scenario accumulation of step results
 bool gScenarioHadFailure = false;
 bool gScenarioWasSkipped = false;
+bool gScenarioNeedsSideEffects = true;
 
 // Step-level tracking
 struct StepRecord {
@@ -199,12 +203,73 @@ HOOK_AFTER_ALL() {
     }
 }
 
+namespace {
+
+/// Does this scenario contain a side-effect assertion ("no side effects" /
+/// "the side effects should be")? Most TCK scenarios do not; taking a six-query
+/// graph snapshot before and after every query dominates the serial TCK run.
+/// Conservatively return true when the feature file or scenario cannot be read.
+bool scenarioHasSideEffectStep(const std::string& uri, const std::string& name) {
+    static std::unordered_map<std::string, std::vector<std::string>> cache;
+    auto it = cache.find(uri);
+    if (it == cache.end()) {
+        std::vector<std::string> lines;
+        std::ifstream in(uri);
+        if (in) {
+            std::string line;
+            while (std::getline(in, line))
+                lines.push_back(std::move(line));
+        }
+        it = cache.emplace(uri, std::move(lines)).first;
+    }
+    const auto& lines = it->second;
+    if (lines.empty())
+        return true;
+
+    auto is_scenario = [](const std::string& line) {
+        size_t i = line.find_first_not_of(" \t");
+        return i != std::string::npos && line.compare(i, 8, "Scenario") == 0;
+    };
+
+    size_t start = std::string::npos;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (is_scenario(lines[i]) && lines[i].find(name) != std::string::npos) {
+            start = i;
+            break;
+        }
+    }
+    if (start == std::string::npos)
+        return true;
+
+    for (size_t i = start + 1; i < lines.size(); ++i) {
+        if (is_scenario(lines[i]))
+            break;
+        std::string lower = lines[i];
+        for (auto& c : lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower.find("side effect") != std::string::npos)
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 HOOK_BEFORE_SCENARIO() {
     resetCtx();
     gStepIndex = 0;
     gPendingSteps.clear();
     gScenarioHadFailure = false;
     gScenarioWasSkipped = false;
+    gScenarioNeedsSideEffects = true;
+    try {
+        if (context.Contains("scenario.uri") && context.Contains("scenario.name")) {
+            gScenarioNeedsSideEffects = scenarioHasSideEffectStep(context.Get<std::string>("scenario.uri"),
+                                                                  context.Get<std::string>("scenario.name"));
+        }
+    } catch (...) {
+        gScenarioNeedsSideEffects = true;
+    }
     spdlog::info("[TCK] === Scenario {} (graph: {}) ===", gScenarioNum.load(), gCtx->graphName);
 }
 
@@ -281,6 +346,66 @@ GIVEN("^any graph$") {
     gCtx->createGraph(gCtx->graphName);
 }
 
+// Declare the strong schema in Cypher-like DDL, e.g.
+//   Given the schema:
+//     """
+//     CREATE LABEL Person (name STRING, age INT64)
+//     CREATE LABEL Employee (salary INT64)
+//     """
+// The engine does not expose CREATE LABEL as a Cypher statement yet (the
+// shell's :create-label and the Thrift API do); this step feeds the same
+// Thrift createLabel path, so the feature stays declarative and readable.
+GIVEN("^the schema:$") {
+    gCurrentStepText = "the schema:";
+    std::string ddl = getDocString(docString);
+    std::istringstream input(ddl);
+    std::string line;
+    while (std::getline(input, line)) {
+        line = trim(line);
+        if (line.empty() || line.rfind("--", 0) == 0)
+            continue;
+        if (!line.empty() && line.back() == ';')
+            line.pop_back();
+        std::string upper = line;
+        std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+        const std::string prefix = "CREATE LABEL ";
+        if (upper.rfind(prefix, 0) != 0) {
+            GTEST_FAIL() << "Unsupported schema DDL line: " << line;
+            continue;
+        }
+        const auto open = line.find('(');
+        const auto close = line.rfind(')');
+        if (open == std::string::npos || close == std::string::npos || close < open) {
+            GTEST_FAIL() << "Malformed CREATE LABEL (expected 'CREATE LABEL Name (p TYPE, ...)'): " << line;
+            continue;
+        }
+        std::string name = trim(line.substr(prefix.size(), open - prefix.size()));
+        if (name.size() >= 2 && name.front() == '`' && name.back() == '`')
+            name = name.substr(1, name.size() - 2);
+        std::vector<eugraph::thrift_service::PropertyDefThrift> props;
+        std::stringstream spec(line.substr(open + 1, close - open - 1));
+        std::string item;
+        while (std::getline(spec, item, ',')) {
+            item = trim(item);
+            if (item.empty())
+                continue;
+            size_t sep = item.find_first_of(" :");
+            if (sep == std::string::npos) {
+                GTEST_FAIL() << "Malformed property definition: " << item;
+                continue;
+            }
+            std::string prop_name = trim(item.substr(0, sep));
+            std::string type_name = trim(item.substr(sep + 1));
+            eugraph::thrift_service::PropertyDefThrift pd;
+            pd.name() = prop_name;
+            pd.type() = eugraph::service::thrift::parsePropertyType(type_name);
+            props.push_back(std::move(pd));
+        }
+        gCtx->createLabel(name, props, gCtx->graphName);
+    }
+    gCtx->lastQueryHadError = false;
+}
+
 GIVEN("^the (.+) graph$", (const std::string& graph_name)) {
     gCurrentStepText = "the " + graph_name + " graph";
     gCtx->createGraph(gCtx->graphName);
@@ -352,14 +477,19 @@ WHEN("^executing query:$") {
     spdlog::info("[TCK] [{}] test query: {}", gCtx->graphName, q);
     gCtx->ensureTypesForQuery(q);
 
-    // Snapshot before for side effects
-    gCtx->snapshotBefore = gCtx->takeSnapshot();
+    // Snapshots are six graph-wide queries each; only scenarios that actually
+    // assert side effects need them.
+    if (gScenarioNeedsSideEffects) {
+        gCtx->snapshotBefore = gCtx->takeSnapshot();
+    }
 
     gCtx->executeQuery(q);
     gCtx->pendingParams.clear();
 
-    auto after = gCtx->takeSnapshot();
-    gCtx->lastSideEffects = gCtx->computeSideEffects(gCtx->snapshotBefore, after);
+    if (gScenarioNeedsSideEffects) {
+        auto after = gCtx->takeSnapshot();
+        gCtx->lastSideEffects = gCtx->computeSideEffects(gCtx->snapshotBefore, after);
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -497,7 +627,7 @@ THEN("^the result should be, in order:$") {
 
 // Pattern: "a SyntaxError should be raised at compile time: UndefinedVariable"
 THEN(
-    R"(^a (SyntaxError|SemanticError|TypeError|ArgumentError|ArithmeticError|EntityNotFound|PropertyNotFound|LabelNotFound|ConstraintVerificationFailed|ConstraintValidationFailed|ParameterMissing) should be raised at (compile time|runtime|any time): (.+)$)",
+    R"(^a (SyntaxError|SemanticError|TypeError|ArgumentError|ArithmeticError|EntityNotFound|PropertyNotFound|LabelNotFound|ConstraintVerificationFailed|ConstraintValidationFailed|ParameterMissing|RuntimeError) should be raised at (compile time|runtime|any time): (.+)$)",
     (const std::string& expType, const std::string& expPhase, const std::string& expDetail)) {
     gCurrentStepText = "an error should be raised at ...:";
     ASSERT_TRUE(gCtx->lastQueryHadError) << "Expected error " << expType << " but query succeeded";

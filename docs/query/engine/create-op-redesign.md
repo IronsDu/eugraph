@@ -20,8 +20,8 @@ Added 1 properties to label 'Person'
 `nickname` 确实被 ALTER 到了 Person 和 Employee 上，而非走 `__anon__`。测试虽然通过（ALTER 后属性仍可读写），但违反了设计意图。
 
 **违反的设计文档**：
-- [unlabeled-node-property-design.md](../../features/unlabeled-node-property-design.md) 第 5 节：不在任何标签 schema 中的属性应回退到 `__anon__` 轻量路径
-- [mixed-mode-design.md](../../refactor/mixed-mode-design.md) 第 12.2 节：ALTER 永久修改全局 schema，产生 schema 污染
+- [strong-weak-hybrid.md](../../features/strong-weak-hybrid.md)：不在任何标签 schema 中的属性应回退到 `__anon__` 轻量路径
+- [strong-weak-hybrid.md](../../features/strong-weak-hybrid.md)：ALTER 永久修改全局 schema，产生 schema 污染
 
 ### 问题 2：CreateNodePhysicalOp 不支持逐行创建
 

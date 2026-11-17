@@ -274,6 +274,7 @@ uint64_t hashBoundExpression(const binder::BoundExpression& expr) {
                 if (!val)
                     return;
                 seed = hashBytes(seed, val->property_name);
+                seed = combine(seed, static_cast<uint64_t>(val->strong_mode));
                 seed = combine(seed, hashBoundExpression(val->object));
                 for (const auto& c : val->candidates) {
                     seed = combine(seed, static_cast<uint64_t>(c.label_id));

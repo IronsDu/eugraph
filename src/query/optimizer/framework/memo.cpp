@@ -1231,6 +1231,7 @@ binder::BoundExpression cloneBoundExpression(const binder::BoundExpression& expr
                 c->object = cloneBoundExpression(val->object);
                 c->candidates = val->candidates;
                 c->result_type = val->result_type;
+                c->strong_mode = val->strong_mode;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
                 if (!val)

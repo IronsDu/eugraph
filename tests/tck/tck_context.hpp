@@ -29,6 +29,11 @@ struct TckContext {
 
     // Per-scenario state
     std::string graphName;
+    // Labels/edge labels already created on the CURRENT graph. ensureTypesForQuery
+    // runs for every query; without this, each query re-issues createLabel RPCs
+    // (and logs "may already exist") for names created earlier in the scenario.
+    std::unordered_set<std::string> known_labels_;
+    std::unordered_set<std::string> known_edge_labels_;
     std::vector<std::string> lastColumns;           // column names from last query
     std::vector<std::vector<std::string>> lastRows; // TCK-formatted result rows
     bool lastQueryHadError = false;
@@ -81,6 +86,8 @@ struct TckContext {
 
     thrift_service::GraphInfo createGraph(const std::string& name) {
         connectRpc();
+        known_labels_.clear();
+        known_edge_labels_.clear();
         try {
             return rpc->createGraph(name);
         } catch (const std::exception& e) {
@@ -107,6 +114,7 @@ struct TckContext {
     thrift_service::LabelInfo createLabel(const std::string& name,
                                           const std::vector<thrift_service::PropertyDefThrift>& props,
                                           const std::string& gname) {
+        known_labels_.insert(name);
         try {
             return rpc->createLabel(name, props, gname);
         } catch (const std::exception& e) {
@@ -122,6 +130,7 @@ struct TckContext {
     thrift_service::EdgeLabelInfo createEdgeLabel(const std::string& name,
                                                   const std::vector<thrift_service::PropertyDefThrift>& props,
                                                   const std::string& gname) {
+        known_edge_labels_.insert(name);
         try {
             return rpc->createEdgeLabel(name, props, gname);
         } catch (const std::exception& e) {

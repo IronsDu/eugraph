@@ -64,6 +64,11 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
     } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
+    } else if (errMsg.find("AmbiguousProperty") != std::string::npos) {
+        // Write/read ambiguity: binder rejects a multi-label CREATE/MERGE
+        // (compile time), the evaluator rejects conflicting values at runtime.
+        errorType = "SemanticError";
+        errorPhase = errMsg.find("Binding failed") != std::string::npos ? "compile time" : "runtime";
     } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
         errorType = "ConstraintVerificationFailed";
         errorPhase = "runtime";
@@ -508,6 +513,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "UnknownFunction";
                 } else if (errMsg.find("InvalidRelationshipPattern") != std::string::npos) {
                     lastErrorDetail = "InvalidRelationshipPattern";
+                } else if (errMsg.find("AmbiguousProperty") != std::string::npos) {
+                    lastErrorDetail = "AmbiguousProperty";
                 } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
                     lastErrorDetail = "DeleteConnectedNode";
                 } else if (errMsg.find("InvalidDelete") != std::string::npos) {
@@ -569,6 +576,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "UnknownFunction";
         } else if (errMsg.find("InvalidRelationshipPattern") != std::string::npos) {
             lastErrorDetail = "InvalidRelationshipPattern";
+        } else if (errMsg.find("AmbiguousProperty") != std::string::npos) {
+            lastErrorDetail = "AmbiguousProperty";
         } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
             lastErrorDetail = "DeleteConnectedNode";
         } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
@@ -953,12 +962,16 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
     // Also match patterns like (n:Label) where n is a known variable and Label is the label name
     // These are captured by the labelRe above
 
-    // Create labels (if not already created)
+    // Create labels (if not already created on this graph)
     for (const auto& label : labels) {
+        if (known_labels_.count(label))
+            continue;
         spdlog::info("[TCK] Auto-creating label: {}", label);
         try {
             rpc->createLabel(label, {}, graphName);
+            known_labels_.insert(label);
         } catch (const std::exception& e) {
+            known_labels_.insert(label);
             std::string msg = e.what();
             if (isConnectionError(msg)) {
                 spdlog::critical("[TCK] [{}] Connection lost during ensureTypes — aborting: {}", graphName, msg);
@@ -968,12 +981,16 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
         }
     }
 
-    // Create edge labels
+    // Create edge labels (if not already created on this graph)
     for (const auto& et : edgeTypes) {
+        if (known_edge_labels_.count(et))
+            continue;
         spdlog::info("[TCK] Auto-creating edge label: {}", et);
         try {
             rpc->createEdgeLabel(et, {}, graphName);
+            known_edge_labels_.insert(et);
         } catch (const std::exception& e) {
+            known_edge_labels_.insert(et);
             std::string msg = e.what();
             if (isConnectionError(msg)) {
                 spdlog::critical("[TCK] [{}] Connection lost during ensureTypes — aborting: {}", graphName, msg);

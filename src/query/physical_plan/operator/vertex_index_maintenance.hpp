@@ -7,6 +7,7 @@
 #include <folly/coro/Task.h>
 
 #include <optional>
+#include <stdexcept>
 
 #include <spdlog/spdlog.h>
 #include <unordered_map>
@@ -68,43 +69,72 @@ collectVertexIndexEntries(IAsyncGraphDataStore& store, const std::unordered_map<
                         break;
                     }
                 } else {
-                    std::optional<PropertyValue> found;
-                    bool conflict = false;
+                    // Weak accessor: resolve the property's homes. A vertex
+                    // with more than one home is ambiguous and cannot be
+                    // represented in a weak index -> fail the write/backfill.
+                    int home_count = 0;
+                    LabelId home_label = INVALID_LABEL_ID;
+                    bool home_anon = false;
+                    std::optional<PropertyValue> anon_value;
                     for (LabelId lid : labels) {
+                        if (lid == anon_label_id)
+                            continue;
                         auto lit = label_defs.find(lid);
                         if (lit == label_defs.end())
                             continue;
-                        uint16_t pid = UINT16_MAX;
                         for (const auto& pd : lit->second.properties) {
                             if (pd.name == acc.property_name) {
-                                pid = pd.id;
+                                home_count++;
+                                home_label = lid;
                                 break;
                             }
                         }
-                        if (pid == UINT16_MAX)
-                            continue;
-                        auto props = co_await store.getVertexProperties(vid, lid);
-                        if (!props || pid >= props->size() || !(*props)[pid].has_value())
-                            continue;
-                        const auto& candidate = (*props)[pid].value();
-                        if (found.has_value()) {
-                            if (!(found.value() == candidate)) {
-                                conflict = true;
+                    }
+                    if (anon_label_id != INVALID_LABEL_ID && labels.count(anon_label_id)) {
+                        auto ait = label_defs.find(anon_label_id);
+                        if (ait != label_defs.end()) {
+                            auto props = co_await store.getVertexProperties(vid, anon_label_id);
+                            for (const auto& pd : ait->second.properties) {
+                                if (pd.name != acc.property_name)
+                                    continue;
+                                if (props && pd.id < props->size() && (*props)[pd.id].has_value()) {
+                                    home_count++;
+                                    home_anon = true;
+                                    anon_value = (*props)[pd.id].value();
+                                }
                                 break;
                             }
-                        } else {
-                            found = candidate;
                         }
                     }
-                    if (conflict) {
+                    if (home_count > 1) {
+                        throw std::runtime_error("AmbiguousProperty: property '" + acc.property_name +
+                                                 "' exists in multiple places on vertex " + std::to_string(vid) +
+                                                 "; clean it up before using a weak index");
+                    }
+                    if (home_count == 0) {
                         all_present = false;
                         break;
                     }
-                    if (!found.has_value()) {
-                        all_present = false;
-                        break;
+                    if (home_anon) {
+                        values.push_back(std::move(*anon_value));
+                    } else {
+                        auto props = co_await store.getVertexProperties(vid, home_label);
+                        uint16_t pid = UINT16_MAX;
+                        auto lit = label_defs.find(home_label);
+                        if (lit != label_defs.end()) {
+                            for (const auto& pd : lit->second.properties) {
+                                if (pd.name == acc.property_name) {
+                                    pid = pd.id;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!props || pid == UINT16_MAX || pid >= props->size() || !(*props)[pid].has_value()) {
+                            all_present = false;
+                            break;
+                        }
+                        values.push_back((*props)[pid].value());
                     }
-                    values.push_back(std::move(*found));
                 }
             }
 
@@ -161,34 +191,50 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
                     }
                     values.push_back((*src)[pid].value());
                 } else {
-                    std::optional<PropertyValue> found;
-                    bool conflict = false;
+                    // Weak accessor: one home only (see the store-based
+                    // overload). Multiple homes are ambiguous -> fail the write.
+                    int home_count = 0;
+                    const Properties* home_props = nullptr;
+                    uint16_t home_pid = UINT16_MAX;
+                    std::optional<PropertyValue> anon_value;
                     for (const auto& [lid, lp] : label_props) {
                         auto lit = label_defs.find(lid);
                         if (lit == label_defs.end())
                             continue;
-                        uint16_t pid = UINT16_MAX;
-                        for (const auto& pd : lit->second.properties)
-                            if (pd.name == acc.property_name) {
-                                pid = pd.id;
-                                break;
+                        for (const auto& pd : lit->second.properties) {
+                            if (pd.name != acc.property_name)
+                                continue;
+                            if (lit->second.name == std::string(kAnonLabelName)) {
+                                if (pd.id < lp.size() && lp[pd.id].has_value()) {
+                                    home_count++;
+                                    anon_value = lp[pd.id].value();
+                                }
+                            } else {
+                                home_count++;
+                                home_props = &lp;
+                                home_pid = pd.id;
                             }
-                        if (pid == UINT16_MAX || pid >= lp.size() || !lp[pid].has_value())
-                            continue;
-                        if (found.has_value()) {
-                            if (!(found.value() == lp[pid].value())) {
-                                conflict = true;
-                                break;
-                            }
-                        } else {
-                            found = lp[pid].value();
+                            break;
                         }
                     }
-                    if (conflict || !found.has_value()) {
+                    if (home_count > 1) {
+                        throw std::runtime_error("AmbiguousProperty: property '" + acc.property_name +
+                                                 "' exists in multiple places on vertex " + std::to_string(vid) +
+                                                 "; clean it up before using a weak index");
+                    }
+                    if (home_count == 0) {
                         all_present = false;
                         break;
                     }
-                    values.push_back(std::move(*found));
+                    if (anon_value.has_value()) {
+                        values.push_back(std::move(*anon_value));
+                    } else {
+                        if (!home_props || home_pid >= home_props->size() || !(*home_props)[home_pid].has_value()) {
+                            all_present = false;
+                            break;
+                        }
+                        values.push_back((*home_props)[home_pid].value());
+                    }
                 }
             }
             if (all_present)

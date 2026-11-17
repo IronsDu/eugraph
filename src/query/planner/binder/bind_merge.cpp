@@ -228,16 +228,27 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
             if (!bound_val)
                 continue;
 
-            bool resolved = false;
+            // Exactly one declaring label may own the value. Picking "the first
+            // label that declares p" would silently bind the filter to the wrong
+            // prop_id when labels number their columns differently.
+            LabelId matched_lid = INVALID_LABEL_ID;
+            int match_count = 0;
             for (auto lid : start_labels) {
                 if (catalog_.lookupProperty(lid, prop_name)) {
-                    auto* pd = catalog_.lookupProperty(lid, prop_name);
-                    start_prop_filters.emplace_back(pd->id, std::move(*bound_val));
-                    resolved = true;
-                    break;
+                    if (match_count == 0)
+                        matched_lid = lid;
+                    match_count++;
                 }
             }
-            if (!resolved) {
+            if (match_count > 1) {
+                error("AmbiguousProperty: property '" + prop_name +
+                      "' is declared by multiple labels of the MERGE node; split the pattern or rename the property");
+                return std::nullopt;
+            }
+            if (match_count == 1) {
+                auto* pd = catalog_.lookupProperty(matched_lid, prop_name);
+                start_prop_filters.emplace_back(pd->id, std::move(*bound_val));
+            } else {
                 start_pending_props.emplace_back(prop_name, std::move(*bound_val));
             }
         }
@@ -318,16 +329,25 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
                 auto bound_val = bindExpression(prop_expr);
                 if (!bound_val)
                     continue;
-                bool resolved = false;
+                LabelId matched_lid = INVALID_LABEL_ID;
+                int match_count = 0;
                 for (auto lid : end_labels) {
                     if (catalog_.lookupProperty(lid, prop_name)) {
-                        auto* pd = catalog_.lookupProperty(lid, prop_name);
-                        end_prop_filters.emplace_back(pd->id, std::move(*bound_val));
-                        resolved = true;
-                        break;
+                        if (match_count == 0)
+                            matched_lid = lid;
+                        match_count++;
                     }
                 }
-                if (!resolved) {
+                if (match_count > 1) {
+                    error(
+                        "AmbiguousProperty: property '" + prop_name +
+                        "' is declared by multiple labels of the MERGE node; split the pattern or rename the property");
+                    return std::nullopt;
+                }
+                if (match_count == 1) {
+                    auto* pd = catalog_.lookupProperty(matched_lid, prop_name);
+                    end_prop_filters.emplace_back(pd->id, std::move(*bound_val));
+                } else {
                     end_pending_props.emplace_back(prop_name, std::move(*bound_val));
                 }
             }

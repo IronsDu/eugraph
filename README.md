@@ -27,10 +27,11 @@ openCypher TCK 当前为 **3959 scenarios / 3906 passed / 52 undefined / 1 known
 - `FOREACH (x IN list | ...)` 更新子句
 - 内置过程调用：`CALL db.*`、`SHOW ...`、`CALL ... YIELD ...`；自定义过程尚未实现
 - 多标签与强弱模式混合属性访问
-  - **便捷模式 / 弱模式**：`n.name` 自动在所有标签（含隐藏的 `__anon__`）中查找属性；单个标签命中返回标量，多个标签同名冲突时合并为列表返回
+  - **便捷模式 / 弱模式**：`n.name` 按「家」解析（声明该键的标签列 + `__anon__` 有值）；唯一家返回标量，多个家报 `AmbiguousProperty`
   - **强模式 / 类型安全模式**：`n::Label` / `n::Label.prop`，在编译期校验属性是否存在，并只访问指定标签下的属性；也支持 `SET n::Label.prop = ...`
-  - 支持多标签节点 `(n:A:B)`、`CREATE (n:A:B {...})`、`SET n:Label` 等
-  - 详见 [docs/features/multi-label-design.md](docs/features/multi-label-design.md)
+  - 支持多标签节点 `(n:A:B)`、`CREATE (n:A:B {...})`、`SET n:Label` 等；`properties(n)` 按家摊平、`keys(n)` 去重
+  - 通用多标签语义遵循 Neo4j，不单独展开；只描述按标签分列带来的差异
+  - 详见 [docs/features/strong-weak-hybrid.md](docs/features/strong-weak-hybrid.md)
 - 额外数值字面量格式：十六进制（`0xFF`）、八进制（`0o17`）、下划线分隔（`1_000_000`）—— 标准 openCypher 仅支持十进制和科学计数法
 
 **暂未实现 / 远期规划**

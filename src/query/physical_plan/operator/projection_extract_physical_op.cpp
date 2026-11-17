@@ -370,13 +370,9 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             if (ref_vids.empty())
                 continue;
 
-            if (spec.required_labels.empty()) {
-                auto coalesced = co_await store_.batchGetVertexCoalesceProperties(ref_vids, spec.coalesce_candidates);
-                for (size_t j = 0; j < ref_vids.size() && j < coalesced.size(); ++j) {
-                    for (auto& value : coalesced[j])
-                        vertex_coalesce_cache[i][ref_rows[j]].push_back(std::move(value));
-                }
-            } else {
+            {
+                // Labels are needed to count the property's homes: a declared
+                // column counts even when its value is NULL.
                 auto data = co_await store_.batchGetVertexCoalesceData(ref_vids, spec.coalesce_candidates);
                 label_filter_cache[i].resize(row_count);
                 for (size_t j = 0; j < ref_vids.size() && j < data.size(); ++j) {
@@ -634,44 +630,33 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
                     if (row < vertex_coalesce_cache[i].size()) {
                         const auto& values = vertex_coalesce_cache[i][row];
-                        // A multi-label CREATE writes a shared property to every
-                        // label that declares it. UNWIND/coalesce must still
-                        // produce one Cypher property value, not a duplicate
-                        // list; collapse identical per-label values (genuinely
-                        // conflicting values stay a list, matching multi-label
-                        // property semantics).
-                        if (values.empty()) {
-                            output.columns[i].setNull(dst_row);
-                        } else if (values.size() == 1) {
-                            // Fast path: the common single-label case must not pay
-                            // for a per-row dedup vector (complex-3 reads 52k
-                            // creationDate values through this path).
+                        // HOME-BASED ambiguity: a declared column counts even
+                        // when its value is NULL. Two held labels declaring the
+                        // key is ambiguous (strong-weak-hybrid.md §4).
+                        int homes = 0;
+                        const LabelIdSet* labels = nullptr;
+                        if (row < label_filter_cache[i].size() && label_filter_cache[i][row])
+                            labels = &*label_filter_cache[i][row];
+                        if (labels) {
+                            for (const auto& [lid, pid] : spec.coalesce_candidates) {
+                                if (lid == anon_label_id_)
+                                    continue; // anon keys are forced to whole-vertex upstream
+                                if (labels->count(lid))
+                                    homes++;
+                            }
+                        } else {
+                            homes = static_cast<int>(values.size());
+                        }
+                        if (homes > 1) {
+                            throw std::runtime_error("AmbiguousProperty: property '" + spec.property_name +
+                                                     "' exists in multiple places on this vertex; use n::<Label>." +
+                                                     spec.property_name + " to select one");
+                        }
+                        if (homes == 1 && !values.empty()) {
                             if (!setColumnFromPropertyValue(output.columns[i], dst_row, values[0]))
                                 output.columns[i].setValue(dst_row, propertyValueToValue(values[0]));
                         } else {
-                            std::vector<PropertyValue> unique_values;
-                            unique_values.reserve(values.size());
-                            for (const auto& pv : values) {
-                                bool duplicate = false;
-                                for (const auto& existing : unique_values) {
-                                    if (existing == pv) {
-                                        duplicate = true;
-                                        break;
-                                    }
-                                }
-                                if (!duplicate)
-                                    unique_values.push_back(pv);
-                            }
-                            if (unique_values.size() == 1) {
-                                if (!setColumnFromPropertyValue(output.columns[i], dst_row, unique_values[0]))
-                                    output.columns[i].setValue(dst_row, propertyValueToValue(unique_values[0]));
-                            } else {
-                                ListValue lv;
-                                lv.elements.reserve(unique_values.size());
-                                for (const auto& pv : unique_values)
-                                    lv.elements.push_back(ValueStorage{propertyValueToValue(pv)});
-                                output.columns[i].setValue(dst_row, Value(mk<ListValue>(std::move(lv))));
-                            }
+                            output.columns[i].setNull(dst_row);
                         }
                     } else {
                         output.columns[i].setNull(dst_row);

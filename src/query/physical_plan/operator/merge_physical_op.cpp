@@ -6,8 +6,11 @@
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/function/scalar/graph_functions.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
+#include "query/physical_plan/operator/vertex_index_maintenance.hpp"
 
 #include <spdlog/spdlog.h>
+
+#include <exception>
 
 namespace {
 
@@ -52,20 +55,23 @@ eugraph::Direction toStoreDir(eugraph::cypher::RelationshipDirection dir) {
 // inputs (caller falls through to the existing MapValue path).
 eugraph::MapValue entityValueToMap(const eugraph::Value& v,
                                    const std::unordered_map<eugraph::LabelId, eugraph::LabelDef>& label_defs,
-                                   const std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef>& edge_defs) {
+                                   const std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef>& edge_defs,
+                                   eugraph::LabelId anon_label_id) {
     eugraph::MapValue mv;
     if (std::holds_alternative<eugraph::VertexValuePtr>(v)) {
         const auto& vv = (*std::get<eugraph::VertexValuePtr>(v));
-        for (const auto& [lid, props] : vv.properties) {
-            auto it = label_defs.find(lid);
-            if (it == label_defs.end())
-                continue;
-            for (const auto& pd : it->second.properties) {
-                if (pd.id < props.size() && props[pd.id].has_value())
-                    mv.entries.push_back(
-                        {pd.name,
-                         eugraph::ValueStorage{eugraph::function::scalar::propertyValueToRuntimeValue(*props[pd.id])}});
-            }
+        // Same flatten rule as properties(n): ambiguity (two homes for a key,
+        // even with equal/NULL values) cannot be represented by a map.
+        auto flattened = eugraph::function::scalar::flattenVertexProperties(
+            vv,
+            [&](eugraph::LabelId lid) -> const eugraph::LabelDef* {
+                auto it = label_defs.find(lid);
+                return it == label_defs.end() ? nullptr : &it->second;
+            },
+            anon_label_id);
+        for (auto& [name, pv] : flattened) {
+            mv.entries.push_back(
+                {std::move(name), eugraph::ValueStorage{eugraph::function::scalar::propertyValueToRuntimeValue(pv)}});
         }
     } else if (std::holds_alternative<eugraph::EdgeValuePtr>(v)) {
         const auto& ev = (*std::get<eugraph::EdgeValuePtr>(v));
@@ -181,19 +187,43 @@ MergePhysicalOp::registerPendingProps(const std::vector<std::pair<std::string, b
     if (anon_label_id_ == INVALID_LABEL_ID)
         co_return;
 
-    // Collect all property names that need registration with __anon__
+    // Collect all property names that will land in the weak space. Note that
+    // only node-scoped SET items are considered (edge properties are declared
+    // on the edge type) and that a name already declared by one of the node's
+    // labels is written to that column, so it must NOT be registered here --
+    // otherwise the weak key registry would accumulate strong keys.
+    auto declared_by = [&](const std::vector<LabelId>& labels, const std::string& name) {
+        for (auto lid : labels) {
+            if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
+                continue;
+            auto def_it = label_defs_.find(lid);
+            if (def_it == label_defs_.end())
+                continue;
+            for (const auto& pd : def_it->second.properties)
+                if (pd.name == name)
+                    return true;
+        }
+        return false;
+    };
     std::unordered_set<std::string> prop_names;
     for (const auto& [name, _] : start_pending)
-        prop_names.insert(name);
+        if (!declared_by(start_labels_, name))
+            prop_names.insert(name);
     for (const auto& [name, _] : end_pending)
-        prop_names.insert(name);
-    for (const auto& [name, _] : edge_pending)
-        prop_names.insert(name);
+        if (!declared_by(end_labels_, name))
+            prop_names.insert(name);
 
     auto collectSetItemProps = [&](const std::vector<SetPhysicalOp::BoundSetItem>& items) {
         for (const auto& item : items) {
-            if (item.kind == cypher::SetItemKind::SET_PROPERTY && !item.prop_name.empty())
-                prop_names.insert(item.prop_name);
+            if (item.kind != cypher::SetItemKind::SET_PROPERTY || item.prop_name.empty())
+                continue;
+            if (item.var_name == start_var_) {
+                if (!declared_by(start_labels_, item.prop_name))
+                    prop_names.insert(item.prop_name);
+            } else if (has_relationship_ && item.var_name == end_var_) {
+                if (!declared_by(end_labels_, item.prop_name))
+                    prop_names.insert(item.prop_name);
+            }
         }
     };
     collectSetItemProps(on_create_items);
@@ -921,6 +951,17 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertyItem(const SetPhysica
         co_return;
 
     if (item.strong_mode && item.resolved_prop_id && item.resolved_label_id) {
+        // Same guard as SET: a label-scoped write requires the vertex to carry
+        // that label, otherwise the row is orphaned (invisible to MATCH (n:L)).
+        auto labels = co_await store_.getVertexLabels(target_vid);
+        if (!labels.count(*item.resolved_label_id)) {
+            auto def_it = label_defs_.find(*item.resolved_label_id);
+            const std::string label_name =
+                def_it != label_defs_.end() ? def_it->second.name : std::to_string(*item.resolved_label_id);
+            throw std::runtime_error("Cannot write property '" + item.prop_name + "' on label '" + label_name +
+                                     "': the vertex does not have that label. Add it first with SET n:" + label_name +
+                                     ", or write n." + item.prop_name + " (weak mode).");
+        }
         co_await store_.putVertexProperty(target_vid, *item.resolved_label_id, *item.resolved_prop_id,
                                           valueToPropertyValue(val));
         co_return;
@@ -935,96 +976,53 @@ folly::coro::Task<void> MergePhysicalOp::resolveAndPutVertexProperty(VertexId ta
                                                                      const Value& val,
                                                                      const std::vector<LabelId>& search_labels) {
     // Search concrete labels for a declared property matching item.prop_name.
+    // __anon__ is a fallback space, never a peer candidate.
     LabelId resolved_lid = INVALID_LABEL_ID;
     uint16_t resolved_pid = 0;
+    std::vector<LabelId> declared;
     for (auto lid : search_labels) {
         if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
             continue;
         auto def_it = label_defs_.find(lid);
-        if (def_it != label_defs_.end()) {
-            for (const auto& pd : def_it->second.properties) {
-                if (pd.name == item.prop_name) {
-                    resolved_lid = lid;
-                    resolved_pid = pd.id;
-                    break;
-                }
+        if (def_it == label_defs_.end())
+            continue;
+        for (const auto& pd : def_it->second.properties) {
+            if (pd.name == item.prop_name) {
+                declared.push_back(lid);
+                resolved_lid = lid;
+                resolved_pid = pd.id;
+                break;
             }
         }
-        if (resolved_lid != INVALID_LABEL_ID)
-            break;
+    }
+    if (declared.size() > 1) {
+        std::string label_names;
+        for (auto lid : declared) {
+            auto it = label_defs_.find(lid);
+            if (it == label_defs_.end())
+                continue;
+            if (!label_names.empty())
+                label_names += ", ";
+            label_names += it->second.name;
+        }
+        throw std::runtime_error("AmbiguousProperty: property '" + item.prop_name +
+                                 "' is declared by multiple labels (" + label_names +
+                                 "). Use an explicit label scope or rename the property.");
     }
     if (resolved_lid != INVALID_LABEL_ID) {
         co_await store_.putVertexProperty(target_vid, resolved_lid, resolved_pid, valueToPropertyValue(val));
         co_return;
     }
 
-    // Pick the first concrete label; falls back to __anon__ if none exists.
-    LabelId fallback_lid = anon_label_id_;
-    for (auto lid : search_labels) {
-        if (lid != INVALID_LABEL_ID && lid != anon_label_id_) {
-            fallback_lid = lid;
-            break;
-        }
-    }
-    if (fallback_lid == INVALID_LABEL_ID)
+    // No label declares the key: it belongs to the weak space. Attach the
+    // hidden __anon__ label so ProjectionExtract prefetches it later.
+    if (anon_label_id_ == INVALID_LABEL_ID)
         co_return;
-
-    LabelId final_lid = fallback_lid;
-    uint16_t pid = 0;
-    co_await dynamicallyRegisterVertexProperty(fallback_lid, item.prop_name, final_lid, pid);
-    co_await store_.putVertexProperty(target_vid, final_lid, pid, valueToPropertyValue(val));
-}
-
-folly::coro::Task<bool> MergePhysicalOp::dynamicallyRegisterVertexProperty(LabelId fallback_lid,
-                                                                           const std::string& prop_name,
-                                                                           LabelId& out_lid, uint16_t& out_pid) {
-    std::string label_name;
-    auto def_it = label_defs_.find(fallback_lid);
-    if (def_it != label_defs_.end())
-        label_name = def_it->second.name;
-    if (label_name.empty()) {
-        for (auto it = label_name_to_id_.begin(); it != label_name_to_id_.end(); ++it) {
-            if (it->second == fallback_lid) {
-                label_name = it->first;
-                break;
-            }
-        }
-    }
-    uint16_t pid = 0;
-    bool found = false;
-    if (!label_name.empty()) {
-        std::vector<std::pair<std::string, PropertyType>> props;
-        props.emplace_back(prop_name, PropertyType::ANY);
-        co_await meta_.addVertexLabelProperties(label_name, props);
-        auto updated = co_await meta_.getLabelDefById(fallback_lid);
-        if (updated) {
-            label_defs_[fallback_lid] = std::move(*updated);
-            const auto& props_vec = label_defs_[fallback_lid].properties;
-            for (size_t i = 0; i < props_vec.size(); ++i) {
-                if (props_vec[i].name == prop_name) {
-                    pid = props_vec[i].id;
-                    found = true;
-                    break;
-                }
-            }
-        }
-    }
-    if (!found && fallback_lid != anon_label_id_) {
-        fallback_lid = anon_label_id_;
-        auto adef_it = label_defs_.find(anon_label_id_);
-        if (adef_it != label_defs_.end()) {
-            const auto& props_vec = adef_it->second.properties;
-            for (size_t i = 0; i < props_vec.size(); ++i) {
-                if (props_vec[i].name == prop_name) {
-                    pid = props_vec[i].id;
-                    break;
-                }
-            }
-        }
-    }
-    out_lid = fallback_lid;
-    out_pid = pid;
-    co_return true;
+    uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(item.prop_name, PropertyType::ANY);
+    auto label_set = co_await store_.getVertexLabels(target_vid);
+    if (!label_set.count(anon_label_id_))
+        co_await store_.addVertexLabel(target_vid, anon_label_id_);
+    co_await store_.putVertexProperty(target_vid, anon_label_id_, anon_pid, valueToPropertyValue(val));
 }
 
 folly::coro::Task<void> MergePhysicalOp::executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item,
@@ -1036,8 +1034,35 @@ folly::coro::Task<void> MergePhysicalOp::executeSetLabelsItem(const SetPhysicalO
         vid = start_vid;
     else if (has_relationship_ && item.var_name == end_var_)
         vid = end_vid;
-    if (vid != INVALID_VERTEX_ID)
-        co_await store_.addVertexLabel(vid, *item.resolved_label_id);
+    if (vid == INVALID_VERTEX_ID)
+        co_return;
+
+    // Adding a declaring label can make a key ambiguous. A weak index cannot
+    // represent that, so its maintenance throws and this write must fail
+    // (matching SET n:L). A strong index only covers its own label and is
+    // unaffected.
+    auto old_entries = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+    co_await store_.addVertexLabel(vid, *item.resolved_label_id);
+    std::vector<VertexIndexEntry> new_entries;
+    std::exception_ptr index_error;
+    try {
+        new_entries = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+    } catch (...) {
+        index_error = std::current_exception();
+    }
+    if (index_error) {
+        co_await store_.removeVertexLabel(vid, *item.resolved_label_id);
+        std::rethrow_exception(index_error);
+    }
+    co_await deleteVertexIndexEntries(store_, old_entries);
+    bool inserted = co_await insertVertexIndexEntriesChecked(store_, new_entries);
+    if (!inserted) {
+        co_await deleteVertexIndexEntries(store_, new_entries);
+        co_await store_.removeVertexLabel(vid, *item.resolved_label_id);
+        auto restored = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+        co_await insertVertexIndexEntries(store_, restored);
+        throw std::runtime_error("ConstraintVerificationFailed: unique index constraint violated");
+    }
 }
 
 folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysicalOp::BoundSetItem& item,
@@ -1051,7 +1076,7 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
     // handles both cases.
     Value normalised;
     if (std::holds_alternative<VertexValuePtr>(val) || std::holds_alternative<EdgeValuePtr>(val)) {
-        normalised = Value(mk<MapValue>(entityValueToMap(val, label_defs_, edge_label_defs_)));
+        normalised = Value(mk<MapValue>(entityValueToMap(val, label_defs_, edge_label_defs_, anon_label_id_)));
     } else {
         normalised = val;
     }
@@ -1099,20 +1124,49 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
         vid = end_vid;
     if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValuePtr>(normalised)) {
         const auto& mv = (*std::get<MapValuePtr>(normalised));
+        auto* search_labels = (item.var_name == start_var_) ? &start_labels_ : &end_labels_;
         for (const auto& [k, vs] : mv.entries) {
-            if (anon_label_id_ != INVALID_LABEL_ID) {
-                uint16_t pid = 0;
-                auto def_it = label_defs_.find(anon_label_id_);
-                if (def_it != label_defs_.end()) {
-                    for (const auto& pd : def_it->second.properties) {
-                        if (pd.name == k) {
-                            pid = pd.id;
-                            break;
-                        }
+            // Same resolution as SET n += {k: v}: declared column when exactly
+            // one label declares k, error when several do, weak space otherwise.
+            std::vector<std::pair<LabelId, uint16_t>> declared;
+            for (auto lid : *search_labels) {
+                if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
+                    continue;
+                auto def_it = label_defs_.find(lid);
+                if (def_it == label_defs_.end())
+                    continue;
+                for (const auto& pd : def_it->second.properties) {
+                    if (pd.name == k) {
+                        declared.emplace_back(lid, pd.id);
+                        break;
                     }
                 }
-                co_await store_.putVertexProperty(vid, anon_label_id_, pid, valueToPropertyValue(vs.value));
             }
+            if (declared.size() > 1) {
+                std::string label_names;
+                for (const auto& [lid, pid] : declared) {
+                    auto it = label_defs_.find(lid);
+                    if (it == label_defs_.end())
+                        continue;
+                    if (!label_names.empty())
+                        label_names += ", ";
+                    label_names += it->second.name;
+                }
+                throw std::runtime_error("AmbiguousProperty: property '" + k + "' is declared by multiple labels (" +
+                                         label_names + ").");
+            }
+            if (declared.size() == 1) {
+                co_await store_.putVertexProperty(vid, declared[0].first, declared[0].second,
+                                                  valueToPropertyValue(vs.value));
+                continue;
+            }
+            if (anon_label_id_ == INVALID_LABEL_ID)
+                continue;
+            uint16_t pid = co_await meta_.getOrCreateAnonPropId(k, PropertyType::ANY);
+            auto labels = co_await store_.getVertexLabels(vid);
+            if (!labels.count(anon_label_id_))
+                co_await store_.addVertexLabel(vid, anon_label_id_);
+            co_await store_.putVertexProperty(vid, anon_label_id_, pid, valueToPropertyValue(vs.value));
         }
     }
 }
@@ -1225,21 +1279,17 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
             // filter/pending data. We cannot rely on getVertexProperties here
             // because insertVertex writes may not be visible within the same
             // snapshot (WiredTiger snapshot isolation).
+            // Only UNDECLARED pattern properties belong to the weak space.
+            // Declared filter properties live in their label's column and are
+            // read from storage by buildVertexValue; injecting them into
+            // __anon__ would alias unrelated weak keys (same prop_id, other
+            // name) and corrupt same-statement reads.
             auto enrichCreatedVertex =
-                [&](VertexValue& vv, const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                    const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
+                [&](VertexValue& vv, const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
                     const DataChunk* chunk_ptr, size_t row_idx) -> void {
                 if (anon_label_id_ == INVALID_LABEL_ID)
                     return;
                 Properties anon_props;
-                for (const auto& [prop_id, expr] : prop_filters) {
-                    Value v = evaluateExpr(evaluator, expr, chunk_ptr, row_idx);
-                    if (!std::holds_alternative<std::monostate>(v)) {
-                        if (anon_props.size() <= prop_id)
-                            anon_props.resize(prop_id + 1);
-                        anon_props[prop_id] = valueToPropertyValue(v);
-                    }
-                }
                 for (const auto& [prop_name, expr] : pending_props) {
                     Value v = evaluateExpr(evaluator, expr, chunk_ptr, row_idx);
                     if (!std::holds_alternative<std::monostate>(v)) {
@@ -1259,7 +1309,17 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                 }
                 if (!anon_props.empty()) {
-                    vv.properties[anon_label_id_] = std::move(anon_props);
+                    // Merge into the anon bag instead of replacing it: the bag
+                    // may already hold values written by ON CREATE SET (which
+                    // now store undeclared keys in the weak space). Replacing
+                    // would drop them for the RETURN in the same statement.
+                    auto& dst = vv.properties[anon_label_id_];
+                    if (dst.size() < anon_props.size())
+                        dst.resize(anon_props.size());
+                    for (size_t i = 0; i < anon_props.size(); ++i) {
+                        if (anon_props[i].has_value())
+                            dst[i] = std::move(anon_props[i]);
+                    }
                     vv.labels->insert(anon_label_id_);
                 }
             };
@@ -1504,7 +1564,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         start_vv = co_await buildVertexValue(start_vid, start_labels_, start_added);
 
                     if (start_created)
-                        enrichCreatedVertex(start_vv, start_prop_filters_, start_pending_props_, &*chunk, row);
+                        enrichCreatedVertex(start_vv, start_pending_props_, &*chunk, row);
 
                     VertexValue end_vv;
                     if (has_relationship_) {
@@ -1513,7 +1573,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         else if (!end_pre_bound_)
                             end_vv = co_await buildVertexValue(end_vid, end_labels_, end_added);
                         if (end_created)
-                            enrichCreatedVertex(end_vv, end_prop_filters_, end_pending_props_, &*chunk, row);
+                            enrichCreatedVertex(end_vv, end_pending_props_, &*chunk, row);
                     }
 
                     DataChunk output;
@@ -1641,7 +1701,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     start_vv = co_await buildVertexValue(start_vid, start_labels_, start_added);
 
                 if (start_created)
-                    enrichCreatedVertex(start_vv, start_prop_filters_, start_pending_props_, &*chunk, row);
+                    enrichCreatedVertex(start_vv, start_pending_props_, &*chunk, row);
 
                 DataChunk output;
                 output.count = 1;

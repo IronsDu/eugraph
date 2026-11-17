@@ -14,6 +14,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import threading
 import sys
 import time
 from collections import Counter
@@ -522,7 +523,10 @@ def main():
 
     # ---- Start server ----
     server_cmd = [args.server_bin, "--thrift-port", str(args.port), "--bolt-port", "0",
-                  "--data-dir", args.data_dir]
+                  "--data-dir", args.data_dir,
+                  # TCK data is disposable and each scenario drops its graph;
+                  # fsync per transaction only slows the suite down.
+                  "--wt-txn-sync", "none"]
     print(f"[run_tck] Starting server: {' '.join(server_cmd)}", flush=True)
 
     server_log = open("/tmp/eugraph_tck_server.log", "w")
@@ -556,16 +560,62 @@ def main():
     print(f"[run_tck] Running: {' '.join(tck_cmd)}", flush=True)
     sys.stdout.flush()
     tck_start = time.monotonic()
-    tck_result = subprocess.run(tck_cmd, env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True)
-    tck_elapsed = time.monotonic() - tck_start
 
-    # Print captured output
-    if tck_result.stdout:
-        sys.stdout.write(tck_result.stdout)
-    if tck_result.stderr:
-        sys.stderr.write(tck_result.stderr)
+    class _Result:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    tck_result = _Result()
+    tck_proc = subprocess.Popen(tck_cmd, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, bufsize=1)
+
+    # Stream the cucumber (stdout) and spdlog (stderr) output live. The old
+    # code buffered both pipes and printed them only after the child exited, so
+    # a runner shutdown (SIGTERM) lost every scenario/query line. The report
+    # still uses the accumulated text; nothing is printed twice.
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+
+    def _pump(stream, sink, chunks) -> None:
+        try:
+            for line in stream:
+                chunks.append(line)
+                sink.write(line)
+                sink.flush()
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    out_thread = threading.Thread(target=_pump,
+                                  args=(tck_proc.stdout, sys.stdout, out_chunks),
+                                  daemon=True)
+    err_thread = threading.Thread(target=_pump,
+                                  args=(tck_proc.stderr, sys.stderr, err_chunks),
+                                  daemon=True)
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat() -> None:
+        # Also emit a periodic elapsed-time line for runs whose scenario output
+        # is sparse or still stuck in the child's stdio buffer.
+        while not stop_heartbeat.wait(60):
+            print(f"[run_tck] TCK still running ({time.monotonic() - tck_start:.0f}s)", flush=True)
+
+    heartbeat = threading.Thread(target=_heartbeat, daemon=True)
+    out_thread.start()
+    err_thread.start()
+    heartbeat.start()
+    try:
+        tck_result.returncode = tck_proc.wait()
+    finally:
+        stop_heartbeat.set()
+        out_thread.join(timeout=5)
+        err_thread.join(timeout=5)
+    tck_result.stdout = ''.join(out_chunks)
+    tck_result.stderr = ''.join(err_chunks)
+    tck_elapsed = time.monotonic() - tck_start
 
     print(f"[run_tck] tck_tests finished in {tck_elapsed:.1f}s "
           f"(exit={tck_result.returncode})", flush=True)

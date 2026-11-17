@@ -411,12 +411,30 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             acc.is_strong = src.is_strong;
             acc.property_name = src.property_name;
             if (src.is_strong) {
+                // Strong accessor: the indexed value comes ONLY from the source
+                // label's declared column. It must exist before the index is
+                // created (and before any storage/table side effect).
                 auto source_opt = co_await async_meta_.getLabelId(src.source_label);
                 if (!source_opt.has_value()) {
                     result.error = "Source label not found: " + src.source_label;
                     co_return;
                 }
                 acc.source_label_id = *source_opt;
+                auto source_def = co_await async_meta_.getLabelDefById(*source_opt);
+                bool declared = false;
+                if (source_def.has_value()) {
+                    for (const auto& pd : source_def->properties) {
+                        if (pd.name == src.property_name) {
+                            declared = true;
+                            break;
+                        }
+                    }
+                }
+                if (!declared) {
+                    result.error = "Property '" + src.property_name + "' is not declared on label '" +
+                                   src.source_label + "'; declare it with DDL before indexing it.";
+                    co_return;
+                }
             }
             accessors.push_back(std::move(acc));
         }
@@ -508,6 +526,14 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                     std::vector<VertexId> pending;
                     pending.reserve(batch_rows);
 
+                    LabelId anon_label_id = INVALID_LABEL_ID;
+                    for (const auto& [lid, ldef] : schema.labels) {
+                        if (ldef.name == kAnonLabelName) {
+                            anon_label_id = lid;
+                            break;
+                        }
+                    }
+
                     auto flush_batch = [&]() -> folly::coro::Task<bool> {
                         if (pending.empty())
                             co_return true;
@@ -531,44 +557,77 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                     }
                                     values.push_back((*props_opt)[ra.source_prop_id].value());
                                 } else {
-                                    std::optional<PropertyValue> found_value;
+                                    // Weak accessor: one home per vertex. More
+                                    // than one home is ambiguity -> the weak
+                                    // index cannot represent it -> fail.
+                                    int home_count = 0;
+                                    LabelId home_label = INVALID_LABEL_ID;
+                                    bool home_anon = false;
+                                    std::optional<PropertyValue> anon_value;
                                     for (LabelId lid : vertex_labels) {
+                                        if (lid == anon_label_id)
+                                            continue;
                                         auto lab = schema.getLabel(lid);
                                         if (!lab)
                                             continue;
-                                        uint16_t pid = UINT16_MAX;
                                         for (const auto& pd : lab->properties) {
                                             if (pd.name == ra.property_name) {
-                                                pid = pd.id;
+                                                home_count++;
+                                                home_label = lid;
                                                 break;
                                             }
-                                        }
-                                        if (pid == UINT16_MAX)
-                                            continue;
-                                        auto props_opt = co_await write_store.getVertexProperties(vid, lid);
-                                        if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
-                                            continue;
-                                        const auto& candidate = (*props_opt)[pid].value();
-                                        if (found_value.has_value()) {
-                                            if (!(found_value.value() == candidate)) {
-                                                conflict = true;
-                                                break;
-                                            }
-                                        } else {
-                                            found_value = candidate;
                                         }
                                     }
-                                    if (conflict) {
+                                    if (anon_label_id != INVALID_LABEL_ID && vertex_labels.count(anon_label_id)) {
+                                        auto alab = schema.getLabel(anon_label_id);
+                                        if (alab) {
+                                            auto props_opt =
+                                                co_await write_store.getVertexProperties(vid, anon_label_id);
+                                            for (const auto& pd : alab->properties) {
+                                                if (pd.name != ra.property_name)
+                                                    continue;
+                                                if (props_opt && pd.id < props_opt->size() &&
+                                                    (*props_opt)[pd.id].has_value()) {
+                                                    home_count++;
+                                                    home_anon = true;
+                                                    anon_value = (*props_opt)[pd.id].value();
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (home_count > 1) {
                                         spdlog::warn(
-                                            "Index '{}' weak accessor '{}' has conflicting values on vertex {}",
+                                            "Index '{}' weak accessor '{}' is ambiguous on vertex {} (multiple homes)",
                                             stmt.index_name, ra.property_name, vid);
+                                        conflict = true;
                                         break;
                                     }
-                                    if (!found_value.has_value()) {
+                                    if (home_count == 0) {
                                         allPresent = false;
                                         break;
                                     }
-                                    values.push_back(found_value.value());
+                                    if (home_anon) {
+                                        values.push_back(std::move(*anon_value));
+                                    } else {
+                                        auto props_opt = co_await write_store.getVertexProperties(vid, home_label);
+                                        uint16_t pid = UINT16_MAX;
+                                        auto lab = schema.getLabel(home_label);
+                                        if (lab) {
+                                            for (const auto& pd : lab->properties) {
+                                                if (pd.name == ra.property_name) {
+                                                    pid = pd.id;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (!props_opt || pid == UINT16_MAX || pid >= props_opt->size() ||
+                                            !(*props_opt)[pid].has_value()) {
+                                            allPresent = false;
+                                            break;
+                                        }
+                                        values.push_back((*props_opt)[pid].value());
+                                    }
                                 }
                             }
 
