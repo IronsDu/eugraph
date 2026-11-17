@@ -1,6 +1,6 @@
 // GraphSession 测试：直接持 WtSession（无 backend 抽象）⇒ 用真实 WT 连接。
 // 纯事务状态机（TxnController/StickyError）另有不依赖 WT 的单测 ✓。
-#include "storage/data/graph_session.hpp"
+#include "storage/session/graph_session.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <gtest/gtest.h>

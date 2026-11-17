@@ -1,11 +1,11 @@
 #pragma once
 
 #include "common/types/constants.hpp"
-#include "storage/data/cursor_provider.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/kv/key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
 #include "storage/schema_ddl.hpp"
+#include "storage/session/cursor_provider.hpp"
 #include "storage/wt_connection_store.hpp"
 #include "storage/wt_cursor.hpp"
 

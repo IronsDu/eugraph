@@ -15,8 +15,8 @@
 //       -Wl,--end-group $LIBS -ldl -lpthread -lgcc_s
 //
 // ⚠️ 服务端必须先停（同一 WT 库不能两个进程同时打开）；数据根目录指向 <graph>/data。
-#include "storage/data/session_pool.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/session/session_pool.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <algorithm>

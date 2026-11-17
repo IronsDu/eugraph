@@ -8,8 +8,8 @@
 // 同时测两个工作集档位（小/大），用于区分：
 //   「小工作集（可驻留 cache）仍下降」= WT 内部争用
 //   「仅大工作集下降」                = 缓存/内存带宽
-#include "storage/data/session_pool.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/session/session_pool.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <algorithm>

@@ -9,7 +9,7 @@
 //  - 提交失败按类别处理：可重试（Busy）⇒ 事务结束但**不毒化** ✓；其余 ⇒ 毒化 ✗
 //  - 未提交就收尾 ⇒ rollback ✓；Failed 状态**不可被 rollback 洗白** ✗
 
-#include "storage/data/session_types.hpp"
+#include "storage/session/session_types.hpp"
 
 #include <optional>
 

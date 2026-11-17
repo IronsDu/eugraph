@@ -1,7 +1,7 @@
 #include "storage/wt_table_ops.hpp"
 #include <folly/Function.h>
 
-#include "storage/data/graph_session.hpp"
+#include "storage/session/graph_session.hpp"
 
 #include <cstring>
 #include <spdlog/spdlog.h>

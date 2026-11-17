@@ -1,5 +1,5 @@
 // 会话池（拥有 GraphSession ✓）+ 非拥有租约（析构即归还 ✓）的真实 WT 测试
-#include "storage/data/session_pool.hpp"
+#include "storage/session/session_pool.hpp"
 #include "test_sync_store.hpp"
 
 #include <gtest/gtest.h>
