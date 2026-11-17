@@ -97,6 +97,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 表达式求值相关 | [query/syntax/cypher-syntax.md], [query/engine/query-engine-design.md] | `executor/vectorized_evaluator.cpp`, `binder/` |
 | 时间类型/时间运算语义 | [query/engine/temporal-semantics.md] | `src/common/types/temporal_value.*`, `function/scalar/temporal_functions.hpp` |
 | 查询错误分类/状态码 | [query/engine/error-model.md] | `src/common/types/query_error.*`, `src/service/bolt/bolt_session.cpp` |
+| 新增源码文件 / 移动目录（放哪层、哪些 include 禁止） | [architecture/module-layout.md](architecture/module-layout.md) | `scripts/check-layering.sh`, 根 `CMakeLists.txt` |
 
 ## 构建与运行
 
@@ -135,14 +136,16 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [已知缺陷待办](query/known-defects-todo.md) | 排查中顺带确认、与 complex-10 无关的既有缺陷（反向模式、类型硬编码、列集合冲突、loader 越界、测量陷阱） |
 
 
-## 格式化
+## 格式化与分层检查
 运行 `./scripts/check-format.sh --fix` 可自动格式化所有源码（`.cpp/.h/.hpp`），检查用 `./scripts/check-format.sh`。
+运行 `./scripts/check-layering.sh` 检查跨模块 include 是否违反分层方向（规则见 [模块布局](architecture/module-layout.md)）。
 
 ## 架构与设计
 
 | 文档 | 说明 |
 |------|------|
 | [系统架构](architecture/system-architecture.md) | 分层架构、sync/async 分离、线程模型、IoScheduler |
+| [模块布局与依赖规则](architecture/module-layout.md) | 目录 ↔ 分层 ↔ CMake target 映射、新文件落位判定、禁止的反向 include、`scripts/check-layering.sh` |
 | [数据模型](architecture/data-model.md) | Vertex/Edge 概念、Label/EdgeLabel 映射、属性模型、PK、运行时类型 |
 | [类型定义](architecture/type-definitions.md) | C++ 核心类型（ID、属性值、LabelDef/EdgeLabelDef、运行时类型） |
 

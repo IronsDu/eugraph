@@ -25,6 +25,16 @@ social_network-*/**
 # 本地草稿（文件头通常写明不入库）：*.local.md 一律不提交
 *.local.md
 
+# 本地运行/调试产物（可随时重建，不入库）：
+# Testing/ = ctest 在仓库根跑出的结果目录；perf.data = perf record 采样；
+# import.report = loader 导入报告；.demo-loader/ = 本地 demo 的 data/db/log；
+# uploads/ = 测试与服务产生的上传暂存目录
+/Testing/
+/perf.data
+/import.report
+/.demo-loader/
+/uploads/
+
 # Web console frontend (dist is intentionally committed; see docs/service/web-console.md)
 web/node_modules/
 web/.vite/

@@ -256,6 +256,7 @@ ASan 构建低并行（如 `-j 2`）；同一服务端重复执行时做好库�
 
 ```bash
 ./scripts/check-format.sh --fix && ./scripts/check-format.sh
+./scripts/check-layering.sh   # 分层依赖检查：禁止 storage ↛ query 等反向 include（规则见 docs/architecture/module-layout.md）
 cmake --preset debug && cmake --build --preset debug
 ./build/debug/query_executor_tests
 ctest --preset debug --output-on-failure
