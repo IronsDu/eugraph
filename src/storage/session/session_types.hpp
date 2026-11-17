@@ -6,6 +6,10 @@
 //  - 提交必须显式；未提交 ⇒ 回滚；提交失败 ⇒ 明确错误（绝不静默 ✗）
 //  - 首个失败被"粘住"：事务期间任何失败都**禁止提交** ✓（避免部分写入被当成成功 ✗）
 //  - 只有**不可重试**类错误才毒化会话 ✓；Busy 可重试，会话仍可复用 ✓
+//
+// `TxnErrorClass` + 重试/毒化判定在 `storage/txn_error_class.hpp`（WT 层与会话层共用）。
+
+#include "storage/txn_error_class.hpp"
 
 #include <cstdint>
 #include <string>
@@ -26,44 +30,6 @@ enum class TxnState : uint8_t {
     RolledBack,
     Failed
 };
-
-/// WT 错误分类（§5）：决定「能否重试」与「是否毒化会话 ✓」
-enum class TxnErrorClass : uint8_t {
-    None,          // 成功
-    Busy,          // EBUSY：可重试，**不毒化** ✓
-    Rollback,      // WT_ROLLBACK：事务失效 ⇒ 毒化，语句边界可换会话重试 ✓
-    CacheOverflow, // WT_CACHE_OVERFLOW：事务过大 ⇒ 毒化 ✓
-    Panic,         // WT_PANIC：引擎不可信 ⇒ 毒化并停止服务 ✓
-    Unknown        // 未知错误 ⇒ 保守毒化 ✓
-};
-
-[[nodiscard]] constexpr bool is_retryable(TxnErrorClass cls) noexcept {
-    return cls == TxnErrorClass::Busy;
-}
-
-/// 是否**必须销毁**该会话（不回池）✓：保守策略——未知错误也算不可信 ✗
-[[nodiscard]] constexpr bool poisons_session(TxnErrorClass cls) noexcept {
-    return cls == TxnErrorClass::Rollback || cls == TxnErrorClass::CacheOverflow || cls == TxnErrorClass::Panic ||
-           cls == TxnErrorClass::Unknown;
-}
-
-[[nodiscard]] constexpr const char* to_string(TxnErrorClass cls) noexcept {
-    switch (cls) {
-    case TxnErrorClass::None:
-        return "None";
-    case TxnErrorClass::Busy:
-        return "Busy";
-    case TxnErrorClass::Rollback:
-        return "Rollback";
-    case TxnErrorClass::CacheOverflow:
-        return "CacheOverflow";
-    case TxnErrorClass::Panic:
-        return "Panic";
-    case TxnErrorClass::Unknown:
-        return "Unknown";
-    }
-    return "Unknown";
-}
 
 /// 事务结局（替代 bool ✗：调用方需要区分「没有事务」「可重试失败」「毒化失败」✓）
 struct TxnOutcome {

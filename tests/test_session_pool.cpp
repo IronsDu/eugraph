@@ -1,8 +1,8 @@
 // 会话池（拥有 GraphSession ✓）+ 非拥有租约（析构即归还 ✓）+ 事务错误分类的测试。
 // 会话本身用真实 WT（GraphSession 直接持 WtSession，不再有假 backend 抽象）；
 // 纯状态机/错误分类部分仍不依赖连接 ✓。
-#include "storage/data/session_pool.hpp"
-#include "storage/data/session_types.hpp"
+#include "storage/session/session_pool.hpp"
+#include "storage/session/session_types.hpp"
 #include "storage/wt_connection_store.hpp"
 #include "storage/wt_error.hpp"
 

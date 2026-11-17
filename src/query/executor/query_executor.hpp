@@ -15,8 +15,8 @@
 #include "query/profile/query_profile.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
-#include "storage/data/session_pool.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
+#include "storage/session/session_pool.hpp"
 
 #include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>

@@ -6,9 +6,9 @@
 // `store->beginTransaction()/commitTransaction(txn)` 习惯由本包装转成会话 API，
 // 避免在每个用例里重复样板。**仅测试代码使用** ✓。
 
-#include "storage/data/session_pool.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "storage/session/session_pool.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <functional>

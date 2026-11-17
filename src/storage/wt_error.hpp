@@ -8,7 +8,7 @@
 //  - `wt::table_*`：数据 op 失败时经 `GraphSession::fail_from_wt()` 粘住 ✓
 //  - `GraphSession`：数据 op 后禁止提交 ✓
 
-#include "storage/data/session_types.hpp"
+#include "storage/txn_error_class.hpp"
 
 #include <cerrno>
 #include <wiredtiger.h>

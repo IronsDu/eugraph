@@ -5,11 +5,11 @@
 #include "query/executor/query_executor.hpp"
 #include "storage/catalog/catalog_store.hpp"
 #include "storage/data/async_graph_data_store.hpp"
-#include "storage/data/session_pool.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "storage/session/session_pool.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <atomic>
