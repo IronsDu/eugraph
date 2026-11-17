@@ -63,6 +63,7 @@
 |----|------|------|
 | `wt::table_*` | `storage/wt_table_ops.hpp` | WT 表级原语（无状态自由函数：表级 KV、统一 `scan_range`；session 显式传入）；**不创建会话、不持有事务表、不做 DDL 序列** |
 | `SchemaDdl` | `storage/schema_ddl.hpp` | 单连接内 DDL 唯一入口（接收 `WtSession&`；内部 schema 锁 + 建/删/ensure；建表失败只回滚本次新建） |
+| `SessionPool` / `GraphSession` / `TxnController` / `CursorProvider` | `storage/session/` | WT 会话、事务、cursor 的所有权与生命周期：池拥有会话、语句借非拥有 `SessionLease`、`StickyError` 粘住首个失败并禁止提交（纯逻辑部分可脱离 WT 单测） |
 | `SyncGraphDataStore` | `storage/data/` | 图数据 CRUD + 扫描（`op(GraphSession&, …)`）+ DDL（创建/删除物理表） |
 | `SyncGraphMetaStore` | `storage/meta/` | 元数据 KV 操作（metadataPut/Get/Scan） |
 
