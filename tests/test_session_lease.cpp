@@ -1,5 +1,5 @@
 // 会话租约（非拥有 ✓ 析构即归还 ✓）测试：真实 WT 会话 + 真 SessionPool。
-#include "storage/data/session_pool.hpp"
+#include "storage/session/session_pool.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <gtest/gtest.h>

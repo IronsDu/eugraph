@@ -15,7 +15,7 @@
 //    等真正接入 current-node 再加 ✓
 //  - 池必须在 WT connection 关闭**之前** `clear()` ✓（GraphInstance 成员声明顺序保证 ✓）
 
-#include "storage/data/graph_session.hpp"
+#include "storage/session/graph_session.hpp"
 
 #include <spdlog/spdlog.h>
 

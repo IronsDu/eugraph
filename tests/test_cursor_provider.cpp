@@ -1,7 +1,7 @@
 // cursor 所有权边界（CursorHandle / CursorProvider）测试：
 // 句柄/假 provider 不依赖 WT；GraphSession 注入 provider 用真实 WT 连接。
-#include "storage/data/cursor_provider.hpp"
-#include "storage/data/graph_session.hpp"
+#include "storage/session/cursor_provider.hpp"
+#include "storage/session/graph_session.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <gtest/gtest.h>

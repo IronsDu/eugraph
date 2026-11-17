@@ -3,13 +3,13 @@
 #include "common/config/env_vars.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "storage/data/graph_session.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
-#include "storage/data/index_maintenance.hpp"
+#include "storage/index/index_maintenance.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/kv/index_key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
+#include "storage/session/graph_session.hpp"
 #include "storage/storage_op_metrics.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
