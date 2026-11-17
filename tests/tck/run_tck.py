@@ -523,7 +523,10 @@ def main():
 
     # ---- Start server ----
     server_cmd = [args.server_bin, "--thrift-port", str(args.port), "--bolt-port", "0",
-                  "--data-dir", args.data_dir]
+                  "--data-dir", args.data_dir,
+                  # TCK data is disposable and each scenario drops its graph;
+                  # fsync per transaction only slows the suite down.
+                  "--wt-txn-sync", "none"]
     print(f"[run_tck] Starting server: {' '.join(server_cmd)}", flush=True)
 
     server_log = open("/tmp/eugraph_tck_server.log", "w")
