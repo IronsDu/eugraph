@@ -565,29 +565,54 @@ def main():
 
     tck_result = _Result()
     tck_proc = subprocess.Popen(tck_cmd, env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True)
+                                stderr=subprocess.PIPE, text=True, bufsize=1)
+
+    # Stream the cucumber (stdout) and spdlog (stderr) output live. The old
+    # code buffered both pipes and printed them only after the child exited, so
+    # a runner shutdown (SIGTERM) lost every scenario/query line. The report
+    # still uses the accumulated text; nothing is printed twice.
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+
+    def _pump(stream, sink, chunks) -> None:
+        try:
+            for line in stream:
+                chunks.append(line)
+                sink.write(line)
+                sink.flush()
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    out_thread = threading.Thread(target=_pump,
+                                  args=(tck_proc.stdout, sys.stdout, out_chunks),
+                                  daemon=True)
+    err_thread = threading.Thread(target=_pump,
+                                  args=(tck_proc.stderr, sys.stderr, err_chunks),
+                                  daemon=True)
     stop_heartbeat = threading.Event()
 
     def _heartbeat() -> None:
-        # Long ASan TCK runs are silent for tens of minutes; a periodic line
-        # keeps the CI log alive and makes an external SIGTERM diagnosable.
+        # Also emit a periodic elapsed-time line for runs whose scenario output
+        # is sparse or still stuck in the child's stdio buffer.
         while not stop_heartbeat.wait(60):
             print(f"[run_tck] TCK still running ({time.monotonic() - tck_start:.0f}s)", flush=True)
 
     heartbeat = threading.Thread(target=_heartbeat, daemon=True)
+    out_thread.start()
+    err_thread.start()
     heartbeat.start()
     try:
-        tck_result.stdout, tck_result.stderr = tck_proc.communicate()
-        tck_result.returncode = tck_proc.returncode
+        tck_result.returncode = tck_proc.wait()
     finally:
         stop_heartbeat.set()
+        out_thread.join(timeout=5)
+        err_thread.join(timeout=5)
+    tck_result.stdout = ''.join(out_chunks)
+    tck_result.stderr = ''.join(err_chunks)
     tck_elapsed = time.monotonic() - tck_start
-
-    # Print captured output
-    if tck_result.stdout:
-        sys.stdout.write(tck_result.stdout)
-    if tck_result.stderr:
-        sys.stderr.write(tck_result.stderr)
 
     print(f"[run_tck] tck_tests finished in {tck_elapsed:.1f}s "
           f"(exit={tck_result.returncode})", flush=True)
