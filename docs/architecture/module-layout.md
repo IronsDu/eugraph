@@ -43,9 +43,11 @@
 | 目录 | 职责 | 编译目标 |
 |---|---|---|
 | `src/common/{types,config,thread,concurrency,schema}` | 零 IO 基础类型、配置、NUMA 线程、准入原语、内存 schema | 多数 header-only；`temporal_value.cpp`/`query_error.cpp` 在 `eugraph_query_engine` |
-| `src/storage/wt_*.{hpp,cpp}`、`schema_ddl.*` | WT 表级原语、会话/游标、错误分类、单连接 DDL 序列 | `eugraph_lib` |
+| `src/storage/wt_*.{hpp,cpp}`、`schema_ddl.*`、`txn_error_class.hpp` | WT 表级原语、会话/游标、错误码分类、单连接 DDL 序列 | `eugraph_lib` |
+| `src/storage/session/` | WT 资源生命周期：`SessionPool` / `SessionLease` / `GraphSession` / `TxnController` / `CursorProvider`（纯逻辑，可脱离 WT 单测） | header-only（7 个专属测试） |
 | `src/storage/kv/` | Key/Value/IndexKey 编解码 | `eugraph_lib` |
 | `src/storage/data/` | 图数据 store：`SyncGraphDataStore` + `AsyncGraphDataStore` | `eugraph_lib`（sync）；async 为头文件内联实现 |
+| `src/storage/index/` | 索引维护（收集条目 / 唯一性校验 / 写条目），供 store 与查询算子共用 | header-only |
 | `src/storage/meta/` | 元数据 store（sync + async）、`GraphSchema` 持久化 | `eugraph_lib` + `eugraph_metadata` |
 | `src/storage/catalog/` | 全局图目录（独立 WT 数据库） | `eugraph_lib` |
 | `src/storage/io_scheduler.hpp` | IO 线程池 / 协程调度 | header-only |
@@ -62,6 +64,21 @@
 
 > `storage/catalog/` 与 `query/catalog/` 不是一回事：前者是**持久化**的图目录（WT 库），
 > 后者是**内存**中的符号索引。二者同名但分属两层，不要合并。
+
+**storage 内部方向**（同样只能往下）：
+
+```
+txn_error_class.hpp（纯 enum，无 WT 依赖）
+   ↖                         ↖
+wt_error.hpp（WT 错误码分类）   session/（会话/事务/游标）
+                                 ↖
+                               data/（store：在 session 里做读写）
+                                 ↖
+                               index/（索引维护，被 store 与查询算子调用）
+```
+
+`wt_error.hpp` 曾 include `storage/data/session_types.hpp`（最底层依赖上层），
+2026-11-17 把 `TxnErrorClass` 拆到 `txn_error_class.hpp` 后消除。
 
 ## 3. 新文件落位：按顺序问
 
@@ -80,15 +97,16 @@
 低层需要高层的能力时，正确做法是**把能力下沉到它该在的层，并删掉高层旧实现**；
 只做前半步会留下两份代码。典型：索引维护。
 
-- 下沉版：`storage/data/index_maintenance.hpp`（198 行，仅 async store 使用）
+- 下沉版：`storage/index/index_maintenance.hpp`（198 行，仅 async store 使用；原先放在 `storage/data/`）
 - 旧实现：`query/physical_plan/operator/{vertex,edge}_index_maintenance.hpp`（353 行，仍被 5 个写算子、8 处 include 使用）
 - 两份代码有同名 `VertexIndexEntry` 和约 130–145 行近似重复块。
 
 ### 4.2 "一个目录装两种变化原因"
 
-`storage/data/` 同时装了图数据 store（6 文件 4539 行）和 WT 资源生命周期
+`storage/data/` 曾同时装图数据 store（6 文件 4539 行）和 WT 资源生命周期
 （`session_types` / `txn_controller` / `cursor_provider` / `graph_session` / `session_pool`，
 5 文件 947 行）。后者已有 **7 个专属测试**，说明测试都承认它是独立单元，目录却不承认。
+2026-11-17 已拆到 `storage/session/`；`index_maintenance.hpp` 同期移到 `storage/index/`。
 
 ### 4.3 "文件靠 section 注释分隔"
 
@@ -117,8 +135,12 @@
 | 偏差 | 现状 | 归属 |
 |---|---|---|
 | 索引维护双实现 | 见 §4.1 | #280（合并，净删约 200 行） |
-| `storage/data/` 混装 store 与 session | 见 §4.2 | #280（`storage/session/`） |
-| `storage/wt_error.hpp` 上向依赖 `storage/data/session_types.hpp` | 最底层依赖上层目录 | #280（`TxnErrorClass` 下沉） |
 | `storage/data/async_graph_data_store.cpp` 未被任何 target 编译 | 仅 1 行 `#include`，孤儿 TU | #280（并入实现或删除） |
 | `graph/graph_manager.cpp` 编进 `eugraph_shell_lib` | 目标名与目录不对应 | #280（CMake 分目录） |
 | [system-architecture.md](system-architecture.md) 写"13 种物理算子"、`query/logical_plan/` | 实际 44 个算子、实际路径 `query/planner/logical_plan/` | 随 #280 同步 |
+
+已修复（2026-11-17，`refactor/storage-session-split`）：
+
+- `storage/data/` 混装 store 与 session ⇒ 拆出 `storage/session/`（5 文件 947 行）；
+- `storage/data/index_maintenance.hpp` ⇒ `storage/index/index_maintenance.hpp`；
+- `wt_error.hpp` 上向依赖 `data/session_types.hpp` ⇒ `TxnErrorClass` 拆到 `storage/txn_error_class.hpp`。

@@ -657,7 +657,7 @@ service EuGraphService {
 ```
 
 - 复用现成 helper 的**判定语义**（`checkUniqueConstraint` → 冲突返回 false，不抛异常，正好是 first-wins 需要的钩子，[vertex_index_maintenance.hpp](../../../src/query/physical_plan/operator/vertex_index_maintenance.hpp#L207-L220)）；
-- **依赖方向**：索引维护 helper 现在位于 `src/query/physical_plan/operator/`（`compute` 命名空间）。由存储层的 `batchInsertVertices` 去 include query 层头文件是反向依赖，因此必须把「收集条目 / 唯一性检查 / 写条目」的逻辑下沉到 `src/storage/data/`（例如 `vertex_index_maintenance.hpp` 移为存储层组件），query 算子改为调用新位置 —— 行为不变，属 AGENTS.md 要求的依赖方向单一化；
+- **依赖方向**：索引维护 helper 现在位于 `src/query/physical_plan/operator/`（`compute` 命名空间）。由存储层的 `batchInsertVertices` 去 include query 层头文件是反向依赖，因此必须把「收集条目 / 唯一性检查 / 写条目」的逻辑下沉到 `src/storage/index/`（把 `query/.../vertex_index_maintenance.hpp` 移为存储层组件），query 算子改为调用新位置 —— 行为不变，属 AGENTS.md 要求的依赖方向单一化；
 - 影响面：`batchInsertVertices` 目前**只有 loader 使用**（已确认，§8）。改造后任何批量导入都会顺带维护索引，"索引变脏"这一类问题一次性消除。
 - **同类问题一并覆盖**：`batchInsertEdges` 同样不维护边索引（同一段代码只调 `insertEdge`）。本次一并把边索引维护下沉并接上，否则「批量导入的边搜不到」会在下一步暴露 —— 属 AGENTS.md「同类失败禁止逐条特判、优先补齐统一机制」。
 
@@ -962,7 +962,7 @@ for each edge file:
 | 表面 | 影响 | 处置 |
 |---|---|---|
 | Thrift 写协议（`VertexRecord`/`EdgeRecord`/`batchInsert*` 返回值） | **破坏性变更，且不需要兼容**（已确认）：`src_vertex_id` / `dst_vertex_id` 直接删除、字段编号重排、新增 `PkRef`；`batchInsertEdges` 返回类型变更 | 全仓只有 `eugraph-loader` 一个调用方（已确认，见 [csv_loader.cpp](../../../src/program/loader/csv_loader.cpp#L617-L904)），server 与 loader 同版本发布；不保留 reserved 编号、不做双写 |
-| 文件搬迁 | 新增 `src/program/loader/schema_config.{hpp,cpp}`；索引维护逻辑从 `src/query/physical_plan/operator/*_index_maintenance.hpp`（`compute` 命名空间）下沉到 `src/storage/data/`（§6.2） | 依赖方向单一化 + 单一职责（AGENTS.md 物理设计约束）；query 算子改为调用新位置，行为不变 |
+| 文件搬迁 | 新增 `src/program/loader/schema_config.{hpp,cpp}`；索引维护逻辑从 `src/query/physical_plan/operator/*_index_maintenance.hpp`（`compute` 命名空间）下沉到 `src/storage/index/`（§6.2） | 依赖方向单一化 + 单一职责（AGENTS.md 物理设计约束）；query 算子改为调用新位置，行为不变 |
 | 元数据编码（`LabelDef`） | 新增 `pk_prop_ids` 字段 | **不需要兼容**（已确认）：`meta_codec` 直接改编码格式，不写旧格式解码分支、不做迁移测试 |
 | KV 编码 | **不变**：不新增表类型，完全复用 `vidx_*` 与 `IndexKeyCodec` | — |
 | Cypher 语义 | **不变**：不动 `CREATE` / `MERGE` / `MATCH` | — |
@@ -1040,7 +1040,7 @@ for each edge file:
 
 1. **CSV 读取能力（§3）**：BOM 剥离、RFC 4180 引号解析、分隔符进 schema（`,`,`;`,`\t`,`|` 及任意多字符）、每行列数校验与可操作报错；`--schema` 的文件存在性校验。这一步**独立于主键化**，可单独合并与验证（用构造的 Excel 形态样本）；
 2. **时序解析器上提**：`common/types/temporal_value` 公开 `parseXxxString`，`temporal_functions.hpp` 改为调用 → TCK 回归（纯搬家，先做以隔离风险）；
-3. **批量写入维护索引（机制改造）**：索引条目收集/校验逻辑从 `query/physical_plan/operator` 下沉到 `storage/data`，`batchInsertVertices` / `batchInsertEdges` 改签名带 `label_defs` 并在同事务写索引条目；query 算子改调新位置 + 全量回归（这一步独立于 loader，可单独验证）；
+3. **批量写入维护索引（机制改造）**：索引条目收集/校验逻辑从 `query/physical_plan/operator` 下沉到 `storage/index`，`batchInsertVertices` / `batchInsertEdges` 改签名带 `label_defs` 并在同事务写索引条目；query 算子改调新位置 + 全量回归（这一步独立于 loader，可单独验证）；
 4. **元数据**：`LabelDef.pk_prop_ids`（**有序**，复合主键即多元素）、`meta_codec` 编解码（直接改格式，不做兼容分支）、`createLabel` 的主键声明与「配套唯一索引按同序覆盖」校验 + 单元测试；
 5. **Thrift 协议 + 服务端解析**：`PkKey` / `PkRef`（`keys` 列表天然支持复合键）/ 返回类型变更、`GraphService` 两条路径改为走索引（**按元组**预检 + `scanVerticesByIndexId`）+ `test_rpc_integration`；
 6. **Loader 改造（单一入口）**：删除 `--nodes`/`--relationships` 与目录扫描（约 158 行）、`LoadedIdMaps` → `PkNameMap`、顶点/边装载按 `nodes`/`relationships` 分组改写（含**复合主键的元组取值与索引 DDL**、行级标签只追加不抢主标签）、`createUniqueIdIndexes` 改为「按 schema 键 + 声明的 pk 列」并**移到点装载之前**（§6.3）+ 集成测试；
