@@ -75,7 +75,7 @@ jobs:
         # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
         # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
         # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
         restore-keys: |
@@ -216,7 +216,7 @@ jobs:
         # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
         # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-coverage-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-archives-coverage-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
         # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
         restore-keys: |
@@ -380,7 +380,7 @@ jobs:
         # clang-tidy 的 x64-linux-release 条目（ABI 不同、一个包都用不上），并被当成自己的内容存了下来。
         # 新增作业时注意：key 前缀不得是其它作业 key 的前缀。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-buildclang-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-archives-buildclang-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-buildclang-
 
@@ -557,7 +557,7 @@ jobs:
         # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
         # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-asan-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-archives-asan-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
         # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
         restore-keys: |
@@ -859,7 +859,7 @@ jobs:
         # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
         # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-ubsan-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-archives-ubsan-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
         # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
         restore-keys: |
@@ -977,7 +977,7 @@ jobs:
         # Static Analysis 使用系统默认 GCC + 同一 vcpkg triplet，和 GCC job 共享
         # release ABI 的二进制缓存；它自己单独 keys 时长期 miss，导致每次都从源码
         # 重编依赖（并撞上上游 tarball hash 问题）。
-        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-gcc-
 
