@@ -55,11 +55,15 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
+    - name: Compute ccache cache week
+      id: ccache_week
+      run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
     - name: Cache ccache
       uses: actions/cache@v4
       with:
         path: ~/.cache/ccache
-        key: ${{ runner.os }}-ccache-gcc-${{ github.sha }}
+        key: ${{ runner.os }}-ccache-gcc-${{ steps.ccache_week.outputs.week }}
         restore-keys: ${{ runner.os }}-ccache-gcc-
 
     - name: Cache vcpkg packages
@@ -187,6 +191,10 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
+    - name: Compute ccache cache week
+      id: ccache_week
+      run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
     - name: Cache ccache
       # ccache does cache the .gcno produced by -fprofile-arcs/--coverage and
       # restores it on a hit, so instrumentation survives a cache hit (verified
@@ -196,7 +204,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/ccache
-        key: ${{ runner.os }}-ccache-coverage-${{ github.sha }}
+        key: ${{ runner.os }}-ccache-coverage-${{ steps.ccache_week.outputs.week }}
         restore-keys: ${{ runner.os }}-ccache-coverage-
 
     - name: Cache vcpkg packages
@@ -349,11 +357,15 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
+    - name: Compute ccache cache week
+      id: ccache_week
+      run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
     - name: Cache ccache
       uses: actions/cache@v4
       with:
         path: ~/.cache/ccache
-        key: ${{ runner.os }}-ccache-buildclang-${{ github.sha }}
+        key: ${{ runner.os }}-ccache-buildclang-${{ steps.ccache_week.outputs.week }}
         restore-keys: ${{ runner.os }}-ccache-buildclang-
 
     - name: Cache vcpkg packages
@@ -518,18 +530,22 @@ jobs:
           </dependencies>
         </project>
         EOF
-        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
+        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
         sudo mkdir -p /usr/share/neo4j/lib
         sudo cp "$RUNNER_TEMP/neo4j-driver/lib/"*.jar /usr/share/neo4j/lib/
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
+    - name: Compute ccache cache week
+      id: ccache_week
+      run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
     - name: Cache ccache
       uses: actions/cache@v4
       with:
         path: ~/.cache/ccache
-        key: ${{ runner.os }}-ccache-asan-${{ github.sha }}
+        key: ${{ runner.os }}-ccache-asan-${{ steps.ccache_week.outputs.week }}
         restore-keys: ${{ runner.os }}-ccache-asan-
 
     - name: Cache vcpkg packages
@@ -815,18 +831,22 @@ jobs:
           </dependencies>
         </project>
         EOF
-        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
+        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
         sudo mkdir -p /usr/share/neo4j/lib
         sudo cp "$RUNNER_TEMP/neo4j-driver/lib/"*.jar /usr/share/neo4j/lib/
 
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
+    - name: Compute ccache cache week
+      id: ccache_week
+      run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
     - name: Cache ccache
       uses: actions/cache@v4
       with:
         path: ~/.cache/ccache
-        key: ${{ runner.os }}-ccache-ubsan-${{ github.sha }}
+        key: ${{ runner.os }}-ccache-ubsan-${{ steps.ccache_week.outputs.week }}
         restore-keys: ${{ runner.os }}-ccache-ubsan-
 
     - name: Cache vcpkg packages
@@ -952,11 +972,12 @@ jobs:
         # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
         # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-clang-tidy-${{ hashFiles('vcpkg.json') }}
-        # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
-        # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
+        # Static Analysis 使用系统默认 GCC + 同一 vcpkg triplet，和 GCC job 共享
+        # release ABI 的二进制缓存；它自己单独 keys 时长期 miss，导致每次都从源码
+        # 重编依赖（并撞上上游 tarball hash 问题）。
+        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json') }}
         restore-keys: |
-          ${{ runner.os }}-vcpkg-archives-clang-tidy-
+          ${{ runner.os }}-vcpkg-archives-gcc-
 
     - name: Cache vcpkg tool
       # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
@@ -981,6 +1002,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DVCPKG_OVERLAY_PORTS="$PWD/../ports" \
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
     - name: Verify vcpkg binary cache
