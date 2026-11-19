@@ -166,3 +166,58 @@ struct PropertyDef {
 ```
 
 约束: `default_value.has_value() || !required`（有默认值或非 required）
+
+---
+
+## 六、待办：破坏性 DDL 与事务内 schema 更新（索引 v2 合并后）
+
+> 现有索引 v2 PR 只做 `CREATE INDEX` / `DROP INDEX`；下面这些是后续独立工作，当前**不暴露入口**。
+
+### 6.1 需要支持的不兼容操作
+
+| 操作 | 关键难点 | 建议优先级 |
+|---|---|---|
+| `DROP PROPERTY`（顶点/边） | 属性无重编号；数据/索引清理；旧事务 pin | P1（首个） |
+| `DROP LABEL` / `DROP EDGE LABEL` | 标签下实体/边/索引清理；非空语义 | P2 |
+| `ALTER PROPERTY TYPE` | 已有值全量转换/失败策略；在线迁移 | P3 |
+| `RENAME LABEL/PROPERTY` | 数据按 id 不变，但弱 accessor 索引按名解析 | P3/P4 |
+| `REQUIRED/NULLABLE` 变化 | 现有 null 数据校验；写规则切换 | P4 |
+| 修改主键定义 | 身份/边端点/唯一性重建，建议独立 epic | 单独立项 |
+| `CREATE/DROP CONSTRAINT` | 约束模型/已有数据冲突 | 单独立项 |
+
+### 6.2 安全推进协议（F1 式）
+
+1. 发布新 schema 版本（删除/改写元素已不可见）；旧事务继续持有旧版本；
+2. `compat_version++` + `SchemaChangeLog.recordRemoval(element)`；
+3. 新写入拒绝删除元素；旧写入按 touched 集合在提交时 `SchemaChanged`（可重试）；
+4. `SchemaGenerationTracker::waitNoPinsOlderThan(change_generation)` drain 旧版本（可后台异步）；
+5. drain 完成后物理删除/迁移数据；失败进 orphan/重试，带进度与水位；
+6. 索引依赖：先 DROP INDEX 或置 ERROR 并清理，否则索引条目无法解释。
+
+### 6.3 必须先解决的模型/基础设施缺口
+
+- **属性 tombstone**：`LabelDef.properties` 是稠密 vector，`next_prop_id = properties.size()`；
+  删属性**不能 erase/重编号**，必须增加 `deleted` 标记（或 optional 槽位），并让 binder/planner/算子过滤；
+- **touched 集合**：写事务需记录 touched `(label, prop)`；提交路径读 `SchemaChangeLog` 做元素级校验；
+- **compat_version 生产者**：当前恒 0，`SchemaChangeLog` 无调用者；
+- **通用 DDL 管线**：parser/statement/handler 目前是 index 专用，需要 `SchemaDdlStatement` + meta mutation API；
+- **数据迁移引擎**：扫描/删除/重写、异步进度、失败继续、重启恢复；不能放在单个大事务里；
+- **`__anon__` 发布成本**：每次新增属性名发布全量 schema；后续改 COW 子快照；
+- **索引依赖检查**：meta 层在删属性/标签前检查引用并拒绝/自动清理。
+
+### 6.4 事务内隐式 DDL 的 schema 更新（已知 BUG/待调整）
+
+当前显式事务在 BEGIN 时 pin 一个不可变 schema 版本；后续语句沿用该版本。
+如果事务内执行了**隐式、兼容的 DDL**（如 DML 自动建标签、追加 `__anon__` 属性），
+这些新增目前通过 meta store 发布到全局新版本，但**没有回写到当前事务的 pin**，
+导致同一事务后续语句看不到刚创建的元素（例如 `CREATE (n:NewLabel)` 后再 `MATCH (n:NewLabel)` 可能失败）。
+
+目标语义：
+
+- 隐式兼容新增应更新**当前事务自己的 schema 视图**，立即可见；
+- 但不应对其他事务可见，除非事务提交；rollback 时丢弃；
+- 实现建议：事务持有可写的 schema 副本/overlay（`owned_schema` 已有写语句局部副本，
+  需要提升到事务级），隐式 DDL 更新它；commit 时合并发布，rollback 丢弃；
+- 显式 DDL 在事务内仍拒绝（现有语义）；这条只针对 DML 隐式新增；
+- 需要测试：显式事务内 `CREATE` 新标签/anon 属性 → 同事务 `MATCH` 可见；rollback 后全局不可见；
+  并发事务看不到未提交的 schema 新增。

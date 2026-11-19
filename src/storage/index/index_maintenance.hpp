@@ -3,6 +3,8 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/index/index_entry.hpp"
+#include "storage/index/index_write_applier_sync.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -26,20 +28,6 @@ namespace eugraph {
 ///   - 弱 accessor 按属性名在实体的所有标签里取值，多标签冲突则跳过该条目；
 ///   - 任一 accessor 缺值则不产生条目；
 ///   - unique 索引先 `checkUniqueConstraint`，冲突时**跳过**（不抛异常、不阻断导入）。
-struct VertexIndexEntry {
-    std::string table;
-    std::vector<PropertyValue> values;
-    VertexId vid = INVALID_VERTEX_ID;
-    bool unique = false;
-};
-
-struct EdgeIndexEntry {
-    std::string table;
-    std::vector<PropertyValue> values;
-    EdgeId eid = INVALID_EDGE_ID;
-    bool unique = false;
-};
-
 namespace index_maint_detail {
 
 /// 在标签定义里按属性名解析 prop_id；找不到返回 UINT16_MAX。
@@ -127,7 +115,8 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
                 }
             }
             if (all_present)
-                entries.push_back(VertexIndexEntry{vidxTableById(idx.index_id), std::move(values), vid, idx.unique});
+                entries.push_back(
+                    VertexIndexEntry{vidxTableById(idx.index_id), std::move(values), vid, idx.unique, idx.index_id});
         }
     }
     return entries;
@@ -160,37 +149,58 @@ inline std::vector<EdgeIndexEntry> collectEdgeIndexEntries(const std::unordered_
 
         auto table =
             idx.prop_ids.size() == 1 ? eidxTable(elid, idx.prop_ids[0]) : eidxCompositeTable(elid, idx.prop_ids);
-        entries.push_back(EdgeIndexEntry{std::move(table), std::move(values), eid, idx.unique});
+        entries.push_back(EdgeIndexEntry{std::move(table), std::move(values), eid, idx.unique, idx.index_id});
     }
     return entries;
 }
 
-/// 写入顶点索引条目。unique 索引冲突时跳过并返回冲突计数（不抛异常）。
+/// 写入顶点索引条目（批量装载路径）。统一走 sync applier：
+/// BUILDING→delta、PUBLIC→索引表、unique 只在 PUBLIC 查重；冲突计数返回给调用方。
 inline int insertVertexIndexEntries(ISyncGraphDataStore& store, GraphSession& session,
                                     const std::vector<VertexIndexEntry>& entries) {
     int conflicts = 0;
     for (const auto& entry : entries) {
-        if (entry.unique && !store.checkUniqueConstraint(session, entry.table, entry.values)) {
+        IndexWriteItem item;
+        item.index_id = entry.index_id;
+        item.legacy_table = entry.table;
+        item.values = entry.values;
+        item.entity_id = entry.vid;
+        item.unique = entry.unique;
+        const auto status = applyIndexWriteSync(store, session, store.indexRegistry(), item);
+        if (status == IndexWriteStatus::kUniqueConflict) {
             spdlog::warn("Unique index constraint violated while maintaining index entry for vertex {}", entry.vid);
             ++conflicts;
             continue;
         }
-        store.insertIndexEntry(session, entry.table, entry.values, entry.vid);
+        if (status == IndexWriteStatus::kRetryLater) {
+            spdlog::error("Batch vertex index write could not be admitted (index {}); batch will fail", entry.index_id);
+            break;
+        }
     }
     return conflicts;
 }
 
-/// 写入边索引条目。unique 索引冲突时跳过并返回冲突计数（不抛异常）。
+/// 写入边索引条目（批量装载路径）。语义同顶点：统一走 sync applier。
 inline int insertEdgeIndexEntries(ISyncGraphDataStore& store, GraphSession& session,
                                   const std::vector<EdgeIndexEntry>& entries) {
     int conflicts = 0;
     for (const auto& entry : entries) {
-        if (entry.unique && !store.checkUniqueConstraint(session, entry.table, entry.values)) {
+        IndexWriteItem item;
+        item.index_id = entry.index_id;
+        item.legacy_table = entry.table;
+        item.values = entry.values;
+        item.entity_id = entry.eid;
+        item.unique = entry.unique;
+        const auto status = applyIndexWriteSync(store, session, store.indexRegistry(), item);
+        if (status == IndexWriteStatus::kUniqueConflict) {
             spdlog::warn("Unique edge index constraint violated while maintaining index entry for edge {}", entry.eid);
             ++conflicts;
             continue;
         }
-        store.insertIndexEntry(session, entry.table, entry.values, entry.eid);
+        if (status == IndexWriteStatus::kRetryLater) {
+            spdlog::error("Batch edge index write could not be admitted (index {}); batch will fail", entry.index_id);
+            break;
+        }
     }
     return conflicts;
 }

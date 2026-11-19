@@ -1,103 +1,40 @@
 #include <gtest/gtest.h>
 
+#include "common/config/env_vars.hpp"
 #include "common/types/constants.hpp"
 #include "query/executor/query_executor.hpp"
 
 #include "query/parser/index_ddl_parser.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_builder.hpp"
+#include "storage/index/index_runtime_registry.hpp"
+#include "storage/index/index_test_hooks.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/kv/value_codec.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "storage/session/schema_generation_tracker.hpp"
 #include "test_chunk_helpers.hpp"
+#include "test_index_env.hpp"
 #include "test_sync_store.hpp"
 
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+#include <future>
 #include <set>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <thread>
 
 using namespace eugraph;
 using namespace eugraph::compute;
 using namespace folly::coro;
 
-namespace {
-std::string makeTempDir(const std::string& suffix) {
-    auto dir = std::filesystem::temp_directory_path() / ("eugraph_idx_e2e_" + suffix);
-    std::filesystem::create_directories(dir);
-    return dir.string();
-}
-
-struct TestEnv {
-    std::string db_path;
-    std::unique_ptr<test::TestSyncGraphDataStore> data_store;
-    std::unique_ptr<test::TestSyncGraphMetaStore> meta_store;
-    std::shared_ptr<SessionPool> session_pool;
-    std::unique_ptr<IoScheduler> io;
-    std::unique_ptr<AsyncGraphMetaStore> async_meta;
-    std::unique_ptr<GraphSession> async_session;
-    std::unique_ptr<AsyncGraphDataStore> async_data;
-
-    void init(const std::string& name) {
-        db_path = makeTempDir(name);
-        data_store = std::make_unique<test::TestSyncGraphDataStore>();
-        meta_store = std::make_unique<test::TestSyncGraphMetaStore>();
-        ASSERT_TRUE(data_store->open(db_path + "/data"));
-        ASSERT_TRUE(meta_store->open(db_path + "/meta"));
-
-        io = std::make_unique<IoScheduler>(1);
-
-        async_meta = std::make_unique<AsyncGraphMetaStore>();
-        auto ok = blockingWait(async_meta->open(*meta_store, *io));
-        ASSERT_TRUE(ok);
-
-        async_session = std::make_unique<GraphSession>(data_store->conn().make_session());
-        async_data = std::make_unique<AsyncGraphDataStore>(*data_store, *io, *async_session);
-        session_pool = std::make_shared<SessionPool>(8, [this]() { return data_store->conn().make_session(); });
-    }
-
-    void shutdown() {
-        async_data.reset();
-        async_session.reset();
-        blockingWait(async_meta->close());
-        async_meta.reset();
-        io.reset();
-        session_pool.reset(); // ★ 会话先于连接销毁 ✓
-        data_store->close();
-        meta_store->close();
-        std::filesystem::remove_all(db_path);
-    }
-};
-} // namespace
-
-/// Temporarily set an environment variable for a test and restore it on exit.
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        const char* old = std::getenv(name);
-        if (old != nullptr) {
-            had_old_ = true;
-            old_ = old;
-        }
-        setenv(name, value, 1);
-    }
-    ~ScopedEnvVar() {
-        if (had_old_)
-            setenv(name_.c_str(), old_.c_str(), 1);
-        else
-            unsetenv(name_.c_str());
-    }
-    ScopedEnvVar(const ScopedEnvVar&) = delete;
-    ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
-
-private:
-    std::string name_;
-    std::string old_;
-    bool had_old_ = false;
-};
+using eugraph::test::ScopedEnvVar;
+using eugraph::test::TestEnv;
 
 class IndexE2ETest : public ::testing::Test {
 protected:
@@ -670,7 +607,7 @@ TEST_F(IndexE2ETest, DdlShowIndexesViaExecutor) {
     auto result = execSync(executor, "SHOW INDEXES");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 0u);
-    ASSERT_EQ(result.columns.size(), 5u);
+    ASSERT_EQ(result.columns.size(), 10u); // 追加 phase/progress/backlog/started_at/last_error（P3）
     EXPECT_EQ(result.columns[0], "name");
 
     // Create an index
@@ -727,7 +664,7 @@ TEST_F(IndexE2ETest, DdlCreateWeakIndexBackfillAcrossLabels) {
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
-    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_msg_date");
     ASSERT_TRUE(idx.has_value());
     EXPECT_EQ(idx->state, IndexState::PUBLIC);
 
@@ -763,7 +700,7 @@ TEST_F(IndexE2ETest, WeakIndexMaintainsOnLabelAddRemove) {
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
-    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_msg_date");
     ASSERT_TRUE(idx.has_value());
     auto table = vidxTableById(idx->index_id);
 
@@ -810,7 +747,7 @@ TEST_F(IndexE2ETest, WeakIndexMaintainsOnPropertySetRemove) {
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
-    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_msg_date");
     ASSERT_TRUE(idx.has_value());
     auto table = vidxTableById(idx->index_id);
 
@@ -861,7 +798,7 @@ TEST_F(IndexE2ETest, WeakIndexRemovedOnVertexDelete) {
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
-    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_msg_date");
     ASSERT_TRUE(idx.has_value());
     auto table = vidxTableById(idx->index_id);
 
@@ -1071,7 +1008,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillConflictSetsError) {
     EXPECT_FALSE(ddl.error.empty());
     EXPECT_NE(ddl.error.find("conflicting"), std::string::npos);
 
-    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_msg_date");
     ASSERT_TRUE(idx.has_value());
     EXPECT_EQ(idx->state, IndexState::ERROR);
 }
@@ -1090,7 +1027,7 @@ TEST_F(IndexE2ETest, DdlCreateStrongIndexBackfill) {
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_pdate FOR (n:Message) ON (n::Post.creationDate)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
-    auto idx = env.async_meta->schema().findIndexByName("idx_msg_pdate");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_msg_pdate");
     ASSERT_TRUE(idx.has_value());
     EXPECT_EQ(idx->state, IndexState::PUBLIC);
 
@@ -1638,7 +1575,7 @@ TEST_F(IndexE2ETest, WeakIndexPointLookupWithDisagreeingSourcePropIds) {
 
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_id FOR (n:Message) ON (n.id)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
-    auto idx = env.async_meta->schema().findIndexByName("idx_msg_id");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_msg_id");
     ASSERT_TRUE(idx.has_value());
 
     // 判据 1：索引表里两个顶点都要有条目（回填不能漏）
@@ -1675,7 +1612,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillAcrossTwoSourceLabels) {
         execSync(executor, "CREATE (n:Post:Message {imageFile: 'p.jpg', language: 'en', id: 7})").error.empty());
     ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_m_id FOR (n:Message) ON (n.id)").error.empty());
 
-    auto idx = env.async_meta->schema().findIndexByName("idx_m_id");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_m_id");
     ASSERT_TRUE(idx.has_value());
     std::vector<VertexId> got;
     auto txn = env.data_store->beginTransaction();
@@ -1723,7 +1660,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
 
     auto ddl = execSync(executor, "CREATE INDEX idx_scale FOR (n:Message) ON (n.id)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
-    auto idx = env.async_meta->schema().findIndexByName("idx_scale");
+    auto idx = env.async_meta->schemaSnapshot().findIndexByName("idx_scale");
     ASSERT_TRUE(idx.has_value());
 
     size_t hits = 0;
@@ -1818,4 +1755,1089 @@ TEST_F(IndexE2ETest, EdgeIndexScanStreamsBeyondBatch) {
     EXPECT_EQ(drain_batches(bound.scanEdgesByIndex(elid, 0, std::string("dup"), scan_batch)), N)
         << "边索引扫描必须流式返回全部命中（旧实现会截断）";
     EXPECT_TRUE(session.commit().committed());
+}
+
+// ==================== v2 运行时注册表：DDL 生命周期 ====================
+
+TEST_F(IndexE2ETest, IndexRuntimeRegistryTracksDdlLifecycle) {
+    createLabel(env, "Person", {{0, "name", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry; // 每图一份（测试里挂在 executor 上）
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_person_name FOR (n:Person) ON (n.name)").error.empty());
+
+    auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(label_def.has_value());
+    ASSERT_EQ(label_def->indexes.size(), 1u);
+    const uint32_t index_id = label_def->indexes[0].index_id;
+    ASSERT_NE(index_id, 0u);
+
+    auto runtime = registry.find(index_id);
+    ASSERT_TRUE(runtime);
+    EXPECT_EQ(runtime->phase(), IndexPhase::kPublic);
+    EXPECT_EQ(runtime->lifecycle(), IndexLifecycle::kActive);
+    EXPECT_EQ(runtime->indexTable(), vidxTableById(index_id));
+    EXPECT_EQ(runtime->deltaTable(), indexDeltaTable(index_id));
+    EXPECT_TRUE(registry.plannerSelectable(index_id, env.async_meta->schemaGeneration()));
+
+    ASSERT_TRUE(execSync(executor, "DROP INDEX idx_person_name").error.empty());
+    EXPECT_EQ(registry.size(), 0u);
+    EXPECT_FALSE(registry.plannerSelectable(index_id, env.async_meta->schemaGeneration()));
+}
+
+TEST_F(IndexE2ETest, IndexRuntimeRegistryMarksFailedUniqueBuildAsError) {
+    createLabel(env, "Person", {{0, "name", PropertyType::STRING, false, std::nullopt}});
+    QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ASSERT_TRUE(execSync(writer, "CREATE (a:Person {name:'dup'}), (b:Person {name:'dup'})").error.empty());
+
+    IndexRuntimeRegistry registry;
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+
+    // 回填发现重复 ⇒ 语句报错、索引置 ERROR、运行时 phase=ERROR（绝不 PUBLIC）。
+    const auto result = execSync(executor, "CREATE UNIQUE INDEX idx_person_name FOR (n:Person) ON (n.name)");
+    EXPECT_FALSE(result.error.empty());
+
+    auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(label_def.has_value());
+    ASSERT_EQ(label_def->indexes.size(), 1u);
+    EXPECT_EQ(label_def->indexes[0].state, IndexState::ERROR);
+
+    auto runtime = registry.find(label_def->indexes[0].index_id);
+    ASSERT_TRUE(runtime);
+    EXPECT_EQ(runtime->phase(), IndexPhase::kError);
+    EXPECT_FALSE(runtime->lastError().empty()); // SHOW INDEXES.last_error 有内容
+    EXPECT_FALSE(registry.plannerSelectable(label_def->indexes[0].index_id, env.async_meta->schemaGeneration()));
+}
+
+// ==================== P1a-04：构建期并发 UPDATE 不得留下过期条目 ====================
+
+TEST_F(IndexE2ETest, BuildAllowsConcurrentUpdateWithoutStaleEntry) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry); // for_session 会继承它
+    QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setIndexRegistry(&registry);
+    QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setIndexRegistry(&registry);
+
+    // 300 行（6 条多行 CREATE）；回填批 64 ⇒ 第一批覆盖 id 0..63。
+    for (int base = 0; base < 300; base += 50) {
+        std::string query = "CREATE ";
+        for (int i = base; i < base + 50; ++i) {
+            if (i > base)
+                query += ", ";
+            query += "(p" + std::to_string(i) + ":Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) +
+                     "'})";
+        }
+        ASSERT_TRUE(execSync(writer, query).error.empty());
+    }
+
+    ScopedEnvVar batch_env(config::kEnvIndexBackfillBatch, "64");
+    std::promise<void> batch_done;
+    auto batch_done_future = batch_done.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+
+    index_hooks::install([&](std::string_view point, uint64_t /*index_id*/) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            batch_done.set_value();
+            release_future.wait(); // 暂停回填，制造"构建窗口"
+        }
+    });
+
+    ExecutionResult build_result;
+    std::thread build_thread(
+        [&] { build_result = execSync(ddl, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)"); });
+    batch_done_future.wait();
+
+    // 修改一个**已被回填**的行的键：BUILDING ⇒ 写路径必须进变更表。
+    const auto update = execSync(writer, "MATCH (n:Person) WHERE n.id = 0 SET n.email = 'changed'");
+    ASSERT_TRUE(update.error.empty()) << update.error;
+
+    release_scan.set_value();
+    build_thread.join();
+    index_hooks::clear();
+    ASSERT_TRUE(build_result.error.empty()) << build_result.error;
+
+    auto countWhere = [&](const std::string& email) -> int64_t {
+        auto rows = runQuery(writer, "MATCH (n:Person) WHERE n.email = '" + email + "' RETURN count(*)");
+        if (rows.empty() || rows[0].empty())
+            return -1;
+        return std::get<int64_t>(rows[0][0]);
+    };
+
+    // 先确认查询确实走索引（否则用例没有覆盖索引路径）。
+    const auto explain = explainQuery(writer, "MATCH (n:Person) WHERE n.email = 'e0' RETURN n");
+    EXPECT_NE(explain.find("IndexScan"), std::string::npos) << explain;
+    EXPECT_EQ(countWhere("e0"), 0) << "构建期 UPDATE 留下了过期条目";
+    EXPECT_EQ(countWhere("changed"), 1);
+
+    // 独立 oracle：全表扫（不经过索引）逐行统计，结果必须一致。
+    auto all_emails = runQuery(writer, "MATCH (n:Person) RETURN n.email");
+    int64_t full_scan_e0 = 0;
+    int64_t full_scan_changed = 0;
+    for (const auto& row : all_emails) {
+        if (row.empty() || !std::holds_alternative<std::string>(row[0]))
+            continue;
+        const auto& value = std::get<std::string>(row[0]);
+        if (value == "e0")
+            ++full_scan_e0;
+        else if (value == "changed")
+            ++full_scan_changed;
+    }
+    EXPECT_EQ(full_scan_e0, 0);
+    EXPECT_EQ(full_scan_changed, 1);
+}
+
+// ==================== P1a：构建期并发 INSERT 不丢行 ====================
+
+TEST_F(IndexE2ETest, BuildAllowsConcurrentInsertWithoutLostRows) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setIndexRegistry(&registry);
+    QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setIndexRegistry(&registry);
+
+    for (int base = 0; base < 200; base += 50) {
+        std::string query = "CREATE ";
+        for (int i = base; i < base + 50; ++i) {
+            if (i > base)
+                query += ", ";
+            query += "(p" + std::to_string(i) + ":Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) +
+                     "'})";
+        }
+        ASSERT_TRUE(execSync(writer, query).error.empty());
+    }
+
+    ScopedEnvVar batch_env(config::kEnvIndexBackfillBatch, "64");
+    std::promise<void> batch_done;
+    auto batch_done_future = batch_done.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            batch_done.set_value();
+            release_future.wait();
+        }
+    });
+
+    ExecutionResult build_result;
+    std::thread build_thread(
+        [&] { build_result = execSync(ddl, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)"); });
+    batch_done_future.wait();
+
+    ASSERT_TRUE(execSync(writer, "CREATE (a:Person {id:900, email:'new-a'}), (b:Person {id:901, email:'new-b'}), "
+                                 "(c:Person {id:902, email:'new-c'})")
+                    .error.empty());
+
+    release_scan.set_value();
+    build_thread.join();
+    index_hooks::clear();
+    ASSERT_TRUE(build_result.error.empty()) << build_result.error;
+
+    auto countWhere = [&](const std::string& email) -> int64_t {
+        auto rows = runQuery(writer, "MATCH (n:Person) WHERE n.email = '" + email + "' RETURN count(*)");
+        if (rows.empty() || rows[0].empty())
+            return -1;
+        return std::get<int64_t>(rows[0][0]);
+    };
+    EXPECT_EQ(countWhere("new-a"), 1);
+    EXPECT_EQ(countWhere("new-b"), 1);
+    EXPECT_EQ(countWhere("new-c"), 1);
+
+    // 独立 oracle：全表扫计数。
+    int64_t full_scan_new = 0;
+    for (const auto& row : runQuery(writer, "MATCH (n:Person) RETURN n.email")) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]) &&
+            std::get<std::string>(row[0]).rfind("new-", 0) == 0)
+            ++full_scan_new;
+    }
+    EXPECT_EQ(full_scan_new, 3);
+}
+
+// ==================== P1a：FINALIZE 关闸后的晚到写入不丢 ====================
+
+TEST_F(IndexE2ETest, BuildFinalizeGateDoesNotLoseLateWrites) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setIndexRegistry(&registry);
+    QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setIndexRegistry(&registry);
+
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE(
+            execSync(writer, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    std::promise<void> gate_hit;
+    auto gate_hit_future = gate_hit.get_future();
+    std::promise<void> release_gate;
+    auto release_future = release_gate.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "finalize.before_public" && !hit_once.exchange(true)) {
+            gate_hit.set_value();
+            release_future.wait();
+        }
+    });
+
+    ExecutionResult build_result;
+    std::thread build_thread(
+        [&] { build_result = execSync(ddl, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)"); });
+    gate_hit_future.wait(); // 此时闸门已关、delta 已排空
+
+    ExecutionResult late_result;
+    std::thread late_writer([&] { late_result = execSync(writer, "CREATE (late:Person {id:999, email:'late'})"); });
+    release_gate.set_value();
+    late_writer.join();
+    build_thread.join();
+    index_hooks::clear();
+
+    ASSERT_TRUE(build_result.error.empty()) << build_result.error;
+    ASSERT_TRUE(late_result.error.empty()) << late_result.error;
+
+    auto rows = runQuery(writer, "MATCH (n:Person) WHERE n.email = 'late' RETURN count(*)");
+    ASSERT_FALSE(rows.empty());
+    EXPECT_EQ(std::get<int64_t>(rows[0][0]), 1) << "关闸后的写入必须等 PUBLIC 后直写索引，不能丢";
+}
+
+// ==================== P1a：唯一索引最终校验（构建期并发重复） ====================
+
+TEST_F(IndexE2ETest, UniqueBuildFailsOnConcurrentDuplicate) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setIndexRegistry(&registry);
+    QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setIndexRegistry(&registry);
+
+    for (int base = 0; base < 100; base += 50) {
+        std::string query = "CREATE ";
+        for (int i = base; i < base + 50; ++i) {
+            if (i > base)
+                query += ", ";
+            query += "(p" + std::to_string(i) + ":Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) +
+                     "'})";
+        }
+        ASSERT_TRUE(execSync(writer, query).error.empty());
+    }
+
+    ScopedEnvVar batch_env(config::kEnvIndexBackfillBatch, "32");
+    std::promise<void> batch_done;
+    auto batch_done_future = batch_done.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            batch_done.set_value();
+            release_future.wait();
+        }
+    });
+
+    ExecutionResult build_result;
+    std::thread build_thread(
+        [&] { build_result = execSync(ddl, "CREATE UNIQUE INDEX idx_person_email FOR (n:Person) ON (n.email)"); });
+    batch_done_future.wait();
+
+    // 构建期并发写重复键：两个事务都成功（唯一约束尚未生效），必须由最终校验拦截。
+    ASSERT_TRUE(execSync(writer, "CREATE (a:Person {id:900, email:'dup-x'}), (b:Person {id:901, email:'dup-x'})")
+                    .error.empty());
+
+    release_scan.set_value();
+    build_thread.join();
+    index_hooks::clear();
+
+    EXPECT_FALSE(build_result.error.empty()) << "构建期重复必须让构建失败，绝不能带重复上线";
+    auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(label_def.has_value());
+    ASSERT_EQ(label_def->indexes.size(), 1u);
+    EXPECT_EQ(label_def->indexes[0].state, IndexState::ERROR);
+
+    const auto explain = explainQuery(writer, "MATCH (n:Person) WHERE n.email = 'dup-x' RETURN n");
+    EXPECT_EQ(explain.find("IndexScan"), std::string::npos) << "ERROR 索引不得被规划器使用";
+
+    auto rows = runQuery(writer, "MATCH (n:Person) WHERE n.email = 'dup-x' RETURN count(*)");
+    ASSERT_FALSE(rows.empty());
+    EXPECT_EQ(std::get<int64_t>(rows[0][0]), 2); // 全表扫仍能看到两条（约束未上线）
+}
+
+// ==================== P1b：索引可见性冻结在事务开始 ====================
+
+TEST_F(IndexE2ETest, IndexVisibilityFrozenAtTransactionStart) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setIndexRegistry(&registry);
+    QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setIndexRegistry(&registry);
+
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE(
+            execSync(writer, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    std::promise<void> gate_hit;
+    auto gate_hit_future = gate_hit.get_future();
+    std::promise<void> release_gate;
+    auto release_future = release_gate.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "finalize.before_public" && !hit_once.exchange(true)) {
+            gate_hit.set_value();
+            release_future.wait();
+        }
+    });
+
+    ExecutionResult build_result;
+    std::thread build_thread(
+        [&] { build_result = execSync(ddl, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)"); });
+    gate_hit_future.wait(); // 索引已建好但还未 PUBLIC
+
+    // 在构建窗口内开启显式事务：它的 pin 早于 PUBLIC。
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_read());
+
+    auto run_in_session = [&](const std::string& query) -> std::vector<Row> {
+        auto ctx = blockingWait(ddl.prepareStream(query, {}, nullptr, std::ref(session)));
+        std::vector<Row> rows;
+        if (!ctx->error.empty())
+            return rows;
+        auto gen = std::move(ctx->gen);
+        blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+            while (auto chunk = co_await gen.next()) {
+                auto chunk_rows = eugraph::test::chunkToRows(*chunk);
+                for (auto& row : chunk_rows)
+                    rows.push_back(std::move(row));
+            }
+        }));
+        return rows;
+    };
+
+    const auto plan_before = run_in_session("EXPLAIN MATCH (n:Person) WHERE n.email = 'e0' RETURN n");
+    std::string plan_before_text;
+    for (const auto& row : plan_before) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_before_text += std::get<std::string>(row[0]) + "\n";
+    }
+
+    release_gate.set_value();
+    build_thread.join();
+    index_hooks::clear();
+    ASSERT_TRUE(build_result.error.empty()) << build_result.error;
+
+    // 同一事务的后续语句仍然看不到这个索引（pin 早于 public_generation）。
+    const auto plan_after = run_in_session("EXPLAIN MATCH (n:Person) WHERE n.email = 'e0' RETURN n");
+    std::string plan_after_text;
+    for (const auto& row : plan_after) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_after_text += std::get<std::string>(row[0]) + "\n";
+    }
+    EXPECT_EQ(plan_before_text.find("IndexScan"), std::string::npos) << plan_before_text;
+    EXPECT_EQ(plan_after_text.find("IndexScan"), std::string::npos) << plan_after_text;
+
+    auto in_txn = run_in_session("MATCH (n:Person) WHERE n.email = 'e0' RETURN count(*)");
+    ASSERT_FALSE(in_txn.empty());
+    EXPECT_EQ(std::get<int64_t>(in_txn[0][0]), 1); // 结果正确（走全表扫）
+
+    session.rollback();
+    lease.reset();
+
+    // 新事务：索引可见，EXPLAIN 必须出现 IndexScan。
+    const auto plan_new = explainQuery(writer, "MATCH (n:Person) WHERE n.email = 'e0' RETURN n");
+    EXPECT_NE(plan_new.find("IndexScan"), std::string::npos) << plan_new;
+}
+
+// ==================== P1b：异步 CREATE INDEX（投递即返回） ====================
+
+TEST_F(IndexE2ETest, AsyncCreateIndexReturnsBeforeBuildCompletes) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service; // 声明在 executor 之后 ⇒ 先析构/shutdown（job 捕获 executor）
+    executor.setIndexBuildService(&service);
+
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE(
+            execSync(executor, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    std::promise<void> batch_done;
+    auto batch_done_future = batch_done.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            batch_done.set_value();
+            release_future.wait();
+        }
+    });
+
+    auto index_state = [&](const std::string& name) -> std::string {
+        auto rows = execSync(executor, "SHOW INDEXES");
+        for (const auto& row : rows.rows) {
+            if (row.size() >= 5 && std::holds_alternative<std::string>(row[0]) && std::get<std::string>(row[0]) == name)
+                return std::get<std::string>(row[4]);
+        }
+        return {};
+    };
+
+    const auto created = execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)");
+    ASSERT_TRUE(created.error.empty()) << created.error;
+    ASSERT_FALSE(created.rows.empty());
+    EXPECT_NE(std::get<std::string>(created.rows[0][0]).find("building"), std::string::npos);
+
+    batch_done_future.wait(); // 后台构建仍在进行（被钩子暂停）
+    EXPECT_EQ(index_state("idx_person_email"), "BUILDING");
+
+    release_scan.set_value();
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    EXPECT_EQ(index_state("idx_person_email"), "PUBLIC");
+
+    auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.email = 'e0' RETURN count(*)");
+    ASSERT_FALSE(rows.empty());
+    EXPECT_EQ(std::get<int64_t>(rows[0][0]), 1);
+
+    index_hooks::clear();
+    service.shutdown();
+}
+
+// ==================== P2：异步 DROP INDEX（返回即删定义，表后台清理） ====================
+
+TEST_F(IndexE2ETest, AsyncDropIndexReturnsImmediatelyAndCleansUp) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:0, email:'e0'})").error.empty());
+    auto created = execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)");
+    ASSERT_TRUE(created.error.empty());
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+
+    auto find_index = [&](const std::string& name) -> bool {
+        auto rows = execSync(executor, "SHOW INDEXES");
+        for (const auto& row : rows.rows)
+            if (row.size() >= 1 && std::holds_alternative<std::string>(row[0]) && std::get<std::string>(row[0]) == name)
+                return true;
+        return false;
+    };
+    ASSERT_TRUE(find_index("idx_person_email"));
+
+    const auto dropped = execSync(executor, "DROP INDEX idx_person_email");
+    ASSERT_TRUE(dropped.error.empty()) << dropped.error;
+    ASSERT_FALSE(dropped.rows.empty());
+    EXPECT_NE(std::get<std::string>(dropped.rows[0][0]).find("dropping"), std::string::npos);
+    EXPECT_FALSE(find_index("idx_person_email")); // 定义立即消失
+
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    // 清理任务跑完：pending_drop 必须销账（删除成功或转 orphan，都不能留在 pending）。
+    auto records = blockingWait(env.async_meta->listCleanupRecords());
+    for (const auto& record : records)
+        EXPECT_NE(record.kind, "pending_drop") << "index " << record.index_id;
+
+    // 同名索引可以立即重建（证明定义/属性集没有被残留阻塞）。
+    auto recreated = execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)");
+    ASSERT_TRUE(recreated.error.empty()) << "recreate error: " << recreated.error;
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+
+    service.shutdown();
+}
+
+// ==================== P2：DROP 等在飞读者归零 ====================
+
+TEST_F(IndexE2ETest, AsyncDropWaitsForActiveReaders) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:0, email:'e0'})").error.empty());
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)").error.empty());
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+
+    auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(label_def.has_value());
+    ASSERT_EQ(label_def->indexes.size(), 1u);
+    const uint32_t index_id = label_def->indexes[0].index_id;
+
+    // 模拟"在飞查询"：直接持一个读句柄。
+    auto reader = registry.acquireRead(index_id);
+    ASSERT_TRUE(reader.has_value());
+
+    ASSERT_TRUE(execSync(executor, "DROP INDEX idx_person_email").error.empty());
+    // 清理任务应阻塞在 readers>0（不销账）。
+    EXPECT_FALSE(service.waitUntilIdle(300));
+
+    reader->reset();
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+
+    auto records = blockingWait(env.async_meta->listCleanupRecords());
+    for (const auto& record : records)
+        EXPECT_NE(record.kind, "pending_drop") << "index " << record.index_id;
+
+    service.shutdown();
+}
+
+// ==================== P2：DROP 等"旧 pin 事务"结束 ====================
+
+TEST_F(IndexE2ETest, AsyncDropWaitsForOldSchemaPins) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+    auto tracker = std::make_shared<SchemaGenerationTracker>();
+    executor.setSchemaGenerationTracker(tracker);
+
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:0, email:'e0'})").error.empty());
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)").error.empty());
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+
+    // 显式事务在 DROP 之前 pin 住旧代数（计划可能稍后才扫该索引）。
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_read());
+    auto ctx = blockingWait(executor.prepareStream("MATCH (n:Person) RETURN count(*)", {}, nullptr, std::ref(session)));
+    ASSERT_TRUE(ctx->error.empty()) << ctx->error;
+    auto gen = std::move(ctx->gen);
+    blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        while (auto chunk = co_await gen.next()) {}
+    }));
+    EXPECT_EQ(tracker->pinCount(), 1u);
+
+    ASSERT_TRUE(execSync(executor, "DROP INDEX idx_person_email").error.empty());
+    EXPECT_FALSE(service.waitUntilIdle(300)); // 清理阻塞在旧 pin 上
+
+    session.rollback(); // 事务结束 ⇒ unpin
+    lease.reset();
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    EXPECT_EQ(tracker->pinCount(), 0u);
+
+    service.shutdown();
+}
+
+// ==================== P2：PENDING_PURGE 进程内重试 ====================
+
+TEST_F(IndexE2ETest, PendingPurgeIsRetriedInProcess) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:0, email:'e0'})").error.empty());
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)").error.empty());
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+
+    auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(label_def.has_value());
+    const uint32_t index_id = label_def->indexes[0].index_id;
+
+    executor.setIndexPurgeWaitMs(200); // 测试用短等待，制造"读者未归零"
+    auto reader = registry.acquireRead(index_id);
+    ASSERT_TRUE(reader.has_value());
+    ASSERT_TRUE(execSync(executor, "DROP INDEX idx_person_email").error.empty());
+    ASSERT_TRUE(service.waitUntilIdle(5000)); // 清理等 200ms 后放弃
+
+    auto runtime = registry.find(index_id);
+    ASSERT_TRUE(runtime != nullptr);
+    EXPECT_EQ(runtime->lifecycle(), IndexLifecycle::kPendingPurge);
+
+    auto pending_count = [&]() {
+        size_t count = 0;
+        for (const auto& record : blockingWait(env.async_meta->listCleanupRecords()))
+            if (record.kind == "pending_drop" && record.index_id == index_id)
+                ++count;
+        return count;
+    };
+    EXPECT_EQ(pending_count(), 1u);
+
+    reader->reset();
+    blockingWait(executor.retryPendingIndexCleanups());
+    EXPECT_EQ(pending_count(), 0u); // 成功销账，或转 orphan（都不能留 pending）
+
+    service.shutdown();
+}
+
+// ==================== P3：SHOW INDEXES 的 phase / progress ====================
+
+TEST_F(IndexE2ETest, AsyncBuildExposesPhaseAndProgress) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE(
+            execSync(executor, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    // 进度百分比依赖"已知总数"（图打开时由 countVerticesByLabel 填充；本用例在线建标签，
+    // 手动补一次，模拟正常图打开后的计数）。
+    auto person_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    env.async_meta->setLabelVertexCount(person_def->id, 100);
+
+    ScopedEnvVar batch_env(config::kEnvIndexBackfillBatch, "16");
+    std::promise<void> first_batch;
+    auto first_batch_future = first_batch.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            first_batch.set_value();
+            release_future.wait();
+        }
+    });
+
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)").error.empty());
+    first_batch_future.wait();
+
+    auto row_for = [&](const std::string& name) -> std::vector<Row> {
+        auto rows = execSync(executor, "SHOW INDEXES");
+        std::vector<Row> matched;
+        for (const auto& row : rows.rows)
+            if (!row.empty() && std::holds_alternative<std::string>(row[0]) && std::get<std::string>(row[0]) == name)
+                matched.push_back(row);
+        return matched;
+    };
+
+    auto building = row_for("idx_person_email");
+    ASSERT_EQ(building.size(), 1u);
+    ASSERT_GE(building[0].size(), 10u);
+    EXPECT_EQ(std::get<std::string>(building[0][4]), "BUILDING");
+    EXPECT_EQ(std::get<std::string>(building[0][5]), "SCAN");
+    EXPECT_GT(std::stoi(std::get<std::string>(building[0][6])), 0);
+    EXPECT_LT(std::stoi(std::get<std::string>(building[0][6])), 100);
+    EXPECT_GT(std::stoll(std::get<std::string>(building[0][8])), 0); // started_at
+
+    release_scan.set_value();
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    auto published = row_for("idx_person_email");
+    ASSERT_EQ(published.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(published[0][4]), "PUBLIC");
+    EXPECT_EQ(std::get<std::string>(published[0][5]), "PUBLIC");
+    EXPECT_EQ(std::get<std::string>(published[0][6]), "100");
+
+    index_hooks::clear();
+    service.shutdown();
+}
+
+// ==================== P3：构建期 delta_backlog 可观测 ====================
+
+TEST_F(IndexE2ETest, BuildDeltaBacklogVisibleDuringBuild) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE(
+            execSync(executor, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    ScopedEnvVar batch_env(config::kEnvIndexBackfillBatch, "16");
+    std::promise<void> first_batch;
+    auto first_batch_future = first_batch.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            first_batch.set_value();
+            release_future.wait();
+        }
+    });
+
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)").error.empty());
+    first_batch_future.wait();
+
+    auto backlog = [&]() -> int64_t {
+        auto rows = execSync(executor, "SHOW INDEXES");
+        for (const auto& row : rows.rows) {
+            if (!row.empty() && std::holds_alternative<std::string>(row[0]) &&
+                std::get<std::string>(row[0]) == "idx_person_email")
+                return std::stoll(std::get<std::string>(row[7]));
+        }
+        return -1;
+    };
+    EXPECT_EQ(backlog(), 0);
+
+    ASSERT_TRUE(execSync(executor, "MATCH (n:Person) WHERE n.id = 0 SET n.email = 'changed'").error.empty());
+    EXPECT_EQ(backlog(), 2); // 改索引属性 = DEL 旧键 + PUT 新键 ⇒ 2 行 delta
+
+    release_scan.set_value();
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    EXPECT_EQ(backlog(), 0); // 追平后归零
+
+    index_hooks::clear();
+    service.shutdown();
+}
+
+// ==================== P4：并发构建压力（需显式开启） ====================
+// 运行：EUGRAPH_INDEX_STRESS=1 ./build/release/index_e2e_tests --gtest_filter='*StressConcurrentBuild*'
+
+TEST_F(IndexE2ETest, StressConcurrentBuildAndWrites) {
+    if (std::getenv("EUGRAPH_INDEX_STRESS") == nullptr)
+        GTEST_SKIP() << "set EUGRAPH_INDEX_STRESS=1 to run the stress case";
+
+    int base_rows = 4000;
+    if (const char* rows_env = std::getenv("EUGRAPH_INDEX_STRESS_ROWS")) {
+        const int parsed = std::atoi(rows_env);
+        if (parsed >= 100)
+            base_rows = parsed;
+    }
+    constexpr int kThreads = 4;
+    constexpr int kUpdatesPerThread = 50;
+    constexpr int kInsertsPerThread = 10;
+
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setIndexRegistry(&registry);
+    IndexBuildService service;
+    ddl.setIndexBuildService(&service);
+
+    QueryExecutor bulk(*env.async_data, *env.async_meta, *env.session_pool, {});
+    bulk.setIndexRegistry(&registry);
+    for (int i = 0; i < base_rows; ++i) {
+        ASSERT_TRUE(
+            execSync(bulk, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    std::promise<void> first_batch;
+    auto first_batch_future = first_batch.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            first_batch.set_value();
+            release_future.wait();
+        }
+    });
+
+    ASSERT_TRUE(execSync(ddl, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)").error.empty());
+    first_batch_future.wait();
+
+    std::atomic<int> writer_errors{0};
+    std::vector<std::thread> writers;
+    writers.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        writers.emplace_back([&, t] {
+            QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+            writer.setIndexRegistry(&registry);
+            for (int i = 0; i < kUpdatesPerThread; ++i) {
+                const int id = t * kUpdatesPerThread + i;
+                const auto result = execSync(writer, "MATCH (n:Person) WHERE n.id = " + std::to_string(id) +
+                                                         " SET n.email = 'u-" + std::to_string(id) + "'");
+                if (!result.error.empty())
+                    ++writer_errors;
+            }
+            for (int i = 0; i < kInsertsPerThread; ++i) {
+                const int id = base_rows + t * kInsertsPerThread + i;
+                const auto result = execSync(writer, "CREATE (:Person {id:" + std::to_string(id) + ", email:'n-" +
+                                                         std::to_string(id) + "'})");
+                if (!result.error.empty())
+                    ++writer_errors;
+            }
+        });
+    }
+    for (auto& thread : writers)
+        thread.join();
+    release_scan.set_value();
+
+    ASSERT_TRUE(service.waitUntilIdle(60000));
+    index_hooks::clear();
+    EXPECT_EQ(writer_errors.load(), 0);
+
+    for (int t = 0; t < kThreads; ++t) {
+        for (int i = 0; i < kUpdatesPerThread; ++i) {
+            const int id = t * kUpdatesPerThread + i;
+            auto old_rows =
+                runQuery(ddl, "MATCH (n:Person) WHERE n.email = 'e" + std::to_string(id) + "' RETURN count(*)");
+            auto new_rows =
+                runQuery(ddl, "MATCH (n:Person) WHERE n.email = 'u-" + std::to_string(id) + "' RETURN count(*)");
+            ASSERT_FALSE(old_rows.empty());
+            ASSERT_FALSE(new_rows.empty());
+            EXPECT_EQ(std::get<int64_t>(old_rows[0][0]), 0) << "id=" << id;
+            EXPECT_EQ(std::get<int64_t>(new_rows[0][0]), 1) << "id=" << id;
+        }
+    }
+    for (int t = 0; t < kThreads; ++t) {
+        for (int i = 0; i < kInsertsPerThread; ++i) {
+            const int id = base_rows + t * kInsertsPerThread + i;
+            auto rows =
+                runQuery(ddl, "MATCH (n:Person) WHERE n.email = 'n-" + std::to_string(id) + "' RETURN count(*)");
+            ASSERT_FALSE(rows.empty());
+            EXPECT_EQ(std::get<int64_t>(rows[0][0]), 1) << "id=" << id;
+        }
+    }
+
+    auto total = runQuery(ddl, "MATCH (n:Person) RETURN count(*)");
+    ASSERT_FALSE(total.empty());
+    EXPECT_EQ(std::get<int64_t>(total[0][0]), base_rows + kThreads * kInsertsPerThread);
+
+    service.shutdown();
+}
+
+// ==================== 可测试性：builder 脱离 QueryExecutor 直接运行 ====================
+
+TEST_F(IndexE2ETest, BuilderRunsWithoutQueryExecutor) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+    QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    for (int i = 0; i < 50; ++i) {
+        ASSERT_TRUE(
+            execSync(writer, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    // 手工建定义/表/变更表，不经过 DDL/Executor。
+    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_builder", "Person", {"email"}, false)));
+    const GraphSchema schema = env.async_meta->schemaSnapshot();
+    auto idx = schema.findIndexByName("idx_builder");
+    ASSERT_TRUE(idx.has_value());
+    ASSERT_NE(idx->index_id, 0u);
+    ASSERT_TRUE(env.data_store->createIndex(vidxTableById(idx->index_id)));
+    ASSERT_TRUE(env.data_store->createIndex(indexDeltaTable(idx->index_id)));
+
+    IndexBuildSpec spec;
+    spec.index_id = idx->index_id;
+    spec.index_name = "idx_builder";
+    spec.label_id = 1;
+    spec.index_table = vidxTableById(idx->index_id);
+    spec.delta_table = indexDeltaTable(idx->index_id);
+    spec.labels = schema.labels;
+    for (const auto& [lid, ldef] : schema.labels) {
+        if (ldef.name == kAnonLabelName) {
+            spec.anon_label_id = lid;
+            break;
+        }
+    }
+    for (const auto& acc : idx->accessors) {
+        IndexBuildAccessor accessor;
+        accessor.is_strong = acc.is_strong;
+        accessor.source_label_id = acc.source_label_id;
+        accessor.property_name = acc.property_name;
+        spec.accessors.push_back(std::move(accessor));
+    }
+
+    IndexBuildContext context{*env.async_data, *env.session_pool, /*registry=*/nullptr, {}};
+    const auto outcome = blockingWait(runIndexBuild(context, spec));
+    ASSERT_TRUE(outcome.ok) << outcome.error;
+
+    ASSERT_TRUE(blockingWait(env.async_meta->updateIndexState("idx_builder", IndexState::PUBLIC)));
+    auto rows = runQuery(writer, "MATCH (n:Person) WHERE n.email = 'e1' RETURN count(*)");
+    ASSERT_FALSE(rows.empty());
+    EXPECT_EQ(std::get<int64_t>(rows[0][0]), 1);
+    EXPECT_NE(explainQuery(writer, "MATCH (n:Person) WHERE n.email = 'e1' RETURN n").find("IndexScan"),
+              std::string::npos);
+}
+
+// ==================== schema 快照：独立拷贝 + 并发读不崩 ====================
+
+TEST_F(IndexE2ETest, SchemaSnapshotIsIndependentCopy) {
+    createLabel(env, "Person", {{0, "id", PropertyType::INT64, false, std::nullopt}});
+    const GraphSchema before = env.async_meta->schemaSnapshot();
+    ASSERT_EQ(before.labels.at(1).properties.size(), 1u);
+
+    ASSERT_TRUE(blockingWait(env.async_meta->addVertexLabelProperties("Person", {{"email", PropertyType::STRING}})));
+    EXPECT_EQ(before.labels.at(1).properties.size(), 1u); // 旧快照不受影响
+    EXPECT_EQ(env.async_meta->schemaSnapshot().labels.at(1).properties.size(), 2u);
+}
+
+TEST_F(IndexE2ETest, SchemaSnapshotsSurviveConcurrentPropertyAdds) {
+    createLabel(env, "Person", {{0, "id", PropertyType::INT64, false, std::nullopt}});
+    std::atomic<bool> stop{false};
+    std::atomic<int> snapshots{0};
+    std::thread reader([&] {
+        while (!stop.load(std::memory_order_acquire)) {
+            const GraphSchema snapshot = env.async_meta->schemaSnapshot();
+            auto it = snapshot.labels.find(1);
+            if (it != snapshot.labels.end())
+                EXPECT_GE(it->second.properties.size(), 1u);
+            snapshots.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    for (int i = 0; i < 50; ++i)
+        ASSERT_TRUE(blockingWait(
+            env.async_meta->addVertexLabelProperties("Person", {{"p" + std::to_string(i), PropertyType::INT64}})));
+    stop.store(true, std::memory_order_release);
+    reader.join();
+    EXPECT_GT(snapshots.load(), 0);
+}
+
+// ==================== 事务级 schema 版本（shared_ptr pin） ====================
+
+TEST_F(IndexE2ETest, TransactionSchemaPinKeepsOldVersionAlive) {
+    createLabel(env, "Person", {{0, "id", PropertyType::INT64, false, std::nullopt}});
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_read());
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    auto ctx = blockingWait(executor.prepareStream("RETURN 1", {}, nullptr, std::ref(session)));
+    ASSERT_TRUE(ctx->error.empty()) << ctx->error;
+    auto gen = std::move(ctx->gen);
+    blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        while (auto chunk = co_await gen.next()) {}
+    }));
+
+    const auto pinned = session.schemaPin().schema;
+    ASSERT_TRUE(pinned != nullptr);
+    ASSERT_EQ(pinned->labels.at(1).properties.size(), 1u);
+
+    // 另一个"事务"发布新版本；本事务的 pin 必须继续看到旧版本。
+    ASSERT_TRUE(blockingWait(env.async_meta->addVertexLabelProperties("Person", {{"email", PropertyType::STRING}})));
+    EXPECT_EQ(pinned->labels.at(1).properties.size(), 1u);
+    EXPECT_EQ(env.async_meta->schemaPtr()->labels.at(1).properties.size(), 2u);
+    EXPECT_EQ(session.schemaPin().schema->labels.at(1).properties.size(), 1u);
+
+    session.rollback();
+    lease.reset();
+}
+
+// ==================== 创建索引之前开始的事务：构建必须等它结束 ====================
+
+TEST_F(IndexE2ETest, BuildWaitsForTransactionsStartedBeforeCreate) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+    auto tracker = std::make_shared<SchemaGenerationTracker>();
+    executor.setSchemaGenerationTracker(tracker);
+
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE(
+            execSync(executor, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    // 旧事务：CREATE INDEX 之前 BEGIN，并固定旧 schema 版本。
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    auto pin_ctx = blockingWait(executor.prepareStream("RETURN 1", {}, nullptr, std::ref(session)));
+    ASSERT_TRUE(pin_ctx->error.empty()) << pin_ctx->error;
+    auto pin_gen = std::move(pin_ctx->gen);
+    blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        while (auto chunk = co_await pin_gen.next()) {}
+    }));
+    EXPECT_GE(tracker->pinCount(), 1u);
+
+    auto created = execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)");
+    ASSERT_TRUE(created.error.empty()) << created.error;
+    ASSERT_FALSE(created.rows.empty());
+
+    // 旧事务在索引创建后、PUBLIC 前写入；构建必须等它提交后再 SCAN。
+    auto write_ctx = blockingWait(executor.prepareStream("MATCH (n:Person) WHERE n.id = 0 SET n.email = 'from-old-txn'",
+                                                         {}, nullptr, std::ref(session)));
+    ASSERT_TRUE(write_ctx->error.empty()) << write_ctx->error;
+    auto write_gen = std::move(write_ctx->gen);
+    blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        while (auto chunk = co_await write_gen.next()) {}
+    }));
+    ASSERT_TRUE(session.commit().committed());
+    lease.reset();
+
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    auto old_rows = runQuery(executor, "MATCH (n:Person) WHERE n.email = 'e0' RETURN count(*)");
+    auto new_rows = runQuery(executor, "MATCH (n:Person) WHERE n.email = 'from-old-txn' RETURN count(*)");
+    ASSERT_FALSE(old_rows.empty());
+    ASSERT_FALSE(new_rows.empty());
+    EXPECT_EQ(std::get<int64_t>(old_rows[0][0]), 0);
+    EXPECT_EQ(std::get<int64_t>(new_rows[0][0]), 1);
+
+    service.shutdown();
 }

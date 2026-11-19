@@ -303,26 +303,22 @@ folly::coro::Task<bool>
 CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props) {
     auto planned_entries = collectVertexIndexEntriesFromLabelProps(label_defs_, label_props, vid);
 
-    bool ok = true;
+    // unique 的检查交给 applier：BUILDING 期不查（索引未完成），PUBLIC 后由它查重。
+    if (!(co_await store_.insertVertex(vid, label_props)))
+        co_return false;
+
     for (const auto& entry : planned_entries) {
-        if (!entry.unique)
-            continue;
-        bool constraint_ok = co_await store_.checkUniqueConstraint(entry.table, entry.values);
-        if (!constraint_ok) {
+        const auto status = co_await applyIndexWrite(store_, toIndexWriteItem(entry, /*is_delete=*/false));
+        if (status == IndexWriteStatus::kUniqueConflict) {
             spdlog::warn("Unique index constraint violated while creating vertex {}", vid);
-            ok = false;
-            break;
+            co_return false;
+        }
+        if (status == IndexWriteStatus::kRetryLater) {
+            spdlog::error("Vertex index write could not be admitted (index {}); statement will fail", entry.index_id);
+            co_return false;
         }
     }
-
-    if (ok)
-        ok = co_await store_.insertVertex(vid, label_props);
-
-    if (ok) {
-        for (const auto& entry : planned_entries)
-            co_await store_.insertIndexEntry(entry.table, entry.values, entry.vid);
-    }
-    co_return ok;
+    co_return true;
 }
 
 } // namespace compute

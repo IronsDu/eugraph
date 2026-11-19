@@ -2,6 +2,7 @@
 
 #include "common/concurrency/graph_usage_gate.hpp"
 #include "common/config/env_vars.hpp"
+#include "common/schema/graph_schema.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
@@ -15,7 +16,11 @@
 #include "query/profile/query_profile.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/index/index_build_service.hpp"
+#include "storage/index/index_builder.hpp"
+#include "storage/index/index_runtime_registry.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
+#include "storage/session/schema_generation_tracker.hpp"
 #include "storage/session/session_pool.hpp"
 
 #include <folly/coro/Task.h>
@@ -55,9 +60,28 @@ struct StreamContext {
     /// purpose: it must not be the thing that keeps them alive during teardown.
     std::shared_ptr<QueryContext> query_context;
     bool should_commit = true;
+    // Owned by StreamContext so references in physical operators remain valid
+    /// 写语句的本地可变 schema 副本（DML 隐式建标签/属性会修改它）；只读语句为空。
+    std::shared_ptr<GraphSchema> owned_schema;
+    /// 本语句固定的 schema 版本；label/edge_label 定义直接引用它，不再逐语句复制。
+    std::shared_ptr<const GraphSchema> schema;
+    const std::unordered_map<LabelId, LabelDef>& label_defs;
+    const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
+    std::unordered_map<std::string, LabelId> label_name_to_id;
+    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
+
     /// Planning heuristic: per-label vertex counts snapshotted for this
     /// statement (see GraphSchema::label_vertex_counts).
-    std::unordered_map<LabelId, uint64_t> label_vertex_counts;
+    const std::unordered_map<LabelId, uint64_t>& label_vertex_counts;
+
+    explicit StreamContext(std::shared_ptr<const GraphSchema> schema_version)
+        : schema(std::move(schema_version)), label_defs(schema->labels), edge_label_defs(schema->edge_labels),
+          label_vertex_counts(schema->label_vertex_counts) {}
+
+    /// 写语句专用：持有本地可变副本，DML 的隐式 schema 更新只影响本语句。
+    explicit StreamContext(std::shared_ptr<GraphSchema> schema_version)
+        : owned_schema(std::move(schema_version)), schema(owned_schema), label_defs(owned_schema->labels),
+          edge_label_defs(owned_schema->edge_labels), label_vertex_counts(owned_schema->label_vertex_counts) {}
     /// PROFILE state. `profile` is only populated after the stream is fully
     /// drained (and, for auto-commit, after the transaction commit).
     bool profile_requested = false;
@@ -81,19 +105,12 @@ struct StreamContext {
         profile = query_context->buildProfile(planning_ns, execution_ns, commit_ns);
         return *profile;
     }
-    // Owned by StreamContext so references in physical operators remain valid
-    std::unordered_map<LabelId, LabelDef> label_defs;
-    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
-    std::unordered_map<std::string, LabelId> label_name_to_id;
-    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
     // Binder results: catalog, function registry, bound expressions
     std::unique_ptr<catalog::Catalog> catalog;
     std::unique_ptr<function::FunctionRegistry> func_registry;
     std::unique_ptr<binder::BoundStatement> bound_plan;
     // Presentation metadata: per-column label order for vertex formatting.
     std::unordered_map<std::string, std::vector<LabelId>> label_order;
-
-    StreamContext() = default;
 
     ~StreamContext() {
         if (query_store) {
@@ -187,13 +204,53 @@ public:
         return compute_pool_.get();
     }
 
+    /// 绑定每图的索引运行时注册表（可空：单测/极小化装配不启用在线索引运行时）。
+    /// 生命周期由 GraphInstance 保证：registry 必须先于 executor 销毁。
+    void setIndexRegistry(IndexRuntimeRegistry* registry) noexcept {
+        index_registry_ = registry;
+    }
+    /// 绑定每图构建服务（null ⇒ CREATE INDEX 同步执行，供单测/极小化装配使用）。
+    void setIndexBuildService(IndexBuildService* service) noexcept {
+        index_builds_ = service;
+    }
+    /// 绑定每图使用闸门（后台构建持 Guard，DROP DATABASE 的 waitDrained 会等它退出）。
+    void setUsageGate(std::shared_ptr<GraphUsageGate> gate) {
+        usage_gate_ = std::move(gate);
+    }
+    /// 绑定每图 schema 代数 tracker（DROP 等"旧 pin 事务"用）。
+    void setSchemaGenerationTracker(std::shared_ptr<SchemaGenerationTracker> tracker) {
+        schema_generations_ = std::move(tracker);
+    }
+    /// 测试钩子：DROP 清理等待旧 pin/读句柄的上限（默认 30s）。
+    void setIndexPurgeWaitMs(uint32_t wait_ms) noexcept {
+        index_purge_wait_ms_ = wait_ms;
+    }
+    /// PENDING_PURGE 重试（周期任务调用；测试可直接调用）。
+    folly::coro::Task<void> retryPendingIndexCleanups();
+
 private:
     folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
+    /// 构建数据侧完成后的落库：失败置 ERROR，成功置 PUBLIC + 发布运行时；返回错误串（空=成功）。
+    folly::coro::Task<std::string> applyIndexBuildOutcome(const IndexBuildSpec& spec, const IndexBuildOutcome& outcome);
+    /// 异步 DROP 的清理任务：删表成功 ⇒ 删除清理记录 + 运行时 PURGED；失败 ⇒ 转 orphan 等下次启动。
+    folly::coro::Task<void> cleanupDroppedIndex(IAsyncGraphMetaStore::IndexCleanupRecord record,
+                                                uint64_t drop_generation);
+
+    // ---- 索引运行时注册表的维护（DDL 的三个时机：创建 / 发布/失败 / 删除） ----
+    void registerIndexRuntime(const std::string& index_name, uint32_t label_id, bool is_edge);
+    void publishIndexRuntime(const std::string& index_name);
+    void failIndexRuntime(const std::string& index_name, std::string_view error = {});
+    void retireIndexRuntime(uint32_t index_id);
     AsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;
     std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
     SessionPool& session_pool_;
+    IndexRuntimeRegistry* index_registry_ = nullptr;
+    IndexBuildService* index_builds_ = nullptr;
+    std::shared_ptr<SchemaGenerationTracker> schema_generations_;
+    std::shared_ptr<GraphUsageGate> usage_gate_;
+    uint32_t index_purge_wait_ms_ = 30000;
 };
 
 } // namespace compute

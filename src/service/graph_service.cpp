@@ -235,6 +235,10 @@ folly::coro::Task<std::optional<GraphService::SessionScope>> GraphService::begin
     auto bound = graph.inst->async_data->for_session(**lease);
     if (!co_await bound.beginSession(true))
         throw std::runtime_error("Failed to begin explicit transaction: " + graph_name);
+    // 显式事务在 BEGIN 时绑定 schema 版本（设计 §10.1）：后续语句不再升级。
+    (**lease).setSchemaPin(GraphSession::SchemaPin{graph.inst->async_meta->schemaGeneration(),
+                                                   graph.inst->async_meta->compatVersion(), true, false,
+                                                   graph.inst->async_meta->schemaPtr()});
     co_return SessionScope{std::move(graph), std::move(*lease)};
 }
 
@@ -631,7 +635,7 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
 folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const DatabaseDdlStatement& stmt,
                                                                           GraphInstance& instance) {
     CypherExecutionContext result;
-    auto ctx = std::make_shared<compute::StreamContext>();
+    auto ctx = std::make_shared<compute::StreamContext>(instance.async_meta->schemaPtr());
     Schema columns;
     std::vector<Row> rows;
 

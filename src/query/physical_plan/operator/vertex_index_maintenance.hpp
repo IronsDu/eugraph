@@ -3,6 +3,8 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/index/index_entry.hpp"
+#include "storage/index/index_write_applier.hpp"
 
 #include <folly/coro/Task.h>
 
@@ -16,12 +18,7 @@
 namespace eugraph {
 namespace compute {
 
-struct VertexIndexEntry {
-    std::string table;
-    std::vector<PropertyValue> values;
-    VertexId vid;
-    bool unique = false;
-};
+using VertexIndexEntry = ::eugraph::VertexIndexEntry;
 
 /// Collect all index entries the vertex currently contributes to.
 /// Index definitions live in label_defs keyed by their filter label.
@@ -142,7 +139,7 @@ collectVertexIndexEntries(IAsyncGraphDataStore& store, const std::unordered_map<
                 continue;
 
             if (idx.index_id != 0)
-                entries.push_back(VertexIndexEntry{vidxTableById(idx.index_id), values, vid, idx.unique});
+                entries.push_back(VertexIndexEntry{vidxTableById(idx.index_id), values, vid, idx.unique, idx.index_id});
         }
     }
 
@@ -238,29 +235,45 @@ collectVertexIndexEntriesFromLabelProps(const std::unordered_map<LabelId, LabelD
                 }
             }
             if (all_present)
-                entries.push_back(VertexIndexEntry{vidxTableById(idx.index_id), std::move(values), vid, idx.unique});
+                entries.push_back(
+                    VertexIndexEntry{vidxTableById(idx.index_id), std::move(values), vid, idx.unique, idx.index_id});
         }
     }
     return entries;
 }
 
+inline IndexWriteItem toIndexWriteItem(const VertexIndexEntry& entry, bool is_delete) {
+    IndexWriteItem item;
+    item.index_id = entry.index_id;
+    item.legacy_table = entry.table;
+    item.values = entry.values;
+    item.entity_id = entry.vid;
+    item.unique = entry.unique;
+    item.is_delete = is_delete;
+    return item;
+}
+
 inline folly::coro::Task<void> deleteVertexIndexEntries(IAsyncGraphDataStore& store,
                                                         const std::vector<VertexIndexEntry>& entries) {
-    for (const auto& entry : entries)
-        co_await store.deleteIndexEntry(entry.table, entry.values, entry.vid);
+    for (const auto& entry : entries) {
+        const auto status = co_await applyIndexWrite(store, toIndexWriteItem(entry, /*is_delete=*/true));
+        if (status == IndexWriteStatus::kRetryLater || status == IndexWriteStatus::kUniqueConflict)
+            co_return; // 失败已由底层粘到会话；不要继续写半套
+    }
 }
 
 inline folly::coro::Task<bool> insertVertexIndexEntriesChecked(IAsyncGraphDataStore& store,
                                                                const std::vector<VertexIndexEntry>& entries) {
     for (const auto& entry : entries) {
-        if (entry.unique) {
-            bool constraint_ok = co_await store.checkUniqueConstraint(entry.table, entry.values);
-            if (!constraint_ok) {
-                spdlog::warn("Unique index constraint violated while maintaining index entry for vertex {}", entry.vid);
-                co_return false;
-            }
+        const auto status = co_await applyIndexWrite(store, toIndexWriteItem(entry, /*is_delete=*/false));
+        if (status == IndexWriteStatus::kUniqueConflict) {
+            spdlog::warn("Unique index constraint violated while maintaining index entry for vertex {}", entry.vid);
+            co_return false;
         }
-        co_await store.insertIndexEntry(entry.table, entry.values, entry.vid);
+        if (status == IndexWriteStatus::kRetryLater) {
+            spdlog::error("Index write could not be admitted (index {}); statement will fail", entry.index_id);
+            co_return false;
+        }
     }
     co_return true;
 }

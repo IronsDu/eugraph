@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"
@@ -19,10 +20,10 @@ class LabelScanPhysicalOp : public PhysicalOperator {
 public:
     LabelScanPhysicalOp(std::string variable, std::vector<LabelId> label_ids,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::unordered_map<LabelId, LabelDef> label_defs, LabelId anon_label_id = INVALID_LABEL_ID,
+                        std::shared_ptr<const GraphSchema> schema, LabelId anon_label_id = INVALID_LABEL_ID,
                         std::unordered_map<LabelId, std::vector<uint16_t>> /*label_prop_ids*/ = {})
         : variable_(std::move(variable)), label_ids_(std::move(label_ids)), output_types_(std::move(output_types)),
-          store_(store), label_defs_(std::move(label_defs)), anon_label_id_(anon_label_id) {}
+          store_(store), schema_(std::move(schema)), anon_label_id_(anon_label_id) {}
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
@@ -30,8 +31,9 @@ public:
         for (size_t i = 0; i < label_ids_.size(); ++i) {
             if (i > 0)
                 label_name += ":";
-            auto it = label_defs_.find(label_ids_[i]);
-            label_name += (it != label_defs_.end()) ? it->second.name : std::to_string(label_ids_[i]);
+            auto it =
+                schema_ ? schema_->labels.find(label_ids_[i]) : std::unordered_map<LabelId, LabelDef>::const_iterator{};
+            label_name += (schema_ && it != schema_->labels.end()) ? it->second.name : std::to_string(label_ids_[i]);
         }
         return "LabelScan(variable=" + variable_ + ", labels=" + label_name + ")";
     }
@@ -41,7 +43,7 @@ private:
     std::vector<LabelId> label_ids_;
     std::vector<binder::BoundType> output_types_;
     IAsyncGraphDataStore& store_;
-    std::unordered_map<LabelId, LabelDef> label_defs_;
+    std::shared_ptr<const GraphSchema> schema_;
     LabelId anon_label_id_ = INVALID_LABEL_ID;
 };
 

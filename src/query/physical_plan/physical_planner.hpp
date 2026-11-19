@@ -41,10 +41,18 @@ struct ExpandAllowedFilterContext {
 struct PlanContext {
     const std::unordered_map<std::string, LabelId>& label_name_to_id;
     std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id;
-    std::unordered_map<LabelId, LabelDef>& label_defs;
-    std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
+    const std::unordered_map<LabelId, LabelDef>& label_defs;
+    const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
     /// Per-label vertex counts (planning heuristic; may be stale).
     const std::unordered_map<LabelId, uint64_t>& label_vertex_counts;
+    /// 不可变 schema 版本：算子/计划持有它，避免逐语句复制 label 定义。
+    std::shared_ptr<const GraphSchema> schema;
+    /// 写语句的本地可变 schema 副本（DML 隐式更新用）；只读语句为 null。
+    std::unordered_map<LabelId, LabelDef>* mutable_label_defs = nullptr;
+    std::unordered_map<EdgeLabelId, EdgeLabelDef>* mutable_edge_label_defs = nullptr;
+    /// 在线索引构建：索引可见性（planner 只选 public_generation ≤ txn_start_generation 且 ACTIVE 的索引）。
+    class IndexRuntimeRegistry* index_registry = nullptr;
+    uint64_t txn_start_generation = 0;
     function::EvalContext eval_ctx;
     /// Per-slot requirements collected from downstream operators.
     /// Drives ProjectionExtractPhysicalOp spec generation.

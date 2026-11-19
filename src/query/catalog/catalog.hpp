@@ -1,8 +1,10 @@
 #pragma once
 
+#include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -19,9 +21,8 @@ class Catalog {
 public:
     Catalog() = default;
 
-    /// Build catalog from label and edge-label definitions.
-    void load(std::unordered_map<LabelId, LabelDef> label_defs,
-              std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs);
+    /// 绑定一个不可变 schema 版本；catalog 不复制 label 定义。
+    void load(std::shared_ptr<const GraphSchema> schema);
 
     // ── Label lookup ──
 
@@ -60,10 +61,10 @@ public:
     // ── Bulk access ──
 
     const std::unordered_map<LabelId, LabelDef>& allLabels() const {
-        return label_defs_;
+        return schema_->labels;
     }
     const std::unordered_map<EdgeLabelId, EdgeLabelDef>& allEdgeLabels() const {
-        return edge_label_defs_;
+        return schema_->edge_labels;
     }
 
     // ── Cardinality statistics (Phase 3 CBO) ──
@@ -103,13 +104,8 @@ public:
     }
 
 private:
-    std::unordered_map<std::string, LabelId> label_name_to_id_;
-    std::unordered_map<LabelId, LabelDef> label_defs_;
-
+    std::shared_ptr<const GraphSchema> schema_;
     LabelId anon_label_id_ = INVALID_LABEL_ID;
-
-    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id_;
-    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_;
 
     // Cardinality statistics (separate from LabelDef to avoid serialization changes)
     std::unordered_map<LabelId, uint64_t> label_vertex_counts_;

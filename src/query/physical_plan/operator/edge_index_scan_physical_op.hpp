@@ -1,9 +1,11 @@
 #pragma once
 
+#include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/index/index_runtime_registry.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
@@ -28,7 +30,8 @@ public:
     EdgeIndexScanPhysicalOp(std::string src_var, std::string dst_var, std::string edge_var, EdgeLabelId label_id,
                             uint16_t prop_id, ScanMode mode, PropertyValue search_value,
                             std::optional<PropertyValue> range_end, std::vector<binder::BoundType> output_types,
-                            IAsyncGraphDataStore& store, std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs);
+                            IAsyncGraphDataStore& store, std::shared_ptr<const GraphSchema> schema,
+                            uint32_t index_id = 0);
 
     // Composite constructor
     EdgeIndexScanPhysicalOp(std::string src_var, std::string dst_var, std::string edge_var, EdgeLabelId label_id,
@@ -36,7 +39,7 @@ public:
                             std::optional<std::vector<PropertyValue>> range_start,
                             std::optional<std::vector<PropertyValue>> range_end,
                             std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                            std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs);
+                            std::shared_ptr<const GraphSchema> schema, uint32_t index_id = 0);
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
@@ -53,7 +56,9 @@ private:
     std::optional<std::vector<PropertyValue>> range_end_;
     std::vector<binder::BoundType> output_types_;
     IAsyncGraphDataStore& store_;
-    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_;
+    std::shared_ptr<const GraphSchema> schema_;
+    uint32_t index_id_ = 0;
+    std::optional<IndexReadHandle> read_handle_;
 };
 
 } // namespace compute

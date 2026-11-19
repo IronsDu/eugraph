@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_delta_codec.hpp"
 #include "storage/kv/index_key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
 #include "test_sync_store.hpp"
@@ -317,4 +318,158 @@ TEST_F(IndexStoreTest, EdgeCompositeIndexInsertAndScan) {
     ASSERT_EQ(results.size(), 1u);
     EXPECT_EQ(results[0], 1u);
     commit();
+}
+
+// ==================== 变更表（delta）：编解码 + 重放 ====================
+
+TEST(IndexDeltaCodecTest, RoundTripsPutAndDelete) {
+    const auto put = encodeIndexDeltaValue(IndexDeltaOp::kPut, "payload");
+    ASSERT_EQ(put.size(), 8u);
+    auto decoded = decodeIndexDeltaValue(put);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(decoded->op, IndexDeltaOp::kPut);
+    EXPECT_EQ(decoded->payload, "payload");
+
+    const auto del = encodeIndexDeltaValue(IndexDeltaOp::kDelete);
+    ASSERT_EQ(del.size(), 1u);
+    auto decoded_del = decodeIndexDeltaValue(del);
+    ASSERT_TRUE(decoded_del.has_value());
+    EXPECT_EQ(decoded_del->op, IndexDeltaOp::kDelete);
+    EXPECT_TRUE(decoded_del->payload.empty());
+}
+
+TEST(IndexDeltaCodecTest, RejectsEmptyAndUnknownOp) {
+    EXPECT_FALSE(decodeIndexDeltaValue({}).has_value());
+    EXPECT_FALSE(decodeIndexDeltaValue(std::string_view("\x7f", 1)).has_value());
+}
+
+namespace {
+
+std::vector<PropertyValue> propValues(int64_t value) {
+    return std::vector<PropertyValue>{PropertyValue{value}};
+}
+
+} // namespace
+
+TEST_F(IndexStoreTest, DeltaEntryIsDedupedByKeyAndWins) {
+    const auto index_table = vidxTableById(1);
+    const auto delta_table = indexDeltaTable(1);
+    ASSERT_TRUE(store_->createIndex(index_table));
+    ASSERT_TRUE(store_->createIndex(delta_table));
+
+    auto txn = store_->beginTransaction();
+    EXPECT_TRUE(store_->putDeltaEntry(txn, delta_table, propValues(10), 1, /*is_delete=*/false, "v1"));
+    // 同一 (key, entity) 覆盖写：表里仍只有一行，值是最后一次。
+    EXPECT_TRUE(store_->putDeltaEntry(txn, delta_table, propValues(10), 1, /*is_delete=*/false, "v2"));
+    EXPECT_TRUE(store_->commitTransaction(txn));
+
+    auto replay_txn = store_->beginTransaction();
+    std::string last_key;
+    EXPECT_EQ(store_->replayDeltaBatch(replay_txn, index_table, delta_table, 1024, {}, last_key), 1u);
+    EXPECT_TRUE(store_->commitTransaction(replay_txn));
+
+    std::vector<std::pair<uint64_t, std::string>> hits;
+    auto read_txn = store_->beginTransaction();
+    store_->scanIndexEqualityWithValue(read_txn, index_table, PropertyValue{int64_t(10)},
+                                       [&](uint64_t entity_id, std::string_view value) {
+                                           hits.emplace_back(entity_id, std::string(value));
+                                           return true;
+                                       });
+    EXPECT_TRUE(store_->commitTransaction(read_txn));
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_EQ(hits[0].first, 1u);
+    EXPECT_EQ(hits[0].second, "v2");
+}
+
+TEST_F(IndexStoreTest, ReplayAppliesPutAndDeleteAndDrainsDelta) {
+    const auto index_table = vidxTableById(1);
+    const auto delta_table = indexDeltaTable(1);
+    ASSERT_TRUE(store_->createIndex(index_table));
+    ASSERT_TRUE(store_->createIndex(delta_table));
+
+    // 先放一条基础条目（模拟回填已完成的部分）
+    auto base = store_->beginTransaction();
+    ASSERT_TRUE(store_->insertIndexEntry(base, index_table, propValues(10), 1, "base"));
+    ASSERT_TRUE(store_->commitTransaction(base));
+
+    auto delta_txn = store_->beginTransaction();
+    ASSERT_TRUE(store_->putDeltaEntry(delta_txn, delta_table, propValues(20), 2, false, "p20"));
+    ASSERT_TRUE(store_->putDeltaEntry(delta_txn, delta_table, propValues(10), 1, /*is_delete=*/true));
+    ASSERT_TRUE(store_->commitTransaction(delta_txn));
+
+    auto replay_txn = store_->beginTransaction();
+    std::string last_key;
+    EXPECT_EQ(store_->replayDeltaBatch(replay_txn, index_table, delta_table, 1024, {}, last_key), 2u);
+    EXPECT_TRUE(store_->commitTransaction(replay_txn));
+
+    // 变更表已排空：再重放一批必须是 0 行（不能靠计数器判定）。
+    auto empty_txn = store_->beginTransaction();
+    std::string last_key2;
+    EXPECT_EQ(store_->replayDeltaBatch(empty_txn, index_table, delta_table, 1024, {}, last_key2), 0u);
+    EXPECT_TRUE(store_->commitTransaction(empty_txn));
+
+    std::vector<uint64_t> old_hits;
+    std::vector<std::pair<uint64_t, std::string>> new_hits;
+    auto read_txn = store_->beginTransaction();
+    store_->scanIndexEquality(read_txn, index_table, PropertyValue{int64_t(10)}, [&](uint64_t id) {
+        old_hits.push_back(id);
+        return true;
+    });
+    store_->scanIndexEqualityWithValue(read_txn, index_table, PropertyValue{int64_t(20)},
+                                       [&](uint64_t id, std::string_view value) {
+                                           new_hits.emplace_back(id, std::string(value));
+                                           return true;
+                                       });
+    EXPECT_TRUE(store_->commitTransaction(read_txn));
+    EXPECT_TRUE(old_hits.empty()) << "DEL 必须从索引表删除旧键";
+    ASSERT_EQ(new_hits.size(), 1u);
+    EXPECT_EQ(new_hits[0].first, 2u);
+    EXPECT_EQ(new_hits[0].second, "p20");
+}
+
+TEST_F(IndexStoreTest, ReplayContinuationUsesLastKey) {
+    const auto index_table = vidxTableById(2);
+    const auto delta_table = indexDeltaTable(2);
+    ASSERT_TRUE(store_->createIndex(index_table));
+    ASSERT_TRUE(store_->createIndex(delta_table));
+
+    auto delta_txn = store_->beginTransaction();
+    for (int64_t value = 1; value <= 5; ++value)
+        ASSERT_TRUE(store_->putDeltaEntry(delta_txn, delta_table, propValues(value * 10), 1, false, ""));
+    ASSERT_TRUE(store_->commitTransaction(delta_txn));
+
+    auto replay = [&](size_t max_rows, const std::string& start) {
+        auto txn = store_->beginTransaction();
+        std::string last;
+        const size_t applied = store_->replayDeltaBatch(txn, index_table, delta_table, max_rows, start, last);
+        EXPECT_TRUE(store_->commitTransaction(txn));
+        return std::make_pair(applied, last);
+    };
+
+    const auto first = replay(2, {});
+    EXPECT_EQ(first.first, 2u);
+    EXPECT_FALSE(first.second.empty());
+    const auto second = replay(2, first.second);
+    EXPECT_EQ(second.first, 2u);
+    EXPECT_FALSE(second.second.empty());
+    const auto third = replay(2, second.second);
+    EXPECT_EQ(third.first, 1u);
+    const auto fourth = replay(2, third.second);
+    EXPECT_EQ(fourth.first, 0u);
+}
+
+TEST_F(IndexStoreTest, DeltaWriteRollsBackWithTransaction) {
+    const auto index_table = vidxTableById(3);
+    const auto delta_table = indexDeltaTable(3);
+    ASSERT_TRUE(store_->createIndex(index_table));
+    ASSERT_TRUE(store_->createIndex(delta_table));
+
+    auto txn = store_->beginTransaction();
+    ASSERT_TRUE(store_->putDeltaEntry(txn, delta_table, propValues(42), 7, false, ""));
+    store_->rollbackTransaction(txn);
+
+    auto replay_txn = store_->beginTransaction();
+    std::string last;
+    EXPECT_EQ(store_->replayDeltaBatch(replay_txn, index_table, delta_table, 1024, {}, last), 0u);
+    EXPECT_TRUE(store_->commitTransaction(replay_txn));
 }

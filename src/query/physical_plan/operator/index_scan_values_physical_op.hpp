@@ -5,6 +5,7 @@
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/index/index_runtime_registry.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
@@ -37,6 +38,7 @@ private:
     std::vector<binder::BoundType> output_types_;
     Schema output_schema_;
     std::shared_ptr<std::vector<PropertyValue>> values_;
+    std::optional<IndexReadHandle> read_handle_;
 };
 
 } // namespace compute
