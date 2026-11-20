@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/schema/graph_schema.hpp"
+#include "common/schema/schema_version.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
@@ -114,6 +115,15 @@ public:
         return *schemaPtr();
     }
 
+    SchemaVersion schemaVersion() const override {
+        std::lock_guard<std::mutex> lock(published_mu_);
+        SchemaVersion version;
+        version.schema = published_schema_ ? published_schema_ : std::make_shared<GraphSchema>(schema_);
+        version.generation = published_generation_.load(std::memory_order_acquire);
+        version.compat_version = compat_version_.load(std::memory_order_acquire);
+        return version;
+    }
+
     /// Planning heuristic: approximate vertex count per label (refreshed at
     /// graph open; later writes may make it stale). Never used for semantics.
     void setLabelVertexCount(LabelId id, uint64_t count) {
@@ -137,6 +147,8 @@ private:
     /// 已发布的不可变版本：读者持有 shared_ptr，旧版本由引用计数释放。
     std::shared_ptr<const GraphSchema> published_schema_;
     mutable std::mutex published_mu_;
+    /// 与 published_schema_ 同一把锁更新的代数；schemaVersion() 用它避免"新代数 + 旧 schema"。
+    std::atomic<uint64_t> published_generation_{0};
     /// 把当前 schema_ 发布成一个新版本（DDL 成功后调用）。
     void publishSchemaVersion();
     std::atomic<uint64_t> schema_generation_{0};

@@ -155,8 +155,8 @@ PENDING_PURGE --周期清扫/下次打开，readers==0--> PURGING --> PURGED -->
 |---|---|
 | CATCHUP 阈值 + 连续 2 轮再 FINALIZE | 回填后一次性 `replayDeltaBatch` 到 EOF |
 | FINALIZE 关闸超时回退 CATCHUP | 超时/失败 ⇒ `ERROR`（`failIndexRuntime`） |
-| admission `OPEN/CLOSING/CLOSED_PUBLIC/CLOSED_ERROR` 四态 | atomic `open` bool + `inflight++` 后复查 |
-| PUBLIC 后异步 drop `idx_delta_<id>` | 保留（TODO P2；DROP INDEX 时会删） |
+| admission `OPEN/CLOSING/CLOSED_PUBLIC/CLOSED_ERROR` 四态 | atomic `open` bool + `inflight++` 后复查 + baton 等待 |
+| PUBLIC 后异步 drop `idx_delta_<id>` | 已实现：PUBLIC 后 drop 空 delta；失败告警，DROP 兜底 |
 | 构建持 `GraphUsageGate::Guard` | 未持；靠 `GraphManager` 先 shutdown 构建服务再关连接 |
 | 唯一索引“CATCHUP 末尾全扫 + 最后一批 point-lookup”两段校验 | 回填逐行查重 + 关闸排空后一次全量相邻键扫描 |
 | `version_refcount` 等旧版本引用 | 读句柄 `readers` + `SchemaGenerationTracker` pin 计数 |
@@ -426,8 +426,9 @@ PUBLIC    开闸（PUBLIC 模式）→ 异步 drop 变更表
 任一失败：phase = ERROR，meta 置 ERROR，admission = CLOSED_ERROR，drop 变更表与部分索引表
 ```
 
-> **as-built**：`admission` 只有 open/closed；关闸超时或失败直接 `ERROR`（不 reopen、不回 CATCHUP）；
-> 成功路径不 drop delta 表（P2 TODO）；失败路径的部分表交给 orphan 记录/启动回收。
+> **as-built**：`admission` 只有 open/closed（外加 baton 等待）；关闸超时或失败直接 `ERROR`（不 CATCHUP）；
+> 成功路径 PUBLIC 后会 drop 空的 delta 表，失败只告警、DROP/启动回收兜底；
+> 失败路径的部分表交给 orphan 记录/启动回收。
 
 **为什么 `PUBLIC` 只能在 3、4 之后**：`PUBLIC` 对读者是"完整性证明"；先翻状态再排空会让读者在缺口窗口看到不完整索引（旧方案的问题）。校验失败也必须走 `ERROR`，不得"先上线再补"。
 
@@ -1159,16 +1160,43 @@ GraphInstance
 
 **验收口径**：性能结论用同二进制交错 A/B，注明轮数/warmup/机器状态；1–4ms 级差异不写成优化。
 
-### 15.1 已知风险与待办（as-built）
+### 15.1 写准入、批量装载与已知风险（as-built）
 
-| # | 风险 | 影响 | 待办 |
-|---|---|---|---|
-| R1 | FINALIZE 期写准入等待上限 `kIndexWriteWaitMs=1000` | 追平/关闸超过 1s 时，写语句可能返回 `RetryLater`（可重试失败），不是 schema 冲突 | 改为无上限/可配置等待，或让 DML 排队到 PUBLIC；补慢 FINALIZE 测试 |
-| R2 | 批量装载（`batchInsertVertices/Edges`）绕过 `prepareStream`，没有 `SchemaPin`/tracker | 在线 CREATE INDEX 与批量装载并发时，旧 schema 批量写可能不被 drain，索引漏行 | 给批量会话补 pin/tracker，或明确约束“loader 先建索引再装载，不与在线建索引并发” |
-| R3 | 构建前 drain 旧 pin 无上限 | 长事务会让构建长期停在 BUILDING（可用性，不丢数据） | 增加等待观测/告警；是否超时转 ERROR 需要产品决策 |
-| R4 | 唯一索引 PUBLIC 前不强制 | 并发事务可提交重复值；构建最终校验失败 ⇒ 索引 ERROR（事务本身正常提交） | 明确文档；需要强约束时用“空表建唯一索引 → 再装载”工作流 |
-| R5 | 构建依赖 tracker 注入 | 未注入 tracker 的装配（部分单测/极简装配）不会 drain 旧 pin | 生产 `GraphInstance` 已注入；新增装配/测试需显式设置，否则并发旧事务不安全 |
-| R6 | `__anon__` 每新增属性名发布全量 schema 版本 | 大量未声明属性的写入路径有拷贝开销 | 改为 COW 子快照（见 §10.3） |
+#### 事务级写准入
+
+`IndexWriteGuard` 现在绑定到**整个用户事务**（`GraphSession` 持有 `index_id → guard`），
+不是单条写入：
+
+- 同一事务已经持有某索引准入时，即使 FINALIZE 已关闸，后续写入仍继续写 delta；
+  FINALIZE 的 `closeAndWait` 等的是整个事务，不会死锁；
+- 没有事务准入的写者才 `co_await IndexRuntime::waitForAdmission()`（baton，可被
+  PUBLIC/ERROR 唤醒）；不再使用 1s sleep 轮询；
+- 事务已持有 A 索引准入、又遇到 B 索引关闸时立即返回 `RetryLater`，让事务回滚重试，
+  **不等待**（否则 B 的 FINALIZE 等本事务、本事务等 B，死锁）；
+- 批量入口在数据写入前预取本批标签相关索引的准入；拿到后 sync applier 即使遇到关闸
+  也能继续写 delta。
+
+#### 批量装载
+
+`batchInsertVertices/Edges` 现在：
+
+1. `begin_write` 后用原子 `schemaVersion()` 取 `{schema, generation, compat}`；
+2. 通过 `ensureSchemaPin` 绑定 pin/tracker（构建会 drain 旧批量事务）；
+3. 用**pin 住的 schema** 解析标签/索引定义；
+4. 数据写入前预取相关索引准入；
+5. 索引维护统一走 `applyIndexWriteSync`（delta/PUBLIC/skip），不再有绕过。
+
+#### 仍需跟踪
+
+| # | 风险 | 状态 |
+|---|---|---|
+| R1 | FINALIZE 写入等待上限 | **已修**：事务级准入 + baton，测试覆盖 >1s 等待 |
+| R2 | 批量装载未 pin | **已修**：批量 pin/tracker + 预取准入 + sync applier；补并发用例 |
+| R3 | 旧 pin drain 无上限 | **已加**：`EUGRAPH_INDEX_PIN_WAIT_TIMEOUT_MS`（0=无限）+ 超时 ERROR/日志；默认仍无限 |
+| R4 | 唯一索引 PUBLIC 前不强制 | **保持语义**：文档说明；强约束用空表建唯一索引 |
+| R5 | tracker 注入 | **已修**：DDL 无 tracker 直接失败；测试覆盖 |
+| R6 | `__anon__` 全量 schema 拷贝 | 仍待 COW 子快照（见 §10.3） |
+| R7 | `waitForAdmission` 不支持协作取消 | 构建失败/PUBLIC 会唤醒；客户端取消需等当前 FINALIZE 结束；后续接 CancellationToken |
 
 
 ---
@@ -1226,7 +1254,7 @@ GraphInstance
 | 1 | `SHOW INDEXES.state` 对外叫 **`BUILDING`**（内部 `WRITE_ONLY` 不泄漏）；`db.indexes` 保持 Neo4j 词表 `ONLINE`/`POPULATING`/`FAILED` |
 | 2 | **`CREATE INDEX` 异步**：建定义/建表/入队后立即返回；构建在后台推进 |
 | 3 | **`DROP INDEX` 异步**：删定义即返回，物理表在后台清理（§9.3） |
-| 4 | **构建期写入不会因"与索引冲突"而失败**：不使用未 `PUBLIC` 的索引做唯一性检查、不拒绝写入；重复只在构建最终校验时暴露并让构建 `ERROR`（§8.4）。唯一例外是 `FINALIZE` 的短暂等待超时（§8.3，可重试） |
+| 4 | **构建期写入不会因"与索引冲突"而失败**：不使用未 `PUBLIC` 的索引做唯一性检查、不拒绝写入；重复只在构建最终校验时暴露并让构建 `ERROR`（§8.4）。FINALIZE 期写者会等待 PUBLIC/ERROR（事务已准入则继续写 delta），不因索引构建失败而失败 |
 | 5 | **对齐 F1 在线 schema 变更**（§10.1 / I11）：事务绑定一个 `SchemaPin`；系统允许 DDL 与长事务并存；**写入维护按注册表当前状态**，所以旧事务也不会漏维护新索引 |
 | 6 | delta 重放冲突**不设数值门限**：先实现"应用即删"，P4 度量；只有出现**用户可见重试**才切 §19.2 备选 |
 | 7 | **显式事务内执行 DDL 一律拒绝**（`DDL cannot run inside an explicit transaction`）；自动提交不受影响 |

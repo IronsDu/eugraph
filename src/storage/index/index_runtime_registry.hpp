@@ -29,6 +29,11 @@
 #include <utility>
 #include <vector>
 
+namespace folly::coro {
+class Baton;
+template <typename T> class Task;
+} // namespace folly::coro
+
 namespace eugraph {
 
 class IndexRuntime;
@@ -153,6 +158,9 @@ public:
     bool closeAndWait(uint32_t timeout_ms);
     /// 重新开闸（收尾失败/取消回退时必须调用，I8）。
     void reopenAdmission();
+    /// 异步等待闸门重新打开。只在调用方当前**不持有任何事务级准入**时使用；
+    /// 醒来后必须重新 route，不能假设自己已获准。
+    folly::coro::Task<void> waitForAdmission();
     bool waitDrained(uint32_t timeout_ms);
     /// 等读句柄归零（DROP 清理用）；超时返回 false（调用方转 PENDING_PURGE）。
     bool waitReadersZero(uint32_t timeout_ms);
@@ -212,6 +220,8 @@ private:
     std::atomic<IndexPhase> phase_;
     std::atomic<IndexLifecycle> lifecycle_;
     std::atomic<bool> admission_open_{true};
+    mutable std::mutex gate_mu_;
+    std::shared_ptr<folly::coro::Baton> admission_baton_;
     std::atomic<uint32_t> inflight_{0};
     std::atomic<uint32_t> readers_{0};
     std::atomic<uint64_t> public_generation_;
@@ -332,13 +342,6 @@ inline void IndexRuntime::releaseAdmission() noexcept {
     wait_cv_.notify_all();
 }
 
-inline bool IndexRuntime::closeAdmission() {
-    const bool was_open = admission_open_.exchange(false, std::memory_order_acq_rel);
-    { std::lock_guard<std::mutex> lock(wait_mu_); }
-    wait_cv_.notify_all();
-    return was_open;
-}
-
 inline bool IndexRuntime::waitDrained(uint32_t timeout_ms) {
     std::unique_lock<std::mutex> lock(wait_mu_);
     const auto drained = [this] { return inflight_.load(std::memory_order_acquire) == 0; };
@@ -352,12 +355,6 @@ inline bool IndexRuntime::waitDrained(uint32_t timeout_ms) {
 inline bool IndexRuntime::closeAndWait(uint32_t timeout_ms) {
     closeAdmission();
     return waitDrained(timeout_ms);
-}
-
-inline void IndexRuntime::reopenAdmission() {
-    admission_open_.store(true, std::memory_order_release);
-    { std::lock_guard<std::mutex> lock(wait_mu_); }
-    wait_cv_.notify_all();
 }
 
 inline std::optional<IndexReadHandle> IndexRuntime::acquireRead() {

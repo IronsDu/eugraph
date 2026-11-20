@@ -211,6 +211,7 @@ add_dependencies(eugraph_lib wiredtiger_ext)
 # so storage code does not get compiled as part of the query engine.
 add_library(eugraph_index STATIC
     src/storage/index/index_builder.cpp
+    src/storage/index/index_runtime_registry.cpp
 )
 target_include_directories(eugraph_index PUBLIC
     "${PROJECT_SOURCE_DIR}/src"
@@ -963,6 +964,7 @@ if(EUGRAPH_BUILD_TESTS)
 
     target_link_libraries(index_runtime_tests PRIVATE
         eugraph_lib
+        eugraph_index
         GTest::gtest
         GTest::gtest_main
         dl
@@ -983,6 +985,7 @@ if(EUGRAPH_BUILD_TESTS)
 
     target_link_libraries(index_write_router_tests PRIVATE
         eugraph_lib
+        eugraph_index
         GTest::gtest
         GTest::gtest_main
         dl

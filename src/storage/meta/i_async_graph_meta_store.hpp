@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/schema/graph_schema.hpp"
+#include "common/schema/schema_version.hpp"
 #include "common/types/graph_types.hpp"
 
 #include <folly/coro/Task.h>
@@ -103,6 +104,8 @@ public:
     // Schema access
     /// 当前 schema 版本的只读智能指针（O(1)，不拷贝）；事务 BEGIN 时取一次并持有。
     virtual std::shared_ptr<const GraphSchema> schemaPtr() const = 0;
+    /// 原子返回 {published schema, generation, compat_version}：三者必须来自同一个发布点。
+    virtual SchemaVersion schemaVersion() const = 0;
     /// 兼容旧调用：深拷贝当前版本（测试/一次性用途；热路径用 schemaPtr）。
     virtual GraphSchema schemaSnapshot() const = 0;
 

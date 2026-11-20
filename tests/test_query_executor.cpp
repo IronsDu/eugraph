@@ -51,6 +51,7 @@ protected:
     std::unique_ptr<GraphSession> async_session_; // 共享 async 门面的构造锚点（测试）
     std::unique_ptr<AsyncGraphDataStore> async_data_;
     std::shared_ptr<SessionPool> session_pool_;
+    std::shared_ptr<SchemaGenerationTracker> schema_generations_;
     std::unique_ptr<QueryExecutor> executor_;
 
     LabelId PERSON_LABEL = INVALID_LABEL_ID;
@@ -110,8 +111,10 @@ protected:
         blockingWait(async_meta_->nextVertexIdRange(100));
         blockingWait(async_meta_->nextEdgeIdRange(100));
 
+        schema_generations_ = std::make_shared<SchemaGenerationTracker>();
         executor_ =
             std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+        executor_->setSchemaGenerationTracker(schema_generations_);
     }
 
     void TearDown() override {
@@ -1230,6 +1233,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodePropertyAccess) {
     // Recreate executor so new catalog picks up __anon__ label
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // Create unlabeled node and return its property
     auto result = execSync(*executor_, "CREATE ({name: 'hello'})");
@@ -1250,6 +1254,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeReturnWholeVertex) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     execSync(*executor_, "CREATE ({name: 'whole'})");
     auto rows = execSync(*executor_, "MATCH (n) RETURN n").rows;
@@ -1266,6 +1271,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeWhereFilter) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     execSync(*executor_, "CREATE ({name: 'target'}), ({name: 'other'})");
     auto rows = execSync(*executor_, "MATCH (n) WHERE n.name = 'target' RETURN n.name").rows;
@@ -1282,6 +1288,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCrossProductWithLabeled) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     insertTestVertices(); // 5 Person nodes
     execSync(*executor_, "CREATE ({name: 'anon'})");
@@ -1309,6 +1316,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeAutoRegisterProperty) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // CREATE with a property not yet registered → pending_props triggers DDL
     auto result = execSync(*executor_, "CREATE ({name: 'auto'})");
@@ -1329,6 +1337,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeTwoProperties) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto result = execSync(*executor_, "CREATE ({name: 'hello', age: 42})");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -1349,6 +1358,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeSamePropNameDifferentTypes) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // First node: prop1 is INT64
     auto r1 = execSync(*executor_, "CREATE ({prop1: 42})");
@@ -1385,6 +1395,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndReturnProperty) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // Single query: CREATE with property + RETURN that property
     auto result = execSync(*executor_, "CREATE (n {new_prop: 'foo'}) RETURN n.new_prop");
@@ -1407,6 +1418,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCreatePropertyWithExistingLabelProp) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // Create a labeled node with 'name' property
     auto dog_result = execSync(*executor_, "CREATE (:Dog {name: 'Buddy'})");
@@ -1433,6 +1445,7 @@ TEST_F(QueryExecutorTest, NamedLabelCreatePropertyWithExistingLabelProp) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // Create a labeled node with 'name' property
     auto dog_result = execSync(*executor_, "CREATE (:Dog {name: 'Buddy'})");
@@ -2487,6 +2500,7 @@ protected:
 
         executor_ =
             std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+        executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     }
 
     void TearDown() override {
@@ -2751,6 +2765,7 @@ protected:
 
         executor_ =
             std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+        executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     }
 
     void TearDown() override {
@@ -3283,6 +3298,7 @@ TEST_F(QueryExecutorTest, PropertyNamedIdReturnsStoredValue) {
 
     // Create executor with updated schema
     QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
+    executor.setSchemaGenerationTracker(schema_generations_);
 
     // Create vertices: internal ID != stored property "id" value
     execSync(executor, "CREATE (n:Item {id: 100})");
@@ -3322,6 +3338,7 @@ TEST_F(QueryExecutorTest, PropertyNamedIdWorksWithInlineFilter) {
     ASSERT_TRUE(blockingWait(async_data_->createLabel(item_label)));
 
     QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
+    executor.setSchemaGenerationTracker(schema_generations_);
 
     execSync(executor, "CREATE (n:Product {id: 500})");
     execSync(executor, "CREATE (n:Product {id: 600})");
@@ -3350,6 +3367,7 @@ TEST_F(QueryExecutorTest, CreateEdgeMaintainsIndex) {
 
     // Create index on edge property
     QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
+    executor.setSchemaGenerationTracker(schema_generations_);
     auto ddl = execSync(executor, "CREATE INDEX idx_rated_weight FOR ()-[r:RATED]-() ON (r.weight)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
@@ -3384,6 +3402,7 @@ TEST_F(QueryExecutorTest, CreateEdgeViolatesUniqueEdgeIndex) {
     ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(edge_label_id)));
 
     QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
+    executor.setSchemaGenerationTracker(schema_generations_);
 
     // Create unique edge index
     auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_reviewed_since FOR ()-[r:REVIEWED]-() ON (r.since)");
@@ -3412,6 +3431,7 @@ TEST_F(QueryExecutorTest, OutputSchemaReturnPropertyOnly) {
     ASSERT_TRUE(blockingWait(async_data_->createLabel(label)));
 
     QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
+    executor.setSchemaGenerationTracker(schema_generations_);
     execSync(executor, "CREATE (n:Item {name: 'test'})");
 
     auto result = execSync(executor, "MATCH (n:Item) RETURN n.name");
@@ -3435,6 +3455,7 @@ TEST_F(QueryExecutorTest, OutputSchemaReturnMultipleProperties) {
     ASSERT_TRUE(blockingWait(async_data_->createLabel(label)));
 
     QueryExecutor executor(*async_data_, *async_meta_, *session_pool_, {});
+    executor.setSchemaGenerationTracker(schema_generations_);
     execSync(executor, "CREATE (n:Product {name: 'x', val: 1})");
 
     auto result = execSync(executor, "MATCH (n:Product) RETURN n.name, n.val");
@@ -3507,6 +3528,7 @@ protected:
 
         executor_ =
             std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+        executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     }
 
     void TearDown() override {
@@ -4121,6 +4143,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateOnMatchSetDynamicEdgeProp) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(
         *executor_, "CREATE (a:A {id: 1}), (b:B {id: 2}) CREATE (a)-[:TYPE]->(b) CREATE (:A {id: 3}), (:B {id: 4})");
@@ -4173,6 +4196,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicVertexProp) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (:A), (:B)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -4217,6 +4241,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -4250,6 +4275,7 @@ TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
     // Reproduces Merge5 [11]: UNDIRECTED MERGE should create edge startNode=a endNode=b
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (a {id: 2}), (b {id: 1}) RETURN a, b");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -4280,6 +4306,7 @@ TEST_F(QueryExecutorTest, MergeUndirectedMatch) {
     // Reproduces Merge5 [12]: pre-existing edge a(1)→b(2). Query MATCH a(2),b(1) MERGE (a)-[r:KNOWS]-(b) should match.
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (a {id: 1}), (b {id: 2}) "
                                       "CREATE (a)-[:KNOWS]->(b)");
@@ -4311,6 +4338,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
 
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -6079,6 +6107,7 @@ TEST_F(QueryExecutorTest, PropertiesVertex) {
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto create = execSync(*executor_, "CREATE (:PersonWithProps {name: 'Alice', age: 30})");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -6102,6 +6131,7 @@ TEST_F(QueryExecutorTest, PropertiesVertexEmpty) {
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto create = execSync(*executor_, "CREATE (:PersonEmpty)");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -6122,6 +6152,7 @@ TEST_F(QueryExecutorTest, PropertiesEdge) {
     ASSERT_NE(knows_id, INVALID_EDGE_LABEL_ID);
     blockingWait(async_data_->createEdgeLabel(knows_id));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto c1 = execSync(*executor_, "CREATE (:Person)-[:KNOWS_WITH_PROPS {since: 2020}]->(:Person)");
     ASSERT_TRUE(c1.error.empty()) << c1.error;
@@ -6141,6 +6172,7 @@ TEST_F(QueryExecutorTest, KeysMap) {
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto create = execSync(*executor_, "CREATE (:KeyMapTest {name: 'test'})");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -6175,6 +6207,7 @@ TEST_F(QueryExecutorTest, PropertiesInWhere) {
     ASSERT_NE(person_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(person_id));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto c1 = execSync(*executor_, "CREATE (:PersonWhere {name: 'Alice'})");
     ASSERT_TRUE(c1.error.empty()) << c1.error;
@@ -8932,6 +8965,7 @@ TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
     // the value just SET.
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // Build $props = [{login: 'login1', name: 'name1'}, {login: 'login2', name: 'name2'}]
     ListValue props;
@@ -9036,6 +9070,7 @@ TEST_F(QueryExecutorTest, TckReturn6Scenario12CountingPerGroup) {
     blockingWait(async_data_->createLabel(l_id));
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (a:L), (b1), (b2) CREATE (a)-[:A]->(b1), (a)-[:A]->(b2)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -9069,6 +9104,7 @@ TEST_F(QueryExecutorTest, TckDoubleAliasExistingNode) {
     blockingWait(async_data_->createLabel(x_id));
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (a:X)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -9087,6 +9123,7 @@ TEST_F(QueryExecutorTest, TckDistinctInsideAggregation) {
     blockingWait(async_data_->createLabel(x_id));
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (:X {p:1}), (:X {p:2})");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -9112,6 +9149,7 @@ TEST_F(QueryExecutorTest, TckMixedRelPatterns) {
     blockingWait(async_data_->createEdgeLabel(x_el_id));
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (a:Y), (b), (c) CREATE (a)-[:R]->(b), (a)-[:X]->(c)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -9129,6 +9167,7 @@ TEST_F(QueryExecutorTest, TckLabelsOnAnyType) {
     blockingWait(async_data_->createLabel(z_id));
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (:Z)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -9147,6 +9186,7 @@ TEST_F(QueryExecutorTest, TckProjectingListOfNodes) {
     blockingWait(async_data_->createLabel(p_id));
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE (:P), (:P)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -9168,6 +9208,7 @@ TEST_F(QueryExecutorTest, TckCreateAndDeleteSameQuery) {
     // then read column 0 (the anonymous VertexRef) and silently skipped.
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, config);
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto setup = execSync(*executor_, "CREATE ()");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
@@ -9437,6 +9478,7 @@ TEST_F(QueryExecutorTest, MultiLabelCreateAndMatch) {
     blockingWait(async_data_->createLabel(lc));
     // Recreate executor to pick up new labels
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // Create nodes with multiple labels
     auto r1 = execSync(*executor_, "CREATE (:A:B:C), (:A:B), (:A:C), (:B:C), (:A), (:B), (:C)");
@@ -9455,6 +9497,7 @@ TEST_F(QueryExecutorTest, MultiLabelMatchWithProperty) {
     blockingWait(async_data_->createLabel(la));
     blockingWait(async_data_->createLabel(lb));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto r1 =
         execSync(*executor_, "CREATE (:A:B {name: 'ab'}), (:A:B {name: 'ab2'}), (:A {name: 'a'}), (:B {name: 'b'})");
@@ -9474,6 +9517,7 @@ TEST_F(QueryExecutorTest, MultiLabelMatchSingleLabelSubset) {
     blockingWait(async_data_->createLabel(la));
     blockingWait(async_data_->createLabel(lb));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     // (:A) should NOT be matched by MATCH (n:A:B)
     auto r1 = execSync(*executor_, "CREATE (:A), (:B), (:A:B)");
@@ -9496,6 +9540,7 @@ TEST_F(QueryExecutorTest, MultiLabelCreateWithExpand) {
     blockingWait(async_data_->createLabel(la));
     blockingWait(async_data_->createLabel(lb));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto r1 = execSync(*executor_, "CREATE (:A:B {name: 'ab'})-[:KNOWS]->(:B {name: 'b'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
@@ -9524,6 +9569,7 @@ TEST_F(QueryExecutorTest, MergeCreateNodeWithReturn) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     auto result = execSync(*executor_, "MERGE (n:M {name: 'Alice'}) RETURN n.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
@@ -9536,6 +9582,7 @@ TEST_F(QueryExecutorTest, MergeIdempotentReadOwnWrites) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     execSync(*executor_, "MERGE (n:M {name: 'Bob'})");
     execSync(*executor_, "MERGE (n:M {name: 'Bob'})");
     auto check = execSync(*executor_, "MATCH (n:M {name: 'Bob'}) RETURN count(*) AS c");
@@ -9549,6 +9596,7 @@ TEST_F(QueryExecutorTest, UnwindMergeReadOwnWrites) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     auto result = execSync(*executor_, "UNWIND [1, 1, 2] AS x MERGE (n:M {name: 'val'}) RETURN x");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 3);
@@ -9559,6 +9607,7 @@ TEST_F(QueryExecutorTest, MatchWhereCreateEdge) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     execSync(*executor_, "CREATE (:M {name: 'src'})");
     execSync(*executor_, "CREATE (:M {name: 'dst'})");
     auto before = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN count(*) AS c");
@@ -9575,6 +9624,7 @@ TEST_F(QueryExecutorTest, MergeEdgeEndpointAutoCreation) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     auto result = execSync(*executor_, "MERGE (a:M {name: 'Charlie'})-[:KNOWS]->(b:M {name: 'Diana'}) "
                                        "RETURN a.name, b.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -9586,6 +9636,7 @@ TEST_F(QueryExecutorTest, MergeOnCreateSet) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     auto result = execSync(*executor_, "MERGE (n:M {name: 'oncreate'}) ON CREATE SET n.name = 'Created' "
                                        "RETURN n.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -9611,6 +9662,7 @@ TEST_F(QueryExecutorTest, MergeVariableAlreadyBoundFails) {
     auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     execSync(*executor_, "CREATE (n:M {name: 'prebound'})");
     auto result = execSync(*executor_, "MATCH (n:M {name: 'prebound'}) MERGE (n:M {name: 'other'})");
     EXPECT_FALSE(result.error.empty());
@@ -9631,6 +9683,7 @@ TEST_F(QueryExecutorTest, FilterOnExpandDstMultiLabel) {
     blockingWait(async_data_->createLabel(int_id));
     blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     execSync(*executor_, "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0}) "
                          "CREATE (root)-[:KNOWS]->(child1), (root)-[:KNOWS]->(child2)");
@@ -9649,6 +9702,7 @@ TEST_F(QueryExecutorTest, CreateEdgeLabelExistingMetadataEnsuresDataTable) {
     auto rel = blockingWait(async_meta_->createEdgeLabel("R2"));
     ASSERT_NE(rel, INVALID_EDGE_LABEL_ID);
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     auto created = execSync(*executor_, "CREATE (:M)-[:R2]->(:N)");
     ASSERT_TRUE(created.error.empty()) << created.error;
@@ -10056,6 +10110,7 @@ protected:
 
         executor_ =
             std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+        executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     }
 
     // Run EXPLAIN and extract operator names from the plan tree.
@@ -11129,6 +11184,7 @@ TEST_F(QueryExecutorTest, ForeachMergeIsIdempotent) {
     auto lid = blockingWait(async_meta_->createLabel("FT_T", {PropertyDef{0, "v", PropertyType::INT64, false, {}}}));
     blockingWait(async_data_->createLabel(lid));
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN [1, 1, 2] | MERGE (:FT_T {v: x}))").error.empty());
     EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 2);
@@ -11365,6 +11421,7 @@ TEST_F(QueryExecutorTest, DynamicPropertyFallsBackToAnonLabel) {
 
     // Recreate executor so the catalog picks up the __anon__ label.
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
     ASSERT_TRUE(execSync(*executor_, "CREATE ({name: 'anon-dyn'})").error.empty());
 
     ExpressionEvaluator::resetMissingPrefetchCount();
@@ -11418,6 +11475,7 @@ TEST_F(QueryExecutorTest, DeferredDestinationLabelFilterDropsRows) {
     // Broad enough for the planner to defer the label check to materialization.
     async_meta_->setLabelVertexCount(entity_id, 100000);
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'a'})-[:KNOWS]->(b:Entity:Person {name: 'x'}), "
                                      "(a)-[:KNOWS]->(c:Person {name: 'y'})")
@@ -11447,6 +11505,7 @@ TEST_F(QueryExecutorTest, C6TagAnchoredReorder) {
     async_meta_->setLabelVertexCount(tag_id, 100);
     async_meta_->setLabelVertexCount(post_id, 1000);
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
+    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
 
     ASSERT_TRUE(execSync(*executor_, "CREATE (known:Tag {id: 100, name: 'known'}), "
                                      "(co:Tag {id: 101, name: 'co'}), "

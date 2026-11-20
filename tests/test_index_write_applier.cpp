@@ -13,8 +13,11 @@
 #include "storage/io_scheduler.hpp"
 #include "test_sync_store.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+#include <thread>
 
 using namespace eugraph;
 using namespace folly::coro;
@@ -107,7 +110,7 @@ TEST_F(IndexWriteApplierTest, BuildingWritesDeltaAndBindsAdmissionToTransaction)
     const auto status = blockingWait(applyIndexWrite(async, makeItem()));
     EXPECT_EQ(status, IndexWriteStatus::kApplied);
     EXPECT_EQ(runtime->inflight(), 1u); // 名额挂在本事务上
-    EXPECT_EQ(txn.get().transactionEndHookCount(), 1u);
+    EXPECT_TRUE(txn.get().hasIndexAdmission(1));
     EXPECT_TRUE(scanIndex().empty()); // 构建期不写索引表
     ASSERT_TRUE(store_->commitTransaction(txn));
     EXPECT_EQ(runtime->inflight(), 0u); // commit 后释放
@@ -223,7 +226,7 @@ TEST_F(IndexWriteApplierTest, SyncBuildingRoutesToDeltaAndBindsGuard) {
     auto txn = store_->beginTransaction();
     EXPECT_EQ(applyIndexWriteSync(*store_, txn.get(), registry_.get(), makeItem()), IndexWriteStatus::kApplied);
     EXPECT_EQ(runtime->inflight(), 1u);
-    EXPECT_EQ(txn.get().transactionEndHookCount(), 1u);
+    EXPECT_TRUE(txn.get().hasIndexAdmission(1));
     ASSERT_TRUE(store_->commitTransaction(txn));
     EXPECT_EQ(runtime->inflight(), 0u);
 
@@ -273,4 +276,92 @@ TEST_F(IndexWriteApplierTest, SyncLegacyWithoutRegistryWritesIndexTable) {
 
     EXPECT_EQ(scanIndex().size(), 1u);
     EXPECT_EQ(replayDelta(), 0u);
+}
+
+TEST_F(IndexWriteApplierTest, AdmittedTransactionContinuesAfterGateCloses) {
+    auto runtime = registry_->createOrUpdate(makeDescriptor(IndexPhase::kScan, /*unique=*/false));
+    auto txn = store_->beginTransaction();
+    AsyncGraphDataStore async(*store_, *io_, txn.get());
+    async.setIndexRegistry(registry_.get());
+
+    ASSERT_EQ(blockingWait(applyIndexWrite(async, makeItem())), IndexWriteStatus::kApplied);
+    ASSERT_TRUE(runtime->closeAdmission()); // 模拟 FINALIZE 关闸
+
+    // 同一事务已持有该索引准入：后续写入必须继续写 delta，不能等闸门（否则
+    // FINALIZE 等事务、事务等 FINALIZE 死锁）。
+    auto second = makeItem();
+    second.entity_id = 43;
+    EXPECT_EQ(blockingWait(applyIndexWrite(async, second)), IndexWriteStatus::kApplied);
+    EXPECT_EQ(runtime->inflight(), 1u);
+
+    ASSERT_TRUE(store_->commitTransaction(txn));
+    EXPECT_EQ(runtime->inflight(), 0u);
+    EXPECT_EQ(replayDelta(), 2u);
+}
+
+TEST_F(IndexWriteApplierTest, UnadmittedWriterWaitsForGateReopen) {
+    registry_->createOrUpdate(makeDescriptor(IndexPhase::kScan, /*unique=*/false));
+    auto runtime = registry_->find(1);
+    ASSERT_TRUE(runtime->closeAdmission());
+
+    auto txn = store_->beginTransaction();
+    AsyncGraphDataStore async(*store_, *io_, txn.get());
+    async.setIndexRegistry(registry_.get());
+
+    std::atomic<bool> done{false};
+    IndexWriteStatus status = IndexWriteStatus::kRetryLater;
+    std::thread waiter([&] {
+        status = blockingWait(applyIndexWrite(async, makeItem()));
+        done.store(true);
+    });
+    // 超过旧的 1s 超时：新实现必须继续等待，而不是返回 RetryLater。
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    EXPECT_FALSE(done.load());
+    runtime->reopenAdmission();
+    waiter.join();
+    EXPECT_TRUE(done.load());
+    EXPECT_EQ(status, IndexWriteStatus::kApplied);
+    ASSERT_TRUE(store_->commitTransaction(txn));
+}
+
+TEST_F(IndexWriteApplierTest, NewIndexDuringAdmittedTransactionFailsFastWithoutDeadlock) {
+    auto runtime1 = registry_->createOrUpdate(makeDescriptor(IndexPhase::kScan, /*unique=*/false));
+    ASSERT_NE(runtime1, nullptr);
+
+    IndexRuntime::Descriptor second_desc = makeDescriptor(IndexPhase::kScan, /*unique=*/false);
+    second_desc.index_id = 2;
+    second_desc.index_table = vidxTableById(2);
+    second_desc.delta_table = indexDeltaTable(2);
+    ASSERT_TRUE(store_->createIndex(vidxTableById(2)));
+    ASSERT_TRUE(store_->createIndex(indexDeltaTable(2)));
+    auto runtime2 = registry_->createOrUpdate(second_desc);
+    ASSERT_NE(runtime2, nullptr);
+
+    auto txn = store_->beginTransaction();
+    AsyncGraphDataStore async(*store_, *io_, txn.get());
+    async.setIndexRegistry(registry_.get());
+    ASSERT_EQ(blockingWait(applyIndexWrite(async, makeItem())), IndexWriteStatus::kApplied);
+    ASSERT_TRUE(runtime2->closeAdmission());
+
+    auto second = makeItem();
+    second.index_id = 2;
+    second.legacy_table = vidxTableById(2);
+    second.entity_id = 44;
+    // 已持有 index 1 的准入 ⇒ 遇到 index 2 关闸必须快速失败，不能等（否则死锁）。
+    EXPECT_EQ(blockingWait(applyIndexWrite(async, second)), IndexWriteStatus::kRetryLater);
+    ASSERT_TRUE(store_->commitTransaction(txn));
+    EXPECT_EQ(runtime1->inflight(), 0u);
+}
+
+TEST_F(IndexWriteApplierTest, SyncBatchContinuesAfterGateClosesWhenAdmitted) {
+    auto runtime = registry_->createOrUpdate(makeDescriptor(IndexPhase::kScan, /*unique=*/false));
+    auto txn = store_->beginTransaction();
+    ASSERT_EQ(applyIndexWriteSync(*store_, txn.get(), registry_.get(), makeItem()), IndexWriteStatus::kApplied);
+    ASSERT_TRUE(runtime->closeAdmission());
+
+    auto second = makeItem();
+    second.entity_id = 43;
+    EXPECT_EQ(applyIndexWriteSync(*store_, txn.get(), registry_.get(), second), IndexWriteStatus::kApplied);
+    ASSERT_TRUE(store_->commitTransaction(txn));
+    EXPECT_EQ(replayDelta(), 2u);
 }
