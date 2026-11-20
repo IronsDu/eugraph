@@ -69,8 +69,11 @@ D 的右侧子计划里 `Expand(dst=__exists_dst_0, ...)` 之上叠了 3 个 `Fi
 ### 0.3 因此后续工作方向
 
 1. 不再重复实现 binder 级折进（与既有物理层折进重复，且现有实现已有单测 + TCK 覆盖）；
-2. 若继续这个方向，先给折进加**跳过原因计数器**（env 开关 + PROFILE 标记），量化 D 类形状在
-   LDBC 21 条里的出现频度，再决定是否值得改 binder 或放宽守卫；
+2. 残余形状（D）已在同一分支修复：折进原先只写在 `planBound`，而带 `EXISTS` 谓词的查询会被
+   CBO 选中走 `planChosen`，后者漏掉了折进。两条路径现在共用
+   `applyCorrelatedEndpointFold`；修复后 D 的 `EXPLAIN` 为 `dst=bound` + `probe=set`，
+   `__exists_dst` 计数 0。详见
+   [engine/correlated-endpoint-set-probe.md](engine/correlated-endpoint-set-probe.md) §2.1；
 3. §1 的 18,321 次 / 2.6M 行 / 541 ms 是 2026-11-11 之前的数，不能再当作现状引用。
 
 ---

@@ -22,7 +22,7 @@ Filter(id(__exists_dst_N) == id(__exists_saved_N))
 
 ## 2. 三个机制
 
-### 2.1 把端点等值折进 Expand（planBound）
+### 2.1 把端点等值折进 Expand（两条规划路径共用）
 
 `physical_planner.cpp` 的 `rewriteDstBoundExpandFilters` 在
 `collectPlanRequirements` **之前**做结构化重写：
@@ -44,6 +44,14 @@ Filter(BinaryOp(EQ, id(ref_a), id(ref_b)))
 
 必须早于需求收集：dst 绑定会改变下游需要物化的列集合。重写只改计划形状，不依赖
 只读性。
+
+**两条规划路径都必须执行**：执行器在 `bound_stmt->plan.chosen` 存在时走
+`PhysicalPlanner::planChosen`（CBO），否则走 `planBound`（RBO）。两者前处理序列相同，
+只是 CBO 路径原先漏了折进，导致 `EXISTS { MATCH ... }` 这类**被 CBO 选中**的计划仍枚举
+源点整段邻接再过滤（`__exists_dst_N` 残留、无 `dst=bound`）。现在两条路径共用
+`applyCorrelatedEndpointFold(root, allow_probe)`，调用点固定为
+`rewriteRefCompatiblePredicates` 之后、`collectPlanRequirements` 之前；回归测试
+`CorrelatedExistsPredicateBindsEndpointOnChosenPlan`（旧实现必失败）。
 
 ### 2.2 批量精确 seek（存储接口）
 
