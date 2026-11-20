@@ -985,6 +985,7 @@ if(EUGRAPH_BUILD_TESTS)
 
     target_link_libraries(index_write_router_tests PRIVATE
         eugraph_lib
+        eugraph_index
         GTest::gtest
         GTest::gtest_main
         dl
