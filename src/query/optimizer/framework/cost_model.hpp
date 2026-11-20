@@ -32,7 +32,6 @@ enum class PhysicalOpTag {
     VarLenExpand,
     MultiExpand,
     // Joins
-    HashJoin,
     NestedLoopJoin,
     CrossProduct,
     SemiJoin,
@@ -75,7 +74,6 @@ enum class PhysicalOpTag {
 //   Scan/IndexScan:    output cardinality
 //   Filter/Project:    input cardinality (scan + apply)
 //   Expand:            output cardinality (output = input × degree)
-//   HashJoin:          build + probe = right.card + left.card
 //   NestedLoopJoin:    left × right
 //   CrossProduct:      left × right
 //   Sort:              n × log2(n), n = input cardinality

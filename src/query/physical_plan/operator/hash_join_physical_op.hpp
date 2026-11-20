@@ -23,10 +23,11 @@ class HashJoinPhysicalOp : public PhysicalOperator {
 public:
     HashJoinPhysicalOp(std::unique_ptr<PhysicalOperator> left, std::unique_ptr<PhysicalOperator> right,
                        std::vector<uint32_t> left_key_cols, std::vector<uint32_t> right_key_cols,
-                       std::vector<binder::BoundType> output_types, Schema output_schema)
+                       std::vector<binder::BoundType> output_types, Schema output_schema, bool build_left = false,
+                       size_t max_build_rows = 0)
         : left_(std::move(left)), right_(std::move(right)), left_key_cols_(std::move(left_key_cols)),
           right_key_cols_(std::move(right_key_cols)), output_types_(std::move(output_types)),
-          output_schema_(std::move(output_schema)) {}
+          output_schema_(std::move(output_schema)), build_left_(build_left), max_build_rows_(max_build_rows) {}
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
@@ -43,6 +44,10 @@ private:
     std::vector<uint32_t> right_key_cols_;
     std::vector<binder::BoundType> output_types_;
     Schema output_schema_;
+    /// true: 物化 left（小表）并探测 right；默认物化 right。
+    bool build_left_ = false;
+    /// 0 = 不限；>0 时构建行数超限直接失败，避免无界内存（planner 应先用估算拦截）。
+    size_t max_build_rows_ = 0;
 };
 
 } // namespace compute

@@ -1,7 +1,8 @@
 # c6 tag-anchored join reorder
 
-Status: 2026-11-07. Narrow, guarded logical rewrite for the LDBC c6
-tag-co-occurrence shape.
+Status: **historical / removed**. 该规则曾在 2026-11-07 为 LDBC c6 引入，
+但因按 `Tag/Post/Person/HAS_TAG/HAS_CREATOR` 硬编码，已从 core optimizer 移除；
+当前走通用 HashJoin/物理规划，见 `optimizer-architecture.md`。
 
 ## Problem
 
@@ -77,7 +78,8 @@ reorder:       62 /   64 /   66 ms   (~33-35x vs D1)
 
 ## Files
 
-- `src/query/optimizer/rules/logical/tag_anchored_join_reorder.{hpp,cpp}`
+- 原实现 `src/query/optimizer/rules/logical/tag_anchored_join_reorder.{hpp,cpp}`
+  （已删除；当前用通用 HashJoin/物理规划）
 - `src/query/optimizer/logical_optimizer.cpp` (call + stats parameter)
 - `src/query/executor/query_executor.cpp` (pass label counts)
 - `tests/test_query_executor.cpp` (`C6TagAnchoredReorder`)

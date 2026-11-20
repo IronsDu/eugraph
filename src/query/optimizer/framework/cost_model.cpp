@@ -38,10 +38,6 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     case PhysicalOpTag::MultiExpand:
         return Cost(group_lp.cardinality);
 
-    // Hash join: build side (right) + probe side (left)
-    case PhysicalOpTag::HashJoin:
-        return Cost(input1Card() + input0Card());
-
     // Nested loop join: left × right iterations
     case PhysicalOpTag::NestedLoopJoin:
     case PhysicalOpTag::CrossProduct:
