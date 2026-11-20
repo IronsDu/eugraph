@@ -103,6 +103,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [构建指南](build/build-guide.md) | 前置条件、CMake Presets、ASan/UBSan 构建、测试、代码格式化 |
+| [依赖版本](build/dependency-versions.md) | vcpkg baseline、直接依赖版本、libunwind overlay 与 CI ccache 滚动策略 |
 | [Server 使用](program/usage/server.md) | eugraph-server 启动参数与典型流程 |
 | [Shell 使用](program/usage/shell.md) | eugraph-shell 启动参数、命令列表、交互示例 |
 | [CSV Loader 使用](program/usage/loader.md) | LDBC SNB 格式导入、schema 推断、批量 RPC 插入 |
