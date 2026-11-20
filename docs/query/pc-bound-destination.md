@@ -51,10 +51,20 @@ Expand(src=__anon_3, dst=__exists_saved_1, edge=__anon_edge_4, labels=[3], direc
 | D. `EXISTS { MATCH (p)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person) }`（起点 `p` 局部） | 0 | 0 | 4 |
 
 D 的右侧子计划里 `Expand(dst=__exists_dst_0, ...)` 之上叠了 3 个 `Filter`，折进没有发生，
-因此该跳仍然「枚举 tag 的全部 `HAS_INTEREST` 入边再过滤」。**跳过原因尚未定位**：
-`rewriteDstBoundExpandFilters` 的守卫是 `endpoint_expr_refs.complete`（整计划 walker 完整性）、
-`Filter` 必须直接贴在 `Expand` 上、以及 `expr_refs[dst]==1 && field_refs[dst]==1`；
-需要计数器才能区分是哪一条挡住的。
+因此该跳仍然「枚举 tag 的全部 `HAS_INTEREST` 入边再过滤」。
+
+**跳过原因已定位（env 诊断，`EUGRAPH_PLAN_DEBUG=1`）**：
+
+```text
+[FOLD] filter skipped: child_is_expand=false pred_is_eq=true    ← D：EQ 过滤存在，但孩子不是 Expand
+[FOLD] dst=__exists_dst_1 saved=__exists_saved_1 expr_refs=1 field_refs=1 provides=true fold=yes   ← A（c10）
+```
+
+即：不是 `safe_to_fold` / `subtreeProvidesCorrelatedVariable` 拦住的，而是**绑定期形状不满足
+「`Filter` 直接位于 `Expand` 之上」**——`EXPLAIN` 打印的是优化后的物理计划，看起来贴着，
+但 `rewriteDstBoundExpandFilters` 在 requirements 收集前看到的 bound 计划里，那个 EQ 过滤器的
+孩子不是 `Expand`。折进只对 binder 恰好把等值过滤直接套在 Expand 上的路径（pattern comprehension）
+生效，EXISTS 子查询这条路径不满足。
 
 ### 0.3 因此后续工作方向
 
