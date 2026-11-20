@@ -11,6 +11,7 @@
 //  - 只有不可重试错误才毒化会话 ✓（Busy 可重试，见 `TxnErrorClass`）
 //  - 纯事务状态机在 `TxnController`/`StickyError` ⇒ 可脱离 WT 单测 ✓
 
+#include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
 #include "storage/session/cursor_provider.hpp"
 #include "storage/session/session_types.hpp"
@@ -63,6 +64,8 @@ public:
         }
         auto request = txn_.commit_request();
         if (!request) {
+            runTransactionEndHooks();
+            clearSchemaPin();
             TxnOutcome out{TxnState::Failed, 0, "commit without active transaction"};
             err_.set(out);
             return out;
@@ -81,6 +84,8 @@ public:
         txn_.on_commit_result(out);
         err_.set(out);
         summary_written_.clear();
+        runTransactionEndHooks();
+        clearSchemaPin();
         return out;
     }
 
@@ -95,11 +100,15 @@ public:
                 err_.set(TxnOutcome{TxnState::Failed, ret,
                                     std::string("rollback_transaction failed: ") + describeWtError(ret),
                                     classifyWtError(ret)});
+                runTransactionEndHooks();
+                clearSchemaPin();
                 return; // 保留 transaction_open：由池销毁/会话析构收尾 ✓
             }
         }
         txn_.on_rollback();
         summary_written_.clear();
+        runTransactionEndHooks();
+        clearSchemaPin();
     }
 
     /// 收尾：关全部 cursor → 后端事务仍开着 ⇒ 回滚 ✓（归还由池负责 ✓）
@@ -119,6 +128,8 @@ public:
                     err_.set(TxnOutcome{TxnState::Failed, ret,
                                         std::string("close rollback failed: ") + describeWtError(ret),
                                         classifyWtError(ret)});
+                    runTransactionEndHooks();
+                    clearSchemaPin();
                     return; // 毒化 ⇒ 池销毁；不谎报“已回滚” ✓
                 }
             }
@@ -126,6 +137,8 @@ public:
             summary_written_.clear();
             spdlog::warn("[GraphSession] 未提交就收尾 ⇒ 已回滚（调用方应显式 commit/rollback）");
         }
+        runTransactionEndHooks();
+        clearSchemaPin();
     }
 
     /// 记录本事务的一次失败（数据 op / 表原语）✓
@@ -139,6 +152,54 @@ public:
     /// 数据 op 返回 WT 错误码时的统一入口 ✓
     void fail_from_wt(int wt_error, std::string message) {
         fail(classifyWtError(wt_error), wt_error, std::move(message));
+    }
+
+    // ==================== schema 版本 pin（在线索引构建）====================
+    /// 事务开始时的 schema 快照代数/兼容版本。语义见设计 §10.1：
+    ///   * 索引可用性冻结在事务开始（`public_generation <= pin.generation` 才可选）；
+    ///   * 兼容新增（新标签/属性）仍按语句边界采用（读活 schema）；
+    ///   * `compat_version` 变化时整体退回旧视图（破坏性 DDL 尚未开放）。
+    struct SchemaPin {
+        uint64_t generation = 0;
+        uint64_t compat_version = 0;
+        bool valid = false;
+        bool tracked = false; ///< 是否已在图级 tracker 计数（每事务只计一次）
+        /// 事务开始时固定的 schema 版本；旧版本由服务用引用计数管理。
+        std::shared_ptr<const GraphSchema> schema;
+    };
+    void setSchemaPin(SchemaPin pin) noexcept {
+        schema_pin_ = pin;
+    }
+    const SchemaPin& schemaPin() const noexcept {
+        return schema_pin_;
+    }
+    void clearSchemaPin() noexcept {
+        schema_pin_ = {};
+    }
+    void markSchemaPinTracked() noexcept {
+        schema_pin_.tracked = true;
+    }
+
+    // ==================== 事务结束回调（通用，不依赖具体特性）====================
+    /// 注册"事务结束时必须执行"的回调（如释放写准入名额、解绑 schema pin）。
+    /// commit/rollback/close 时**逐个执行**（异常吞掉，保证其余回调仍执行）。
+    void onTransactionEnd(std::function<void()> hook) {
+        if (hook)
+            txn_end_hooks_.push_back(std::move(hook));
+    }
+    void runTransactionEndHooks() noexcept {
+        std::vector<std::function<void()>> hooks;
+        hooks.swap(txn_end_hooks_);
+        for (auto& hook : hooks) {
+            try {
+                hook();
+            } catch (...) {
+                // 事务收尾路径：回调失败不能让收尾半途而废。
+            }
+        }
+    }
+    size_t transactionEndHookCount() const noexcept {
+        return txn_end_hooks_.size();
     }
 
     /// 会话级 cursor 缓存（§7 ✓）：同表复用 ✓；close()/end_statement() 统一关闭 ✓
@@ -163,6 +224,8 @@ public:
             cursors_->clear();
         txn_.reset();
         err_.clear();
+        runTransactionEndHooks();
+        clearSchemaPin();
         closed_ = false; // close() 会置真 ✗ ⇒ 复用前必须复位 ✓
     }
 
@@ -246,6 +309,10 @@ private:
     TxnController txn_{};
     StickyError err_{};
     std::unordered_set<VertexId> summary_written_;
+    /// 事务开始时绑定的 schema 版本（见上）。
+    SchemaPin schema_pin_;
+    /// 事务结束时需要释放的资源（RAII 闭包）。事务结束统一清空，防止资源泄漏。
+    std::vector<std::function<void()>> txn_end_hooks_;
     bool closed_ = false;
 };
 

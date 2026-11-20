@@ -429,6 +429,34 @@ GIVEN("^the (.+) graph$", (const std::string& graph_name)) {
     gCtx->executeQuery(ss.str());
 }
 
+namespace {
+
+/// CREATE INDEX 是异步 DDL：TCK 的 setup 步骤要像 loader 一样轮询到终态。
+void waitForIndexBuildsToSettle() {
+    constexpr int kMaxWaitMs = 120000;
+    constexpr int kIntervalMs = 100;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kMaxWaitMs);
+    while (true) {
+        gCtx->executeQuery("SHOW INDEXES");
+        if (gCtx->lastQueryHadError)
+            return; // 让后续断言报告真实错误
+        bool building = false;
+        for (const auto& row : gCtx->lastRows) {
+            if (row.size() >= 5 && (row[4] == "BUILDING" || row[4] == "WRITE_ONLY")) {
+                building = true;
+                break;
+            }
+        }
+        if (!building)
+            return;
+        if (std::chrono::steady_clock::now() >= deadline)
+            throw std::runtime_error("TCK: timed out waiting for index build to finish");
+        std::this_thread::sleep_for(std::chrono::milliseconds(kIntervalMs));
+    }
+}
+
+} // namespace
+
 // -----------------------------------------------------------------------
 // Setup query: "And having executed:"
 // -----------------------------------------------------------------------
@@ -442,6 +470,8 @@ STEP("^having executed:$") {
     spdlog::info("[TCK] [{}] setup query: {}", gCtx->graphName, q);
     gCtx->ensureTypesForQuery(q);
     gCtx->executeQuery(q);
+    if (q.find("CREATE INDEX") != std::string::npos || q.find("CREATE UNIQUE INDEX") != std::string::npos)
+        waitForIndexBuildsToSettle();
 }
 
 // -----------------------------------------------------------------------
@@ -520,6 +550,52 @@ THEN("^the result should be empty$") {
 // -----------------------------------------------------------------------
 // Then: result in any order (with data table)
 // -----------------------------------------------------------------------
+
+THEN("^the result should include columns:$") {
+    gCurrentStepText = "the result should include columns:";
+    ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
+    if (!dataTable || dataTable->rows.empty())
+        return;
+
+    std::vector<std::string> expCols;
+    for (const auto& c : dataTable->rows[0].cells)
+        expCols.push_back(c.value);
+    ASSERT_GE(gCtx->lastColumns.size(), expCols.size());
+    for (size_t i = 0; i < expCols.size(); ++i)
+        EXPECT_EQ(gCtx->lastColumns[i], expCols[i]) << "column " << i;
+
+    std::vector<std::vector<std::string>> expRows;
+    for (size_t i = 1; i < dataTable->rows.size(); ++i) {
+        std::vector<std::string> row;
+        for (const auto& c : dataTable->rows[i].cells)
+            row.push_back(c.value);
+        if (!row.empty())
+            expRows.push_back(row);
+    }
+    ASSERT_EQ(gCtx->lastRows.size(), expRows.size());
+
+    auto normalize = [](std::string s) {
+        for (size_t i = 0; i + 1 < s.size();) {
+            if (s[i] == ':' && s[i + 1] == ' ')
+                s.erase(i + 1, 1);
+            else
+                ++i;
+        }
+        return s;
+    };
+    for (auto& row : gCtx->lastRows)
+        for (size_t i = 0; i < expCols.size(); ++i)
+            row[i] = normalize(row[i]);
+    for (auto& row : expRows)
+        for (auto& cell : row)
+            cell = normalize(cell);
+    std::sort(gCtx->lastRows.begin(), gCtx->lastRows.end());
+    std::sort(expRows.begin(), expRows.end());
+    for (size_t i = 0; i < expRows.size(); ++i) {
+        for (size_t j = 0; j < expCols.size(); ++j)
+            EXPECT_EQ(gCtx->lastRows[i][j], expRows[i][j]) << "row " << i << " col " << j;
+    }
+}
 
 THEN("^the result should be, in any order:$") {
     gCurrentStepText = "the result should be, in any order:";

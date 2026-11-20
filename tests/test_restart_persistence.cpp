@@ -270,6 +270,65 @@ TEST_F(RestartPersistenceTest, EdgeDataPersistsAcrossRestart) {
     }
 }
 
+// ==================== v2 索引：id 分配与启动恢复 ====================
+
+TEST_F(RestartPersistenceTest, EdgeIndexIdAssignedAndPersisted) {
+    uint32_t first_id = 0;
+    {
+        auto s = StorageStack::open(db_path_);
+        ASSERT_TRUE(s);
+        const auto elid = blockingWait(s->async_meta->createEdgeLabel(
+            "KNOWS", {PropertyDef{0, "since", PropertyType::INT64, false, std::nullopt}}));
+        ASSERT_NE(elid, INVALID_LABEL_ID);
+        ASSERT_TRUE(blockingWait(s->async_meta->createEdgeIndex("idx_knows_since", "KNOWS", {"since"}, false)));
+
+        auto def = blockingWait(s->async_meta->getEdgeLabelDef("KNOWS"));
+        ASSERT_TRUE(def.has_value());
+        ASSERT_EQ(def->indexes.size(), 1u);
+        first_id = def->indexes[0].index_id;
+        EXPECT_NE(first_id, 0u); // v2 之前这里恒为 0
+        s->close();
+    }
+    {
+        auto s = StorageStack::open(db_path_);
+        ASSERT_TRUE(s);
+        auto def = blockingWait(s->async_meta->getEdgeLabelDef("KNOWS"));
+        ASSERT_TRUE(def.has_value());
+        ASSERT_EQ(def->indexes.size(), 1u);
+        EXPECT_EQ(def->indexes[0].index_id, first_id); // index_id 必须持久化且稳定
+    }
+}
+
+TEST_F(RestartPersistenceTest, UnfinishedIndexBuildBecomesErrorOnRecovery) {
+    {
+        auto s = StorageStack::open(db_path_);
+        ASSERT_TRUE(s);
+        const auto lid = blockingWait(
+            s->async_meta->createLabel("Person", {PropertyDef{0, "name", PropertyType::STRING, false, std::nullopt}}));
+        ASSERT_NE(lid, INVALID_LABEL_ID);
+        ASSERT_TRUE(blockingWait(s->async_meta->createVertexIndex("idx_person_name", "Person", {"name"}, false)));
+
+        auto def = blockingWait(s->async_meta->getLabelDef("Person"));
+        ASSERT_TRUE(def.has_value());
+        ASSERT_EQ(def->indexes.size(), 1u);
+        EXPECT_EQ(def->indexes[0].state, IndexState::WRITE_ONLY); // 构建中（模拟崩溃现场）
+        s->close();
+    }
+    {
+        auto s = StorageStack::open(db_path_);
+        ASSERT_TRUE(s);
+        const auto recovered = blockingWait(s->async_meta->recoverUnfinishedIndexes());
+        ASSERT_EQ(recovered.size(), 1u);
+        EXPECT_EQ(recovered[0].kind, "orphan");
+        EXPECT_FALSE(recovered[0].tables.empty());
+
+        auto def = blockingWait(s->async_meta->getLabelDef("Person"));
+        ASSERT_TRUE(def.has_value());
+        ASSERT_EQ(def->indexes.size(), 1u);
+        EXPECT_EQ(def->indexes[0].state, IndexState::ERROR); // 绝不停在 BUILDING，也绝不 PUBLIC
+    }
+}
+
 } // anonymous namespace
 
 int main(int argc, char** argv) {

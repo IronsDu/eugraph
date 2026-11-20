@@ -11,6 +11,12 @@ namespace eugraph {
 
 // ==================== Lifecycle ====================
 
+void AsyncGraphMetaStore::publishSchemaVersion() {
+    auto next = std::make_shared<GraphSchema>(schema_);
+    std::lock_guard<std::mutex> lock(published_mu_);
+    published_schema_ = std::move(next);
+}
+
 folly::coro::Task<bool> AsyncGraphMetaStore::open(ISyncGraphMetaStore& store, IoScheduler& io) {
     store_ = std::ref(store);
     io_ = std::ref(io);
@@ -53,6 +59,7 @@ folly::coro::Task<bool> AsyncGraphMetaStore::open(ISyncGraphMetaStore& store, Io
     spdlog::info("AsyncGraphMetaStore opened: {} labels, {} edge labels, next_vid={}, next_eid={}",
                  schema_.labels.size(), schema_.edge_labels.size(), schema_.next_vertex_id, schema_.next_edge_id);
 
+    publishSchemaVersion();
     co_return true;
 }
 
@@ -60,6 +67,10 @@ folly::coro::Task<void> AsyncGraphMetaStore::close() {
     store_ = std::nullopt;
     io_ = std::nullopt;
     schema_ = GraphSchema{};
+    {
+        std::lock_guard<std::mutex> lock(published_mu_);
+        published_schema_.reset();
+    }
     co_return;
 }
 
@@ -81,6 +92,7 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
                                                             const std::vector<PropertyDef>& properties,
                                                             const std::vector<std::string>& pk_props,
                                                             bool merge_properties) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
     // 已存在时的两种语义（loader 每次运行都会先 createLabel，这是它的正常路径）：
     //   merge_properties=true  → 增量加属性：同名必须同类型（否则报错），新属性按声明顺序追加 prop_id。
     //                            对应 neo4j-admin import：同一标签可由多个文件供给，属性取并集。
@@ -90,7 +102,7 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
         const LabelDef before = schema_.labels.at(existing_id);
 
         if (merge_properties) {
-            auto& def = schema_.labels[existing_id];
+            LabelDef def = schema_.labels.at(existing_id);
             uint16_t next_prop_id = static_cast<uint16_t>(def.properties.size());
             bool changed = false;
             for (const auto& p : properties) {
@@ -117,12 +129,13 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
                 auto& s = store_->get();
                 auto& i = io_->get();
                 const LabelDef snapshot = def;
-                try {
-                    co_await i.dispatchVoid([&s, &snapshot]() { persistLabelDef(s, snapshot); });
-                } catch (...) {
-                    schema_.labels[existing_id] = before; // 持久化失败 ⇒ 回滚内存 schema ✓
-                    throw;
+                co_await i.dispatchVoid([&s, &snapshot]() { persistLabelDef(s, snapshot); });
+                {
+                    std::unique_lock<std::shared_mutex> lock(schema_mu_);
+                    schema_.labels[existing_id] = std::move(def);
                 }
+                bumpSchemaGeneration();
+                publishSchemaVersion();
                 spdlog::info("Merged properties into label '{}' ({} -> {} properties)", name, before.properties.size(),
                              snapshot.properties.size());
             }
@@ -154,7 +167,11 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
         co_return existing_id;
     }
 
-    LabelId id = schema_.next_label_id++;
+    LabelId id;
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        id = schema_.next_label_id++;
+    }
     auto& s = store_->get();
     auto& i = io_->get();
 
@@ -196,8 +213,13 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
 
     // NOTE: No longer calls store.createLabel(id) — data table creation is the handler's responsibility.
 
-    schema_.labels[id] = def;
-    schema_.label_name_to_id[name] = id;
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        schema_.labels[id] = def;
+        schema_.label_name_to_id[name] = id;
+    }
+    bumpSchemaGeneration();
+    publishSchemaVersion();
 
     spdlog::info("Created label '{}' with id={}, {} properties", name, id, def.properties.size());
     co_return id;
@@ -240,6 +262,7 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string
 folly::coro::Task<bool>
 AsyncGraphMetaStore::createVertexIndexWithAccessors(const std::string& name, const std::string& label_name,
                                                     const std::vector<IndexAccessorDef>& accessors, bool unique) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
     if (schema_.findIndexByName(name).has_value()) {
         spdlog::error("Index '{}' already exists", name);
         co_return false;
@@ -274,7 +297,10 @@ AsyncGraphMetaStore::createVertexIndexWithAccessors(const std::string& name, con
     }
 
     LabelDef::IndexDef idx_def;
-    idx_def.index_id = schema_.next_index_id++;
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        idx_def.index_id = schema_.next_index_id++;
+    }
     idx_def.name = name;
     idx_def.accessors = resolved;
     idx_def.unique = unique;
@@ -298,14 +324,14 @@ AsyncGraphMetaStore::createVertexIndexWithAccessors(const std::string& name, con
         }
     }
 
-    const LabelDef before_label = schema_.labels[label_opt->id];
-    schema_.labels[label_opt->id].indexes.push_back(idx_def);
+    LabelDef updated_label = schema_.labels[label_opt->id];
+    updated_label.indexes.push_back(idx_def);
 
     auto& s = store_->get();
     auto& i = io_->get();
     try {
         co_await i.dispatchVoid([&]() {
-            persistLabelDef(s, schema_.labels[label_opt->id]);
+            persistLabelDef(s, updated_label);
             std::string idx_key = std::string("M|index:") + name;
             std::string idx_val;
             idx_val.push_back(static_cast<char>(label_opt->id >> 8));
@@ -326,10 +352,15 @@ AsyncGraphMetaStore::createVertexIndexWithAccessors(const std::string& name, con
         });
         co_await saveNextIds();
     } catch (...) {
-        schema_.labels[label_opt->id] = before_label;
         throw;
     }
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        schema_.labels[label_opt->id] = std::move(updated_label);
+    }
 
+    bumpSchemaGeneration();
+    publishSchemaVersion();
     std::string prop_list;
     for (size_t i = 0; i < idx_def.accessors.size(); ++i) {
         if (i > 0)
@@ -343,6 +374,7 @@ AsyncGraphMetaStore::createVertexIndexWithAccessors(const std::string& name, con
 folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& name,
                                                              const std::string& edge_label_name,
                                                              const std::vector<std::string>& prop_names, bool unique) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
     if (schema_.findIndexByName(name).has_value()) {
         spdlog::error("Index '{}' already exists", name);
         co_return false;
@@ -372,19 +404,24 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
     }
 
     LabelDef::IndexDef idx_def;
+    // v2: 边索引也必须分配 index_id（此前漏了 ⇒ 恒为 0，任何按 id 的路由/注册都不成立）。
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        idx_def.index_id = schema_.next_index_id++;
+    }
     idx_def.name = name;
     idx_def.prop_ids = new_prop_ids;
     idx_def.unique = unique;
     idx_def.state = IndexState::WRITE_ONLY;
 
-    const EdgeLabelDef before_elabel = schema_.edge_labels[elabel_opt->id];
-    schema_.edge_labels[elabel_opt->id].indexes.push_back(idx_def);
+    EdgeLabelDef updated_elabel = schema_.edge_labels[elabel_opt->id];
+    updated_elabel.indexes.push_back(idx_def);
 
     auto& s = store_->get();
     auto& i = io_->get();
     try {
         co_await i.dispatchVoid([&]() {
-            persistEdgeLabelDef(s, schema_.edge_labels[elabel_opt->id]);
+            persistEdgeLabelDef(s, updated_elabel);
             std::string idx_key = std::string("M|index:") + name;
             std::string idx_val;
             idx_val.push_back(static_cast<char>(elabel_opt->id >> 8));
@@ -399,11 +436,18 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
             if (!s.metadataPut(idx_key, idx_val))
                 throw std::runtime_error("Failed to persist edge index definition '" + name + "'");
         });
+        // index_id 是持久化字段（meta_codec::encodeIndexDef），必须与定义一起落盘计数器。
+        co_await saveNextIds();
     } catch (...) {
-        schema_.edge_labels[elabel_opt->id] = before_elabel;
         throw;
     }
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        schema_.edge_labels[elabel_opt->id] = std::move(updated_elabel);
+    }
 
+    bumpSchemaGeneration();
+    publishSchemaVersion();
     std::string edge_prop_list;
     for (size_t i = 0; i < prop_names.size(); ++i) {
         if (i > 0)
@@ -415,36 +459,55 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
 }
 
 folly::coro::Task<bool> AsyncGraphMetaStore::updateIndexState(const std::string& name, IndexState new_state) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
+    const GraphSchema snapshot = schemaSnapshot();
     auto& s = store_->get();
     auto& i = io_->get();
-    for (auto& [lid, label] : schema_.labels) {
-        for (auto& idx : label.indexes) {
-            if (idx.name == name) {
-                const IndexState before = idx.state;
-                idx.state = new_state;
-                try {
-                    co_await i.dispatchVoid([&]() { persistLabelDef(s, label); });
-                } catch (...) {
-                    idx.state = before;
-                    throw;
+
+    for (const auto& [lid, label] : snapshot.labels) {
+        for (const auto& idx : label.indexes) {
+            if (idx.name != name)
+                continue;
+            const IndexState before = idx.state;
+            LabelDef updated = label;
+            for (auto& candidate : updated.indexes) {
+                if (candidate.name == name) {
+                    candidate.state = new_state;
+                    break;
                 }
-                co_return true;
             }
+            co_await i.dispatchVoid([&]() { persistLabelDef(s, updated); });
+            {
+                std::unique_lock<std::shared_mutex> lock(schema_mu_);
+                schema_.labels[lid] = std::move(updated);
+            }
+            if (new_state == IndexState::PUBLIC && before != IndexState::PUBLIC)
+                bumpSchemaGeneration();
+            publishSchemaVersion();
+            co_return true;
         }
     }
-    for (auto& [elid, elabel] : schema_.edge_labels) {
-        for (auto& idx : elabel.indexes) {
-            if (idx.name == name) {
-                const IndexState before = idx.state;
-                idx.state = new_state;
-                try {
-                    co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, elabel); });
-                } catch (...) {
-                    idx.state = before;
-                    throw;
+    for (const auto& [elid, elabel] : snapshot.edge_labels) {
+        for (const auto& idx : elabel.indexes) {
+            if (idx.name != name)
+                continue;
+            const IndexState before = idx.state;
+            EdgeLabelDef updated = elabel;
+            for (auto& candidate : updated.indexes) {
+                if (candidate.name == name) {
+                    candidate.state = new_state;
+                    break;
                 }
-                co_return true;
             }
+            co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, updated); });
+            {
+                std::unique_lock<std::shared_mutex> lock(schema_mu_);
+                schema_.edge_labels[elid] = std::move(updated);
+            }
+            if (new_state == IndexState::PUBLIC && before != IndexState::PUBLIC)
+                bumpSchemaGeneration();
+            publishSchemaVersion();
+            co_return true;
         }
     }
     spdlog::error("Index '{}' not found for state update", name);
@@ -452,44 +515,49 @@ folly::coro::Task<bool> AsyncGraphMetaStore::updateIndexState(const std::string&
 }
 
 folly::coro::Task<bool> AsyncGraphMetaStore::dropIndex(const std::string& name) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
+    const GraphSchema snapshot = schemaSnapshot();
     auto& s = store_->get();
     auto& i = io_->get();
-    for (auto& [lid, label] : schema_.labels) {
+
+    for (const auto& [lid, label] : snapshot.labels) {
         for (auto it = label.indexes.begin(); it != label.indexes.end(); ++it) {
-            if (it->name == name) {
-                const LabelDef before = label;
-                label.indexes.erase(it);
-                try {
-                    co_await i.dispatchVoid([&]() {
-                        persistLabelDef(s, label);
-                        if (!s.metadataDel(std::string("M|index:") + name))
-                            throw std::runtime_error("Failed to delete index metadata '" + name + "'");
-                    });
-                } catch (...) {
-                    schema_.labels[lid] = before;
-                    throw;
-                }
-                co_return true;
+            if (it->name != name)
+                continue;
+            LabelDef updated = label;
+            updated.indexes.erase(updated.indexes.begin() + std::distance(label.indexes.begin(), it));
+            co_await i.dispatchVoid([&]() {
+                persistLabelDef(s, updated);
+                if (!s.metadataDel(std::string("M|index:") + name))
+                    throw std::runtime_error("Failed to delete index metadata '" + name + "'");
+            });
+            {
+                std::unique_lock<std::shared_mutex> lock(schema_mu_);
+                schema_.labels[lid] = std::move(updated);
             }
+            bumpSchemaGeneration();
+            publishSchemaVersion();
+            co_return true;
         }
     }
-    for (auto& [elid, elabel] : schema_.edge_labels) {
+    for (const auto& [elid, elabel] : snapshot.edge_labels) {
         for (auto it = elabel.indexes.begin(); it != elabel.indexes.end(); ++it) {
-            if (it->name == name) {
-                const EdgeLabelDef before = elabel;
-                elabel.indexes.erase(it);
-                try {
-                    co_await i.dispatchVoid([&]() {
-                        persistEdgeLabelDef(s, elabel);
-                        if (!s.metadataDel(std::string("M|index:") + name))
-                            throw std::runtime_error("Failed to delete index metadata '" + name + "'");
-                    });
-                } catch (...) {
-                    schema_.edge_labels[elid] = before;
-                    throw;
-                }
-                co_return true;
+            if (it->name != name)
+                continue;
+            EdgeLabelDef updated = elabel;
+            updated.indexes.erase(updated.indexes.begin() + std::distance(elabel.indexes.begin(), it));
+            co_await i.dispatchVoid([&]() {
+                persistEdgeLabelDef(s, updated);
+                if (!s.metadataDel(std::string("M|index:") + name))
+                    throw std::runtime_error("Failed to delete index metadata '" + name + "'");
+            });
+            {
+                std::unique_lock<std::shared_mutex> lock(schema_mu_);
+                schema_.edge_labels[elid] = std::move(updated);
             }
+            bumpSchemaGeneration();
+            publishSchemaVersion();
+            co_return true;
         }
     }
     spdlog::error("Index '{}' not found for drop", name);
@@ -498,9 +566,11 @@ folly::coro::Task<bool> AsyncGraphMetaStore::dropIndex(const std::string& name) 
 
 folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaStore::listIndexes() {
     std::vector<IndexInfo> result;
-    for (auto& [lid, label] : schema_.labels) {
-        for (auto& idx : label.indexes) {
+    const GraphSchema snapshot = schemaSnapshot();
+    for (const auto& [lid, label] : snapshot.labels) {
+        for (const auto& idx : label.indexes) {
             IndexInfo info;
+            info.index_id = idx.index_id;
             info.name = idx.name;
             info.label_name = label.name;
             info.unique = idx.unique;
@@ -511,7 +581,7 @@ folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaSt
                     info.property_names.push_back(acc.property_name);
             } else {
                 for (auto pid : idx.prop_ids) {
-                    for (auto& p : label.properties) {
+                    for (const auto& p : label.properties) {
                         if (p.id == pid) {
                             info.property_names.push_back(p.name);
                             break;
@@ -522,16 +592,17 @@ folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaSt
             result.push_back(std::move(info));
         }
     }
-    for (auto& [elid, elabel] : schema_.edge_labels) {
-        for (auto& idx : elabel.indexes) {
+    for (const auto& [elid, elabel] : snapshot.edge_labels) {
+        for (const auto& idx : elabel.indexes) {
             IndexInfo info;
+            info.index_id = idx.index_id;
             info.name = idx.name;
             info.label_name = elabel.name;
             info.unique = idx.unique;
             info.is_edge = true;
             info.state = idx.state;
             for (auto pid : idx.prop_ids) {
-                for (auto& p : elabel.properties) {
+                for (const auto& p : elabel.properties) {
                     if (p.id == pid) {
                         info.property_names.push_back(p.name);
                         break;
@@ -555,31 +626,36 @@ AsyncGraphMetaStore::getIndex(const std::string& name) {
 }
 
 folly::coro::Task<std::optional<LabelId>> AsyncGraphMetaStore::getLabelId(const std::string& name) {
-    auto it = schema_.label_name_to_id.find(name);
-    if (it != schema_.label_name_to_id.end())
+    const GraphSchema snapshot = schemaSnapshot();
+    auto it = snapshot.label_name_to_id.find(name);
+    if (it != snapshot.label_name_to_id.end())
         co_return it->second;
     co_return std::nullopt;
 }
 
 folly::coro::Task<std::optional<std::string>> AsyncGraphMetaStore::getLabelName(LabelId id) {
-    auto it = schema_.labels.find(id);
-    if (it != schema_.labels.end())
+    const GraphSchema snapshot = schemaSnapshot();
+    auto it = snapshot.labels.find(id);
+    if (it != snapshot.labels.end())
         co_return it->second.name;
     co_return std::nullopt;
 }
 
 folly::coro::Task<std::optional<LabelDef>> AsyncGraphMetaStore::getLabelDef(const std::string& name) {
-    co_return schema_.getLabel(name);
+    const GraphSchema snapshot = schemaSnapshot();
+    co_return snapshot.getLabel(name);
 }
 
 folly::coro::Task<std::optional<LabelDef>> AsyncGraphMetaStore::getLabelDefById(LabelId id) {
-    co_return schema_.getLabel(id);
+    const GraphSchema snapshot = schemaSnapshot();
+    co_return snapshot.getLabel(id);
 }
 
 folly::coro::Task<std::vector<LabelDef>> AsyncGraphMetaStore::listLabels() {
+    const GraphSchema snapshot = schemaSnapshot();
     std::vector<LabelDef> result;
-    result.reserve(schema_.labels.size());
-    for (auto& [_, def] : schema_.labels) {
+    result.reserve(snapshot.labels.size());
+    for (const auto& [_, def] : snapshot.labels) {
         result.push_back(def);
     }
     co_return result;
@@ -589,12 +665,17 @@ folly::coro::Task<std::vector<LabelDef>> AsyncGraphMetaStore::listLabels() {
 
 folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::string& name,
                                                                     const std::vector<PropertyDef>& properties) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
     if (schema_.edge_label_name_to_id.count(name)) {
         spdlog::error("EdgeLabel '{}' already exists", name);
         co_return INVALID_EDGE_LABEL_ID;
     }
 
-    EdgeLabelId id = schema_.next_edge_label_id++;
+    EdgeLabelId id;
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        id = schema_.next_edge_label_id++;
+    }
     auto& s = store_->get();
     auto& i = io_->get();
 
@@ -620,8 +701,13 @@ folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::s
 
     // NOTE: No longer calls store.createEdgeLabel(id).
 
-    schema_.edge_labels[id] = def;
-    schema_.edge_label_name_to_id[name] = id;
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        schema_.edge_labels[id] = def;
+        schema_.edge_label_name_to_id[name] = id;
+    }
+    bumpSchemaGeneration();
+    publishSchemaVersion();
 
     spdlog::info("Created edge_label '{}' with id={}, {} properties", name, id, def.properties.size());
     co_return id;
@@ -630,13 +716,13 @@ folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::s
 folly::coro::Task<bool>
 AsyncGraphMetaStore::addVertexLabelProperties(const std::string& name,
                                               const std::vector<std::pair<std::string, PropertyType>>& prop_defs) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
     auto label_opt = schema_.getLabel(name);
     if (!label_opt.has_value()) {
         spdlog::error("Label '{}' does not exist, cannot add properties", name);
         co_return false;
     }
-    auto& def = schema_.labels[label_opt->id];
-    const LabelDef before = def;
+    LabelDef def = schema_.labels[label_opt->id];
     uint16_t next_prop_id = static_cast<uint16_t>(def.properties.size());
     for (const auto& [pname, ptype] : prop_defs) {
         if (findPropId(def.properties, pname)) {
@@ -652,13 +738,14 @@ AsyncGraphMetaStore::addVertexLabelProperties(const std::string& name,
 
     auto& s = store_->get();
     auto& i = io_->get();
-    try {
-        co_await i.dispatchVoid([&]() { persistLabelDef(s, def); });
-    } catch (...) {
-        schema_.labels[label_opt->id] = before;
-        throw;
+    co_await i.dispatchVoid([&]() { persistLabelDef(s, def); });
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        schema_.labels[label_opt->id] = std::move(def);
     }
 
+    bumpSchemaGeneration();
+    publishSchemaVersion();
     spdlog::info("Added {} properties to label '{}'", prop_defs.size(), name);
     co_return true;
 }
@@ -666,13 +753,13 @@ AsyncGraphMetaStore::addVertexLabelProperties(const std::string& name,
 folly::coro::Task<bool>
 AsyncGraphMetaStore::addEdgeLabelProperties(const std::string& name,
                                             const std::vector<std::pair<std::string, PropertyType>>& prop_defs) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
     auto label_opt = schema_.getEdgeLabel(name);
     if (!label_opt.has_value()) {
         spdlog::error("EdgeLabel '{}' does not exist, cannot add properties", name);
         co_return false;
     }
-    auto& def = schema_.edge_labels[label_opt->id];
-    const EdgeLabelDef before = def;
+    EdgeLabelDef def = schema_.edge_labels[label_opt->id];
     uint16_t next_prop_id = static_cast<uint16_t>(def.properties.size());
     for (const auto& [pname, ptype] : prop_defs) {
         if (findPropId(def.properties, pname)) {
@@ -688,13 +775,14 @@ AsyncGraphMetaStore::addEdgeLabelProperties(const std::string& name,
 
     auto& s = store_->get();
     auto& i = io_->get();
-    try {
-        co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, def); });
-    } catch (...) {
-        schema_.edge_labels[label_opt->id] = before;
-        throw;
+    co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, def); });
+    {
+        std::unique_lock<std::shared_mutex> lock(schema_mu_);
+        schema_.edge_labels[label_opt->id] = std::move(def);
     }
 
+    bumpSchemaGeneration();
+    publishSchemaVersion();
     spdlog::info("Added {} properties to edge_label '{}'", prop_defs.size(), name);
     co_return true;
 }
@@ -813,6 +901,7 @@ folly::coro::Task<EdgeId> AsyncGraphMetaStore::nextEdgeIdRange(uint64_t count) {
 
 folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std::string& prop_name,
                                                                        PropertyType prop_type) {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
     // Find __anon__ label in schema
     LabelId anon_id = INVALID_LABEL_ID;
     for (const auto& [lid, ldef] : schema_.labels) {
@@ -826,7 +915,7 @@ folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std
         co_return 0;
     }
 
-    auto& def = schema_.labels[anon_id];
+    LabelDef def = schema_.labels[anon_id];
 
     {
         auto lock = co_await anon_prop_mu_.co_scoped_lock();
@@ -842,7 +931,6 @@ folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std
         }
 
         // Allocate new prop_id — LabelDef order preserves creation order.
-        const LabelDef before = def;
         uint16_t new_id = static_cast<uint16_t>(def.properties.size());
         PropertyDef pd;
         pd.id = new_id;
@@ -852,13 +940,14 @@ folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std
 
         auto& s = store_->get();
         auto& i = io_->get();
-        try {
-            co_await i.dispatchVoid([&s, &def]() { persistLabelDef(s, def); });
-        } catch (...) {
-            schema_.labels[anon_id] = before;
-            throw;
+        co_await i.dispatchVoid([&s, &def]() { persistLabelDef(s, def); });
+        {
+            std::unique_lock<std::shared_mutex> lock(schema_mu_);
+            schema_.labels[anon_id] = std::move(def);
         }
 
+        bumpSchemaGeneration();
+        publishSchemaVersion();
         co_return new_id;
     }
 }
@@ -869,6 +958,7 @@ folly::coro::Task<void> AsyncGraphMetaStore::refillVertexIdCache(uint64_t count)
     VertexId cache_start;
     VertexId chunk;
     {
+        std::unique_lock<std::shared_mutex> schema_lock(schema_mu_);
         std::lock_guard<std::mutex> lock(id_mu_);
         if (vertex_cache_next_ + count <= vertex_cache_end_)
             co_return;
@@ -891,6 +981,7 @@ folly::coro::Task<void> AsyncGraphMetaStore::refillEdgeIdCache(uint64_t count) {
     EdgeId cache_start;
     EdgeId chunk;
     {
+        std::unique_lock<std::shared_mutex> schema_lock(schema_mu_);
         std::lock_guard<std::mutex> lock(id_mu_);
         if (edge_cache_next_ + count <= edge_cache_end_)
             co_return;
@@ -909,8 +1000,183 @@ folly::coro::Task<void> AsyncGraphMetaStore::refillEdgeIdCache(uint64_t count) {
     }
 }
 
+namespace {
+
+std::string encodeCleanupTables(const std::vector<std::string>& tables) {
+    std::string out;
+    const uint16_t count = static_cast<uint16_t>(tables.size());
+    out.push_back(static_cast<char>(count >> 8));
+    out.push_back(static_cast<char>(count & 0xFF));
+    for (const auto& table : tables) {
+        const uint16_t len = static_cast<uint16_t>(table.size());
+        out.push_back(static_cast<char>(len >> 8));
+        out.push_back(static_cast<char>(len & 0xFF));
+        out.append(table);
+    }
+    return out;
+}
+
+std::vector<std::string> decodeCleanupTables(std::string_view data) {
+    std::vector<std::string> tables;
+    if (data.size() < 2)
+        return tables;
+    const auto count = static_cast<uint16_t>((static_cast<uint16_t>(static_cast<uint8_t>(data[0])) << 8) |
+                                             static_cast<uint8_t>(data[1]));
+    size_t offset = 2;
+    for (uint16_t i = 0; i < count; ++i) {
+        if (offset + 2 > data.size())
+            break;
+        const auto len = static_cast<uint16_t>((static_cast<uint16_t>(static_cast<uint8_t>(data[offset])) << 8) |
+                                               static_cast<uint8_t>(data[offset + 1]));
+        offset += 2;
+        if (offset + len > data.size())
+            break;
+        tables.emplace_back(data.substr(offset, len));
+        offset += len;
+    }
+    return tables;
+}
+
+std::string cleanupKey(const std::string& kind, uint32_t index_id) {
+    return "M|cleanup:" + kind + ":" + std::to_string(index_id);
+}
+
+} // namespace
+
+folly::coro::Task<bool> AsyncGraphMetaStore::putCleanupRecord(const std::string& kind, uint32_t index_id,
+                                                              const std::vector<std::string>& tables) {
+    auto value = encodeCleanupTables(tables);
+    const auto key = cleanupKey(kind, index_id);
+    co_return co_await io_->get().dispatch([this, &key, &value]() { return store_->get().metadataPut(key, value); });
+}
+
+folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexCleanupRecord>> AsyncGraphMetaStore::listCleanupRecords() {
+    co_return co_await io_->get().dispatch([this]() {
+        std::vector<IndexCleanupRecord> records;
+        store_->get().metadataScan("M|cleanup:", [&](std::string_view key, std::string_view value) {
+            // M|cleanup:<kind>:<id>
+            const std::string_view rest = key.substr(10);
+            const auto colon = rest.rfind(':');
+            if (colon == std::string_view::npos)
+                return true;
+            IndexCleanupRecord record;
+            record.kind = std::string(rest.substr(0, colon));
+            try {
+                record.index_id = static_cast<uint32_t>(std::stoul(std::string(rest.substr(colon + 1))));
+            } catch (...) {
+                return true;
+            }
+            record.tables = decodeCleanupTables(value);
+            records.push_back(std::move(record));
+            return true;
+        });
+        return records;
+    });
+}
+
+folly::coro::Task<bool> AsyncGraphMetaStore::removeCleanupRecord(const std::string& kind, uint32_t index_id) {
+    const auto key = cleanupKey(kind, index_id);
+    co_return co_await io_->get().dispatch([this, &key]() { return store_->get().metadataDel(key); });
+}
+
+folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexCleanupRecord>>
+AsyncGraphMetaStore::recoverUnfinishedIndexes() {
+    // 构建任务只活在进程内存里；重启后 WRITE_ONLY 不可能继续，也没有扫描水位可以续建。
+    // 安全方向：一律 ERROR（绝不 PUBLIC），保留定义供用户 DROP 后重建；
+    // 同时把半成品表登记为 orphan（调用方在启动时尝试删除，失败则留到下次启动）。
+    std::vector<IndexCleanupRecord> records;
+    // 不能持有 schema_ 的引用跨 co_await：updateIndexState 会替换 map element，
+    // 导致外层 idx/label 悬空。先拷贝快照，再按值处理。
+    const GraphSchema snapshot = schemaSnapshot();
+
+    for (const auto& [lid, label] : snapshot.labels) {
+        for (const auto& idx : label.indexes) {
+            if (idx.state != IndexState::WRITE_ONLY)
+                continue;
+            const std::string index_name = idx.name;
+            if (co_await updateIndexState(index_name, IndexState::ERROR))
+                spdlog::warn("[index] '{}' was BUILDING at shutdown => ERROR (no crash resume; drop and rebuild)",
+                             index_name);
+            else
+                spdlog::error("[index] failed to mark unfinished index '{}' as ERROR", index_name);
+
+            IndexCleanupRecord record;
+            record.kind = "orphan";
+            record.index_id = idx.index_id;
+            record.tables = {vidxTableById(idx.index_id), indexDeltaTable(idx.index_id)};
+            co_await putCleanupRecord(record.kind, record.index_id, record.tables);
+            records.push_back(std::move(record));
+        }
+    }
+    for (const auto& [elid, elabel] : snapshot.edge_labels) {
+        for (const auto& idx : elabel.indexes) {
+            if (idx.state != IndexState::WRITE_ONLY)
+                continue;
+            const std::string index_name = idx.name;
+            if (co_await updateIndexState(index_name, IndexState::ERROR))
+                spdlog::warn("[index] '{}' was BUILDING at shutdown => ERROR (no crash resume; drop and rebuild)",
+                             index_name);
+            else
+                spdlog::error("[index] failed to mark unfinished index '{}' as ERROR", index_name);
+
+            IndexCleanupRecord record;
+            record.kind = "orphan";
+            record.index_id = idx.index_id;
+            record.tables = {eidxCompositeTable(elid, idx.prop_ids), indexDeltaTable(idx.index_id)};
+            co_await putCleanupRecord(record.kind, record.index_id, record.tables);
+            records.push_back(std::move(record));
+        }
+    }
+    co_return records;
+}
+
+folly::coro::Task<size_t> AsyncGraphMetaStore::repairMissingIndexIds() {
+    auto schema_write_lock = co_await schema_write_mu_.co_scoped_lock();
+    // 一次性修复：旧版本 createEdgeIndex 没分配 index_id ⇒ 持久化为 0。
+    // 0 无法注册/路由（也没法区分"不存在"），这里按单调计数器补一个并持久化定义。
+    // 幂等：只处理 index_id==0；修完再跑是 no-op。
+    size_t repaired = 0;
+    auto& s = store_->get();
+    auto& i = io_->get();
+
+    for (auto& [lid, label] : schema_.labels) {
+        bool changed = false;
+        for (auto& idx : label.indexes) {
+            if (idx.index_id == 0) {
+                idx.index_id = schema_.next_index_id++;
+                changed = true;
+                ++repaired;
+            }
+        }
+        if (!changed)
+            continue;
+        const LabelDef snapshot = label;
+        co_await i.dispatchVoid([&s, &snapshot]() { persistLabelDef(s, snapshot); });
+    }
+
+    for (auto& [elid, elabel] : schema_.edge_labels) {
+        bool changed = false;
+        for (auto& idx : elabel.indexes) {
+            if (idx.index_id == 0) {
+                idx.index_id = schema_.next_index_id++;
+                changed = true;
+                ++repaired;
+            }
+        }
+        if (!changed)
+            continue;
+        const EdgeLabelDef snapshot = elabel;
+        co_await i.dispatchVoid([&s, &snapshot]() { persistEdgeLabelDef(s, snapshot); });
+    }
+
+    if (repaired > 0)
+        co_await saveNextIds();
+    co_return repaired;
+}
+
 folly::coro::Task<void> AsyncGraphMetaStore::saveNextIds() {
     const bool persisted = co_await io_->get().dispatch([this]() {
+        std::shared_lock<std::shared_mutex> schema_lock(schema_mu_);
         std::lock_guard<std::mutex> lock(id_mu_);
         auto encoded = MetadataCodec::encodeNextIds(schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
                                                     schema_.next_edge_label_id, schema_.next_index_id);

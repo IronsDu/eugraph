@@ -535,7 +535,10 @@ SHOW INDEXES
 SHOW INDEX idx_name
 ```
 
-`CREATE INDEX` 同步回填已有数据后设为 PUBLIC 状态。
+`CREATE INDEX` / `CREATE UNIQUE INDEX` **异步**执行：语句返回时索引通常仍是
+`BUILDING`（`SHOW INDEXES.state`），后台完成回填/追平后转 `PUBLIC`；构建失败转 `ERROR`。
+客户端/loader 必须轮询 `SHOW INDEXES` 直到终态（loader 已内置轮询；没有专用等待过程）。
+`DROP INDEX` 同样异步：定义立即删除、表在后台清理（`SHOW INDEXES` 中该行立即消失）。
 
 ---
 

@@ -151,6 +151,14 @@ public:
                          std::optional<EdgeLabelId> label_filter) override;
 
     // Index DDL
+    /// 每图索引运行时注册表（GraphInstance 注入）；批量装载路径用它路由写入。
+    void setIndexRegistry(IndexRuntimeRegistry* registry) {
+        index_registry_ = registry;
+    }
+    IndexRuntimeRegistry* indexRegistry() const override {
+        return index_registry_;
+    }
+
     bool createIndex(const std::string& table_name) override;
     bool dropIndex(const std::string& table_name) override;
 
@@ -170,6 +178,13 @@ public:
     bool checkUniqueConstraint(GraphSession& session, const std::string& table, const PropertyValue& value) override;
     bool checkUniqueConstraint(GraphSession& session, const std::string& table,
                                const std::vector<PropertyValue>& values) override;
+
+    // 在线索引构建：变更表
+    bool putDeltaEntry(GraphSession& session, const std::string& delta_table, const std::vector<PropertyValue>& values,
+                       uint64_t entity_id, bool is_delete, std::string_view payload = {}) override;
+    size_t replayDeltaBatch(GraphSession& session, const std::string& index_table, const std::string& delta_table,
+                            size_t max_rows, std::string_view start_after, std::string& last_key_out) override;
+    std::optional<bool> indexHasDuplicateKeys(GraphSession& session, const std::string& table) override;
 
     // Index Scan
     void scanIndexEquality(GraphSession& session, const std::string& table, const PropertyValue& value,
@@ -242,6 +257,7 @@ private:
 
     WtConnectionStore* conn_ = nullptr;
     SchemaDdl schema_ddl_;
+    IndexRuntimeRegistry* index_registry_ = nullptr;
     uint32_t adjacency_cache_capacity_ = 0;
     /// Serialize cache invalidation probes/removes; each call uses a short
     /// lived autocommit session, never the user's GraphSession.

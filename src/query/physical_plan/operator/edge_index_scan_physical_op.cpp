@@ -3,6 +3,8 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
 
+#include <stdexcept>
+
 namespace eugraph {
 namespace compute {
 
@@ -11,11 +13,11 @@ EdgeIndexScanPhysicalOp::EdgeIndexScanPhysicalOp(std::string src_var, std::strin
                                                  EdgeLabelId label_id, uint16_t prop_id, ScanMode mode,
                                                  PropertyValue search_value, std::optional<PropertyValue> range_end,
                                                  std::vector<binder::BoundType> output_types,
-                                                 IAsyncGraphDataStore& store,
-                                                 std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs)
+                                                 IAsyncGraphDataStore& store, std::shared_ptr<const GraphSchema> schema,
+                                                 uint32_t index_id)
     : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)), label_id_(label_id),
       prop_ids_({prop_id}), mode_(mode), eq_values_(), range_start_(std::nullopt), range_end_(std::nullopt),
-      output_types_(std::move(output_types)), store_(store), edge_label_defs_(std::move(edge_label_defs)) {
+      output_types_(std::move(output_types)), store_(store), schema_(std::move(schema)), index_id_(index_id) {
     if (mode == ScanMode::EQUALITY) {
         eq_values_.push_back(std::move(search_value));
     } else {
@@ -32,14 +34,21 @@ EdgeIndexScanPhysicalOp::EdgeIndexScanPhysicalOp(std::string src_var, std::strin
                                                  std::optional<std::vector<PropertyValue>> range_start,
                                                  std::optional<std::vector<PropertyValue>> range_end,
                                                  std::vector<binder::BoundType> output_types,
-                                                 IAsyncGraphDataStore& store,
-                                                 std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs)
+                                                 IAsyncGraphDataStore& store, std::shared_ptr<const GraphSchema> schema,
+                                                 uint32_t index_id)
     : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)), label_id_(label_id),
       prop_ids_(std::move(prop_ids)), mode_(mode), eq_values_(std::move(eq_values)),
       range_start_(std::move(range_start)), range_end_(std::move(range_end)), output_types_(std::move(output_types)),
-      store_(store), edge_label_defs_(std::move(edge_label_defs)) {}
+      store_(store), schema_(std::move(schema)), index_id_(index_id) {}
 
 folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
+    if (index_id_ != 0) {
+        if (auto* registry = store_.indexRegistry()) {
+            read_handle_ = registry->acquireRead(index_id_);
+            if (!read_handle_)
+                throw std::runtime_error("edge index is being dropped (read admission failed)");
+        }
+    }
     std::vector<EdgeIndexScanEntry> scan_batch;
     folly::coro::AsyncGenerator<std::span<const EdgeIndexScanEntry>> gen;
     if (mode_ == ScanMode::EQUALITY) {
@@ -133,12 +142,12 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
 
 std::string EdgeIndexScanPhysicalOp::toString() const {
     std::string label_name = std::to_string(label_id_);
-    auto it = edge_label_defs_.find(label_id_);
-    if (it != edge_label_defs_.end()) {
+    auto it = schema_->labels.find(label_id_);
+    if (it != schema_->labels.end()) {
         label_name = it->second.name;
     }
     std::string prop_list;
-    if (it != edge_label_defs_.end()) {
+    if (it != schema_->labels.end()) {
         for (size_t i = 0; i < prop_ids_.size(); ++i) {
             if (i > 0)
                 prop_list += ", ";

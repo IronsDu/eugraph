@@ -16,6 +16,7 @@
 namespace eugraph {
 
 class GraphSession;
+class IndexRuntimeRegistry;
 
 /// Per-statement holder for the counters storage calls are charged to right
 /// now (see StorageProfileState in storage/storage_op_metrics.hpp).
@@ -35,6 +36,16 @@ public:
     /// operator installs its own counters here while it runs; the statement's
     /// async store reads them per dispatch. Statement-scoped, no TLS (#310).
     virtual StorageOpCounters* currentStorageCounters() const {
+        return nullptr;
+    }
+
+    // ==================== 在线索引构建（可选）====================
+    /// 每图索引运行时注册表；null ⇒ 老行为（直接写索引表）。
+    virtual IndexRuntimeRegistry* indexRegistry() const {
+        return nullptr;
+    }
+    /// 本语句绑定的会话（准入守卫挂到它上面，I6）；null ⇒ 不支持准入。
+    virtual GraphSession* graphSession() {
         return nullptr;
     }
 
@@ -210,6 +221,26 @@ public:
     virtual folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) = 0;
     virtual folly::coro::Task<bool> checkUniqueConstraint(const std::string& table,
                                                           const std::vector<PropertyValue>& values) = 0;
+
+    // ==================== 在线索引构建：变更表（delta） ====================
+
+    struct IndexDeltaReplayResult {
+        size_t applied = 0;
+        std::string last_key; ///< 供续扫；空 = 从头
+    };
+
+    /// 写一条变更（与实体写入同一事务，由调用方保证）。
+    virtual folly::coro::Task<bool> putDeltaEntry(const std::string& delta_table,
+                                                  const std::vector<PropertyValue>& values, uint64_t entity_id,
+                                                  bool is_delete, std::string_view payload = {}) = 0;
+
+    /// 重放一批：按键序应用到索引表、删除已应用的 delta 行；调用方负责事务。
+    virtual folly::coro::Task<IndexDeltaReplayResult> replayDeltaBatch(const std::string& index_table,
+                                                                       const std::string& delta_table, size_t max_rows,
+                                                                       std::string_view start_after = {}) = 0;
+
+    /// 唯一性最终校验（相邻 key 前缀比较）；nullopt = 失败。
+    virtual folly::coro::Task<std::optional<bool>> indexHasDuplicateKeys(const std::string& table) = 0;
 
     // Index Scan
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>

@@ -175,6 +175,8 @@ file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
 
 # Library target (WiredTiger multi-table backend)
 add_library(eugraph_lib STATIC
+    src/common/types/temporal_value.cpp
+    src/common/types/query_error.cpp
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp
     src/storage/kv/index_key_codec.cpp
@@ -183,6 +185,7 @@ add_library(eugraph_lib STATIC
     src/storage/wt_table_ops.cpp
     src/storage/schema_ddl.cpp
     src/storage/data/sync_graph_data_store.cpp
+    src/storage/index/index_build_service.cpp
     src/storage/meta/sync_graph_meta_store.cpp
     src/storage/meta/meta_codec.cpp
     src/storage/catalog/catalog_store.cpp
@@ -203,6 +206,23 @@ target_link_libraries(eugraph_lib PUBLIC
 )
 
 add_dependencies(eugraph_lib wiredtiger_ext)
+
+# Index builder needs folly coro + eugraph_lib; keep it in a storage-level target
+# so storage code does not get compiled as part of the query engine.
+add_library(eugraph_index STATIC
+    src/storage/index/index_builder.cpp
+)
+target_include_directories(eugraph_index PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+    "${WT_INSTALL_DIR}/include"
+)
+target_link_libraries(eugraph_index PUBLIC
+    eugraph_lib
+    Folly::folly
+    Folly::folly_deps
+    spdlog::spdlog
+)
+add_dependencies(eugraph_index wiredtiger_ext)
 
 # ==================== Compute Service (Cypher Parser + Query Engine) ====================
 
@@ -251,8 +271,6 @@ target_link_libraries(eugraph_metadata PUBLIC
 # ==================== Query Engine (Logical Plan + Physical Plan + Executor) ====================
 
 add_library(eugraph_query_engine STATIC
-    src/common/types/temporal_value.cpp
-    src/common/types/query_error.cpp
     src/query/catalog/catalog.cpp
     src/query/planner/binder/bind_binary_op.cpp
     src/query/planner/binder/bind_unary_op.cpp
@@ -362,6 +380,7 @@ target_include_directories(eugraph_query_engine PUBLIC
 target_link_libraries(eugraph_query_engine PUBLIC
     eugraph_compute
     eugraph_lib
+    eugraph_index
     Folly::folly
     Folly::folly_deps
     spdlog::spdlog
@@ -584,8 +603,7 @@ target_include_directories(eugraph_loader_lib PRIVATE
 
 target_link_libraries(eugraph_loader_lib PUBLIC
     eugraph_thrift
-    # 时序解析器（common/types/temporal_value.cpp）编译在 eugraph_query_engine 里，
-    # loader 复用同一份实现（不另写解析器），因此需要链接该库。
+    # loader 复用 query engine 的查询/解析能力（时序解析器在 eugraph_lib 中）。
     eugraph_query_engine
     eugraph_lib
     nlohmann_json::nlohmann_json
@@ -932,6 +950,89 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(index_codec_tests wiredtiger_ext)
     gtest_add_tests(TARGET index_codec_tests)
+
+    # Index runtime model / admission protocol (pure unit tests, no WT data)
+    add_executable(index_runtime_tests
+        tests/test_index_runtime.cpp
+    )
+
+    target_include_directories(index_runtime_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(index_runtime_tests PRIVATE
+        eugraph_lib
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(index_runtime_tests wiredtiger_ext)
+    gtest_add_tests(TARGET index_runtime_tests)
+
+    # Index write router (pure unit tests, no WT data)
+    add_executable(index_write_router_tests
+        tests/test_index_write_router.cpp
+    )
+
+    target_include_directories(index_write_router_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(index_write_router_tests PRIVATE
+        eugraph_lib
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(index_write_router_tests wiredtiger_ext)
+    gtest_add_tests(TARGET index_write_router_tests)
+
+    # Index write applier (routes to delta/index; real WT tables + real GraphSession)
+    add_executable(index_write_applier_tests
+        tests/test_index_write_applier.cpp
+    )
+
+    target_include_directories(index_write_applier_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/tests"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(index_write_applier_tests PRIVATE
+        eugraph_lib
+        eugraph_metadata
+        eugraph_query_engine
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(index_write_applier_tests wiredtiger_ext)
+    gtest_add_tests(TARGET index_write_applier_tests)
+
+    # Index build service (queue/threads/cancel/shutdown; no WT data)
+    add_executable(index_build_service_tests
+        tests/test_index_build_service.cpp
+    )
+
+    target_include_directories(index_build_service_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(index_build_service_tests PRIVATE
+        eugraph_lib
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(index_build_service_tests wiredtiger_ext)
+    gtest_add_tests(TARGET index_build_service_tests)
 
     # Index store integration tests
     add_executable(index_store_tests

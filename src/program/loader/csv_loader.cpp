@@ -1167,6 +1167,72 @@ void runCypherNoResult(shell::EuGraphRpcClient& client, const std::string& query
         throw std::runtime_error(stream_error);
 }
 
+namespace {
+
+struct LoaderIndexState {
+    std::string name;
+    std::string state;
+};
+
+/// 读取 SHOW INDEXES 的 (name, state)。state 是 5 列里的最后一列。
+std::vector<LoaderIndexState> loaderIndexStates(shell::EuGraphRpcClient& client, const std::string& graph) {
+    std::vector<LoaderIndexState> states;
+    auto [meta, stream] = client.executeCypher("SHOW INDEXES", graph);
+    (void)meta;
+    std::string stream_error;
+    std::move(stream).subscribeInline([&states, &stream_error](folly::Try<thrift_service::ResultRowBatch> batch) {
+        if (!batch.hasValue()) {
+            if (batch.hasException())
+                stream_error = batch.exception().what().toStdString();
+            return;
+        }
+        for (const auto& row : *batch->rows()) {
+            const auto& values = *row.values();
+            if (values.size() < 5)
+                continue;
+            if (values[0].getType() != thrift_service::ResultValue::Type::string_val ||
+                values[4].getType() != thrift_service::ResultValue::Type::string_val)
+                continue;
+            states.push_back(LoaderIndexState{values[0].get_string_val(), values[4].get_string_val()});
+        }
+    });
+    if (!stream_error.empty())
+        throw std::runtime_error("SHOW INDEXES failed: " + stream_error);
+    return states;
+}
+
+/// 创建索引是异步 DDL ⇒ loader 必须自行轮询到终态（设计 §13.2）。
+/// 这里等"没有任何索引处于 BUILDING"；出现 ERROR 视为失败（新建索引不可用）。
+void waitForIndexesSettled(shell::EuGraphRpcClient& client, const std::string& graph) {
+    // 不设配置项：内部安全上限 10 分钟（正常建索引远快于它）。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+    while (true) {
+        const auto states = loaderIndexStates(client, graph);
+        bool building = false;
+        std::vector<std::string> failed;
+        for (const auto& entry : states) {
+            if (entry.state == "BUILDING" || entry.state == "WRITE_ONLY")
+                building = true;
+            else if (entry.state == "ERROR" || entry.state == "FAILED")
+                failed.push_back(entry.name);
+        }
+        if (!building) {
+            if (!failed.empty()) {
+                std::string joined;
+                for (const auto& name : failed)
+                    joined += (joined.empty() ? "" : ", ") + name;
+                throw std::runtime_error("index build failed (state=ERROR): " + joined);
+            }
+            return;
+        }
+        if (std::chrono::steady_clock::now() >= deadline)
+            throw std::runtime_error("timed out waiting for index builds to finish (still BUILDING)");
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+}
+
+} // namespace
+
 /// 当前图里已有的索引名（SHOW INDEXES 的第一列）。
 std::set<std::string> existingIndexNames(shell::EuGraphRpcClient& client, const std::string& graph) {
     std::set<std::string> names;
@@ -1274,6 +1340,8 @@ void createPrimaryKeyIndexes(shell::EuGraphRpcClient& client, const SchemaConfig
         spdlog::info("[loader] {}", query);
         runCypherNoResult(client, query, config.graph);
     }
+    // CREATE INDEX 是异步 DDL：必须等 PK 索引 PUBLIC 才能开始装载（写边要用它解析端点）。
+    waitForIndexesSettled(client, config.graph);
 }
 
 // ==================== 有效配置解析 ====================
@@ -1811,6 +1879,7 @@ LoadResult loadAll(const std::vector<shell::EuGraphRpcClient*>& clients, SchemaC
     createPrimaryKeyIndexes(*clients.front(), config);
 
     runStatements(*clients.front(), config, StatementPhase::BEFORE_LOAD);
+    waitForIndexesSettled(*clients.front(), config.graph);
 
     LoadResult result;
     if (options.progress != nullptr)
@@ -1832,6 +1901,7 @@ LoadResult loadAll(const std::vector<shell::EuGraphRpcClient*>& clients, SchemaC
         options.progress->endPhase();
 
     runStatements(*clients.front(), config, StatementPhase::AFTER_LOAD);
+    waitForIndexesSettled(*clients.front(), config.graph);
     return result;
 }
 

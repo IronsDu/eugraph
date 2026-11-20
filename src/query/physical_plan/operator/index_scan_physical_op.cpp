@@ -1,7 +1,9 @@
 #include "query/physical_plan/operator/index_scan_physical_op.hpp"
+
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
+#include <stdexcept>
 
 namespace eugraph {
 namespace compute {
@@ -10,10 +12,10 @@ namespace compute {
 IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                                          PropertyValue search_value, std::optional<PropertyValue> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col)
+                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col)
     : variable_(std::move(variable)), label_id_(label_id), prop_ids_({prop_id}), mode_(mode), eq_values_(),
       prefix_col_(prefix_col), range_start_(std::nullopt), range_end_(std::nullopt),
-      output_types_(std::move(output_types)), store_(store), label_defs_(std::move(label_defs)) {
+      output_types_(std::move(output_types)), store_(store), schema_(std::move(schema)) {
     if (mode == ScanMode::EQUALITY) {
         eq_values_.push_back(std::move(search_value));
     } else {
@@ -29,11 +31,11 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id,
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col)
+                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col)
     : variable_(std::move(variable)), label_id_(label_id), index_id_(0), prop_ids_(std::move(prop_ids)), mode_(mode),
       eq_values_(std::move(eq_values)), prefix_col_(prefix_col), range_start_(std::move(range_start)),
       range_end_(std::move(range_end)), output_types_(std::move(output_types)), store_(store),
-      label_defs_(std::move(label_defs)) {}
+      schema_(std::move(schema)) {}
 
 // Index-id based composite constructor
 IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, uint32_t index_id, std::vector<uint16_t> prop_ids,
@@ -41,13 +43,21 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, uint32_t index_id
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col)
+                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col)
     : variable_(std::move(variable)), label_id_(INVALID_LABEL_ID), index_id_(index_id), prop_ids_(std::move(prop_ids)),
       mode_(mode), eq_values_(std::move(eq_values)), prefix_col_(prefix_col), range_start_(std::move(range_start)),
       range_end_(std::move(range_end)), output_types_(std::move(output_types)), store_(store),
-      label_defs_(std::move(label_defs)) {}
+      schema_(std::move(schema)) {}
 
 folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
+    // 读准入：DROP 会等 readers 归零后才删表（设计 §9.3）。
+    if (index_id_ != 0) {
+        if (auto* registry = store_.indexRegistry()) {
+            read_handle_ = registry->acquireRead(index_id_);
+            if (!read_handle_)
+                throw std::runtime_error("index is being dropped (read admission failed)");
+        }
+    }
     std::vector<VertexId> scan_batch;
     folly::coro::AsyncGenerator<std::span<const VertexId>> gen;
     if (index_id_ != 0) {
@@ -105,15 +115,15 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
 
 std::string IndexScanPhysicalOp::toString() const {
     std::string label_name = std::to_string(label_id_);
-    auto it = label_defs_.find(label_id_);
-    if (it != label_defs_.end()) {
+    auto it = schema_->labels.find(label_id_);
+    if (it != schema_->labels.end()) {
         label_name = it->second.name;
     }
     std::string prop_list;
     for (size_t i = 0; i < prop_ids_.size(); ++i) {
         if (i > 0)
             prop_list += ", ";
-        if (it != label_defs_.end()) {
+        if (it != schema_->labels.end()) {
             bool found = false;
             for (const auto& pd : it->second.properties) {
                 if (pd.id == prop_ids_[i]) {

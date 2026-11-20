@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <folly/SocketAddress.h>
 #include <folly/coro/BlockingWait.h>
+#include <thread>
 #if defined(__SANITIZE_ADDRESS__)
 #define EUGRAPH_ASAN 1
 #elif defined(__has_feature)
@@ -171,6 +172,24 @@ protected:
         return result;
     }
 
+    /// CREATE INDEX 是异步 DDL：等目标索引 PUBLIC（与 loader 的轮询语义一致）。
+    void waitForIndexPublic(const std::string& index_name) {
+        const auto deadline = Clock::now() + std::chrono::seconds(30);
+        while (Clock::now() < deadline) {
+            auto result = execCypher("SHOW INDEXES");
+            if (result.error.empty()) {
+                for (const auto& row : result.rows) {
+                    const auto& values = *row.values();
+                    if (values.size() >= 5 && values[0].get_string_val() == index_name &&
+                        values[4].get_string_val() == "PUBLIC")
+                        return;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        FAIL() << "index '" << index_name << "' did not become PUBLIC within 30s";
+    }
+
     LabelInfo createLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
         return client_->createLabel(name, props, "default");
     }
@@ -212,12 +231,14 @@ TEST_F(RpcIntegrationTest, CreateAndShowIndexes) {
     auto r1 = execCypher("CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
     EXPECT_TRUE(r1.error.empty()) << "CREATE INDEX error: " << r1.error;
     ASSERT_EQ(r1.rows.size(), 1);
+    waitForIndexPublic("idx_name");
     EXPECT_NE(r1.rows[0].values()->at(0).get_string_val().find("Index created"), std::string::npos);
 
     // CREATE UNIQUE INDEX
     auto r2 = execCypher("CREATE UNIQUE INDEX idx_city FOR (n:Person) ON (n.city)");
     EXPECT_TRUE(r2.error.empty()) << "CREATE UNIQUE INDEX error: " << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
+    waitForIndexPublic("idx_city");
     EXPECT_NE(r2.rows[0].values()->at(0).get_string_val().find("Index created"), std::string::npos);
 
     // SHOW INDEXES (list all)
@@ -270,6 +291,7 @@ TEST_F(RpcIntegrationTest, UniqueIndexConstraintViaRpc) {
     auto r1 = execCypher("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)");
     EXPECT_TRUE(r1.error.empty()) << "CREATE UNIQUE INDEX error: " << r1.error;
     ASSERT_EQ(r1.rows.size(), 1);
+    waitForIndexPublic("idx_name");
 
     // Verify PUBLIC state
     auto r2 = execCypher("SHOW INDEXES");

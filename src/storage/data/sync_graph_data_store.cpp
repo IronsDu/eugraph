@@ -13,6 +13,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "storage/index/index_delta_codec.hpp"
 #include "storage/kv/index_key_codec.hpp"
 
 #include "storage/storage_op_metrics.hpp"
@@ -2131,6 +2132,150 @@ bool SyncGraphDataStore::deleteIndexEntry(GraphSession& gs, const std::string& t
     if (!session)
         return false;
     return wt::table_del(gs, table, key);
+}
+
+bool SyncGraphDataStore::putDeltaEntry(GraphSession& gs, const std::string& delta_table,
+                                       const std::vector<PropertyValue>& values, uint64_t entity_id, bool is_delete,
+                                       std::string_view payload) {
+    auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
+    auto encoded = encodeIndexDeltaValue(is_delete ? IndexDeltaOp::kDelete : IndexDeltaOp::kPut, payload);
+    return wt::table_put(gs, delta_table, key, encoded);
+}
+
+size_t SyncGraphDataStore::replayDeltaBatch(GraphSession& gs, const std::string& index_table,
+                                            const std::string& delta_table, size_t max_rows,
+                                            std::string_view start_after, std::string& last_key_out) {
+    last_key_out.clear();
+    if (max_rows == 0)
+        return 0;
+
+    CursorHandle cursor = gs.acquire_scan_cursor(delta_table);
+    if (!cursor) {
+        gs.fail_from_wt(cursor.error(), "replayDeltaBatch: cannot open cursor on " + delta_table);
+        return 0;
+    }
+    WT_CURSOR* c = cursor.get();
+    int ret = 0;
+    if (!start_after.empty()) {
+        setItem(c, start_after);
+        int cmp = 0;
+        ret = c->search_near(c, &cmp);
+        if (ret == WT_NOTFOUND)
+            return 0;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "replayDeltaBatch: search_near failed on " + delta_table);
+            return 0;
+        }
+        if (cmp <= 0) { // 定位到 <= start_after：跳到下一个
+            ret = c->next(c);
+            if (ret == WT_NOTFOUND)
+                return 0;
+            if (ret != 0) {
+                gs.fail_from_wt(ret, "replayDeltaBatch: next failed on " + delta_table);
+                return 0;
+            }
+        }
+    } else {
+        ret = c->reset(c);
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "replayDeltaBatch: reset failed on " + delta_table);
+            return 0;
+        }
+        ret = c->next(c);
+        if (ret == WT_NOTFOUND)
+            return 0;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "replayDeltaBatch: next failed on " + delta_table);
+            return 0;
+        }
+    }
+
+    size_t applied = 0;
+    while (applied < max_rows) {
+        std::string key;
+        if ((ret = getKeyChecked(c, key)) != 0) {
+            gs.fail_from_wt(ret, "replayDeltaBatch: get_key failed on " + delta_table);
+            return applied;
+        }
+        std::string raw_value;
+        if ((ret = getValueChecked(c, raw_value)) != 0) {
+            gs.fail_from_wt(ret, "replayDeltaBatch: get_value failed on " + delta_table);
+            return applied;
+        }
+        auto delta = decodeIndexDeltaValue(raw_value);
+        if (!delta) {
+            gs.fail_from_wt(EINVAL, "replayDeltaBatch: corrupt delta value in " + delta_table);
+            return applied;
+        }
+
+        // delta 的 key 与索引表 key 布局完全一致 ⇒ 直接按原始 key 应用（不解码属性值）。
+        const bool ok = delta->op == IndexDeltaOp::kPut ? wt::table_put(gs, index_table, key, delta->payload)
+                                                        : wt::table_del(gs, index_table, key);
+        if (!ok)
+            return applied; // 错误已由 table_put/table_del 粘到会话上（禁止提交）
+
+        // 应用后删掉该 delta 行（同一事务）：变更表始终只装"未应用的变更"。
+        ret = c->remove(c);
+        if (ret != 0 && ret != WT_NOTFOUND) {
+            gs.fail_from_wt(ret, "replayDeltaBatch: remove failed on " + delta_table);
+            return applied;
+        }
+        last_key_out = std::move(key);
+        ++applied;
+
+        ret = c->next(c);
+        if (ret == WT_NOTFOUND)
+            break;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "replayDeltaBatch: next failed on " + delta_table);
+            return applied;
+        }
+    }
+    return applied;
+}
+
+std::optional<bool> SyncGraphDataStore::indexHasDuplicateKeys(GraphSession& gs, const std::string& table) {
+    CursorHandle cursor = gs.acquire_scan_cursor(table);
+    if (!cursor) {
+        gs.fail_from_wt(cursor.error(), "indexHasDuplicateKeys: cannot open cursor on " + table);
+        return std::nullopt;
+    }
+    WT_CURSOR* c = cursor.get();
+    int ret = c->reset(c);
+    if (ret != 0) {
+        gs.fail_from_wt(ret, "indexHasDuplicateKeys: reset failed on " + table);
+        return std::nullopt;
+    }
+    ret = c->next(c);
+    if (ret == WT_NOTFOUND)
+        return false;
+    if (ret != 0) {
+        gs.fail_from_wt(ret, "indexHasDuplicateKeys: next failed on " + table);
+        return std::nullopt;
+    }
+
+    std::string previous;
+    while (true) {
+        std::string key;
+        if ((ret = getKeyChecked(c, key)) != 0) {
+            gs.fail_from_wt(ret, "indexHasDuplicateKeys: get_key failed on " + table);
+            return std::nullopt;
+        }
+        if (!previous.empty() && key.size() >= 8 && previous.size() >= 8) {
+            const std::string_view previous_value(previous.data(), previous.size() - 8);
+            const std::string_view current_value(key.data(), key.size() - 8);
+            if (previous_value == current_value)
+                return true; // 同键不同实体 ⇒ 唯一索引冲突
+        }
+        previous = std::move(key);
+        ret = c->next(c);
+        if (ret == WT_NOTFOUND)
+            return false;
+        if (ret != 0) {
+            gs.fail_from_wt(ret, "indexHasDuplicateKeys: next failed on " + table);
+            return std::nullopt;
+        }
+    }
 }
 
 bool SyncGraphDataStore::checkUniqueConstraint(GraphSession& gs, const std::string& table, const PropertyValue& value) {

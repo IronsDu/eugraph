@@ -43,7 +43,19 @@ public:
         AsyncGraphDataStore store(store_, io_, session);
         store.profile_counters_ = profile_counters_;
         store.profile_state_ = profile_state_;
+        store.registry_ = registry_; // 语句级实例共享同一张注册表（每图一份）
         return store;
+    }
+
+    /// 每图索引运行时注册表（GraphInstance 在打开图时注入；null ⇒ 老行为）。
+    void setIndexRegistry(IndexRuntimeRegistry* registry) {
+        registry_ = registry;
+    }
+    IndexRuntimeRegistry* indexRegistry() const override {
+        return registry_;
+    }
+    GraphSession* graphSession() override {
+        return &session_;
     }
 
     void setProfileCounters(std::shared_ptr<StorageOpCounters> counters) {
@@ -548,6 +560,39 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> putDeltaEntry(const std::string& delta_table, const std::vector<PropertyValue>& values,
+                                          uint64_t entity_id, bool is_delete, std::string_view payload = {}) override {
+        auto table = delta_table;
+        auto vals = values;
+        auto bytes = std::string(payload);
+        auto ok = co_await dispatch(
+            [this, table = std::move(table), vals = std::move(vals), entity_id, is_delete, bytes = std::move(bytes)]() {
+                return store_.putDeltaEntry(session_, table, vals, entity_id, is_delete, bytes);
+            });
+        co_return ok;
+    }
+
+    folly::coro::Task<IndexDeltaReplayResult> replayDeltaBatch(const std::string& index_table,
+                                                               const std::string& delta_table, size_t max_rows,
+                                                               std::string_view start_after = {}) override {
+        auto index = index_table;
+        auto delta = delta_table;
+        auto start = std::string(start_after);
+        auto result = co_await dispatch(
+            [this, index = std::move(index), delta = std::move(delta), max_rows, start = std::move(start)]() {
+                IndexDeltaReplayResult out;
+                out.applied = store_.replayDeltaBatch(session_, index, delta, max_rows, start, out.last_key);
+                return out;
+            });
+        co_return result;
+    }
+
+    folly::coro::Task<std::optional<bool>> indexHasDuplicateKeys(const std::string& table) override {
+        auto name = table;
+        co_return co_await dispatch(
+            [this, name = std::move(name)]() { return store_.indexHasDuplicateKeys(session_, name); });
+    }
+
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) override {
         auto t = table;
         auto val = value;
@@ -995,6 +1040,7 @@ private:
     /// Per-statement "current operator counters" slot (owned by QueryContext;
     /// the facade only borrows it for the statement's lifetime).
     StorageProfileState* profile_state_ = nullptr;
+    IndexRuntimeRegistry* registry_ = nullptr;
 };
 
 } // namespace eugraph

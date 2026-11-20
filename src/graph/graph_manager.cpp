@@ -1,6 +1,7 @@
 #include "graph/graph_manager.hpp"
 
 #include "common/config/env_vars.hpp"
+#include "storage/index/index_runtime_factory.hpp"
 
 #include <folly/coro/BlockingWait.h>
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
@@ -146,6 +147,9 @@ void GraphManager::shutdown() {
     // 关闭前先关闸并等在飞使用者归零：否则会与仍在执行的协程并发使用同一 WT 连接 ⇒ WT_PANIC。
     // 超时仍不归零 ⇒ **故意泄漏**该实例（进程即将退出；泄漏远好于 UAF/WT_PANIC ✓）。
     for (auto& inst : instances)
+        if (inst && inst->index_builds)
+            inst->index_builds->shutdown();
+    for (auto& inst : instances)
         if (inst && inst->usage)
             inst->usage->close();
     for (auto& inst : instances) {
@@ -213,6 +217,9 @@ bool GraphManager::dropGraph(const std::string& name) {
     // **先关闸再等在飞使用者归零**：否则并发使用同一 WT 连接 ⇒ `__conn_close` 失败 ⇒ WT_PANIC
     // ⇒ 此后进程内写入静默丢失、后续 CREATE DATABASE 打不开图实例（实测，见
     // docs/tests/bolt-driver-integration-notes.md）。
+    // 构建任务不持有 usage 租约 ⇒ 必须先取消并 join，再关连接（H17）。
+    if (inst->index_builds)
+        inst->index_builds->shutdown();
     inst->usage->close();
     if (!inst->usage->waitDrained(/*timeout_ms=*/10000)) {
         // 仍有执行流在用这个图的会话/连接 ⇒ **绝不能**关闭连接（UAF ⇒ WT_PANIC ⇒ 全局静默丢写）。
@@ -399,6 +406,80 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
         }
     }
 
+    // ==================== v2 索引运行时：启动修复与恢复 ====================
+    // 1) 遗留缺陷修复：旧 createEdgeIndex 没分配 index_id（持久化为 0）。
+    //    0 既不能注册也不能路由，这里一次性补 id 并落盘（幂等）。
+    try {
+        const auto repaired = folly::coro::blockingWait(instance->async_meta->repairMissingIndexIds());
+        if (repaired > 0) {
+            spdlog::warn("[index] graph '{}': repaired {} legacy index definition(s) with index_id==0", name, repaired);
+        }
+    } catch (const std::exception& e) {
+        // 修复失败不阻塞打开：内存里已补 id，下次打开会再试。
+        spdlog::error("[index] graph '{}': failed to repair legacy index ids: {}", name, e.what());
+    }
+
+    // 2) 重启恢复：WRITE_ONLY（构建中）意味着构建随进程死亡；本期不做续建（无扫描水位），
+    //    一律置 ERROR 并保留定义；半成品表登记为 orphan。
+    try {
+        const auto recovered = folly::coro::blockingWait(instance->async_meta->recoverUnfinishedIndexes());
+        if (!recovered.empty()) {
+            spdlog::warn("[index] graph '{}': {} unfinished index build(s) marked ERROR (no crash resume)", name,
+                         recovered.size());
+        }
+        // 3) 清理遗留表：启动时没有旧进程的会话占用，通常必成；失败则保留记录等下次启动。
+        const auto records = folly::coro::blockingWait(instance->async_meta->listCleanupRecords());
+        for (const auto& record : records) {
+            bool all_dropped = true;
+            for (const auto& table : record.tables) {
+                if (!instance->sync_data->dropIndex(table)) {
+                    all_dropped = false;
+                    break;
+                }
+            }
+            if (all_dropped) {
+                folly::coro::blockingWait(instance->async_meta->removeCleanupRecord(record.kind, record.index_id));
+                spdlog::info("[index] graph '{}': cleanup '{}' index {} done ({} tables)", name, record.kind,
+                             record.index_id, record.tables.size());
+            } else {
+                spdlog::warn("[index] graph '{}': cleanup '{}' index {} still busy; retry on next open", name,
+                             record.kind, record.index_id);
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("[index] graph '{}': failed to recover/cleanup indexes: {}", name, e.what());
+    }
+
+    // 3) 运行时注册表：从持久化定义播种（PUBLIC 可被规划器选中；ERROR 只用于观测）。
+    //    注册表先于 executor 声明 ⇒ executor 先销毁。
+    instance->index_registry = std::make_shared<IndexRuntimeRegistry>();
+    instance->schema_generations = std::make_shared<SchemaGenerationTracker>();
+    {
+        const GraphSchema schema_now = instance->async_meta->schemaSnapshot();
+        size_t seeded = 0;
+        for (const auto& [lid, label] : schema_now.labels) {
+            for (const auto& idx : label.indexes) {
+                if (idx.index_id == 0)
+                    continue;
+                if (instance->index_registry->createOrUpdate(makeIndexRuntimeDescriptor(idx, lid, false)))
+                    ++seeded;
+            }
+        }
+        for (const auto& [elid, elabel] : schema_now.edge_labels) {
+            for (const auto& idx : elabel.indexes) {
+                if (idx.index_id == 0)
+                    continue;
+                if (instance->index_registry->createOrUpdate(makeIndexRuntimeDescriptor(idx, elid, true)))
+                    ++seeded;
+            }
+        }
+        spdlog::info("[index] graph '{}': {} index runtime(s) registered", name, seeded);
+    }
+    // 所有语句级 AsyncGraphDataStore（for_session）都会继承这个指针；
+    // 批量装载等 sync 路径用 sync_data 上的端口。
+    instance->async_data->setIndexRegistry(instance->index_registry.get());
+    instance->sync_data->setIndexRegistry(instance->index_registry.get());
+
     // 会话池：工厂从**连接所有者**取 session ✓（WT 不外泄 ✓）
     // 注：池成员声明在 GraphInstance **最后** ⇒ 最先销毁 ✓（session 在连接关闭前 close ✓，§3.2.1）
     instance->session_pool =
@@ -409,6 +490,14 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
     executor_config.compute_pool = compute_pool_;
     instance->executor = std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta,
                                                                   *instance->session_pool, executor_config);
+    instance->executor->setIndexRegistry(instance->index_registry.get());
+    instance->executor->setSchemaGenerationTracker(instance->schema_generations);
+    instance->executor->setUsageGate(instance->usage);
+    // 索引构建服务：CREATE INDEX 改成"投递即返回"，后台线程通过 executor 跑完整条构建分支。
+    instance->index_builds = std::make_unique<IndexBuildService>();
+    instance->executor->setIndexBuildService(instance->index_builds.get());
+    instance->index_builds->startPeriodic(
+        5000, [exec = instance->executor.get()] { folly::coro::blockingWait(exec->retryPendingIndexCleanups()); });
 
     return instance;
 }

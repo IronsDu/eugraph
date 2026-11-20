@@ -1,9 +1,11 @@
 #pragma once
 
+#include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/index/index_runtime_registry.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
@@ -29,21 +31,21 @@ public:
     IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                         PropertyValue search_value, std::optional<PropertyValue> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col = 0);
+                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0);
 
     // Composite constructor
     IndexScanPhysicalOp(std::string variable, LabelId label_id, std::vector<uint16_t> prop_ids, ScanMode mode,
                         std::vector<PropertyValue> eq_values, std::optional<std::vector<PropertyValue>> range_start,
                         std::optional<std::vector<PropertyValue>> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col = 0);
+                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0);
 
     // Index-id based composite constructor (new index table naming)
     IndexScanPhysicalOp(std::string variable, uint32_t index_id, std::vector<uint16_t> prop_ids, ScanMode mode,
                         std::vector<PropertyValue> eq_values, std::optional<std::vector<PropertyValue>> range_start,
                         std::optional<std::vector<PropertyValue>> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::unordered_map<LabelId, LabelDef> label_defs, size_t prefix_col = 0);
+                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0);
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
@@ -60,7 +62,9 @@ private:
     std::optional<std::vector<PropertyValue>> range_end_;   // range end (composite or single)
     std::vector<binder::BoundType> output_types_;
     IAsyncGraphDataStore& store_;
-    std::unordered_map<LabelId, LabelDef> label_defs_;
+    std::shared_ptr<const GraphSchema> schema_;
+    /// DROP 期间保护数据（RAII；只在 index_id_ != 0 且注册表存在时获取）。
+    std::optional<IndexReadHandle> read_handle_;
 };
 
 } // namespace compute

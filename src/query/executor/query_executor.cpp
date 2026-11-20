@@ -1,5 +1,8 @@
 #include "query/executor/query_executor.hpp"
-#include "common/config/env_vars.hpp"
+
+#include "storage/index/index_builder.hpp"
+#include "storage/index/index_runtime_factory.hpp"
+#include "storage/index/index_test_hooks.hpp"
 
 #include "common/types/constants.hpp"
 #include "query/catalog/catalog.hpp"
@@ -7,7 +10,6 @@
 #include "query/optimizer/logical_optimizer.hpp"
 #include "query/parser/index_ddl_parser.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
-#include "storage/kv/value_codec.hpp"
 
 #include <folly/coro/BlockingWait.h>
 
@@ -26,18 +28,6 @@ namespace {
 /// transaction over an sf1-sized label (millions of vertices) holds enough
 /// dirty pages that eviction can force WT_ROLLBACK; the backfill is therefore
 /// split into independent commit batches.
-size_t indexBackfillBatchRows() {
-    constexpr size_t kDefault = 20000;
-    const char* env = std::getenv(config::kEnvIndexBackfillBatch);
-    if (env == nullptr || *env == '\0')
-        return kDefault;
-    char* end = nullptr;
-    const unsigned long parsed = std::strtoul(env, &end, 10);
-    if (end == env || end == nullptr || *end != '\0' || parsed == 0)
-        return kDefault;
-    return static_cast<size_t>(std::min<unsigned long>(parsed, 1000000));
-}
-
 } // namespace
 
 QueryExecutor::QueryExecutor(AsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta,
@@ -52,7 +42,17 @@ QueryExecutor::~QueryExecutor() = default;
 folly::coro::Task<std::shared_ptr<StreamContext>>
 QueryExecutor::prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params,
                              QueryCancel cancel, SessionRef existing_session) {
-    auto ctx = std::make_shared<StreamContext>();
+    // 事务级 schema 版本：显式事务用 BEGIN 时 pin 的版本，否则用当前版本。
+    // 只拿 shared_ptr（O(1)）；StreamContext/算子直接引用该版本的 label 定义，不复制。
+    std::shared_ptr<const GraphSchema> schema_version;
+    if (existing_session)
+        schema_version = existing_session->get().schemaPin().schema;
+    if (!schema_version)
+        schema_version = async_meta_.schemaPtr();
+    if (!schema_version)
+        schema_version = std::make_shared<GraphSchema>();
+
+    auto ctx = std::make_shared<StreamContext>(schema_version);
     ctx->query_text = cypher_query;
     const auto planning_start = std::chrono::steady_clock::now();
 
@@ -116,39 +116,21 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     }
     ctx->profile_requested = is_profile;
 
-    // Load label/edge_label mappings from metadata service
-    auto labels = co_await async_meta_.listLabels();
-    auto edge_labels = co_await async_meta_.listEdgeLabels();
-
-    std::unordered_map<std::string, LabelId> label_name_to_id;
-    for (const auto& l : labels)
-        label_name_to_id[l.name] = l.id;
-
-    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
-    for (const auto& el : edge_labels)
-        edge_label_name_to_id[el.name] = el.id;
-
-    // Build catalog and function registry
-    std::unordered_map<LabelId, LabelDef> label_defs_map;
-    for (const auto& l : labels)
-        label_defs_map[l.id] = l;
-    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_map;
-    for (const auto& el : edge_labels)
-        edge_label_defs_map[el.id] = el;
+    auto label_name_to_id = schema_version->label_name_to_id;
+    auto edge_label_name_to_id = schema_version->edge_label_name_to_id;
 
     auto catalog = std::make_unique<catalog::Catalog>();
-    catalog->load(std::move(label_defs_map), std::move(edge_label_defs_map));
-    // Seed cardinality statistics. GraphManager counts vertices per label (and
-    // edges + average out-degree per edge label) at graph open and stores them
-    // in the meta schema; without copying them here the optimizer's LogProp
-    // sees 0 for everything and falls back to kDefaultVertexCount (1000) /
-    // kDefaultAvgOutDegree (10), so every cardinality-based decision is made on
-    // numbers unrelated to the data.
-    for (const auto& [label_id, vertex_count] : async_meta_.schema().label_vertex_counts)
+    catalog->load(schema_version);
+    // Seed cardinality statistics from the SAME schema snapshot the catalog
+    // just loaded (not a fresh peek at the store), so the plan is costed
+    // against one consistent view. GraphManager computes the counts at graph
+    // open; without this the optimizer's LogProp sees 0 for everything and
+    // falls back to kDefaultVertexCount (1000) / kDefaultAvgOutDegree (10).
+    for (const auto& [label_id, vertex_count] : schema_version->label_vertex_counts)
         catalog->setLabelStats(label_id, vertex_count);
-    for (const auto& [edge_label_id, edge_count] : async_meta_.schema().edge_label_counts) {
-        const auto degree_it = async_meta_.schema().edge_avg_out_degrees.find(edge_label_id);
-        const double avg_out = degree_it != async_meta_.schema().edge_avg_out_degrees.end() ? degree_it->second : 0.0;
+    for (const auto& [edge_label_id, edge_count] : schema_version->edge_label_counts) {
+        const auto degree_it = schema_version->edge_avg_out_degrees.find(edge_label_id);
+        const double avg_out = degree_it != schema_version->edge_avg_out_degrees.end() ? degree_it->second : 0.0;
         catalog->setEdgeLabelStats(edge_label_id, edge_count, avg_out);
     }
 
@@ -163,6 +145,18 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
             err += "; " + e;
         ctx->error = std::move(err);
         co_return ctx;
+    }
+
+    // 写语句需要本地可变 schema 副本（DML 隐式建标签/属性会更新它）；
+    // 只读语句继续共享事务级不可变版本。事务 pin 仍固定原始版本。
+    const std::shared_ptr<const GraphSchema> pinned_schema = schema_version;
+    if (binder.ctx().has_mutation) {
+        auto write_schema = std::make_shared<GraphSchema>(*schema_version);
+        auto write_ctx = std::make_shared<StreamContext>(write_schema);
+        write_ctx->query_text = ctx->query_text;
+        write_ctx->profile_requested = ctx->profile_requested;
+        write_ctx->columns = std::move(ctx->columns);
+        ctx = std::move(write_ctx);
     }
 
     // Extract output column names from the bound plan
@@ -203,6 +197,27 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         ctx->should_commit = false; // 显式事务：语句不提交，由 BEGIN/COMMIT 边界负责 ✓
     }
 
+    // schema pin：显式事务由 BEGIN 设置；自动提交/未设置的调用方在语句边界兜底。
+    {
+        auto& session = active_session->get();
+        if (!session.schemaPin().valid || !session.schemaPin().schema) {
+            auto pin = session.schemaPin();
+            if (!pin.valid)
+                pin = GraphSession::SchemaPin{async_meta_.schemaGeneration(), async_meta_.compatVersion(), true, false,
+                                              pinned_schema};
+            else
+                pin.schema = pinned_schema;
+            session.setSchemaPin(std::move(pin));
+        }
+        if (!session.schemaPin().tracked && schema_generations_ != nullptr) {
+            const uint64_t pinned_generation = session.schemaPin().generation;
+            schema_generations_->pin(pinned_generation);
+            session.markSchemaPinTracked();
+            session.onTransactionEnd(
+                [tracker = schema_generations_, pinned_generation] { tracker->unpin(pinned_generation); });
+        }
+    }
+
     // Statement execution context: the one place statement-scoped state (today the
     // cancellation flag, later deadlines/budgets) belongs. Operators hold it through
     // a shared_ptr, and the store stays unaware of it -- cancellation is observed on
@@ -219,15 +234,9 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         ctx->query_store->setProfileCounters(query_ctx->statementCounters());
     IAsyncGraphDataStore& query_data = *ctx->query_store;
 
-    // Store label/edge_label defs + name→id maps in StreamContext so physical operator
-    // raw pointers remain valid throughout streaming consumption
-    for (const auto& l : labels)
-        ctx->label_defs[l.id] = l;
-    for (const auto& el : edge_labels)
-        ctx->edge_label_defs[el.id] = el;
+    // label/edge_label 定义由 ctx 引用 schema_version，不再逐语句复制。
     ctx->label_name_to_id = std::move(label_name_to_id);
     ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
-    ctx->label_vertex_counts = async_meta_.schema().label_vertex_counts;
 
     PlanContext plan_ctx{
         .label_name_to_id = ctx->label_name_to_id,
@@ -235,6 +244,11 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .label_defs = ctx->label_defs,
         .edge_label_defs = ctx->edge_label_defs,
         .label_vertex_counts = ctx->label_vertex_counts,
+        .schema = ctx->schema,
+        .mutable_label_defs = ctx->owned_schema ? &ctx->owned_schema->labels : nullptr,
+        .mutable_edge_label_defs = ctx->owned_schema ? &ctx->owned_schema->edge_labels : nullptr,
+        .index_registry = index_registry_,
+        .txn_start_generation = active_session->get().schemaPin().generation,
         .eval_ctx = {},
         .requirements = {},
         .extraction_info = {},
@@ -410,6 +424,178 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     co_return ctx;
 }
 
+// ==================== 索引运行时注册表维护 ====================
+
+void QueryExecutor::registerIndexRuntime(const std::string& index_name, uint32_t label_id, bool is_edge) {
+    if (index_registry_ == nullptr)
+        return;
+    auto def = async_meta_.schemaPtr()->findIndexByName(index_name);
+    if (!def || def->index_id == 0)
+        return;
+    auto desc = makeIndexRuntimeDescriptor(*def, label_id, is_edge);
+    // 新建索引从 SCAN 开始（持久化的 WRITE_ONLY 是它的投影）。
+    desc.initial_phase = IndexPhase::kScan;
+    index_registry_->createOrUpdate(std::move(desc));
+}
+
+void QueryExecutor::publishIndexRuntime(const std::string& index_name) {
+    if (index_registry_ == nullptr)
+        return;
+    auto def = async_meta_.schemaPtr()->findIndexByName(index_name);
+    if (!def)
+        return;
+    auto runtime = index_registry_->find(def->index_id);
+    if (!runtime)
+        return;
+    // 发布时刻的代数：更早 pin 的事务（public_generation > pin.generation）看不到它。
+    runtime->setPublicGeneration(async_meta_.schemaGeneration());
+    runtime->setProgress(100.0);
+    runtime->transitionPhase(IndexPhase::kPublic);
+}
+
+void QueryExecutor::failIndexRuntime(const std::string& index_name, std::string_view error) {
+    if (index_registry_ == nullptr)
+        return;
+    auto def = async_meta_.schemaPtr()->findIndexByName(index_name);
+    if (!def)
+        return;
+    auto runtime = index_registry_->find(def->index_id);
+    if (runtime) {
+        runtime->setLastError(error.empty() ? std::string("Index build failed (see server log)") : std::string(error));
+        runtime->transitionPhase(IndexPhase::kError);
+    }
+}
+
+void QueryExecutor::retireIndexRuntime(uint32_t index_id) {
+    if (index_registry_ == nullptr || index_id == 0)
+        return;
+    auto runtime = index_registry_->find(index_id);
+    if (!runtime)
+        return;
+    runtime->transitionLifecycle(IndexLifecycle::kDropping);
+    runtime->transitionLifecycle(IndexLifecycle::kPurging);
+    runtime->transitionLifecycle(IndexLifecycle::kPurged);
+    index_registry_->erase(index_id);
+}
+
+folly::coro::Task<void> QueryExecutor::retryPendingIndexCleanups() {
+    const auto records = co_await async_meta_.listCleanupRecords();
+    for (const auto& record : records) {
+        if (record.kind != "pending_drop" && record.kind != "orphan")
+            continue;
+
+        std::shared_ptr<IndexRuntime> runtime;
+        if (index_registry_ != nullptr)
+            runtime = index_registry_->find(record.index_id);
+        if (runtime != nullptr) {
+            if (runtime->lifecycle() != IndexLifecycle::kPendingPurge)
+                continue; // 构建/正常/已删除的索引不归这里管
+            if (runtime->readers() != 0)
+                continue; // 还有在飞读者，下一轮
+        }
+
+        bool all_dropped = true;
+        for (const auto& table : record.tables) {
+            if (!(co_await async_data_.dropIndex(table))) {
+                all_dropped = false;
+                break;
+            }
+        }
+        if (all_dropped) {
+            co_await async_meta_.removeCleanupRecord(record.kind, record.index_id);
+            if (runtime != nullptr) {
+                runtime->transitionLifecycle(IndexLifecycle::kPurging);
+                runtime->transitionLifecycle(IndexLifecycle::kPurged);
+                index_registry_->erase(record.index_id);
+            }
+            spdlog::info("[index] pending purge for index {} done", record.index_id);
+            continue;
+        }
+
+        // 仍失败：pending_drop 转 orphan（下次打开重试），避免 pending 记录长期滞留。
+        if (record.kind == "pending_drop") {
+            co_await async_meta_.putCleanupRecord("orphan", record.index_id, record.tables);
+            co_await async_meta_.removeCleanupRecord("pending_drop", record.index_id);
+        }
+        spdlog::warn("[index] pending purge for index {} still busy; kept for next retry", record.index_id);
+    }
+}
+
+folly::coro::Task<void> QueryExecutor::cleanupDroppedIndex(IAsyncGraphMetaStore::IndexCleanupRecord record,
+                                                           uint64_t drop_generation) {
+    // 先等"删除时刻之前 pin 的事务"结束（它们可能已计划、稍后才来扫这张表）。
+    if (schema_generations_ != nullptr && drop_generation != 0 &&
+        !schema_generations_->waitNoPinsOlderThan(drop_generation, index_purge_wait_ms_)) {
+        if (index_registry_ != nullptr) {
+            if (auto runtime = index_registry_->find(record.index_id))
+                runtime->transitionLifecycle(IndexLifecycle::kPendingPurge);
+        }
+        spdlog::warn("[index] drop cleanup for index {}: old schema pins still active; kept as pending_drop",
+                     record.index_id);
+        co_return;
+    }
+    // 再等读句柄归零：在飞查询可能正在扫这张表（§9.3）。
+    if (index_registry_ != nullptr) {
+        if (auto runtime = index_registry_->find(record.index_id);
+            runtime && !runtime->waitReadersZero(index_purge_wait_ms_)) {
+            runtime->transitionLifecycle(IndexLifecycle::kPendingPurge);
+            spdlog::warn("[index] drop cleanup for index {}: readers still active after timeout; "
+                         "kept as pending_drop (retry on next open)",
+                         record.index_id);
+            co_return; // 保留清理记录
+        }
+    }
+
+    bool all_dropped = true;
+    for (const auto& table : record.tables) {
+        if (!(co_await async_data_.dropIndex(table))) {
+            all_dropped = false;
+            break;
+        }
+    }
+
+    if (all_dropped) {
+        co_await async_meta_.removeCleanupRecord(record.kind, record.index_id);
+        if (index_registry_ != nullptr) {
+            if (auto runtime = index_registry_->find(record.index_id)) {
+                runtime->transitionLifecycle(IndexLifecycle::kPurging);
+                runtime->transitionLifecycle(IndexLifecycle::kPurged);
+                index_registry_->erase(record.index_id);
+            }
+        }
+        spdlog::info("[index] drop cleanup for index {} done", record.index_id);
+        co_return;
+    }
+
+    // 表仍被同进程的会话缓存占用（§9.2）：转 orphan，启动时重试。
+    co_await async_meta_.putCleanupRecord("orphan", record.index_id, record.tables);
+    co_await async_meta_.removeCleanupRecord(record.kind, record.index_id);
+    if (index_registry_ != nullptr) {
+        if (auto runtime = index_registry_->find(record.index_id))
+            runtime->transitionLifecycle(IndexLifecycle::kPendingPurge);
+    }
+    spdlog::warn("[index] drop cleanup for index {}: tables still busy; recorded as orphan", record.index_id);
+}
+
+folly::coro::Task<std::string> QueryExecutor::applyIndexBuildOutcome(const IndexBuildSpec& spec,
+                                                                     const IndexBuildOutcome& outcome) {
+    if (!outcome.ok) {
+        // DROP 可能已删定义：updateIndexState 返回 false 是正常竞态，不影响清理。
+        if (!outcome.cancelled)
+            co_await async_meta_.updateIndexState(spec.index_name, IndexState::ERROR);
+        failIndexRuntime(spec.index_name, outcome.error);
+        co_return outcome.error.empty() ? std::string("Index build failed") : outcome.error;
+    }
+
+    index_hooks::point("finalize.before_public", spec.index_id);
+    if (!(co_await async_meta_.updateIndexState(spec.index_name, IndexState::PUBLIC))) {
+        failIndexRuntime(spec.index_name, "Failed to set index state to PUBLIC");
+        co_return std::string("Failed to set index state to PUBLIC");
+    }
+    publishIndexRuntime(spec.index_name);
+    co_return std::string{};
+}
+
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {
     if (stmt.type == IndexDdlStatement::CREATE_VERTEX_INDEX) {
         auto label_def = co_await async_meta_.getLabelDef(stmt.label_name);
@@ -463,7 +649,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             co_return;
         }
 
-        const auto& schema = async_meta_.schema();
+        const auto schema_ptr = async_meta_.schemaPtr();
+        const GraphSchema& schema = *schema_ptr;
         auto idx_def = schema.findIndexByName(stmt.index_name);
         if (!idx_def) {
             result.error = "Created index not found in schema: " + stmt.index_name;
@@ -476,21 +663,41 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             result.error = "Failed to create index storage table";
             co_return;
         }
-
-        // Pre-resolve strong accessors to prop ids.
-        struct ResolvedAccessor {
-            bool is_strong;
-            LabelId source_label_id;
-            uint16_t source_prop_id;
-            std::string property_name;
-        };
-        std::vector<ResolvedAccessor> resolved;
+        registerIndexRuntime(stmt.index_name, label_def->id, false);
+        ok = co_await async_data_.createIndex(indexDeltaTable(idx_def->index_id));
+        if (!ok) {
+            result.error = "Failed to create index delta table";
+            failIndexRuntime(stmt.index_name);
+            co_return;
+        }
+        // 预解析 strong accessor + 拷贝 schema 快照（weak accessor/anon 解析用），
+        // 之后把 SCAN/FINALIZE 完全交给 storage/index/index_builder。
+        IndexBuildSpec spec;
+        spec.index_id = idx_def->index_id;
+        spec.index_name = stmt.index_name;
+        spec.label_id = label_def->id;
+        spec.is_edge = false;
+        spec.unique = idx_def->unique;
+        spec.index_table = table;
+        spec.delta_table = indexDeltaTable(idx_def->index_id);
+        spec.labels = schema.labels;
+        for (const auto& [lid, ldef] : schema.labels) {
+            if (ldef.name == kAnonLabelName) {
+                spec.anon_label_id = lid;
+                break;
+            }
+        }
+        {
+            const auto counts = async_meta_.schemaPtr()->label_vertex_counts;
+            auto count_it = counts.find(label_def->id);
+            if (count_it != counts.end())
+                spec.total_entities = count_it->second;
+        }
         for (const auto& acc : idx_def->accessors) {
-            ResolvedAccessor ra;
-            ra.is_strong = acc.is_strong;
-            ra.property_name = acc.property_name;
-            ra.source_label_id = acc.source_label_id;
-            ra.source_prop_id = UINT16_MAX;
+            IndexBuildAccessor accessor;
+            accessor.is_strong = acc.is_strong;
+            accessor.property_name = acc.property_name;
+            accessor.source_label_id = acc.source_label_id;
             if (acc.is_strong) {
                 auto src = schema.getLabel(acc.source_label_id);
                 if (!src) {
@@ -500,7 +707,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 bool found = false;
                 for (const auto& pd : src->properties) {
                     if (pd.name == acc.property_name) {
-                        ra.source_prop_id = pd.id;
+                        accessor.source_prop_id = pd.id;
                         found = true;
                         break;
                     }
@@ -511,216 +718,67 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                     co_return;
                 }
             }
-            resolved.push_back(std::move(ra));
+            spec.accessors.push_back(std::move(accessor));
         }
 
-        // Backfill in bounded transactions. A single transaction over an
-        // sf1-sized label (millions of vertices) holds enough dirty pages that
-        // eviction can force WT_ROLLBACK. Commit each batch independently so
-        // eviction can make progress between batches.
-        bool hasConflict = false;
-        bool backfillOk = true;
-        {
-            auto scan_lease = session_pool_.acquire();
-            auto write_lease = session_pool_.acquire();
-            if (!scan_lease || !write_lease) {
-                backfillOk = false;
-                result.error = "Failed to acquire sessions for index backfill (pool exhausted)";
-            } else {
-                auto scan_store = async_data_.for_session(**scan_lease);
-                auto write_store = async_data_.for_session(**write_lease);
-                {
-                    // Do not keep a long-lived read transaction open across
-                    // the whole backfill: it would pin the oldest snapshot and
-                    // defeat eviction just like the oversized write txn. The
-                    // scan cursor runs in autocommit; write batches use a
-                    // separate session.
-                    const size_t batch_rows = indexBackfillBatchRows();
-                    std::vector<VertexId> pending;
-                    pending.reserve(batch_rows);
+        const auto make_context = [&]() {
+            return IndexBuildContext{async_data_, session_pool_, index_registry_, [this, name = stmt.index_name]() {
+                                         return index_builds_ != nullptr && index_builds_->isCancelled(name);
+                                     }};
+        };
 
-                    LabelId anon_label_id = INVALID_LABEL_ID;
-                    for (const auto& [lid, ldef] : schema.labels) {
-                        if (ldef.name == kAnonLabelName) {
-                            anon_label_id = lid;
-                            break;
-                        }
-                    }
-
-                    auto flush_batch = [&]() -> folly::coro::Task<bool> {
-                        if (pending.empty())
-                            co_return true;
-                        if (!co_await write_store.beginSession(true)) {
-                            result.error = "Failed to begin index backfill transaction";
-                            co_return false;
-                        }
-                        for (auto vid : pending) {
-                            std::vector<PropertyValue> values;
-                            bool allPresent = true;
-                            bool conflict = false;
-
-                            auto vertex_labels = co_await write_store.getVertexLabels(vid);
-                            for (const auto& ra : resolved) {
-                                if (ra.is_strong) {
-                                    auto props_opt = co_await write_store.getVertexProperties(vid, ra.source_label_id);
-                                    if (!props_opt || ra.source_prop_id >= props_opt->size() ||
-                                        !(*props_opt)[ra.source_prop_id].has_value()) {
-                                        allPresent = false;
-                                        break;
-                                    }
-                                    values.push_back((*props_opt)[ra.source_prop_id].value());
-                                } else {
-                                    // Weak accessor: one home per vertex. More
-                                    // than one home is ambiguity -> the weak
-                                    // index cannot represent it -> fail.
-                                    int home_count = 0;
-                                    LabelId home_label = INVALID_LABEL_ID;
-                                    bool home_anon = false;
-                                    std::optional<PropertyValue> anon_value;
-                                    for (LabelId lid : vertex_labels) {
-                                        if (lid == anon_label_id)
-                                            continue;
-                                        auto lab = schema.getLabel(lid);
-                                        if (!lab)
-                                            continue;
-                                        for (const auto& pd : lab->properties) {
-                                            if (pd.name == ra.property_name) {
-                                                home_count++;
-                                                home_label = lid;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if (anon_label_id != INVALID_LABEL_ID && vertex_labels.count(anon_label_id)) {
-                                        auto alab = schema.getLabel(anon_label_id);
-                                        if (alab) {
-                                            auto props_opt =
-                                                co_await write_store.getVertexProperties(vid, anon_label_id);
-                                            for (const auto& pd : alab->properties) {
-                                                if (pd.name != ra.property_name)
-                                                    continue;
-                                                if (props_opt && pd.id < props_opt->size() &&
-                                                    (*props_opt)[pd.id].has_value()) {
-                                                    home_count++;
-                                                    home_anon = true;
-                                                    anon_value = (*props_opt)[pd.id].value();
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if (home_count > 1) {
-                                        spdlog::warn(
-                                            "Index '{}' weak accessor '{}' is ambiguous on vertex {} (multiple homes)",
-                                            stmt.index_name, ra.property_name, vid);
-                                        conflict = true;
-                                        break;
-                                    }
-                                    if (home_count == 0) {
-                                        allPresent = false;
-                                        break;
-                                    }
-                                    if (home_anon) {
-                                        values.push_back(std::move(*anon_value));
-                                    } else {
-                                        auto props_opt = co_await write_store.getVertexProperties(vid, home_label);
-                                        uint16_t pid = UINT16_MAX;
-                                        auto lab = schema.getLabel(home_label);
-                                        if (lab) {
-                                            for (const auto& pd : lab->properties) {
-                                                if (pd.name == ra.property_name) {
-                                                    pid = pd.id;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        if (!props_opt || pid == UINT16_MAX || pid >= props_opt->size() ||
-                                            !(*props_opt)[pid].has_value()) {
-                                            allPresent = false;
-                                            break;
-                                        }
-                                        values.push_back((*props_opt)[pid].value());
-                                    }
-                                }
-                            }
-
-                            if (conflict) {
-                                hasConflict = true;
-                                break;
-                            }
-                            if (!allPresent)
-                                continue;
-
-                            if (stmt.unique) {
-                                bool constraint_ok = co_await write_store.checkUniqueConstraint(table, values);
-                                if (!constraint_ok) {
-                                    spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
-                                                 stmt.index_name, vid);
-                                    hasConflict = true;
-                                    break;
-                                }
-                            }
-                            co_await write_store.insertIndexEntry(table, values, vid);
-                        }
-                        if (hasConflict) {
-                            co_await write_store.rollbackSession();
-                            co_return false;
-                        }
-                        const auto outcome = co_await write_store.commitSession();
-                        if (!outcome.committed()) {
-                            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
-                            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-                            result.error =
-                                "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
-                                "see the server log for the WiredTiger error";
-                            co_return false;
-                        }
-                        pending.clear();
-                        co_return true;
-                    };
-
-                    {
-                        std::vector<VertexId> scan_batch;
-                        auto gen = scan_store.scanVerticesByLabel(label_def->id, scan_batch);
-                        while (backfillOk && !hasConflict) {
-                            auto batch = co_await gen.next();
-                            if (!batch)
-                                break;
-                            for (auto vid : *batch) {
-                                pending.push_back(vid);
-                                if (pending.size() < batch_rows)
-                                    continue;
-                                if (!co_await flush_batch()) {
-                                    backfillOk = false;
-                                    break;
-                                }
-                            }
-                        }
-                    } // gen destroyed before ending the read transaction
-                    if (backfillOk && !hasConflict && !pending.empty())
-                        backfillOk = co_await flush_batch();
+        if (index_builds_ != nullptr) {
+            IndexBuildService::Job job = [this, spec]() {
+                auto usage_guard = usage_gate_ ? usage_gate_->tryEnter() : GraphUsageGate::Guard{};
+                if (usage_gate_ && !usage_guard) {
+                    (void)folly::coro::blockingWait(
+                        applyIndexBuildOutcome(spec, IndexBuildOutcome{false, false, "graph is shutting down"}));
+                    return;
                 }
+                // 构建开始前等“索引创建之前 BEGIN 的旧事务”结束：
+                // 它们的 schema 快照里没有新索引，写路径不会写 delta；
+                // 必须让这些写入先落数据，再开始 SCAN，否则索引会漏行。
+                const uint64_t index_generation = async_meta_.schemaGeneration();
+                if (schema_generations_ && index_generation != 0) {
+                    (void)schema_generations_->waitNoPinsOlderThan(index_generation,
+                                                                   std::numeric_limits<uint32_t>::max());
+                }
+                auto context =
+                    IndexBuildContext{async_data_, session_pool_, index_registry_, [this, name = spec.index_name]() {
+                                          return index_builds_ != nullptr && index_builds_->isCancelled(name);
+                                      }};
+                const auto outcome = folly::coro::blockingWait(runIndexBuild(context, spec));
+                const auto error = folly::coro::blockingWait(applyIndexBuildOutcome(spec, outcome));
+                if (!error.empty())
+                    spdlog::error("[index] background build '{}' failed: {}", spec.index_name, error);
+            };
+            if (!index_builds_->submit(spec.index_name, std::move(job))) {
+                result.error = "Index build already in progress: " + spec.index_name;
+                co_await async_meta_.updateIndexState(spec.index_name, IndexState::ERROR);
+                failIndexRuntime(spec.index_name, result.error);
+                co_return;
             }
-        }
-
-        if (!backfillOk || hasConflict) {
-            ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-            if (result.error.empty())
-                result.error = hasConflict
-                                   ? "Index creation failed: conflicting values or duplicate values during backfill"
-                                   : "Index backfill failed (index left in ERROR, not ONLINE)";
+            result.columns.push_back("result");
+            Row row;
+            row.push_back(std::string("Index created (building): " + spec.index_name));
+            result.rows.push_back(std::move(row));
             co_return;
         }
 
-        ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::PUBLIC);
-        if (!ok) {
-            result.error = "Failed to set index state to PUBLIC";
+        auto usage_guard = usage_gate_ ? usage_gate_->tryEnter() : GraphUsageGate::Guard{};
+        if (usage_gate_ && !usage_guard) {
+            result.error = "Graph is shutting down; index build not started";
             co_return;
         }
-
+        const auto outcome = co_await runIndexBuild(make_context(), spec);
+        const auto error = co_await applyIndexBuildOutcome(spec, outcome);
+        if (!error.empty()) {
+            result.error = error;
+            co_return;
+        }
         result.columns.push_back("result");
         Row row;
-        row.push_back(std::string("Index created: " + stmt.index_name));
+        row.push_back(std::string("Index created: " + spec.index_name));
         result.rows.push_back(std::move(row));
 
     } else if (stmt.type == IndexDdlStatement::CREATE_EDGE_INDEX) {
@@ -761,137 +819,140 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             result.error = "Failed to create edge index storage table";
             co_return;
         }
-
-        // Backfill in bounded transactions (same reason as vertex indexes:
-        // a single sf1-sized transaction can be forced to WT_ROLLBACK).
-        bool hasConflict = false;
-        bool backfillOk = true;
-        {
-            auto scan_lease = session_pool_.acquire();
-            auto write_lease = session_pool_.acquire();
-            if (!scan_lease || !write_lease) {
-                backfillOk = false;
-                result.error = "Failed to acquire sessions for index backfill (pool exhausted)";
-            } else {
-                auto scan_store = async_data_.for_session(**scan_lease);
-                auto write_store = async_data_.for_session(**write_lease);
-                {
-                    // Do not keep a long-lived read transaction open across
-                    // the whole backfill: it would pin the oldest snapshot and
-                    // defeat eviction just like the oversized write txn. The
-                    // scan cursor runs in autocommit; write batches use a
-                    // separate session.
-                    const size_t batch_rows = indexBackfillBatchRows();
-                    std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> pending;
-                    pending.reserve(batch_rows);
-
-                    auto flush_batch = [&]() -> folly::coro::Task<bool> {
-                        if (pending.empty())
-                            co_return true;
-                        if (!co_await write_store.beginSession(true)) {
-                            result.error = "Failed to begin index backfill transaction";
-                            co_return false;
-                        }
-                        for (const auto& entry : pending) {
-                            auto props_opt = co_await write_store.getEdgeProperties(edge_label_def->id, entry.edge_id);
-                            if (!props_opt.has_value())
-                                continue;
-                            auto& props = *props_opt;
-                            // Collect all indexed property values; skip if any is missing.
-                            std::vector<PropertyValue> values;
-                            bool allPresent = true;
-                            for (auto pid : prop_ids) {
-                                if (pid < props.size() && props[pid].has_value()) {
-                                    values.push_back(props[pid].value());
-                                } else {
-                                    allPresent = false;
-                                    break;
-                                }
-                            }
-                            if (!allPresent)
-                                continue;
-
-                            if (stmt.unique) {
-                                bool constraint_ok = co_await write_store.checkUniqueConstraint(table, values);
-                                if (!constraint_ok) {
-                                    spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
-                                                 stmt.index_name, entry.edge_id);
-                                    hasConflict = true;
-                                    break;
-                                }
-                            }
-                            auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
-                                                                             edge_label_def->id);
-                            co_await write_store.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
-                        }
-                        if (hasConflict) {
-                            co_await write_store.rollbackSession();
-                            co_return false;
-                        }
-                        const auto outcome = co_await write_store.commitSession();
-                        if (!outcome.committed()) {
-                            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
-                            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
-                            result.error =
-                                "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
-                                "see the server log for the WiredTiger error";
-                            co_return false;
-                        }
-                        pending.clear();
-                        co_return true;
-                    };
-
-                    {
-                        std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> scan_batch;
-                        auto gen =
-                            scan_store.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt, scan_batch);
-                        while (backfillOk && !hasConflict) {
-                            auto batch = co_await gen.next();
-                            if (!batch)
-                                break;
-                            for (const auto& entry : *batch) {
-                                pending.push_back(entry);
-                                if (pending.size() < batch_rows)
-                                    continue;
-                                if (!co_await flush_batch()) {
-                                    backfillOk = false;
-                                    break;
-                                }
-                            }
-                        }
-                    } // gen destroyed before ending the read transaction
-                    if (backfillOk && !hasConflict && !pending.empty())
-                        backfillOk = co_await flush_batch();
-                }
-            }
-        }
-
-        if (!backfillOk || hasConflict) {
-            ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-            if (result.error.empty())
-                result.error = hasConflict ? "Unique edge index creation failed: duplicate values found during backfill"
-                                           : "Edge index backfill failed (index left in ERROR, not ONLINE)";
+        registerIndexRuntime(stmt.index_name, edge_label_def->id, true);
+        auto schema_ptr = async_meta_.schemaPtr();
+        auto edge_idx_def = schema_ptr->findIndexByName(stmt.index_name);
+        if (!edge_idx_def) {
+            result.error = "Created edge index not found in schema: " + stmt.index_name;
+            failIndexRuntime(stmt.index_name);
             co_return;
         }
-
-        ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::PUBLIC);
+        ok = co_await async_data_.createIndex(indexDeltaTable(edge_idx_def->index_id));
         if (!ok) {
-            result.error = "Failed to set edge index state to PUBLIC";
+            result.error = "Failed to create edge index delta table";
+            failIndexRuntime(stmt.index_name);
+            co_return;
+        }
+        IndexBuildSpec spec;
+        spec.index_id = edge_idx_def->index_id;
+        spec.index_name = stmt.index_name;
+        spec.label_id = edge_label_def->id;
+        spec.is_edge = true;
+        spec.unique = edge_idx_def->unique;
+        spec.index_table = table;
+        spec.delta_table = indexDeltaTable(edge_idx_def->index_id);
+        spec.edge_prop_ids = edge_idx_def->prop_ids;
+
+        const auto make_context = [&]() {
+            return IndexBuildContext{async_data_, session_pool_, index_registry_, [this, name = stmt.index_name]() {
+                                         return index_builds_ != nullptr && index_builds_->isCancelled(name);
+                                     }};
+        };
+
+        if (index_builds_ != nullptr) {
+            IndexBuildService::Job job = [this, spec]() {
+                auto usage_guard = usage_gate_ ? usage_gate_->tryEnter() : GraphUsageGate::Guard{};
+                if (usage_gate_ && !usage_guard) {
+                    (void)folly::coro::blockingWait(
+                        applyIndexBuildOutcome(spec, IndexBuildOutcome{false, false, "graph is shutting down"}));
+                    return;
+                }
+                // 构建开始前等“索引创建之前 BEGIN 的旧事务”结束：
+                // 它们的 schema 快照里没有新索引，写路径不会写 delta；
+                // 必须让这些写入先落数据，再开始 SCAN，否则索引会漏行。
+                const uint64_t index_generation = async_meta_.schemaGeneration();
+                if (schema_generations_ && index_generation != 0) {
+                    (void)schema_generations_->waitNoPinsOlderThan(index_generation,
+                                                                   std::numeric_limits<uint32_t>::max());
+                }
+                auto context =
+                    IndexBuildContext{async_data_, session_pool_, index_registry_, [this, name = spec.index_name]() {
+                                          return index_builds_ != nullptr && index_builds_->isCancelled(name);
+                                      }};
+                const auto outcome = folly::coro::blockingWait(runIndexBuild(context, spec));
+                const auto error = folly::coro::blockingWait(applyIndexBuildOutcome(spec, outcome));
+                if (!error.empty())
+                    spdlog::error("[index] background edge build '{}' failed: {}", spec.index_name, error);
+            };
+            if (!index_builds_->submit(spec.index_name, std::move(job))) {
+                result.error = "Index build already in progress: " + spec.index_name;
+                co_await async_meta_.updateIndexState(spec.index_name, IndexState::ERROR);
+                failIndexRuntime(spec.index_name, result.error);
+                co_return;
+            }
+            result.columns.push_back("result");
+            Row row;
+            row.push_back(std::string("Edge index created (building): " + spec.index_name));
+            result.rows.push_back(std::move(row));
             co_return;
         }
 
+        auto usage_guard = usage_gate_ ? usage_gate_->tryEnter() : GraphUsageGate::Guard{};
+        if (usage_gate_ && !usage_guard) {
+            result.error = "Graph is shutting down; index build not started";
+            co_return;
+        }
+        const auto outcome = co_await runIndexBuild(make_context(), spec);
+        const auto error = co_await applyIndexBuildOutcome(spec, outcome);
+        if (!error.empty()) {
+            result.error = error;
+            co_return;
+        }
         result.columns.push_back("result");
         Row row;
-        row.push_back(std::string("Edge index created: " + stmt.index_name));
+        row.push_back(std::string("Edge index created: " + spec.index_name));
         result.rows.push_back(std::move(row));
 
     } else if (stmt.type == IndexDdlStatement::DROP_INDEX) {
-        const auto& schema = async_meta_.schema();
+        const auto schema_ptr = async_meta_.schemaPtr();
+        const GraphSchema& schema = *schema_ptr;
         auto idx_def = schema.findIndexByName(stmt.index_name);
         std::string new_table;
         if (idx_def && idx_def->index_id != 0)
             new_table = vidxTableById(idx_def->index_id);
 
+        const uint32_t drop_index_id = (idx_def && idx_def->index_id != 0) ? idx_def->index_id : 0;
+        std::vector<std::string> cleanup_tables;
+        if (!new_table.empty())
+            cleanup_tables.push_back(new_table);
+        if (drop_index_id != 0)
+            cleanup_tables.push_back(indexDeltaTable(drop_index_id));
+
+        if (index_builds_ != nullptr && drop_index_id != 0) {
+            // 异步 DROP：先取消 → 登记待清理（先记后删）→ 删定义 → 投递清理任务 → 立即返回。
+            // 清理任务与构建任务在**同一队列**（1 线程），因此一定在构建退出后执行。
+            index_builds_->cancel(stmt.index_name);
+            if (!(co_await async_meta_.putCleanupRecord("pending_drop", drop_index_id, cleanup_tables))) {
+                result.error = "Failed to record pending drop for: " + stmt.index_name;
+                co_return;
+            }
+            bool ok = co_await async_meta_.dropIndex(stmt.index_name);
+            if (!ok) {
+                co_await async_meta_.removeCleanupRecord("pending_drop", drop_index_id);
+                result.error = "Failed to drop index: " + stmt.index_name;
+                co_return;
+            }
+            if (index_registry_ != nullptr) {
+                if (auto runtime = index_registry_->find(drop_index_id))
+                    runtime->transitionLifecycle(IndexLifecycle::kDropping);
+            }
+            const uint64_t drop_generation = async_meta_.schemaGeneration();
+            IAsyncGraphMetaStore::IndexCleanupRecord record{"pending_drop", drop_index_id, cleanup_tables};
+            IndexBuildService::Job cleanup = [this, record, drop_generation]() {
+                folly::coro::blockingWait(cleanupDroppedIndex(record, drop_generation));
+            };
+            if (!index_builds_->submit(stmt.index_name + "\x01drop", std::move(cleanup))) {
+                spdlog::warn("[index] drop cleanup for '{}' already queued; startup cleanup will retry",
+                             stmt.index_name);
+            }
+            result.columns.push_back("result");
+            Row row;
+            row.push_back(std::string("Index dropped (dropping): " + stmt.index_name));
+            result.rows.push_back(std::move(row));
+            co_return;
+        }
+
+        // 无构建服务（单测/极小化装配）：保持同步删除语义。
         bool ok = co_await async_meta_.dropIndex(stmt.index_name);
         if (!ok) {
             result.error = "Failed to drop index: " + stmt.index_name;
@@ -899,6 +960,10 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         }
         if (!new_table.empty())
             co_await async_data_.dropIndex(new_table);
+        if (drop_index_id != 0) {
+            co_await async_data_.dropIndex(indexDeltaTable(drop_index_id));
+            retireIndexRuntime(drop_index_id);
+        }
         result.columns.push_back("result");
         Row row;
         row.push_back(std::string("Index dropped: " + stmt.index_name));
@@ -906,7 +971,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
     } else if (stmt.type == IndexDdlStatement::SHOW_INDEXES || stmt.type == IndexDdlStatement::SHOW_INDEX) {
         auto indexes = co_await async_meta_.listIndexes();
-        result.columns = {"name", "label", "property", "unique", "state"};
+        result.columns = {"name",  "label",    "property",      "unique",     "state",
+                          "phase", "progress", "delta_backlog", "started_at", "last_error"};
 
         for (const auto& idx : indexes) {
             // Join property names with commas
@@ -924,7 +990,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             std::string state_str;
             switch (idx.state) {
             case IndexState::WRITE_ONLY:
-                state_str = "WRITE_ONLY";
+                state_str = "BUILDING"; // 内部值不泄漏给用户（设计 §13.1）
                 break;
             case IndexState::PUBLIC:
                 state_str = "PUBLIC";
@@ -937,6 +1003,64 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 break;
             }
             row.push_back(std::move(state_str));
+
+            // P3 可观测：phase / progress（0–100）来自运行时；没有运行时（旧索引/非本进程）用兜底值。
+            std::string phase_str = "-";
+            double progress = idx.state == IndexState::PUBLIC ? 100.0 : 0.0;
+            uint32_t delta_backlog = 0;
+            int64_t started_at = 0;
+            std::string last_error;
+            if (index_registry_ != nullptr && idx.index_id != 0) {
+                if (auto runtime = index_registry_->find(idx.index_id)) {
+                    switch (runtime->phase()) {
+                    case IndexPhase::kScan:
+                        phase_str = "SCAN";
+                        break;
+                    case IndexPhase::kCatchup:
+                        phase_str = "CATCHUP";
+                        break;
+                    case IndexPhase::kFinalize:
+                        phase_str = "FINALIZE";
+                        break;
+                    case IndexPhase::kPublic:
+                        phase_str = "PUBLIC";
+                        break;
+                    case IndexPhase::kError:
+                        phase_str = "ERROR";
+                        break;
+                    case IndexPhase::kAbsent:
+                        phase_str = "-";
+                        break;
+                    }
+                    if (runtime->lifecycle() != IndexLifecycle::kActive) {
+                        switch (runtime->lifecycle()) {
+                        case IndexLifecycle::kDropping:
+                            phase_str = "DROPPING";
+                            break;
+                        case IndexLifecycle::kPendingPurge:
+                            phase_str = "PENDING_PURGE";
+                            break;
+                        case IndexLifecycle::kPurging:
+                            phase_str = "PURGING";
+                            break;
+                        case IndexLifecycle::kPurged:
+                            phase_str = "PURGED";
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                    progress = runtime->progress();
+                    delta_backlog = runtime->deltaBacklog();
+                    started_at = runtime->startedAtUnixMs();
+                    last_error = runtime->lastError();
+                }
+            }
+            row.push_back(std::move(phase_str));
+            row.push_back(std::to_string(static_cast<int64_t>(progress)));
+            row.push_back(std::to_string(delta_backlog));
+            row.push_back(std::to_string(started_at));
+            row.push_back(std::move(last_error));
             result.rows.push_back(std::move(row));
         }
     }
