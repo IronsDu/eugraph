@@ -138,16 +138,19 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
 
     auto catalog = std::make_unique<catalog::Catalog>();
     catalog->load(std::move(label_defs_map), std::move(edge_label_defs_map));
-    // Seed cardinality statistics. GraphManager counts vertices per label at
-    // graph open and stores them in the meta schema; without copying them here
-    // the optimizer's LogProp sees 0 for every label and falls back to
-    // kDefaultVertexCount (1000), so every cardinality-based decision is made
-    // on a number unrelated to the data. Edge counts are seeded when present
-    // (the collection path is not implemented yet); absent means "unknown".
+    // Seed cardinality statistics. GraphManager counts vertices per label (and
+    // edges + average out-degree per edge label) at graph open and stores them
+    // in the meta schema; without copying them here the optimizer's LogProp
+    // sees 0 for everything and falls back to kDefaultVertexCount (1000) /
+    // kDefaultAvgOutDegree (10), so every cardinality-based decision is made on
+    // numbers unrelated to the data.
     for (const auto& [label_id, vertex_count] : async_meta_.schema().label_vertex_counts)
         catalog->setLabelStats(label_id, vertex_count);
-    for (const auto& [edge_label_id, edge_count] : async_meta_.schema().edge_label_counts)
-        catalog->setEdgeCount(edge_label_id, edge_count);
+    for (const auto& [edge_label_id, edge_count] : async_meta_.schema().edge_label_counts) {
+        const auto degree_it = async_meta_.schema().edge_avg_out_degrees.find(edge_label_id);
+        const double avg_out = degree_it != async_meta_.schema().edge_avg_out_degrees.end() ? degree_it->second : 0.0;
+        catalog->setEdgeLabelStats(edge_label_id, edge_count, avg_out);
+    }
 
     auto func_registry = std::make_unique<function::FunctionRegistry>();
 

@@ -1,11 +1,14 @@
 #include "graph/graph_manager.hpp"
 
+#include "common/config/env_vars.hpp"
+
 #include <folly/coro/BlockingWait.h>
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
 #include <spdlog/spdlog.h>
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <thread>
 
@@ -343,6 +346,42 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
         spdlog::info("Label vertex counts computed for graph '{}' ({} labels, {} vertices, {} ms)", name,
                      all_labels.size(), total, ms);
+    }
+
+    // Planning heuristic: edge count + average out-degree per edge label. The
+    // edge-type table is keyed by (src, dst, edge_id) in big-endian order, so a
+    // single ordered scan per type yields both the edge count and the number of
+    // distinct sources in O(1) memory -- that ratio is the average out-degree
+    // the cardinality estimator wants. Distinct destinations are NOT ordered,
+    // so average in-degree is left unknown (0). Stale under writes, heuristic
+    // only. Skip with EUGRAPH_STATS_SKIP_EDGES=1 when open latency matters more
+    // than estimate quality (large graphs).
+    if (const char* skip = std::getenv(config::kEnvStatsSkipEdges); skip == nullptr || *skip != '1') {
+        auto all_edge_labels = folly::coro::blockingWait(instance->async_meta->listEdgeLabels());
+        const auto t0 = std::chrono::steady_clock::now();
+        uint64_t total_edges = 0;
+        for (const auto& edge_label : all_edge_labels) {
+            uint64_t edges = 0;
+            uint64_t distinct_src = 0;
+            VertexId last_src = INVALID_VERTEX_ID;
+            instance->sync_data->scanEdgesByType(*instance->async_session, edge_label.id, std::nullopt, std::nullopt,
+                                                 [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& entry) {
+                                                     ++edges;
+                                                     if (edges == 1 || entry.src_vertex_id != last_src) {
+                                                         ++distinct_src;
+                                                         last_src = entry.src_vertex_id;
+                                                     }
+                                                     return true;
+                                                 });
+            const double avg_out =
+                distinct_src > 0 ? static_cast<double>(edges) / static_cast<double>(distinct_src) : 0.0;
+            instance->async_meta->setEdgeLabelStats(edge_label.id, edges, avg_out);
+            total_edges += edges;
+        }
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        spdlog::info("Edge counts computed for graph '{}' ({} edge labels, {} edges, {} ms)", name,
+                     all_edge_labels.size(), total_edges, ms);
     }
 
     // Ensure __anon__ label exists for unlabeled node properties

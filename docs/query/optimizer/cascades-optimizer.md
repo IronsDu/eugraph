@@ -430,11 +430,15 @@ CBO 扩展需要增加 `E_GROUP` Task（探索子 Group 的所有等价表达式
 - 新增 `log_prop.{hpp,cpp}` — `ColumnInfo`（variable/column_index/type_kind/label_ids）+ `LogProp`（cardinality/columns/valid）+ `LogPropDeriver` 访问器，覆盖全部 25 种算子，filter 谓词选择性估计（索引 0.01 / 默认 0.1 / 范围 0.3）
 - 新增 `cost_model.{hpp,cpp}` — `PhysicalOpTag` 枚举（20 种）+ `findLocalCost`：Scan=output_card、Filter=input_card、HashJoin=build+probe、NLJoin=left×right、Sort=n·log₂(n)
 - `catalog.{hpp,cpp}` — 统计访问器 `setLabelStats`/`setEdgeLabelStats`/`getVertexCount`/`getAvgOutDegree`/`hasIndex`，独立于 `LabelDef` 避免破坏序列化
-- **统计来源（2026-11-20 修正）**：`Catalog` 的标签顶点数改由 `query_executor` 从
-  `GraphSchema::label_vertex_counts` 灌入（`GraphManager` 在图打开时按标签扫一遍算出，SF0.1 上约 4 s）。
-  在此之前 `setLabelStats` 全仓库**无调用者**，`LogPropDeriver` 对所有标签都退回 `kDefaultVertexCount = 1000`，
-  于是 CBO 的基数估算与数据无关。边统计（`edge_label_counts`/`avg_out_degree`）只加了 schema 字段与
-  `setEdgeCount`/`setEdgeLabelCount` 接口，**尚未采集**，`getAvgOutDegree` 仍返回 0 并回落默认度 10。
+- **统计来源（2026-11-20 修正）**：`Catalog` 的统计改由 `query_executor` 从 `GraphSchema` 灌入，
+  `GraphSchema` 的值由 `GraphManager` 在图打开时计算：
+  - 标签顶点数：按标签扫一遍（SF0.1：15 标签 / 623,747 顶点 / 60 ms）；
+  - 边标签统计：每种边标签扫一遍 `etype` 表。该表键为 BE 编码的 `(src, dst, edge_id)`，字典序即数值序，
+    因此单次有序扫描可用 **O(1) 内存**同时得到边数与**不同源点个数**，二者之比即平均出度；
+    目的端不保序，平均入度需要额外集合，暂不采集（记为 0 = 未知）。
+  - 在此之前 `setLabelStats` 全仓库**无调用者**，`LogPropDeriver` 对所有标签都退回
+    `kDefaultVertexCount = 1000`、`kDefaultAvgOutDegree = 10`，CBO 的基数估算与数据无关。
+  - 开关：`EUGRAPH_STATS_SKIP_EDGES=1` 跳过边统计（换打开速度）。
 - `memo.{hpp,cpp}` — Group 新增 `log_prop_`/`log_prop_valid_`/`parents_`，懒推导 `getLogProp()` + 递归失效 `invalidateLogProp()`，`insertExpr`/`mergeGroups` 触发失效
 - `logical_optimizer.{hpp,cpp}` — `optimize()` 接受可选 `const catalog::Catalog*`
 - 测试：`LogPropTest.*` 11 例（cardinality/schema/懒推导/失效传播）+ `CostModelTest.*` 7 例（公式验证）

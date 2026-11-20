@@ -85,14 +85,18 @@ public:
     const std::unordered_map<LabelId, uint64_t>& labelVertexCounts() const {
         return schema_.label_vertex_counts;
     }
-    /// Planning heuristic: edge count per edge label. Not collected yet -- the
-    /// setter exists so the collection path (and its consumers) can be added
-    /// without another storage-layer change; absent means unknown, not empty.
-    void setEdgeLabelCount(EdgeLabelId id, uint64_t count) {
-        schema_.edge_label_counts[id] = count;
+    /// Planning heuristic: edge count and average out-degree per edge label,
+    /// computed at graph open. Never used for semantics; later writes make it
+    /// stale. 0 edges means unknown-or-empty, callers fall back to defaults.
+    void setEdgeLabelStats(EdgeLabelId id, uint64_t edge_count, double avg_out_degree) {
+        schema_.edge_label_counts[id] = edge_count;
+        schema_.edge_avg_out_degrees[id] = avg_out_degree;
     }
     const std::unordered_map<EdgeLabelId, uint64_t>& edgeLabelCounts() const {
         return schema_.edge_label_counts;
+    }
+    const std::unordered_map<EdgeLabelId, double>& edgeLabelAvgOutDegrees() const {
+        return schema_.edge_avg_out_degrees;
     }
 
 private:

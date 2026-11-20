@@ -25,5 +25,9 @@ inline constexpr const char* kEnvIoMode = "EUGRAPH_IO_MODE";
 inline constexpr const char* kEnvLabelMemoMaxVids = "EUGRAPH_LABEL_MEMO_MAX_VIDS";
 inline constexpr const char* kEnvIndexBackfillBatch = "EUGRAPH_INDEX_BACKFILL_BATCH";
 inline constexpr const char* kEnvPathCountCacheMaxEntries = "EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES";
+/// Skip the per-edge-label count/degree scan done when a graph is opened.
+/// Costs one ordered pass over every edge-type table; set to 1 to trade
+/// estimate quality for faster open on very large graphs.
+inline constexpr const char* kEnvStatsSkipEdges = "EUGRAPH_STATS_SKIP_EDGES";
 
 } // namespace eugraph::config

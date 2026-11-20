@@ -27,13 +27,16 @@ struct GraphSchema {
     /// deferring to materialization), never for semantics.
     std::unordered_map<LabelId, uint64_t> label_vertex_counts;
 
-    /// Edge count per edge label. Declared for optimizer cardinality estimates
-    /// but deliberately NOT populated yet: collecting it needs a full scan per
-    /// edge type at open, and the direction-aware degrees that the estimator
-    /// really wants (in vs out, and per source/destination label pair) are not
-    /// modelled at all. Absent/0 means "unknown" -- consumers fall back to the
-    /// default degree rather than treating it as an empty relationship type.
+    /// Edge count per edge label, computed at graph open by scanning each
+    /// edge-type table once (the table is keyed by (src, dst, edge_id) in BE
+    /// order, so one ordered pass also yields the distinct-source count).
     std::unordered_map<EdgeLabelId, uint64_t> edge_label_counts;
+
+    /// Average out-degree per edge label = edge count / distinct source
+    /// vertices seen in that same pass. In-degree is deliberately absent: the
+    /// key order is (src, dst, ...), so counting distinct destinations would
+    /// need an in-memory set per edge type. 0 means unknown.
+    std::unordered_map<EdgeLabelId, double> edge_avg_out_degrees;
 
     // Tombstone — deleted labels/edge labels
     std::set<LabelId> deleted_labels;

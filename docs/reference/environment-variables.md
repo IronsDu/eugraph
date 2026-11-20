@@ -34,6 +34,7 @@
 | `EUGRAPH_INDEX_BACKFILL_BATCH` | 20000 | 索引回填 | 索引回填事务的行数；上限 1,000,000 | 0 或非法值回退默认 |
 | `EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES` | 1,048,576 | PathCount 执行 | 每个 PathCount 算子的 `VertexId -> outdegree` 缓存上限；0 禁用缓存 | 超限后不再插入，改为重新计算 degree；结果不变 |
 | `EUGRAPH_NUMA_BIND` | 关闭 | 线程创建（启动时） | 值为 `1` 时启用 NUMA 绑定 | 单 NUMA 节点上是 no-op；绑定失败有日志 |
+| `EUGRAPH_STATS_SKIP_EDGES` | 关闭 | 图打开（GraphManager） | 值为 `1` 时跳过"每种边标签扫一遍统计边数与平均出度" | 只影响 CBO 基数估算精度（退回默认度 10），不影响语义与结果 |
 
 PathCount 的缓存是**每个算子实例**独立的；并发查询或多个 PathCount 会按算子数量叠加。
 邻接计数本身使用流式 `scanEdges`（4096 条/批），不会保留完整超级节点邻接 vector。

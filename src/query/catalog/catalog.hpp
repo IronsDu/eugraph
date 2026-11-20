@@ -79,11 +79,6 @@ public:
         edge_label_counts_[elid] = edge_count;
         edge_avg_out_degrees_[elid] = avg_out_degree;
     }
-    /// Edge count only: leaves the average degree unknown so the estimator
-    /// keeps its default instead of treating 0 as "no outgoing edges".
-    void setEdgeCount(EdgeLabelId elid, uint64_t edge_count) {
-        edge_label_counts_[elid] = edge_count;
-    }
 
     /// Returns vertex count for label, or 0 if unknown (caller applies default).
     uint64_t getVertexCount(LabelId lid) const {
