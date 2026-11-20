@@ -1,13 +1,73 @@
 # PatternComprehension 已绑定终点折进 Expand
 
-> **状态**：方案（未实施）。本文只记录问题、代码证据、改法与验收判据。
-> **日期**：2026-11-19。
+> **状态**：**已被既有实现覆盖（2026-11-20 实测）**。见 §0。正文 §1–§4 保留为当时的分析与假设，已被实测否证。
+> **日期**：2026-11-19 起草，2026-11-20 实测更新。
 > **范围**：binder（`bindExistsSubPlan`）+ 复用现成的 `dst_bound` 快路径；不改 KV 编码、不改并发/事务模型、不新增公共接口。
 > **动机**：`complex-10` 内层 pattern comprehension 的第二跳把已绑定的终点当成未知终点，枚举全部邻居后再过滤。
 
 ---
 
+## 0. 实测结论（2026-11-20）
+
+本文 §2–§4 的核心判断「只有 binder 没把已绑定终点交回去」**不成立**：折进已经在
+**物理计划层**实现，且对 c10 的形状生效。
+
+- 实现位置：`src/query/physical_plan/physical_planner.cpp` 的 `rewriteDstBoundExpandFilters`
+  （commit `8c6bcc6 perf(compute): fold correlated endpoints and probe bound destinations`，2026-11-11，
+  已在 `main`）。它在 `collectPlanRequirements` 之前把
+  `Filter(id(__exists_dst_N) == id(__exists_saved_N))` 折成 `Expand(dst=__exists_saved_N)`，
+  有向时再设 `probe_bound_dst`（集合探针），配套 `scanEdgesExactBatch` 批量精确 seek。
+- 设计与实测记录： [engine/correlated-endpoint-set-probe.md](engine/correlated-endpoint-set-probe.md)
+  （sf1 c10：490–508 ms → 277–300 ms，PC 子树 180 ms → 63 ms）。
+- 回归测试：`tests/test_query_executor.cpp` 的 `ListComprehensionPatternPredicateAcrossWith`
+  断言计划必须含 `dst=bound` 与 `probe=set`。
+
+### 0.1 c10 内层形状的实测计划（本机 Ubuntu/WSL，release，`EXPLAIN`）
+
+```cypher
+EXPLAIN MATCH (person:Person {id: 933})-[:KNOWS*2..2]-(friend)
+WITH person, collect(friend) AS friends
+RETURN size([p IN friends WHERE (p)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person)]);
+```
+
+关键两行（完整计划另存）：
+
+```text
+Expand(src=__anon_3, dst=__exists_saved_1, edge=__anon_edge_4, labels=[3], direction=IN), dst=bound, probe=set
+  Expand(src=p, dst=__anon_3, edge=__anon_edge_2, labels=[2], direction=OUT)
+```
+
+- 计划中 `__exists_dst` 出现 **0** 次 → 重命名与事后等值过滤都已消失；
+- `dst=bound` 1 次、`probe=set` 1 次；
+- `ListComprehensionPatternPredicateAcrossWith` 在同一次构建上 **PASSED**（105 ms）。
+
+### 0.2 仍存在的残余形状（未折进）
+
+同一构建、同一 server，用 `EXPLAIN` 对比（`dst=bound` / `probe=set` / `__exists_dst` 计数）：
+
+| 形状 | dst=bound | probe=set | `__exists_dst` |
+|---|---:|---:|---:|
+| A. c10 内层（PC，起点 `p` 相关） | 1 | 1 | 0 |
+| D. `EXISTS { MATCH (p)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person) }`（起点 `p` 局部） | 0 | 0 | 4 |
+
+D 的右侧子计划里 `Expand(dst=__exists_dst_0, ...)` 之上叠了 3 个 `Filter`，折进没有发生，
+因此该跳仍然「枚举 tag 的全部 `HAS_INTEREST` 入边再过滤」。**跳过原因尚未定位**：
+`rewriteDstBoundExpandFilters` 的守卫是 `endpoint_expr_refs.complete`（整计划 walker 完整性）、
+`Filter` 必须直接贴在 `Expand` 上、以及 `expr_refs[dst]==1 && field_refs[dst]==1`；
+需要计数器才能区分是哪一条挡住的。
+
+### 0.3 因此后续工作方向
+
+1. 不再重复实现 binder 级折进（与既有物理层折进重复，且现有实现已有单测 + TCK 覆盖）；
+2. 若继续这个方向，先给折进加**跳过原因计数器**（env 开关 + PROFILE 标记），量化 D 类形状在
+   LDBC 21 条里的出现频度，再决定是否值得改 binder 或放宽守卫；
+3. §1 的 18,321 次 / 2.6M 行 / 541 ms 是 2026-11-11 之前的数，不能再当作现状引用。
+
+---
+
 ## 1. 问题
+
+> 本节及 §4 描述的是 2026-11-11 之前的计划形状；当前 HEAD 已折进，见 §0。
 
 官方 LDBC `complex-10` 的内层推导：
 
