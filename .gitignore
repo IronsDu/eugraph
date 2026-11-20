@@ -31,3 +31,6 @@ social_network-*/**
 web/node_modules/
 web/.vite/
 web/coverage/
+
+# WorkBuddy 本地工作记录（项目记忆/会话草稿，不属共享产物）
+.workbuddy/
