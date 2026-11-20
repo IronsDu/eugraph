@@ -84,6 +84,7 @@ protected:
     }
 
     void TearDown() override {
+        index_hooks::clear();
         client_.reset();
         // 这里刻意用 release() 而非 reset()：本夹具把 ThriftServer 的 thread manager
         // 换成了它自己的 IO 线程池，「析构」与「先 stop() 再析构」两种写法实测都会卡在
