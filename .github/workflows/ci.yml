@@ -75,11 +75,12 @@ jobs:
         # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
         # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
-        # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
-        # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
+        # key 必须带 triplet：GCC job 默认 x64-linux；Static Analysis 用
+        # x64-linux-release。两者 ABI 不同，共用 key 会让后跑者恢复错 triplet
+        # 的包并全量重编依赖（2026-11-20 实测 configure 卡 20+ 分钟）。
+        key: ${{ runner.os }}-vcpkg-archives-gcc-x64-linux-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         restore-keys: |
-          ${{ runner.os }}-vcpkg-archives-gcc-
+          ${{ runner.os }}-vcpkg-archives-gcc-x64-linux-
 
     - name: Cache vcpkg tool
       # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
@@ -974,12 +975,11 @@ jobs:
         # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
         # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
         path: ~/.cache/vcpkg/archives
-        # Static Analysis 使用系统默认 GCC + 同一 vcpkg triplet，和 GCC job 共享
-        # release ABI 的二进制缓存；它自己单独 keys 时长期 miss，导致每次都从源码
-        # 重编依赖（并撞上上游 tarball hash 问题）。
-        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
+        # 不与 GCC job 共用 key：Static 使用 x64-linux-release，GCC 默认
+        # x64-linux；共用会互相覆盖/恢复错 ABI。单独 key 首次冷、之后稳定命中。
+        key: ${{ runner.os }}-vcpkg-archives-clang-tidy-x64-linux-release-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'CMakePresets.json') }}
         restore-keys: |
-          ${{ runner.os }}-vcpkg-archives-gcc-
+          ${{ runner.os }}-vcpkg-archives-clang-tidy-x64-linux-release-
 
     - name: Cache vcpkg tool
       # The pinned vcpkg tool is immutable for a given metadata hash.  Cache it
