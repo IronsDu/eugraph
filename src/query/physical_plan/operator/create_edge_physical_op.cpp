@@ -4,6 +4,7 @@
 #include "query/dataset/row.hpp"
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
+#include "storage/index/index_write_applier.hpp"
 #include "storage/kv/value_codec.hpp"
 
 #include <spdlog/spdlog.h>
@@ -84,37 +85,8 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
 
     // Lambda: check constraints and insert one edge
     auto insertEdge = [&](EdgeId eid, VertexId src, VertexId dst, const Properties& props) -> folly::coro::Task<bool> {
+        // unique 的检查交给 applier：BUILDING 期不查（索引未完成），PUBLIC 后由它查重。
         bool ok = true;
-        if (edge_label_def) {
-            for (const auto& idx : edge_label_def->indexes) {
-                if (!idx.unique)
-                    continue;
-                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
-                    continue;
-
-                std::vector<PropertyValue> values;
-                bool allPresent = true;
-                for (auto prop_id : idx.prop_ids) {
-                    if (prop_id < props.size() && props[prop_id].has_value()) {
-                        values.push_back(props[prop_id].value());
-                    } else {
-                        allPresent = false;
-                        break;
-                    }
-                }
-                if (!allPresent)
-                    continue;
-
-                auto table = idx.prop_ids.size() == 1 ? eidxTable(effective_label_id, idx.prop_ids[0])
-                                                      : eidxCompositeTable(effective_label_id, idx.prop_ids);
-                bool constraint_ok = co_await store_.checkUniqueConstraint(table, values);
-                if (!constraint_ok) {
-                    spdlog::warn("Unique edge index constraint violated on index '{}'", idx.name);
-                    ok = false;
-                    break;
-                }
-            }
-        }
 
         if (ok)
             ok = co_await store_.insertEdge(eid, src, dst, effective_label_id, props);
@@ -137,10 +109,27 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                 if (!allPresent)
                     continue;
 
-                auto adj_value = ValueCodec::encodeEdgeAdjacency(src, dst, effective_label_id);
-                auto table = idx.prop_ids.size() == 1 ? eidxTable(effective_label_id, idx.prop_ids[0])
-                                                      : eidxCompositeTable(effective_label_id, idx.prop_ids);
-                co_await store_.insertIndexEntry(table, values, eid, std::move(adj_value));
+                IndexWriteItem item;
+                item.index_id = idx.index_id;
+                item.legacy_table = idx.prop_ids.size() == 1 ? eidxTable(effective_label_id, idx.prop_ids[0])
+                                                             : eidxCompositeTable(effective_label_id, idx.prop_ids);
+                item.values = std::move(values);
+                item.entity_id = eid;
+                item.unique = idx.unique;
+                item.payload = ValueCodec::encodeEdgeAdjacency(src, dst, effective_label_id);
+
+                const auto status = co_await applyIndexWrite(store_, item);
+                if (status == IndexWriteStatus::kUniqueConflict) {
+                    spdlog::warn("Unique edge index constraint violated on index '{}'", idx.name);
+                    ok = false;
+                    break;
+                }
+                if (status == IndexWriteStatus::kRetryLater) {
+                    spdlog::error("Edge index write could not be admitted (index {}); statement will fail",
+                                  idx.index_id);
+                    ok = false;
+                    break;
+                }
             }
         }
         co_return ok;

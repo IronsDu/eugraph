@@ -12,7 +12,7 @@ Feature: SHOW INDEXES
       """
       SHOW INDEXES
       """
-    Then the result should be, in any order:
+    Then the result should include columns:
       | name            | label    | property | unique | state    |
       | 'idx_person_name' | 'Person' | 'name'   | 'false' | 'PUBLIC' |
     And no side effects

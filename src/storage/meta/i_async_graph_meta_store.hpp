@@ -64,7 +64,15 @@ public:
     virtual folly::coro::Task<EdgeId> nextEdgeIdRange(uint64_t count) = 0;
 
     // Index management
+    /// 待清理的索引表记录（pending_drop / orphan）。启动时逐条重试删除。
+    struct IndexCleanupRecord {
+        std::string kind; ///< "pending_drop" | "orphan"
+        uint32_t index_id = 0;
+        std::vector<std::string> tables;
+    };
+
     struct IndexInfo {
+        uint32_t index_id = 0;
         std::string name;
         std::string label_name;
         std::vector<std::string> property_names;
@@ -86,8 +94,23 @@ public:
     virtual folly::coro::Task<std::vector<IndexInfo>> listIndexes() = 0;
     virtual folly::coro::Task<std::optional<IndexInfo>> getIndex(const std::string& name) = 0;
 
+    // ==================== 清理记录（DROP/重建后遗留的表）====================
+    virtual folly::coro::Task<bool> putCleanupRecord(const std::string& kind, uint32_t index_id,
+                                                     const std::vector<std::string>& tables) = 0;
+    virtual folly::coro::Task<std::vector<IndexCleanupRecord>> listCleanupRecords() = 0;
+    virtual folly::coro::Task<bool> removeCleanupRecord(const std::string& kind, uint32_t index_id) = 0;
+
     // Schema access
-    virtual const GraphSchema& schema() const = 0;
+    /// 当前 schema 版本的只读智能指针（O(1)，不拷贝）；事务 BEGIN 时取一次并持有。
+    virtual std::shared_ptr<const GraphSchema> schemaPtr() const = 0;
+    /// 兼容旧调用：深拷贝当前版本（测试/一次性用途；热路径用 schemaPtr）。
+    virtual GraphSchema schemaSnapshot() const = 0;
+
+    // ==================== schema 版本（在线索引构建）====================
+    /// 快照代数（每次定义发布递增）。
+    virtual uint64_t schemaGeneration() const = 0;
+    /// 兼容性版本（只在不兼容变更时递增）。
+    virtual uint64_t compatVersion() const = 0;
 };
 
 } // namespace eugraph

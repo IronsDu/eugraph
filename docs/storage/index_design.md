@@ -19,6 +19,11 @@
 
 ## 2. 索引状态模型
 
+> **在线构建（后台任务 + 变更表 + 构建闸门）见 [online-index-build-design.md](online-index-build-design.md)。**
+> 本文描述**存储编码、扫描与写入维护**细节；构建流程已改为**异步**（v2 设计），
+> 语句返回时索引仍可能是 `BUILDING`，以 `SHOW INDEXES` 为准
+> （`WRITE_ONLY` 仍表示"构建中"；重启后未完成的构建转 `ERROR`，不再永久停在 `WRITE_ONLY`）。
+
 ```cpp
 enum class IndexState : uint8_t {
     WRITE_ONLY  = 0,  // 创建中：写入路径维护索引，查询不可用
@@ -28,22 +33,26 @@ enum class IndexState : uint8_t {
 };
 ```
 
-转换：
+运行时状态流转（`SCAN/CATCHUP/FINALIZE/PUBLIC/ERROR`、`lifecycle`、准入、读句柄、schema pin）
+统一见 [online-index-build-design.md §4.4](online-index-build-design.md#44-状态流转as-built权威)；
+本文不再复制一份，避免两套状态机漂移。
 
-```text
-CREATE INDEX → WRITE_ONLY → (回填成功) → PUBLIC
-                          → (冲突/重复) → ERROR
-DROP INDEX   → 删除元数据 + 删除物理表
-```
+**as-built 摘要**：
+
+- `CREATE INDEX`：meta 先写 `WRITE_ONLY`，runtime 进入 `SCAN`；构建期写入走 `idx_delta_<id>`；
+  回填 + FINALIZE 成功后 meta/runtime 一起置 `PUBLIC`。
+- `DROP INDEX`：runtime 进入 `DROPPING`，定义立即删除；旧 pin / 读句柄归零后 `PURGING → PURGED`。
+- 重启：`WRITE_ONLY → ERROR`（本期不续建）；半成品表由 orphan/启动回收。
+- `ERROR` 是终态；重建 = `DROP` 后新建（新 `index_id`）。
 
 事务行为：
 
 | 索引状态 | 读事务 | 写事务 |
 |----------|--------|--------|
-| WRITE_ONLY | 不使用索引 | 维护索引条目 |
-| PUBLIC | 可使用 IndexScan | 维护索引条目 |
-| DELETE_ONLY | 不使用索引 | 仅删除条目 |
-| ERROR | 不使用索引 | 不维护条目 |
+| WRITE_ONLY（构建中） | 不使用索引 | 写 `idx_delta_<id>`（由注册表/路由决定） |
+| PUBLIC | 可使用 IndexScan | 直接维护索引表 |
+| DELETE_ONLY | 不使用 | 仅删除条目（历史兼容状态，不再产生） |
+| ERROR | 不使用 | 不维护条目 |
 
 ## 3. 索引键编码
 

@@ -38,6 +38,7 @@
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
 #include "query/planner/bound_expression/bound_expression_walk.hpp"
 #include "query/planner/bound_logical_plan.hpp"
+#include "storage/index/index_runtime_registry.hpp"
 
 #include <functional>
 #include <set>
@@ -49,6 +50,18 @@ namespace eugraph {
 namespace compute {
 
 namespace {
+namespace {
+
+/// 规划期索引可用性：不是 PUBLIC 的不可用；有注册表时还要满足"事务开始前已发布"。
+inline bool planUsableIndex(const LabelDef::IndexDef& idx, const PlanContext& ctx) {
+    if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+        return false;
+    if (ctx.index_registry == nullptr)
+        return true;
+    return ctx.index_registry->plannerSelectable(idx.index_id, ctx.txn_start_generation);
+}
+
+} // namespace
 
 /// True when the physical sub-plan below contains another Expand. Filters and
 /// ProjectionExtract nodes may sit between chained Expands, so checking only
@@ -1804,7 +1817,7 @@ static bool trySetVarlenOrFilters(const binder::BoundFilterOp& filter, binder::B
         if (it == ctx.label_defs.end())
             return 0;
         for (const auto& idx : it->second.indexes) {
-            if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+            if (!planUsableIndex(idx, ctx))
                 continue;
             for (const auto& acc : idx.accessors)
                 if (acc.property_name == prop_name)
@@ -1863,15 +1876,15 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         if (idx.index_id != 0) {
             return std::make_unique<IndexScanPhysicalOp>(
                 scan_op.variable, idx.index_id, idx.prop_ids, mode, std::move(eq_values), std::move(range_start),
-                std::move(range_end), std::move(output_types), store, ctx.label_defs, prefix_col);
+                std::move(range_end), std::move(output_types), store, ctx.schema, prefix_col);
         }
         return std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, mode,
                                                      std::move(eq_values), std::move(range_start), std::move(range_end),
-                                                     std::move(output_types), store, ctx.label_defs, prefix_col);
+                                                     std::move(output_types), store, ctx.schema, prefix_col);
     };
 
     for (const auto& idx : label_def.indexes) {
-        if (idx.state != IndexState::PUBLIC || idx.encoding_version != 2)
+        if (!planUsableIndex(idx, ctx) || idx.encoding_version != 2)
             continue;
 
         size_t match_count = 0;
@@ -2035,7 +2048,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
         return std::nullopt;
 
     for (const auto& idx : edge_label_def.indexes) {
-        if (idx.state != IndexState::PUBLIC)
+        if (!planUsableIndex(idx, ctx))
             continue;
 
         size_t match_count = 0;
@@ -2101,7 +2114,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
             result = std::make_unique<EdgeIndexScanPhysicalOp>(
                 expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
                 ScanMode::EQUALITY, std::move(eq_values), std::nullopt, std::nullopt, std::move(output_types), store,
-                ctx.edge_label_defs);
+                ctx.schema, idx.index_id);
         } else {
             std::optional<std::vector<PropertyValue>> composite_start;
             std::optional<std::vector<PropertyValue>> composite_end;
@@ -2120,7 +2133,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
             result = std::make_unique<EdgeIndexScanPhysicalOp>(
                 expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
                 ScanMode::RANGE, std::vector<PropertyValue>{}, std::move(composite_start), std::move(composite_end),
-                std::move(output_types), store, ctx.edge_label_defs);
+                std::move(output_types), store, ctx.schema, idx.index_id);
         }
 
         return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types),
@@ -2251,7 +2264,7 @@ PhysicalPlanner::tryPlanCorrelatedIndexProbe(const binder::BoundFilterOp& filter
         return std::nullopt;
     uint32_t index_id = 0;
     for (const auto& idx : label_it->second.indexes) {
-        if (idx.state != IndexState::PUBLIC || idx.index_id == 0 || idx.accessors.size() != 1)
+        if (!planUsableIndex(idx, ctx) || idx.accessors.size() != 1)
             continue;
         if (idx.accessors[0].property_name == prop_name) {
             index_id = idx.index_id;
@@ -2353,7 +2366,7 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
 
     uint32_t index_id = 0;
     for (const auto& idx : label_it->second.indexes) {
-        if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+        if (!planUsableIndex(idx, ctx))
             continue;
         for (const auto& acc : idx.accessors) {
             if (acc.property_name == prop_name) {
@@ -2430,7 +2443,7 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
         index_id = 0;
         auto expand_label_it = ctx.label_defs.find(prop_label);
         for (const auto& idx : expand_label_it->second.indexes) {
-            if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+            if (!planUsableIndex(idx, ctx))
                 continue;
             for (const auto& acc : idx.accessors) {
                 if (acc.property_name == prop_name) {
@@ -2734,7 +2747,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
 
     uint32_t message_creation_date_index_id = 0;
     for (const auto& idx : message_label_def_it->second.indexes) {
-        if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+        if (!planUsableIndex(idx, ctx))
             continue;
         for (const auto& accessor : idx.accessors) {
             if (accessor.property_name == "creationDate") {
@@ -2844,7 +2857,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
     auto index_scan = std::make_unique<IndexScanPhysicalOp>(
         expand.dst_variable, message_creation_date_index_id, std::vector<uint16_t>{creation_date_prop_id},
         IndexScanPhysicalOp::ScanMode::RANGE, std::vector<PropertyValue>{}, std::move(range_start),
-        std::move(range_end), std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.label_defs);
+        std::move(range_end), std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.schema);
 
     auto expand_result = std::make_unique<ExpandPhysicalOp>(
         expand.dst_variable, creator_var, expand.edge_variable, expand.edge_label_ids,
@@ -3847,9 +3860,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         prune_labels = hint->second.vertex_labels;
                 }
                 auto result = std::make_unique<AllNodeScanPhysicalOp>(
-                    val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id,
-                    ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{},
-                    std::move(prune_labels));
+                    val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id, ctx.schema,
+                    anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::move(prune_labels));
                 TupleSlotLayout scan_layout = makeSlotLayout(output_schema, ctx);
                 auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                       std::move(output_types), std::move(scan_layout)};
@@ -3868,8 +3880,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                                          output_types, output_schema);
                 } else {
                     result = std::make_unique<LabelScanPhysicalOp>(
-                        val.variable, val.label_ids, std::vector<binder::BoundType>(output_types), store,
-                        ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
+                        val.variable, val.label_ids, std::vector<binder::BoundType>(output_types), store, ctx.schema,
+                        anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
                 }
                 TupleSlotLayout scan_layout = makeSlotLayout(output_schema, ctx);
                 auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
@@ -4526,7 +4538,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     auto result = std::make_unique<CreateNodePhysicalOp>(
                         v.variable, std::move(label_ids), std::move(label_prop_exprs), store, meta, std::move(child),
-                        ctx.label_defs, std::move(v.pending_props), std::move(v.label_names));
+                        *ctx.mutable_label_defs, std::move(v.pending_props), std::move(v.label_names));
                     result->setEvalContext(ctx.eval_ctx);
                     // Output schema: child columns + vertex column
                     Schema node_schema = child_schema;
@@ -4567,12 +4579,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (v.label_name.has_value()) {
                         child_op = std::make_unique<CreateEdgeLabelPhysicalOp>(
                             *v.label_name, std::move(pending_prop_defs), meta, store, ctx.edge_label_name_to_id,
-                            ctx.edge_label_defs, std::move(child_op));
+                            *ctx.mutable_edge_label_defs, std::move(child_op));
                     } else if (v.label_id.has_value() && !v.pending_props.empty()) {
                         auto def_it = ctx.edge_label_defs.find(*v.label_id);
                         if (def_it != ctx.edge_label_defs.end()) {
                             child_op = std::make_unique<AlterEdgeLabelPhysicalOp>(
-                                def_it->second.name, std::move(pending_prop_defs), meta, ctx.edge_label_defs,
+                                def_it->second.name, std::move(pending_prop_defs), meta, *ctx.mutable_edge_label_defs,
                                 std::move(child_op));
                         }
                     }
@@ -4594,8 +4606,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     auto result = std::make_unique<CreateEdgePhysicalOp>(
                         v.variable, src_col, dst_col, v.label_id, std::move(prop_exprs), store, meta,
-                        ctx.edge_label_defs, v.label_name, ctx.edge_label_name_to_id, std::move(v.pending_props),
-                        std::move(child_op));
+                        *ctx.mutable_edge_label_defs, v.label_name, ctx.edge_label_name_to_id,
+                        std::move(v.pending_props), std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
                     // Output schema: child columns + edge column
                     Schema edge_schema = child_schema;
@@ -4661,7 +4673,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     auto result = std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, meta,
-                                                                  ctx.label_defs, ctx.edge_label_defs,
+                                                                  *ctx.mutable_label_defs, *ctx.mutable_edge_label_defs,
                                                                   ctx.label_name_to_id, anon_id, std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
@@ -5493,7 +5505,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         v.edge_label_name, v.direction, std::move(v.edge_prop_filters), std::move(v.edge_pending_props),
                         v.end_var, v.end_pre_bound, std::move(v.end_labels), std::move(v.end_prop_filters),
                         std::move(v.end_pending_props), v.path_variable, std::move(on_create), std::move(on_match),
-                        store, meta, ctx.label_defs, ctx.label_name_to_id, ctx.edge_label_defs,
+                        store, meta, *ctx.mutable_label_defs, ctx.label_name_to_id, *ctx.mutable_edge_label_defs,
                         ctx.edge_label_name_to_id, std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
                     TupleSlotLayout merge_layout = makeSlotLayout(output_schema, ctx);

@@ -3,6 +3,8 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/index/index_entry.hpp"
+#include "storage/index/index_write_applier.hpp"
 
 #include <folly/coro/Task.h>
 
@@ -14,12 +16,7 @@
 namespace eugraph {
 namespace compute {
 
-struct EdgeIndexEntry {
-    std::string table;
-    std::vector<PropertyValue> values;
-    EdgeId eid;
-    bool unique = false;
-};
+using EdgeIndexEntry = ::eugraph::EdgeIndexEntry;
 
 inline folly::coro::Task<std::vector<EdgeIndexEntry>>
 collectEdgeIndexEntries(IAsyncGraphDataStore& store,
@@ -49,29 +46,41 @@ collectEdgeIndexEntries(IAsyncGraphDataStore& store,
             continue;
         auto table =
             idx.prop_ids.size() == 1 ? eidxTable(elid, idx.prop_ids[0]) : eidxCompositeTable(elid, idx.prop_ids);
-        entries.push_back(EdgeIndexEntry{std::move(table), std::move(values), eid, idx.unique});
+        entries.push_back(EdgeIndexEntry{std::move(table), std::move(values), eid, idx.unique, idx.index_id});
     }
     co_return entries;
 }
 
+inline IndexWriteItem toIndexWriteItem(const EdgeIndexEntry& entry, bool is_delete) {
+    IndexWriteItem item;
+    item.index_id = entry.index_id;
+    item.legacy_table = entry.table;
+    item.values = entry.values;
+    item.entity_id = entry.eid;
+    item.unique = entry.unique;
+    item.is_delete = is_delete;
+    return item;
+}
+
 inline folly::coro::Task<void> deleteEdgeIndexEntries(IAsyncGraphDataStore& store,
                                                       const std::vector<EdgeIndexEntry>& entries) {
-    for (const auto& entry : entries)
-        co_await store.deleteIndexEntry(entry.table, entry.values, entry.eid);
+    for (const auto& entry : entries) {
+        const auto status = co_await applyIndexWrite(store, toIndexWriteItem(entry, /*is_delete=*/true));
+        if (status == IndexWriteStatus::kRetryLater)
+            co_return;
+    }
 }
 
 inline folly::coro::Task<void> insertEdgeIndexEntries(IAsyncGraphDataStore& store,
                                                       const std::vector<EdgeIndexEntry>& entries) {
     for (const auto& entry : entries) {
-        if (entry.unique) {
-            bool constraint_ok = co_await store.checkUniqueConstraint(entry.table, entry.values);
-            if (!constraint_ok) {
-                spdlog::warn("Unique edge index constraint violated while maintaining index entry for edge {}",
-                             entry.eid);
-                continue;
-            }
+        const auto status = co_await applyIndexWrite(store, toIndexWriteItem(entry, /*is_delete=*/false));
+        if (status == IndexWriteStatus::kUniqueConflict) {
+            spdlog::warn("Unique edge index constraint violated while maintaining index entry for edge {}", entry.eid);
+            continue;
         }
-        co_await store.insertIndexEntry(entry.table, entry.values, entry.eid);
+        if (status == IndexWriteStatus::kRetryLater)
+            co_return;
     }
 }
 

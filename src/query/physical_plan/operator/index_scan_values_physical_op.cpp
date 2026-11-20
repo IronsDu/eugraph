@@ -1,5 +1,7 @@
 #include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
+
 #include "query/dataset/data_chunk.hpp"
+#include <stdexcept>
 
 #include <functional>
 #include <optional>
@@ -8,6 +10,13 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> IndexScanValuesPhysicalOp::executeChunk() {
+    if (index_id_ != 0) {
+        if (auto* registry = store_.indexRegistry()) {
+            read_handle_ = registry->acquireRead(index_id_);
+            if (!read_handle_)
+                throw std::runtime_error("index is being dropped (read admission failed)");
+        }
+    }
     if (!values_)
         co_return;
 

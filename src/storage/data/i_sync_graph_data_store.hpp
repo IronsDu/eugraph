@@ -23,6 +23,7 @@ namespace eugraph {
 /// `session.acquire_cursor(table)`（point）/ `acquire_scan_cursor(table)`（扫描）✓。
 /// 本接口**不**建连接 ✗、**不**开/提交/回滚事务 ✗、**不**持有事务表 ✗。
 class GraphSession;
+class IndexRuntimeRegistry;
 
 class ISyncGraphDataStore {
 public:
@@ -245,6 +246,11 @@ public:
     virtual bool createIndex(const std::string& table_name) = 0;
     virtual bool dropIndex(const std::string& table_name) = 0;
 
+    /// 每图索引运行时注册表（批量路径路由用）；null ⇒ legacy 直写索引表。
+    virtual IndexRuntimeRegistry* indexRegistry() const {
+        return nullptr;
+    }
+
     // ==================== Index Entry Operations ====================
 
     // 索引条目写入/删除/唯一性检查都必须在**调用方的事务**里完成：
@@ -266,6 +272,25 @@ public:
     virtual bool checkUniqueConstraint(GraphSession& session, const std::string& table, const PropertyValue& value) = 0;
     virtual bool checkUniqueConstraint(GraphSession& session, const std::string& table,
                                        const std::vector<PropertyValue>& values) = 0;
+
+    // ==================== 在线索引构建：变更表（delta） ====================
+
+    /// 写一条变更：key 与索引表一致（values..., entity_id），value = `{op, payload}`。
+    /// **必须与实体写入同一事务**（由调用方保证）。
+    virtual bool putDeltaEntry(GraphSession& session, const std::string& delta_table,
+                               const std::vector<PropertyValue>& values, uint64_t entity_id, bool is_delete,
+                               std::string_view payload = {}) = 0;
+
+    /// 重放一批：按键序把 delta 应用到 index_table（PUT 写 / DEL 删），应用后删除 delta 行。
+    /// 调用方负责事务（begin/commit）；`WT_ROLLBACK` 时必须整事务重试。
+    /// 返回本批应用行数；`last_key_out` 供续扫（空 = 从头开始）。
+    virtual size_t replayDeltaBatch(GraphSession& session, const std::string& index_table,
+                                    const std::string& delta_table, size_t max_rows, std::string_view start_after,
+                                    std::string& last_key_out) = 0;
+
+    /// 唯一性最终校验：索引按键序扫描，相邻 key 的前缀（去掉 8B entity_id）相同 ⇒ 重复。
+    /// 返回 nullopt = 扫描失败（会话已标记失败）；false = 无重复。
+    virtual std::optional<bool> indexHasDuplicateKeys(GraphSession& session, const std::string& table) = 0;
 
     // ==================== Index Scan ====================
 

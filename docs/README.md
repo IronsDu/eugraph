@@ -86,6 +86,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | Thrift/RPC 线程归属 | [service/thrift-thread-model.md](service/thrift-thread-model.md) | `src/service/thrift/eugraph_handler.*`, `src/service/query_stream_hop.hpp` |
 | 修改 Shell 交互 | [program/design/server-shell-design.md] | `src/program/shell/` |
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
+| 在线索引构建 / 构建期写入 / 索引生命周期 | [storage/online-index-build-design.md](storage/online-index-build-design.md), [storage/index_design.md] | `src/storage/index/`, `src/query/executor/`, `src/storage/meta/` |
 | 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |
 | 主键/外部键引用（loader 主键化） | [program/design/loader-design.md] | `src/program/loader/`, `proto/eugraph.thrift`, `src/storage/data/` |
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md], [storage/session-cursor-pool-design.md] | `src/storage/` |
@@ -155,6 +156,8 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [接口设计](storage/interfaces.md) | sync/async 分离接口 |
 | [元数据服务](storage/metadata-service-design.md) | AsyncGraphMetaStore、GraphSchema、索引元数据、batch ID 分配 |
 | [二级索引](storage/index_design.md) | B-tree 索引、IndexKeyCodec、状态机、IndexScan 优化 |
+| [在线索引构建 v2](storage/online-index-build-design.md) | 后台构建 + 变更表 + 准入闸门：运行时注册表、**状态流转（as-built）**、模块/依赖、最终化协议、崩溃/关图/DROP、可观测、兼容性 |
+| [在线索引构建 v2 测试计划](storage/online-index-build-test-plan.md) | P0–P4 用例矩阵：fail-first 判据、确定性钩子、全表扫 oracle、chaos harness、执行矩阵 |
 | [DDL 设计](storage/ddl.md) | 删除标签类型、删除关系类型、列的增删改（设计规划） |
 | [多图支持](storage/multi-graph.md) | 多图隔离存储、Catalog、GraphManager、Shell 图切换 |
 

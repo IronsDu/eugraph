@@ -6,9 +6,12 @@
 #include "storage/catalog/catalog_store.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_build_service.hpp"
+#include "storage/index/index_runtime_registry.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "storage/session/schema_generation_tracker.hpp"
 #include "storage/session/session_pool.hpp"
 #include "storage/wt_connection_store.hpp"
 
@@ -39,10 +42,22 @@ struct GraphInstance {
     std::unique_ptr<AsyncGraphDataStore> async_data;
     std::unique_ptr<AsyncGraphMetaStore> async_meta;
 
+    /// v2 索引运行时注册表（每图一份）。executor/算子只持裸指针 ⇒ **必须先于 executor 声明**（后销毁）。
+    std::shared_ptr<IndexRuntimeRegistry> index_registry;
+    /// schema 代数 pin 计数（DROP 等"旧版本事务"用）。
+    std::shared_ptr<SchemaGenerationTracker> schema_generations;
+
     /// 会话池（图级 ✓）：**声明在最后 ⇒ 最先销毁** ✓ ⇒ 池内 session 在 WT 连接关闭前被 close ✓（§3.2.1）
     std::shared_ptr<SessionPool> session_pool;
     /// 查询执行器（持有 pool/stores 引用）：声明在 pool 之后 ⇒ **比 pool 先销毁** ✓
     std::unique_ptr<compute::QueryExecutor> executor;
+    /// 每图索引构建服务：**声明在 executor 之后** ⇒ 先 shutdown/析构（Job 捕获 executor 指针）。
+    std::unique_ptr<IndexBuildService> index_builds;
+
+    ~GraphInstance() {
+        if (index_builds)
+            index_builds->shutdown();
+    }
 };
 
 /// 图实例**生命周期租约**：持有期间 DROP 会关闸并等待租约归零后再销毁连接。

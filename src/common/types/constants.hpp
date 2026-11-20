@@ -43,6 +43,10 @@ inline std::string vidxTableById(uint32_t index_id) {
 inline std::string eidxTableById(uint32_t index_id) {
     return "table:eidx_" + std::to_string(index_id);
 }
+// 在线构建的变更表（每索引一张；构建期写入先去这里，追赶后重放到索引表）
+inline std::string indexDeltaTable(uint32_t index_id) {
+    return "table:idx_delta_" + std::to_string(index_id);
+}
 inline std::string eidxTable(EdgeLabelId label_id, uint16_t prop_id) {
     return "table:eidx_" + std::to_string(label_id) + "_" + std::to_string(prop_id);
 }
