@@ -351,7 +351,8 @@ c5 ~230ms、c9 ~161ms），远端 A/B 只能确认 Expand 对 c5 有稳定收益
 ### 8.9 已回退：Message.creationDate 索引 join 不计入公平对比
 
 2026-10-29 曾临时给 eugraph 建 `Message.creationDate` 索引并放宽
-`tryPlanFilterDestinationIndexJoin` 对显式 `(message:Message)` 的限制，本地 c9
+`tryPlanFilterDestinationIndexJoin` 对显式 `(message:Message)` 的限制（该函数已随 LDBC
+硬编码清理移除），本地 c9
 从 160.6ms 降到 71.4ms。但 **neo4j 基线没有该索引**，这属于给 eugraph 单方面增加
 访问路径，不能作为同 schema 的对比结论。
 

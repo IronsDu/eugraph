@@ -25,7 +25,6 @@ extraction/    Demand-pull extraction decisions + expression lowering
 
 rules/
   logical/     transformation rules (FilterPushdown, EdgeUniquenessPushdown,
-                TagAnchoredJoinReorder pre-pass)
   physical/    logical -> physical implementation rules
 
 logical_optimizer.*  pipeline entry: copy-in, task queue, CBO extract, RBO fallback

@@ -7,7 +7,6 @@
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
-#include "query/optimizer/rules/logical/tag_anchored_join_reorder.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
@@ -46,12 +45,6 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     memo_ = Memo{};
     rules_ = RuleSet{};
     initRules();
-
-    // Join-direction rewrite for the LDBC c6 tag-co-occurrence shape: the
-    // selective knownTag anchor should drive the pattern. Guarded by label
-    // cardinality estimates; other shapes are untouched.
-    if (catalog)
-        rewriteTagAnchoredJoin(plan, catalog, label_vertex_counts);
 
     // Make the catalog available to LogProp derivation. Group::getLogProp
     // picks it up via Memo::getCatalog() during OInputsTask cost computation.

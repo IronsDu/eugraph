@@ -40,8 +40,9 @@ See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
 - `framework/` — memo/tasks/rules/CBO.
 - `analysis/` — `requirement_collector` + materialization model.
 - `extraction/` — `projection_extraction` (PEPlan, slot and expression lowering).
-- `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`, plus the
-  guarded `TagAnchoredJoinReorder` pre-pass (c6 shape only).
+- `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`,
+  `PathCountFusion`, `PatternComprehensionAnchorShare`；不包含按 LDBC
+  label/关系名特判的规则。
 - `rules/physical/` — implementation rules.
 
 ## 3. Columbia mapping and gaps
@@ -57,8 +58,11 @@ Implemented:
 
 Deliberately not yet implemented (framework supports adding them):
 
-- general join-order enumeration/reordering rules (the c6 tag-anchored
-  pre-pass is a single guarded shape, not a general reorder);
+- general join-order enumeration/reordering rules；
+- 通用 HashJoin 目前只覆盖可落到已有列的等值 join（Filter+CrossProduct），
+  属性表达式/残差谓词仍回退；构建侧按标签基数估算选择，超过
+  `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS` 回退，运行期有硬上限防 OOM；
+  后续接入 CBO 代价选择；
 - general projection/column-pruning rules (projection pushdown is currently a
   deterministic pass, not a memo rule);
 - aggregate/distinct pushdown rules;

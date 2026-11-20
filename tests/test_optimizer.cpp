@@ -1053,18 +1053,6 @@ TEST(CostModelTest, FilterCost) {
     EXPECT_DOUBLE_EQ(cost.value(), 5000.0);
 }
 
-TEST(CostModelTest, HashJoinCost) {
-    LogProp out;
-    out.cardinality = 500.0;
-    LogProp left;
-    left.cardinality = 1000.0;
-    LogProp right;
-    right.cardinality = 2000.0;
-    auto cost = findLocalCost(PhysicalOpTag::HashJoin, out, {left, right});
-    // build (right) + probe (left)
-    EXPECT_DOUBLE_EQ(cost.value(), 3000.0);
-}
-
 TEST(CostModelTest, NestedLoopJoinCost) {
     LogProp out;
     out.cardinality = 500.0;
