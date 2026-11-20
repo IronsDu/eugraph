@@ -85,6 +85,15 @@ public:
     const std::unordered_map<LabelId, uint64_t>& labelVertexCounts() const {
         return schema_.label_vertex_counts;
     }
+    /// Planning heuristic: edge count per edge label. Not collected yet -- the
+    /// setter exists so the collection path (and its consumers) can be added
+    /// without another storage-layer change; absent means unknown, not empty.
+    void setEdgeLabelCount(EdgeLabelId id, uint64_t count) {
+        schema_.edge_label_counts[id] = count;
+    }
+    const std::unordered_map<EdgeLabelId, uint64_t>& edgeLabelCounts() const {
+        return schema_.edge_label_counts;
+    }
 
 private:
     folly::coro::Task<void> saveNextIds();

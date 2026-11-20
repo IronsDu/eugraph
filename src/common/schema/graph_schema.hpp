@@ -27,6 +27,14 @@ struct GraphSchema {
     /// deferring to materialization), never for semantics.
     std::unordered_map<LabelId, uint64_t> label_vertex_counts;
 
+    /// Edge count per edge label. Declared for optimizer cardinality estimates
+    /// but deliberately NOT populated yet: collecting it needs a full scan per
+    /// edge type at open, and the direction-aware degrees that the estimator
+    /// really wants (in vs out, and per source/destination label pair) are not
+    /// modelled at all. Absent/0 means "unknown" -- consumers fall back to the
+    /// default degree rather than treating it as an empty relationship type.
+    std::unordered_map<EdgeLabelId, uint64_t> edge_label_counts;
+
     // Tombstone — deleted labels/edge labels
     std::set<LabelId> deleted_labels;
     std::set<EdgeLabelId> deleted_edge_labels;

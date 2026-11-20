@@ -68,7 +68,9 @@ public:
 
     // ── Cardinality statistics (Phase 3 CBO) ──
     // Stored separately from LabelDef/EdgeLabelDef to avoid breaking
-    // meta_codec serialization. Populated by storage layer; defaults to 0.
+    // meta_codec serialization. Vertex counts come from GraphSchema (computed
+    // once per graph open); edge statistics are declared here but not yet
+    // collected -- callers fall back to the LogPropDeriver defaults.
 
     void setLabelStats(LabelId lid, uint64_t vertex_count) {
         label_vertex_counts_[lid] = vertex_count;
@@ -77,11 +79,21 @@ public:
         edge_label_counts_[elid] = edge_count;
         edge_avg_out_degrees_[elid] = avg_out_degree;
     }
+    /// Edge count only: leaves the average degree unknown so the estimator
+    /// keeps its default instead of treating 0 as "no outgoing edges".
+    void setEdgeCount(EdgeLabelId elid, uint64_t edge_count) {
+        edge_label_counts_[elid] = edge_count;
+    }
 
     /// Returns vertex count for label, or 0 if unknown (caller applies default).
     uint64_t getVertexCount(LabelId lid) const {
         auto it = label_vertex_counts_.find(lid);
         return it != label_vertex_counts_.end() ? it->second : 0;
+    }
+    /// Returns edge count for edge label, or 0 if unknown.
+    uint64_t getEdgeCount(EdgeLabelId elid) const {
+        auto it = edge_label_counts_.find(elid);
+        return it != edge_label_counts_.end() ? it->second : 0;
     }
     /// Returns avg out-degree for edge label, or 0.0 if unknown.
     double getAvgOutDegree(EdgeLabelId elid) const {
