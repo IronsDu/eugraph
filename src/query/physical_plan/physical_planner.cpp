@@ -3352,6 +3352,24 @@ bool rewriteDstBoundExpandFilters(binder::BoundLogicalOperator& op, bool allow_p
     });
     return changed;
 }
+
+/// Fold the binder's post-Expand `id(dst) == id(saved)` filter into a bound
+/// Expand destination.
+///
+/// Both planning paths must run this at the same point -- after slot allocation
+/// and ref-compatible predicate rewriting, before requirement collection --
+/// because rebinding the destination changes which columns have to be
+/// materialised. It used to live only in planBound, so any query the CBO picked
+/// (e.g. an `EXISTS { MATCH ... }` predicate) silently kept enumerating the
+/// source's whole adjacency and filtering afterwards.
+void applyCorrelatedEndpointFold(binder::BoundLogicalOperator& root, bool allow_probe) {
+    PlanRefIndex endpoint_expr_refs;
+    collectPlanRefsInto(root, endpoint_expr_refs);
+    std::unordered_map<std::string, int> endpoint_field_refs;
+    countPlanFieldRefs(root, endpoint_field_refs);
+    rewriteDstBoundExpandFilters(
+        root, allow_probe, endpoint_expr_refs.complete ? &endpoint_expr_refs.expr_refs : nullptr, &endpoint_field_refs);
+}
 } // namespace
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
@@ -3385,13 +3403,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // `id(dst) == id(saved)` filter into a bound Expand destination, so the
     // Expand can do one exact seek per row instead of scanning every edge of
     // its source. Must precede requirements collection (see the helper).
-    PlanRefIndex endpoint_expr_refs;
-    collectPlanRefsInto(bound_plan.root, endpoint_expr_refs);
-    std::unordered_map<std::string, int> endpoint_field_refs;
-    countPlanFieldRefs(bound_plan.root, endpoint_field_refs);
-    rewriteDstBoundExpandFilters(bound_plan.root, ctx.read_only,
-                                 endpoint_expr_refs.complete ? &endpoint_expr_refs.expr_refs : nullptr,
-                                 &endpoint_field_refs);
+    applyCorrelatedEndpointFold(bound_plan.root, ctx.read_only);
     ctx.alias_map = optimizer::collectAliasSlotMap(bound_plan.root, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(bound_plan.root, SubtreeTrait::PatternComprehension);
 
@@ -3742,6 +3754,10 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
     optimizer::rewriteInternalEdgeUniqueness(materialized, ctx.var_slots);
     optimizer::rewriteRefCompatiblePredicates(materialized, ctx.var_slots);
+    // Same correlated-endpoint folding as planBound: the CBO path must not lose
+    // the bound destination, otherwise EXISTS-shaped correlated chains fall back
+    // to enumerating the whole adjacency. Must precede requirements collection.
+    applyCorrelatedEndpointFold(materialized, ctx.read_only);
     ctx.alias_map = optimizer::collectAliasSlotMap(materialized, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(materialized, SubtreeTrait::PatternComprehension);
     ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver(), nullptr, &ctx.label_defs);

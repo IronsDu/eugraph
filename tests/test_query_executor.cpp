@@ -5773,6 +5773,42 @@ TEST_F(QueryExecutorTest, ListComprehensionPatternPredicateAcrossWith) {
 // ── Correlated-endpoint optimizations: probe budget, label-filter cost model,
 //    and the negative side of the endpoint-filter fold ──
 
+// The CBO path (planChosen) used to skip the correlated-endpoint fold, so an
+// EXISTS-shaped correlated chain kept enumerating the tag's whole adjacency and
+// filtering afterwards, while the pattern-comprehension form of the same
+// question already used a bound destination. Both planning paths must agree.
+TEST_F(QueryExecutorTest, CorrelatedExistsPredicateBindsEndpointOnChosenPlan) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:CeP {id: 1})-[:CE_KNOWS]->(:CeF {id: 2}) "
+                                     "-[:CE_KNOWS]->(:CeF {id: 3})")
+                    .error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (t4:CeT {id: 4})").error.empty());
+    ASSERT_TRUE(
+        execSync(*executor_, "MATCH (p:CeP {id: 1}), (t:CeT {id: 4}) CREATE (p)-[:CE_INTEREST]->(t)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (f:CeF {id: 2}), (t:CeT {id: 4}) "
+                                     "CREATE (p6:CePost {id: 6})-[:CE_CREATED]->(f), (p6)-[:CE_HAS_TAG]->(t)")
+                    .error.empty());
+
+    // Same question as ListComprehensionPatternPredicateAcrossWith, asked with
+    // EXISTS instead of a pattern comprehension.
+    const std::string query =
+        "MATCH (person:CeP {id: 1})-[:CE_KNOWS*2..2]-(friend) WITH person, collect(friend) AS friends "
+        "WHERE EXISTS { MATCH (x)-[:CE_HAS_TAG]->()<-[:CE_INTEREST]-(person) } "
+        "RETURN count(*) AS c";
+
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty()) << plan;
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    // The fold replaces the binder's fresh "__exists_dst_N" with the saved
+    // correlated column; any occurrence means the post-Expand filter survived.
+    EXPECT_EQ(plan.find("__exists_dst"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+}
+
 TEST_F(QueryExecutorTest, CorrelatedEndpointProbeBudgetFallsBackToExactSeek) {
     ASSERT_TRUE(execSync(*executor_, "CREATE (p:TckP {id: 1})-[:TCK_INTEREST]->(t10:TckT {id: 10})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "MATCH (p:TckP {id: 1}) "
