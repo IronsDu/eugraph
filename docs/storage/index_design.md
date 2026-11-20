@@ -256,10 +256,10 @@ std::unordered_map<PropKey, std::vector<IndexId>, PropKeyHash> prop_pair_to_inde
    应在内存 `IndexDefRuntime` 中把强 accessor 预解析为 `(source_label_id, source_prop_id)`、
    弱 accessor 预解析为 `[(label_id, prop_id), ...]`，并实现 `label_to_indexes` / `prop_pair_to_indexes`
    整数反向 map，使写入维护和回填不再做属性名字符串比较。
-4. **DdlWorker 后台异步回填**。
-5. **崩溃恢复**：重启后恢复未完成 DDL 状态。
+4. ~~**DdlWorker 后台异步回填**~~：已由 `IndexBuildService` 实现（v2）。
+5. **崩溃恢复**：启动时 `BUILDING→ERROR`、orphan/pending_drop 回收已实现；**续建**仍未实现（设计明确不做）。
 6. **Thrift RPC 索引接口**。
-7. **延迟物理删表**：DROP INDEX 后延迟清理 WT 表（含边表与旧表）。
+7. ~~**延迟物理删表**~~：已实现 read handle + schema pin drain；DROP 等在飞读者/旧事务归零后删表。
 8. **写路径弱 accessor 冲突显式报错**：当前 SET/REMOVE 维护遇到多标签同名不同值时静默跳过条目；
    设计目标是像回填一样报错（唯一索引置 ERROR，非唯一索引也应给出明确错误）。
 9. **属性 rename 与索引联动**：未来支持属性改名时，强索引应更新显示名并保持

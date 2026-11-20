@@ -13,6 +13,7 @@
 
 #include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
+#include "storage/index/index_runtime_registry.hpp"
 #include "storage/session/cursor_provider.hpp"
 #include "storage/session/session_types.hpp"
 #include "storage/session/txn_controller.hpp"
@@ -26,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -175,6 +177,24 @@ public:
     }
     void clearSchemaPin() noexcept {
         schema_pin_ = {};
+        releaseIndexAdmissions();
+    }
+
+    // ==================== 事务级索引准入 ====================
+    /// 准入 guard 必须持有到整个用户事务结束：FINALIZE 的 closeAndWait 等的是
+    /// 事务，不是单条索引写入。只有同一个事务已经持有某索引准入时，后续写入
+    /// 才可以在闸门关闭后继续写 delta，避免"事务等 FINALIZE、FINALIZE 等事务"死锁。
+    bool hasIndexAdmission(uint32_t index_id) const noexcept {
+        return index_admissions_.find(index_id) != index_admissions_.end();
+    }
+    bool hasAnyIndexAdmission() const noexcept {
+        return !index_admissions_.empty();
+    }
+    void bindIndexAdmission(uint32_t index_id, IndexWriteGuard guard) {
+        index_admissions_.insert_or_assign(index_id, std::move(guard));
+    }
+    void releaseIndexAdmissions() noexcept {
+        index_admissions_.clear();
     }
     void markSchemaPinTracked() noexcept {
         schema_pin_.tracked = true;
@@ -313,6 +333,8 @@ private:
     SchemaPin schema_pin_;
     /// 事务结束时需要释放的资源（RAII 闭包）。事务结束统一清空，防止资源泄漏。
     std::vector<std::function<void()>> txn_end_hooks_;
+    /// index_id → 事务级写准入（commit/rollback/close 时统一释放）。
+    std::unordered_map<uint32_t, IndexWriteGuard> index_admissions_;
     bool closed_ = false;
 };
 

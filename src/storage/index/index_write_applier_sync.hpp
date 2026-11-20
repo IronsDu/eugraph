@@ -5,8 +5,9 @@
 ///   * `index_write_router.hpp` 的决策（去向/表名/准入/是否查重）；
 ///   * `index_write_types.hpp` 的条目与状态。
 ///
-/// 差异：FINALIZE 期**不等待**（sync 路径在 IO 线程上，不能阻塞 sleep）——
-/// 返回 `kRetryLater`，由调用方让整批失败（loader 场景索引早已 PUBLIC，不会走到这里）。
+/// 差异：FINALIZE 期**不等待**（sync 路径在 IO 线程上，不能阻塞）——
+/// 批量入口会先预取相关索引的事务级准入，写入时即使闸门关了也可继续写 delta；
+/// 如果事务没有预取到新索引准入，返回 `kRetryLater` 让整批失败/重试，绝不阻塞。
 
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/index/index_runtime_registry.hpp"
@@ -36,14 +37,25 @@ inline IndexWriteStatus applyIndexWriteSync(ISyncGraphDataStore& store, GraphSes
     if (registry == nullptr || item.index_id == 0 || registry->find(item.index_id) == nullptr)
         return legacy();
 
+    // 批量事务已预取该索引准入：即使 FINALIZE 关了闸门，也继续写 delta。
+    if (session.hasIndexAdmission(item.index_id)) {
+        auto runtime = registry->find(item.index_id);
+        if (!runtime || runtime->phase() == IndexPhase::kError || runtime->lifecycle() != IndexLifecycle::kActive)
+            return IndexWriteStatus::kSkipped;
+        if (!store.putDeltaEntry(session, runtime->deltaTable(), item.values, item.entity_id, item.is_delete,
+                                 item.payload))
+            return IndexWriteStatus::kRetryLater;
+        runtime->adjustDeltaBacklog(1);
+        return IndexWriteStatus::kApplied;
+    }
+
     IndexWriteRouter router(*registry);
     auto decision = router.route(item.index_id);
     switch (decision.destination) {
     case IndexWriteDestination::kDelta: {
         if (!decision.guard)
             return IndexWriteStatus::kRetryLater;
-        auto held = std::make_shared<IndexWriteGuard>(std::move(*decision.guard));
-        session.onTransactionEnd([held] { held->reset(); }); // 覆盖整个批量事务（I6）
+        session.bindIndexAdmission(item.index_id, std::move(*decision.guard)); // 覆盖整个批量事务（I6）
         const bool ok =
             store.putDeltaEntry(session, decision.table, item.values, item.entity_id, item.is_delete, item.payload);
         if (ok) {

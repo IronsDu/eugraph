@@ -15,6 +15,8 @@ void AsyncGraphMetaStore::publishSchemaVersion() {
     auto next = std::make_shared<GraphSchema>(schema_);
     std::lock_guard<std::mutex> lock(published_mu_);
     published_schema_ = std::move(next);
+    // 代数与 schema 在同一把锁内发布：读者不会看到"新代数 + 旧 schema"。
+    published_generation_.store(schema_generation_.load(std::memory_order_acquire), std::memory_order_release);
 }
 
 folly::coro::Task<bool> AsyncGraphMetaStore::open(ISyncGraphMetaStore& store, IoScheduler& io) {

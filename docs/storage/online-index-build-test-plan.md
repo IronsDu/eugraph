@@ -336,3 +336,13 @@ python3 tests/tck/run_tck.py --server-bin build/release/eugraph-server \
 * sf1 规模（L3）压测；本 PR 用 4000 行 + 并发写做功能压力；
 * UBSan（本机运行库缺失，CI sanitizer job 覆盖）；
 * `property-ownership/03-index.feature` 的 8 个失败是既有属性所有权/歧义属性断言，与异步 DDL 无关。
+
+## R1/R2/R3/R5 修复验证（2026-11）
+
+| 项 | 用例 / 证据 |
+|---|---|
+| R1 事务准入 | `IndexWriteApplierTest.AdmittedTransactionContinuesAfterGateCloses`：同一事务拿到准入后关闸，第二条索引写仍走 delta；`UnadmittedWriterWaitsForGateReopen` 等到 >1s 后重开仍成功；`NewIndexDuringAdmittedTransactionFailsFastWithoutDeadlock` 防死锁 |
+| R2 批量 pin | `IndexE2ETest.BuildWaitsForBatchTransactionStartedBeforeCreate`：批量事务先 pin 旧 schema，构建等待其提交后仍扫到数据；`BatchTransactionDuringScanWritesDelta`：构建中批量事务预取准入写 delta，PUBLIC 后查询命中；`LoaderE2ETest.BatchInsertDuringOnlineIndexBuildIsMaintained`：真实 GraphService batch + 异步 CREATE INDEX |
+| R5 tracker | `IndexE2ETest.IndexDdlWithoutTrackerFailsBeforeBuilding`：DDL 无 tracker 直接报错，不创建半成品索引 |
+| R3 | `EUGRAPH_INDEX_PIN_WAIT_TIMEOUT_MS`（0=无限）+ 超时 ERROR/日志；默认无限，避免长事务被误杀 |
+| 本地验证 | index_e2e 82/82、applier 14/14、runtime 25/25、loader 43/43、query_executor 673/673、catalog 25/25、rpc 29/29；ASan e2e 82/82、applier 14/14 |

@@ -1,6 +1,8 @@
 #include "service/graph_service.hpp"
 
+#include "storage/index/index_admission.hpp"
 #include "storage/kv/index_key_codec.hpp"
+#include "storage/session/schema_pin.hpp"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -414,16 +416,20 @@ GraphService::batchInsertVertices(const std::string& label_name, std::vector<Bat
     auto vertex_store = inst->async_data->for_session(session);
     IAsyncGraphDataStore& data = vertex_store;
 
-    auto label_id_opt = co_await inst->async_meta->getLabelId(label_name);
-    if (!label_id_opt.has_value()) {
+    // 批量事务也必须在数据写入前固定 schema 版本：构建前的批量写会被 drain；
+    // 构建后的批量写持有包含新索引的版本，由 applier 写 delta。
+    const auto schema_version = inst->async_meta->schemaVersion();
+    if (!schema_version.schema)
+        throw std::runtime_error("No published schema for batch insert");
+    ensureSchemaPin(session, schema_version, inst->schema_generations.get());
+
+    auto label_it = schema_version.schema->label_name_to_id.find(label_name);
+    if (label_it == schema_version.schema->label_name_to_id.end())
         throw std::runtime_error("Label not found: " + label_name);
-    }
-    LabelId label_id = *label_id_opt;
+    LabelId label_id = label_it->second;
 
     // 索引定义随标签定义一起取（主键索引查找与批量写入维护都要用）
-    std::unordered_map<LabelId, LabelDef> label_defs;
-    for (const auto& l : co_await inst->async_meta->listLabels())
-        label_defs.emplace(l.id, l);
+    const auto& label_defs = schema_version.schema->labels;
 
     // 主键唯一索引：声明了主键却没建索引属于配置错误，直接报错
     auto pk_index_it = label_defs.find(label_id);
@@ -479,15 +485,24 @@ GraphService::batchInsertVertices(const std::string& label_name, std::vector<Bat
         for (const auto& extra_label : src.extra_labels) {
             if (extra_label == label_name)
                 continue;
-            auto extra_id_opt = co_await inst->async_meta->getLabelId(extra_label);
-            if (!extra_id_opt.has_value()) {
+            auto extra_it = schema_version.schema->label_name_to_id.find(extra_label);
+            if (extra_it == schema_version.schema->label_name_to_id.end()) {
                 throw std::runtime_error("Label not found: " + extra_label);
             }
-            entry.label_props.emplace_back(*extra_id_opt, Properties{});
+            entry.label_props.emplace_back(extra_it->second, Properties{});
         }
         batch_entries.push_back(std::move(entry));
     }
 
+    {
+        std::vector<uint32_t> touched_labels;
+        touched_labels.reserve(batch_entries.size());
+        for (const auto& entry : batch_entries) {
+            for (const auto& lp : entry.label_props)
+                touched_labels.push_back(lp.first);
+        }
+        co_await acquireLabelIndexAdmissions(session, data.indexRegistry(), touched_labels, /*is_edge=*/false);
+    }
     co_await data.batchInsertVertices(std::move(batch_entries), label_defs);
     if (!session.commit().committed())
         throw std::runtime_error("Batch insert transaction failed to commit (see server log)");
@@ -517,19 +532,22 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
     auto edge_store = inst->async_data->for_session(session);
     IAsyncGraphDataStore& data = edge_store;
 
-    auto elabel_id_opt = co_await inst->async_meta->getEdgeLabelId(edge_label_name);
-    if (!elabel_id_opt.has_value()) {
+    const auto schema_version = inst->async_meta->schemaVersion();
+    if (!schema_version.schema)
+        throw std::runtime_error("No published schema for batch edge insert");
+    ensureSchemaPin(session, schema_version, inst->schema_generations.get());
+
+    auto elabel_it = schema_version.schema->edge_label_name_to_id.find(edge_label_name);
+    if (elabel_it == schema_version.schema->edge_label_name_to_id.end())
         throw std::runtime_error("EdgeLabel not found: " + edge_label_name);
-    }
-    EdgeLabelId elabel_id = *elabel_id_opt;
+    EdgeLabelId elabel_id = elabel_it->second;
 
     // 主键 → 索引：按「主键属性名」反查标签，支持 hint 标签未命中时的回退
-    std::unordered_map<LabelId, LabelDef> label_defs;
+    const auto& label_defs = schema_version.schema->labels;
     std::unordered_map<std::string, uint32_t> pk_index_by_label;
     std::unordered_map<std::string, std::vector<std::string>> pk_names_by_label;
     std::unordered_map<std::string, std::vector<LabelId>> labels_by_pk_name;
-    for (const auto& l : co_await inst->async_meta->listLabels()) {
-        label_defs.emplace(l.id, l);
+    for (const auto& [lid, l] : label_defs) {
         if (l.pk_prop_ids.empty())
             continue;
         std::vector<std::string> names;
@@ -561,8 +579,9 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
         };
 
         // 1) hint 标签
-        if (auto hint = co_await inst->async_meta->getLabelId(ep.label); hint.has_value()) {
-            if (auto def_it = label_defs.find(*hint); def_it != label_defs.end()) {
+        auto hint = schema_version.schema->label_name_to_id.find(ep.label);
+        if (hint != schema_version.schema->label_name_to_id.end()) {
+            if (auto def_it = label_defs.find(hint->second); def_it != label_defs.end()) {
                 if (auto vid = co_await try_label(def_it->second); vid.has_value())
                     co_return vid;
                 spdlog::debug("[graph_service] endpoint not found on hinted label '{}', falling back", ep.label);
@@ -580,8 +599,11 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
                     candidates.push_back(lid);
             }
         }
-        std::sort(candidates.begin(), candidates.end(),
-                  [&](LabelId a, LabelId b) { return label_defs[a].name < label_defs[b].name; });
+        std::sort(candidates.begin(), candidates.end(), [&](LabelId a, LabelId b) {
+            auto ia = label_defs.find(a);
+            auto ib = label_defs.find(b);
+            return ia != label_defs.end() && ib != label_defs.end() && ia->second.name < ib->second.name;
+        });
         std::optional<VertexId> best;
         for (auto lid : candidates) {
             auto it = label_defs.find(lid);
@@ -618,11 +640,9 @@ folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(co
         for (size_t i = 0; i < batch_entries.size(); ++i)
             batch_entries[i].eid = start_eid + static_cast<EdgeId>(i);
 
-        std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
-        for (const auto& el : co_await inst->async_meta->listEdgeLabels())
-            edge_label_defs.emplace(el.id, el);
-
+        const auto& edge_label_defs = schema_version.schema->edge_labels;
         auto inserted_count = static_cast<int32_t>(batch_entries.size());
+        co_await acquireLabelIndexAdmissions(session, data.indexRegistry(), {elabel_id}, /*is_edge=*/true);
         co_await data.batchInsertEdges(elabel_id, std::move(batch_entries), edge_label_defs);
         if (!session.commit().committed())
             throw std::runtime_error("Batch edge-insert transaction failed to commit (see server log)");

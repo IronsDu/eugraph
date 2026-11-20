@@ -7,6 +7,7 @@
 #include "query/parser/index_ddl_parser.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_admission.hpp"
 #include "storage/index/index_builder.hpp"
 #include "storage/index/index_runtime_registry.hpp"
 #include "storage/index/index_test_hooks.hpp"
@@ -15,6 +16,7 @@
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
 #include "storage/session/schema_generation_tracker.hpp"
+#include "storage/session/schema_pin.hpp"
 #include "test_chunk_helpers.hpp"
 #include "test_index_env.hpp"
 #include "test_sync_store.hpp"
@@ -207,6 +209,7 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
 
     // Now query with WHERE n.age = 30 — should use index scan
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 30 RETURN n");
 
     ASSERT_EQ(rows.size(), 1u);
@@ -241,6 +244,7 @@ TEST_F(IndexE2ETest, StringIndexExactAndPrefixScan) {
     }
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto exact_plan = explainQuery(executor, "MATCH (n:Person) WHERE n.name = 'Jose' RETURN n.name");
     EXPECT_NE(exact_plan.find("IndexScan"), std::string::npos) << exact_plan;
     EXPECT_NE(exact_plan.find("mode=eq"), std::string::npos) << exact_plan;
@@ -294,6 +298,7 @@ TEST_F(IndexE2ETest, CompositeStringIndexExactAndPrefix) {
     }
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto exact_plan =
         explainQuery(executor, "MATCH (n:Person) WHERE n.firstName = 'Jose' AND n.lastName = 'A' RETURN n.firstName");
     EXPECT_NE(exact_plan.find("IndexScan"), std::string::npos) << exact_plan;
@@ -365,6 +370,7 @@ TEST_F(IndexE2ETest, QueryWithoutIndexUsesLabelScan) {
 
     // Insert data via Cypher
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     runQuery(executor, "CREATE (n:Person {name: 'alice', age: 25})");
     runQuery(executor, "CREATE (n:Person {name: 'bob', age: 30})");
 
@@ -529,6 +535,7 @@ TEST_F(IndexE2ETest, DdlCreateIndexViaExecutor) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto result = execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
 
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -549,6 +556,7 @@ TEST_F(IndexE2ETest, DdlVertexIndexBackfillCommitsInBatches) {
                     {0, "age", PropertyType::INT64, false, std::nullopt},
                 });
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     for (int i = 0; i < 25; ++i) {
         auto created = execSync(executor, "CREATE (n:Person {age: " + std::to_string(i) + "})");
         ASSERT_TRUE(created.error.empty()) << created.error;
@@ -578,6 +586,7 @@ TEST_F(IndexE2ETest, DdlEdgeIndexBackfillCommitsInBatches) {
                         {0, "since", PropertyType::INT64, false, std::nullopt},
                     });
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     for (int i = 0; i < 5; ++i) {
         auto created =
             execSync(executor, "CREATE (a:Person {name: 'a" + std::to_string(i) + "'}), (b:Person {name: 'b" +
@@ -602,6 +611,7 @@ TEST_F(IndexE2ETest, DdlShowIndexesViaExecutor) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // No indexes initially
     auto result = execSync(executor, "SHOW INDEXES");
@@ -631,6 +641,7 @@ TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
 
     // Drop it
@@ -645,6 +656,7 @@ TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
 
 TEST_F(IndexE2ETest, DdlCreateIndexLabelNotFound) {
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto result = execSync(executor, "CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("Label not found"), std::string::npos);
@@ -658,6 +670,7 @@ TEST_F(IndexE2ETest, DdlCreateWeakIndexBackfillAcrossLabels) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
 
@@ -695,6 +708,7 @@ TEST_F(IndexE2ETest, WeakIndexMaintainsOnLabelAddRemove) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
@@ -742,6 +756,7 @@ TEST_F(IndexE2ETest, WeakIndexMaintainsOnPropertySetRemove) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
@@ -793,6 +808,7 @@ TEST_F(IndexE2ETest, WeakIndexRemovedOnVertexDelete) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
@@ -826,6 +842,7 @@ TEST_F(IndexE2ETest, EdgeIndexMaintainsOnPropertySetRemove) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (a:Person {name:'alice'}), (b:Person {name:'bob'}), "
                                      "(a)-[:KNOWS {since:123}]->(b)");
     ASSERT_TRUE(create.error.empty()) << create.error;
@@ -876,6 +893,7 @@ TEST_F(IndexE2ETest, UniqueIndexSetRollsBackProperty) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_person_name FOR (n:Person) ON (n.name)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
     auto create = execSync(executor, "CREATE (a:Person {name:'alice'}), (b:Person {name:'bob'})");
@@ -905,6 +923,7 @@ TEST_F(IndexE2ETest, WeakIndexUsedWhenNodeCreatedAfterIndex) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_id FOR (n:Message) ON (n.id)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
@@ -925,6 +944,7 @@ TEST_F(IndexE2ETest, StrongIndexPointLookup) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_pdate FOR (n:Message) ON (n::Post.creationDate)");
@@ -945,6 +965,7 @@ TEST_F(IndexE2ETest, MixedStrongWeakCompositeIndexQuery) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123, browserUsed: 'Firefox'})");
     ASSERT_TRUE(create.error.empty()) << create.error;
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_mix FOR (n:Message) ON "
@@ -966,6 +987,7 @@ TEST_F(IndexE2ETest, StrongIndexRejectsMissingSourceProperty) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_bad FOR (n:Message) ON (n::Post.missing)");
     EXPECT_FALSE(ddl.error.empty());
 }
@@ -1004,6 +1026,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillConflictSetsError) {
     env.data_store->commitTransaction(txn);
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
     EXPECT_FALSE(ddl.error.empty());
     EXPECT_NE(ddl.error.find("conflicting"), std::string::npos);
@@ -1021,6 +1044,7 @@ TEST_F(IndexE2ETest, DdlCreateStrongIndexBackfill) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
     ASSERT_TRUE(create.error.empty()) << create.error;
 
@@ -1053,6 +1077,7 @@ TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Insert data
     runQuery(executor, "CREATE (n:Person {name: 'alice', age: 25})");
@@ -1087,6 +1112,7 @@ TEST_F(IndexE2ETest, DdlCreateDuplicateIndex) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // First index on name should succeed
     auto result = execSync(executor, "CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
@@ -1114,6 +1140,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithDuplicateData) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Insert two vertices with the same name
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
@@ -1137,6 +1164,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithUniqueData) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Insert two vertices with different names
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
@@ -1162,6 +1190,7 @@ TEST_F(IndexE2ETest, InsertDuplicateValueOnUniqueIndex) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Create unique index on clean data
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
@@ -1217,6 +1246,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeIndexViaExecutor) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Insert some data first
     runQuery(executor, "CREATE (n:Person {name: 'alice', age: 30, city: 'NYC'})");
@@ -1255,6 +1285,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeUniqueIndexNoConflict) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Insert data with unique (id, email) pairs
     runQuery(executor, "CREATE (n:User {id: 1, email: 'a@b.com'})");
@@ -1279,6 +1310,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeUniqueIndexDuplicate) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Insert two vertices with the same (id, email) pair
     runQuery(executor, "CREATE (n:User {id: 1, email: 'dup@test.com'})");
@@ -1303,6 +1335,7 @@ TEST_F(IndexE2ETest, InsertViolatesCompositeUniqueConstraint) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     // Create composite unique index on clean data
     runQuery(executor, "CREATE (n:User {id: 1, email: 'a@b.com'})");
@@ -1326,6 +1359,7 @@ TEST_F(IndexE2ETest, ShowCompositeIndex) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     execSync(executor, "CREATE INDEX idx_age_name FOR (n:Person) ON (n.age, n.name)");
 
@@ -1352,6 +1386,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexViaExecutor) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     auto result = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1371,6 +1406,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexLabelNotFound) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     auto result = execSync(executor, "CREATE INDEX idx_bad FOR ()-[r:NONEXISTENT]-() ON (r.prop)");
     EXPECT_FALSE(result.error.empty());
@@ -1388,6 +1424,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexPropertyNotFound) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     auto result = execSync(executor, "CREATE INDEX idx_bad FOR ()-[r:KNOWS]-() ON (r.nonexistent)");
     EXPECT_FALSE(result.error.empty());
@@ -1405,6 +1442,7 @@ TEST_F(IndexE2ETest, DdlCreateEdgeIndexBackfill) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     runQuery(executor, "CREATE (n:Person {name: 'Alice'})");
     runQuery(executor, "CREATE (n:Person {name: 'Bob'})");
@@ -1429,6 +1467,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueEdgeIndexNoConflict) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     auto result = execSync(executor, "CREATE UNIQUE INDEX idx_uknows_since FOR ()-[r:KNOWS]-() ON (r.since)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1450,6 +1489,7 @@ TEST_F(IndexE2ETest, ShowEdgeIndexes) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
 
     auto result = execSync(executor, "SHOW INDEXES");
@@ -1473,6 +1513,7 @@ TEST_F(IndexE2ETest, DropEdgeIndex) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
 
     auto drop_result = execSync(executor, "DROP INDEX idx_knows_since");
@@ -1494,6 +1535,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeEdgeIndex) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     auto result = execSync(executor, "CREATE INDEX idx_knows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1520,6 +1562,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeUniqueEdgeIndex) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     auto result = execSync(executor, "CREATE UNIQUE INDEX idx_uknows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
     EXPECT_TRUE(result.error.empty()) << result.error;
@@ -1541,6 +1584,7 @@ TEST_F(IndexE2ETest, DdlCreateDuplicateEdgeIndex) {
                     });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
     auto result = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
@@ -1569,6 +1613,7 @@ TEST_F(IndexE2ETest, WeakIndexPointLookupWithDisagreeingSourcePropIds) {
     createLabel(env, "Message", {});
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     ASSERT_TRUE(execSync(executor, "CREATE (n:Comment:Message {id: 7, content: 'hi'})").error.empty());
     ASSERT_TRUE(
         execSync(executor, "CREATE (n:Post:Message {imageFile: 'p.jpg', language: 'en', id: 7})").error.empty());
@@ -1607,6 +1652,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillAcrossTwoSourceLabels) {
                  {2, "id", PropertyType::INT64, false, std::nullopt}});
     createLabel(env, "Message", {});
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     ASSERT_TRUE(execSync(executor, "CREATE (n:Comment:Message {id: 7, content: 'hi'})").error.empty());
     ASSERT_TRUE(
         execSync(executor, "CREATE (n:Post:Message {imageFile: 'p.jpg', language: 'en', id: 7})").error.empty());
@@ -1651,6 +1697,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
                  {1, "content", PropertyType::STRING, false, std::nullopt}});
     createLabel(env, "Message", {});
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
 
     const int N = 3000;
     for (int i = 0; i < N; ++i) {
@@ -1764,6 +1811,7 @@ TEST_F(IndexE2ETest, IndexRuntimeRegistryTracksDdlLifecycle) {
 
     IndexRuntimeRegistry registry; // 每图一份（测试里挂在 executor 上）
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
 
     ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_person_name FOR (n:Person) ON (n.name)").error.empty());
@@ -1790,10 +1838,12 @@ TEST_F(IndexE2ETest, IndexRuntimeRegistryTracksDdlLifecycle) {
 TEST_F(IndexE2ETest, IndexRuntimeRegistryMarksFailedUniqueBuildAsError) {
     createLabel(env, "Person", {{0, "name", PropertyType::STRING, false, std::nullopt}});
     QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setSchemaGenerationTracker(env.schema_generations);
     ASSERT_TRUE(execSync(writer, "CREATE (a:Person {name:'dup'}), (b:Person {name:'dup'})").error.empty());
 
     IndexRuntimeRegistry registry;
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
 
     // 回填发现重复 ⇒ 语句报错、索引置 ERROR、运行时 phase=ERROR（绝不 PUBLIC）。
@@ -1822,8 +1872,10 @@ TEST_F(IndexE2ETest, BuildAllowsConcurrentUpdateWithoutStaleEntry) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry); // for_session 会继承它
     QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setSchemaGenerationTracker(env.schema_generations);
     writer.setIndexRegistry(&registry);
     QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setSchemaGenerationTracker(env.schema_generations);
     ddl.setIndexRegistry(&registry);
 
     // 300 行（6 条多行 CREATE）；回填批 64 ⇒ 第一批覆盖 id 0..63。
@@ -1906,8 +1958,10 @@ TEST_F(IndexE2ETest, BuildAllowsConcurrentInsertWithoutLostRows) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setSchemaGenerationTracker(env.schema_generations);
     writer.setIndexRegistry(&registry);
     QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setSchemaGenerationTracker(env.schema_generations);
     ddl.setIndexRegistry(&registry);
 
     for (int base = 0; base < 200; base += 50) {
@@ -1978,8 +2032,10 @@ TEST_F(IndexE2ETest, BuildFinalizeGateDoesNotLoseLateWrites) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setSchemaGenerationTracker(env.schema_generations);
     writer.setIndexRegistry(&registry);
     QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setSchemaGenerationTracker(env.schema_generations);
     ddl.setIndexRegistry(&registry);
 
     for (int i = 0; i < 100; ++i) {
@@ -2030,8 +2086,10 @@ TEST_F(IndexE2ETest, UniqueBuildFailsOnConcurrentDuplicate) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setSchemaGenerationTracker(env.schema_generations);
     writer.setIndexRegistry(&registry);
     QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setSchemaGenerationTracker(env.schema_generations);
     ddl.setIndexRegistry(&registry);
 
     for (int base = 0; base < 100; base += 50) {
@@ -2095,8 +2153,10 @@ TEST_F(IndexE2ETest, IndexVisibilityFrozenAtTransactionStart) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setSchemaGenerationTracker(env.schema_generations);
     writer.setIndexRegistry(&registry);
     QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setSchemaGenerationTracker(env.schema_generations);
     ddl.setIndexRegistry(&registry);
 
     for (int i = 0; i < 100; ++i) {
@@ -2189,6 +2249,7 @@ TEST_F(IndexE2ETest, AsyncCreateIndexReturnsBeforeBuildCompletes) {
     env.async_data->setIndexRegistry(&registry);
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service; // 声明在 executor 之后 ⇒ 先析构/shutdown（job 捕获 executor）
     executor.setIndexBuildService(&service);
@@ -2250,6 +2311,7 @@ TEST_F(IndexE2ETest, AsyncDropIndexReturnsImmediatelyAndCleansUp) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service;
     executor.setIndexBuildService(&service);
@@ -2298,6 +2360,7 @@ TEST_F(IndexE2ETest, AsyncDropWaitsForActiveReaders) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service;
     executor.setIndexBuildService(&service);
@@ -2339,6 +2402,7 @@ TEST_F(IndexE2ETest, AsyncDropWaitsForOldSchemaPins) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service;
     executor.setIndexBuildService(&service);
@@ -2383,6 +2447,7 @@ TEST_F(IndexE2ETest, PendingPurgeIsRetriedInProcess) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service;
     executor.setIndexBuildService(&service);
@@ -2431,6 +2496,7 @@ TEST_F(IndexE2ETest, AsyncBuildExposesPhaseAndProgress) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service;
     executor.setIndexBuildService(&service);
@@ -2503,6 +2569,7 @@ TEST_F(IndexE2ETest, BuildDeltaBacklogVisibleDuringBuild) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service;
     executor.setIndexBuildService(&service);
@@ -2575,11 +2642,13 @@ TEST_F(IndexE2ETest, StressConcurrentBuildAndWrites) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor ddl(*env.async_data, *env.async_meta, *env.session_pool, {});
+    ddl.setSchemaGenerationTracker(env.schema_generations);
     ddl.setIndexRegistry(&registry);
     IndexBuildService service;
     ddl.setIndexBuildService(&service);
 
     QueryExecutor bulk(*env.async_data, *env.async_meta, *env.session_pool, {});
+    bulk.setSchemaGenerationTracker(env.schema_generations);
     bulk.setIndexRegistry(&registry);
     for (int i = 0; i < base_rows; ++i) {
         ASSERT_TRUE(
@@ -2608,6 +2677,7 @@ TEST_F(IndexE2ETest, StressConcurrentBuildAndWrites) {
     for (int t = 0; t < kThreads; ++t) {
         writers.emplace_back([&, t] {
             QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+            writer.setSchemaGenerationTracker(env.schema_generations);
             writer.setIndexRegistry(&registry);
             for (int i = 0; i < kUpdatesPerThread; ++i) {
                 const int id = t * kUpdatesPerThread + i;
@@ -2670,6 +2740,7 @@ TEST_F(IndexE2ETest, BuilderRunsWithoutQueryExecutor) {
         env, "Person",
         {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
     QueryExecutor writer(*env.async_data, *env.async_meta, *env.session_pool, {});
+    writer.setSchemaGenerationTracker(env.schema_generations);
     for (int i = 0; i < 50; ++i) {
         ASSERT_TRUE(
             execSync(writer, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
@@ -2761,6 +2832,7 @@ TEST_F(IndexE2ETest, TransactionSchemaPinKeepsOldVersionAlive) {
     ASSERT_TRUE(session.begin_read());
 
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     auto ctx = blockingWait(executor.prepareStream("RETURN 1", {}, nullptr, std::ref(session)));
     ASSERT_TRUE(ctx->error.empty()) << ctx->error;
     auto gen = std::move(ctx->gen);
@@ -2791,6 +2863,7 @@ TEST_F(IndexE2ETest, BuildWaitsForTransactionsStartedBeforeCreate) {
     IndexRuntimeRegistry registry;
     env.async_data->setIndexRegistry(&registry);
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
     executor.setIndexRegistry(&registry);
     IndexBuildService service;
     executor.setIndexBuildService(&service);
@@ -2840,4 +2913,127 @@ TEST_F(IndexE2ETest, BuildWaitsForTransactionsStartedBeforeCreate) {
     EXPECT_EQ(std::get<int64_t>(new_rows[0][0]), 1);
 
     service.shutdown();
+}
+
+TEST_F(IndexE2ETest, BuildWaitsForBatchTransactionStartedBeforeCreate) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+
+    // 旧批量事务：先 pin 旧 schema，再提交 DDL；构建必须等它结束。
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    const auto old_version = env.async_meta->schemaVersion();
+    ensureSchemaPin(session, old_version, env.schema_generations.get());
+
+    auto ddl = execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    constexpr int kRows = 100;
+    VertexId start = blockingWait(env.async_meta->nextVertexIdRange(kRows));
+    std::vector<IAsyncGraphDataStore::BatchVertexEntry> entries;
+    entries.reserve(kRows);
+    for (int i = 0; i < kRows; ++i) {
+        IAsyncGraphDataStore::BatchVertexEntry entry;
+        entry.vid = start + static_cast<VertexId>(i);
+        Properties props;
+        props.push_back(PropertyValue{int64_t(i)});
+        props.push_back(PropertyValue{std::string("batch-") + std::to_string(i)});
+        entry.label_props.emplace_back(/*Person*/ 1, std::move(props));
+        entries.push_back(std::move(entry));
+    }
+    auto batch_store = env.async_data->for_session(session);
+    blockingWait(batch_store.batchInsertVertices(std::move(entries), old_version.schema->labels));
+    ASSERT_TRUE(session.commit().committed());
+    lease.reset();
+
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.email = 'batch-0' RETURN count(*)");
+    ASSERT_FALSE(rows.empty());
+    EXPECT_EQ(std::get<int64_t>(rows[0][0]), 1);
+    service.shutdown();
+}
+
+TEST_F(IndexE2ETest, BatchTransactionDuringScanWritesDelta) {
+    createLabel(
+        env, "Person",
+        {{0, "id", PropertyType::INT64, false, std::nullopt}, {1, "email", PropertyType::STRING, false, std::nullopt}});
+    IndexRuntimeRegistry registry;
+    env.async_data->setIndexRegistry(&registry);
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
+    executor.setIndexRegistry(&registry);
+    IndexBuildService service;
+    executor.setIndexBuildService(&service);
+
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE(
+            execSync(executor, "CREATE (p:Person {id:" + std::to_string(i) + ", email:'e" + std::to_string(i) + "'})")
+                .error.empty());
+    }
+
+    std::promise<void> scan_paused;
+    auto scan_paused_future = scan_paused.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            scan_paused.set_value();
+            release_future.wait();
+        }
+    });
+
+    auto ddl = execSync(executor, "CREATE INDEX idx_person_email FOR (n:Person) ON (n.email)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+    scan_paused_future.wait();
+
+    // 构建中开始一个批量事务：pin 当前 schema（含新索引），预取准入，写 delta。
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    const auto version = env.async_meta->schemaVersion();
+    ensureSchemaPin(session, version, env.schema_generations.get());
+    auto batch_store = env.async_data->for_session(session);
+    blockingWait(acquireLabelIndexAdmissions(session, batch_store.indexRegistry(), {1}, /*is_edge=*/false));
+
+    IAsyncGraphDataStore::BatchVertexEntry entry;
+    entry.vid = blockingWait(env.async_meta->nextVertexIdRange(1));
+    Properties props;
+    props.push_back(PropertyValue{int64_t(999)});
+    props.push_back(PropertyValue{std::string("during-scan")});
+    entry.label_props.emplace_back(/*Person*/ 1, std::move(props));
+    std::vector<IAsyncGraphDataStore::BatchVertexEntry> entries;
+    entries.push_back(std::move(entry));
+    blockingWait(batch_store.batchInsertVertices(std::move(entries), version.schema->labels));
+    ASSERT_TRUE(session.commit().committed());
+    lease.reset();
+
+    release_scan.set_value();
+    ASSERT_TRUE(service.waitUntilIdle(5000));
+    index_hooks::clear();
+
+    auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.email = 'during-scan' RETURN count(*)");
+    ASSERT_FALSE(rows.empty());
+    EXPECT_EQ(std::get<int64_t>(rows[0][0]), 1);
+    service.shutdown();
+}
+
+TEST_F(IndexE2ETest, IndexDdlWithoutTrackerFailsBeforeBuilding) {
+    createLabel(env, "Person", {{0, "id", PropertyType::INT64, false, std::nullopt}});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    // 故意不注入 tracker：DDL 必须 fail fast，而不是静默构建出一个无法 drain 旧事务的索引。
+    auto result = execSync(executor, "CREATE INDEX idx_person_id FOR (n:Person) ON (n.id)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("SchemaGenerationTracker"), std::string::npos) << result.error;
 }

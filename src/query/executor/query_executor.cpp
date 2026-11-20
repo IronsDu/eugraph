@@ -1,4 +1,5 @@
 #include "query/executor/query_executor.hpp"
+#include "storage/session/schema_pin.hpp"
 
 #include "storage/index/index_builder.hpp"
 #include "storage/index/index_runtime_factory.hpp"
@@ -24,6 +25,18 @@ namespace compute {
 
 namespace {
 
+/// 0/未设置 = 无限等待；>0 = 每次构建最多等这么久旧 schema pin。
+uint32_t indexPinWaitTimeoutMs() {
+    const char* env = std::getenv(config::kEnvIndexPinWaitTimeoutMs);
+    if (env == nullptr || *env == '\0')
+        return 0;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0')
+        return 0;
+    return static_cast<uint32_t>(std::min<unsigned long>(parsed, std::numeric_limits<uint32_t>::max()));
+}
+
 /// Bound the WiredTiger transaction used by index backfill. A single
 /// transaction over an sf1-sized label (millions of vertices) holds enough
 /// dirty pages that eviction can force WT_ROLLBACK; the backfill is therefore
@@ -42,15 +55,21 @@ QueryExecutor::~QueryExecutor() = default;
 folly::coro::Task<std::shared_ptr<StreamContext>>
 QueryExecutor::prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params,
                              QueryCancel cancel, SessionRef existing_session) {
-    // 事务级 schema 版本：显式事务用 BEGIN 时 pin 的版本，否则用当前版本。
-    // 只拿 shared_ptr（O(1)）；StreamContext/算子直接引用该版本的 label 定义，不复制。
-    std::shared_ptr<const GraphSchema> schema_version;
-    if (existing_session)
-        schema_version = existing_session->get().schemaPin().schema;
-    if (!schema_version)
-        schema_version = async_meta_.schemaPtr();
-    if (!schema_version)
-        schema_version = std::make_shared<GraphSchema>();
+    // 事务级 schema 版本：显式事务用 BEGIN 时 pin 的版本，否则原子读取当前版本。
+    // generation/schema 必须来自同一个发布点，不能分开读。
+    SchemaVersion version_info;
+    if (existing_session && existing_session->get().schemaPin().valid) {
+        const auto& pin = existing_session->get().schemaPin();
+        version_info = SchemaVersion{pin.schema, pin.generation, pin.compat_version};
+    } else {
+        version_info = async_meta_.schemaVersion();
+    }
+    if (!version_info.schema) {
+        version_info.schema = std::make_shared<GraphSchema>();
+        version_info.generation = async_meta_.schemaGeneration();
+        version_info.compat_version = async_meta_.compatVersion();
+    }
+    const auto schema_version = version_info.schema;
 
     auto ctx = std::make_shared<StreamContext>(schema_version);
     ctx->query_text = cypher_query;
@@ -186,25 +205,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     }
 
     // schema pin：显式事务由 BEGIN 设置；自动提交/未设置的调用方在语句边界兜底。
-    {
-        auto& session = active_session->get();
-        if (!session.schemaPin().valid || !session.schemaPin().schema) {
-            auto pin = session.schemaPin();
-            if (!pin.valid)
-                pin = GraphSession::SchemaPin{async_meta_.schemaGeneration(), async_meta_.compatVersion(), true, false,
-                                              pinned_schema};
-            else
-                pin.schema = pinned_schema;
-            session.setSchemaPin(std::move(pin));
-        }
-        if (!session.schemaPin().tracked && schema_generations_ != nullptr) {
-            const uint64_t pinned_generation = session.schemaPin().generation;
-            schema_generations_->pin(pinned_generation);
-            session.markSchemaPinTracked();
-            session.onTransactionEnd(
-                [tracker = schema_generations_, pinned_generation] { tracker->unpin(pinned_generation); });
-        }
-    }
+    // 统一入口负责 pin 计数与事务结束 unpin，批量装载复用同一 helper。
+    ensureSchemaPin(active_session->get(), version_info, schema_generations_.get());
 
     // Statement execution context: the one place statement-scoped state (today the
     // cancellation flag, later deadlines/budgets) belongs. Operators hold it through
@@ -439,6 +441,8 @@ void QueryExecutor::publishIndexRuntime(const std::string& index_name) {
     runtime->setPublicGeneration(async_meta_.schemaGeneration());
     runtime->setProgress(100.0);
     runtime->transitionPhase(IndexPhase::kPublic);
+    // 唤醒 FINALIZE 期间等待准入的写者：PUBLIC 后它们应重新 route 到直写索引表。
+    runtime->reopenAdmission();
 }
 
 void QueryExecutor::failIndexRuntime(const std::string& index_name, std::string_view error) {
@@ -451,6 +455,8 @@ void QueryExecutor::failIndexRuntime(const std::string& index_name, std::string_
     if (runtime) {
         runtime->setLastError(error.empty() ? std::string("Index build failed (see server log)") : std::string(error));
         runtime->transitionPhase(IndexPhase::kError);
+        // 失败/取消也必须唤醒等待者：它们应重新 route 到 kSkip，而不是永久挂起。
+        runtime->reopenAdmission();
     }
 }
 
@@ -460,9 +466,11 @@ void QueryExecutor::retireIndexRuntime(uint32_t index_id) {
     auto runtime = index_registry_->find(index_id);
     if (!runtime)
         return;
+    // 先转 lifecycle，再唤醒等待者：醒来后 route 看到的是 skip，不会重新拿到 delta 准入。
     runtime->transitionLifecycle(IndexLifecycle::kDropping);
     runtime->transitionLifecycle(IndexLifecycle::kPurging);
     runtime->transitionLifecycle(IndexLifecycle::kPurged);
+    runtime->reopenAdmission();
     index_registry_->erase(index_id);
 }
 
@@ -581,10 +589,19 @@ folly::coro::Task<std::string> QueryExecutor::applyIndexBuildOutcome(const Index
         co_return std::string("Failed to set index state to PUBLIC");
     }
     publishIndexRuntime(spec.index_name);
+    // PUBLIC 后写路径直写索引表，delta 不再使用；清掉空表（失败只告警，
+    // DROP INDEX/启动回收仍是兜底）。
+    if (!(co_await async_data_.dropIndex(indexDeltaTable(spec.index_id))))
+        spdlog::warn("[index] failed to drop empty delta table for {} (index {}); DROP INDEX will retry",
+                     spec.index_name, spec.index_id);
     co_return std::string{};
 }
 
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {
+    if (schema_generations_ == nullptr) {
+        result.error = "Index DDL requires a SchemaGenerationTracker; graph assembly is incomplete";
+        co_return;
+    }
     if (stmt.type == IndexDdlStatement::CREATE_VERTEX_INDEX) {
         auto label_def = co_await async_meta_.getLabelDef(stmt.label_name);
         if (!label_def.has_value()) {
@@ -728,8 +745,19 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 // 必须让这些写入先落数据，再开始 SCAN，否则索引会漏行。
                 const uint64_t index_generation = async_meta_.schemaGeneration();
                 if (schema_generations_ && index_generation != 0) {
-                    (void)schema_generations_->waitNoPinsOlderThan(index_generation,
-                                                                   std::numeric_limits<uint32_t>::max());
+                    const uint32_t configured_wait = indexPinWaitTimeoutMs();
+                    const uint32_t wait_ms =
+                        configured_wait == 0 ? std::numeric_limits<uint32_t>::max() : configured_wait;
+                    if (!schema_generations_->waitNoPinsOlderThan(index_generation, wait_ms)) {
+                        spdlog::warn("[index] build for {} timed out waiting for old schema pins "
+                                     "(oldest generation {}, active pins {}); mark ERROR",
+                                     spec.index_name, schema_generations_->minActiveGeneration(),
+                                     schema_generations_->pinCount());
+                        const auto error = folly::coro::blockingWait(applyIndexBuildOutcome(
+                            spec, IndexBuildOutcome{false, false, "old transaction schema pin wait timed out"}));
+                        (void)error;
+                        return;
+                    }
                 }
                 auto context =
                     IndexBuildContext{async_data_, session_pool_, index_registry_, [this, name = spec.index_name]() {
@@ -850,8 +878,19 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 // 必须让这些写入先落数据，再开始 SCAN，否则索引会漏行。
                 const uint64_t index_generation = async_meta_.schemaGeneration();
                 if (schema_generations_ && index_generation != 0) {
-                    (void)schema_generations_->waitNoPinsOlderThan(index_generation,
-                                                                   std::numeric_limits<uint32_t>::max());
+                    const uint32_t configured_wait = indexPinWaitTimeoutMs();
+                    const uint32_t wait_ms =
+                        configured_wait == 0 ? std::numeric_limits<uint32_t>::max() : configured_wait;
+                    if (!schema_generations_->waitNoPinsOlderThan(index_generation, wait_ms)) {
+                        spdlog::warn("[index] build for {} timed out waiting for old schema pins "
+                                     "(oldest generation {}, active pins {}); mark ERROR",
+                                     spec.index_name, schema_generations_->minActiveGeneration(),
+                                     schema_generations_->pinCount());
+                        const auto error = folly::coro::blockingWait(applyIndexBuildOutcome(
+                            spec, IndexBuildOutcome{false, false, "old transaction schema pin wait timed out"}));
+                        (void)error;
+                        return;
+                    }
                 }
                 auto context =
                     IndexBuildContext{async_data_, session_pool_, index_registry_, [this, name = spec.index_name]() {

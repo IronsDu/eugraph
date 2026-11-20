@@ -19,6 +19,7 @@
 #include "service/thrift/result_format.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/index/index_test_hooks.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
@@ -32,6 +33,7 @@
 #include <folly/coro/BlockingWait.h>
 #include <fstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
@@ -1056,4 +1058,61 @@ int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);
     folly::Init init(&argc, &argv, /*removeFlags=*/false);
     return RUN_ALL_TESTS();
+}
+
+TEST_F(LoaderE2ETest, BatchInsertDuringOnlineIndexBuildIsMaintained) {
+    writeFile("person.csv", "id|name\n1|alice\n");
+    writeSchema(R"({
+      "nodes": { "person": [ { "file": "person.csv", "pk": "id",
+                                "columns": { "id": "INT64", "name": "STRING" } } ] },
+      "relationships": {}
+    })");
+    runLoad();
+
+    std::promise<void> scan_paused;
+    auto scan_paused_future = scan_paused.get_future();
+    std::promise<void> release_scan;
+    auto release_future = release_scan.get_future().share();
+    std::atomic<bool> hit_once{false};
+    index_hooks::install([&](std::string_view point, uint64_t) {
+        if (point == "scan.batch_committed" && !hit_once.exchange(true)) {
+            scan_paused.set_value();
+            release_future.wait();
+        }
+    });
+
+    queryAll("default", "CREATE INDEX idx_person_name FOR (n:person) ON (n.name)");
+    scan_paused_future.wait();
+
+    service::GraphService::BatchVertexEntry entry;
+    entry.vid = 0;
+    entry.props = {PropertyValue{int64_t(99)}, PropertyValue{std::string("during-build")}};
+    std::vector<service::GraphService::BatchVertexEntry> entries;
+    entries.push_back(std::move(entry));
+    auto outcome = blockingWait(graph_service_->batchInsertVertices("person", std::move(entries), "default"));
+    EXPECT_EQ(outcome.duplicate_pk, 0);
+
+    release_scan.set_value();
+    // 等异步构建到终态；PUBLIC 后查询必须能看到 batch 行。
+    bool public_seen = false;
+    std::string dump;
+    for (int i = 0; i < 100 && !public_seen; ++i) {
+        auto rows = queryAll("default", "SHOW INDEXES");
+        for (const auto& row : rows) {
+            dump += "[";
+            for (const auto& cell : row)
+                dump += cell + " | ";
+            dump += "]\n";
+            if (row.size() >= 5 && row[0].find("idx_person_name") != std::string::npos &&
+                row[4].find("PUBLIC") != std::string::npos)
+                public_seen = true;
+        }
+        if (!public_seen)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    index_hooks::clear();
+    ASSERT_TRUE(public_seen) << dump;
+    auto count = querySingle("MATCH (n:person) WHERE n.name = 'during-build' RETURN count(*)");
+    ASSERT_TRUE(count.has_value());
+    EXPECT_EQ(*count, "1");
 }
