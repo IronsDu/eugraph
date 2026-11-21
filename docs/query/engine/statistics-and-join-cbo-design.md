@@ -222,7 +222,9 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 
 - ✅ 通用 destination-index join：Filter(Expand) 的 dst 属性索引 → IndexScan(dst)
   → 反向 Expand → HashJoin；条件/索引全部来自 catalog/predicate，无 label 名；
-- ⏳ 选择性 join reorder；
+- ✅ 只读 Cross/Inner join commute（写计划/pattern comprehension 走保守边界，
+  暂不交换）；
+- ⏳ join associativity / 选择性 join reorder；
 - ⏳ SemiJoin/IndexProbe 规则化；
 - ⏳ 共享锚点；
 - ⏳ 统计 confidence 驱动。
