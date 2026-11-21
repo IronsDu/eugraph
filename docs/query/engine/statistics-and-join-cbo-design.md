@@ -213,8 +213,10 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - ✅ 逻辑 `join_conditions`（Filter 原谓词保留，作为语义兜底）；
 - ✅ `ImplHashJoinRule` + HashJoin cost；
 - ✅ ChosenPlan join tag + physical lowering；
-- ⏳ physical planner 仍保留 HashJoin 代价/预算门禁；equi-join 目前 CBO 只有 HashJoin
-  候选，CrossProduct 由物理层兜底，NestedLoop/IndexJoin 候选未接。
+- ✅ equi-join 同时有 HashJoin/CrossProduct 候选；CBO 按 local cost + 输入代价比较
+  （修复了 any-property winner 漏加 local cost 导致两个算法打平的问题）；
+- ✅ 1×3 选 CrossProduct、2×20 选 HashJoin 有单测；
+- ⏳ NestedLoop/IndexJoin 候选未接；physical planner 仍保留 HashJoin 代价/预算门禁。
 
 ### Phase 4：通用 Join 规则
 
