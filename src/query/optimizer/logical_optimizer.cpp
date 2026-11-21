@@ -5,9 +5,11 @@
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
+#include "query/optimizer/rules/logical/extract_join_conditions.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/join_associate.hpp"
+#include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
-#include "query/optimizer/rules/logical/tag_anchored_join_reorder.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
@@ -38,6 +40,37 @@ bool hasFullObjectEnricher(const ChosenPlan& plan) {
 
 } // namespace
 
+namespace {
+
+bool subtreeNeedsConservativeJoinOrder(const binder::BoundLogicalOperator& op) {
+    bool unsafe = false;
+    std::visit(
+        [&](const auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                unsafe = true;
+            }
+        },
+        op);
+    if (unsafe)
+        return true;
+    forEachLogicalChild(op, [&](const binder::BoundLogicalOperator& child) {
+        if (!unsafe)
+            unsafe = subtreeNeedsConservativeJoinOrder(child);
+    });
+    return unsafe;
+}
+
+} // namespace
+
 void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog,
                                 const std::unordered_map<LabelId, uint64_t>* label_vertex_counts) {
     // A LogicalOptimizer instance may be reused. Reset per-query state before
@@ -46,12 +79,10 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     memo_ = Memo{};
     rules_ = RuleSet{};
     initRules();
+    memo_.setCommuteSafe(!subtreeNeedsConservativeJoinOrder(plan.root));
 
-    // Join-direction rewrite for the LDBC c6 tag-co-occurrence shape: the
-    // selective knownTag anchor should drive the pattern. Guarded by label
-    // cardinality estimates; other shapes are untouched.
-    if (catalog)
-        rewriteTagAnchoredJoin(plan, catalog, label_vertex_counts);
+    // 逻辑语义提示：让 CBO 看到 equi-join 条件；Filter 保留作为语义兜底。
+    extractJoinConditions(plan.root);
 
     // Make the catalog available to LogProp derivation. Group::getLogProp
     // picks it up via Memo::getCatalog() during OInputsTask cost computation.
@@ -115,6 +146,8 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 void LogicalOptimizer::initRules() {
     // Transformation rules
     rules_.addRule(std::make_unique<FilterPushdownRule>());
+    rules_.addRule(std::make_unique<JoinCommuteRule>());
+    rules_.addRule(std::make_unique<JoinAssociateRule>());
     rules_.addRule(std::make_unique<EdgeUniquenessPushdownRule>());
     rules_.addRule(std::make_unique<PathCountFusionRule>());
 
@@ -139,6 +172,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplPathBuildRule>());
     rules_.addRule(std::make_unique<ImplPathCountRule>());
     rules_.addRule(std::make_unique<ImplUnwindRule>());
+    rules_.addRule(std::make_unique<ImplHashJoinRule>());
     rules_.addRule(std::make_unique<ImplBinaryJoinRule>());
     rules_.addRule(std::make_unique<ImplLeftJoinRule>());
     rules_.addRule(std::make_unique<ImplSemiJoinRule>());

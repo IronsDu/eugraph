@@ -141,6 +141,24 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     auto catalog = std::make_unique<catalog::Catalog>();
     catalog->load(schema_version);
 
+    // 规划统计：优先使用 GraphStatsStore 的一致快照（journal 维护），
+    // 缺失时回退 schema 近似计数。一次规划只取一次，计划内部数字不跳变。
+    std::unordered_map<LabelId, uint64_t> stats_counts;
+    const std::unordered_map<LabelId, uint64_t>* effective_counts = &ctx->label_vertex_counts;
+    if (stats_store_ != nullptr) {
+        auto stats_snapshot = stats_store_->snapshot();
+        if (stats_snapshot && !stats_snapshot->labels.empty()) {
+            // 旧数据/新写入混合：以 schema 计数为 baseline，只覆盖 stats 明确拥有的
+            // label。不能因为 stats 非空就丢掉没有 journal 覆盖的旧 label。
+            stats_counts = ctx->label_vertex_counts;
+            for (const auto& [lid, st] : stats_snapshot->labels)
+                stats_counts[lid] = st.vertices > 0 ? static_cast<uint64_t>(st.vertices) : 0;
+            effective_counts = &stats_counts;
+        }
+    }
+    if (effective_counts != &ctx->label_vertex_counts)
+        catalog->setLabelVertexCounts(*effective_counts);
+
     auto func_registry = std::make_unique<function::FunctionRegistry>();
 
     // 2. Bind: AST → BoundLogicalPlan
@@ -233,7 +251,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .edge_label_name_to_id = ctx->edge_label_name_to_id,
         .label_defs = ctx->label_defs,
         .edge_label_defs = ctx->edge_label_defs,
-        .label_vertex_counts = ctx->label_vertex_counts,
+        .label_vertex_counts = *effective_counts,
         .schema = ctx->schema,
         .mutable_label_defs = ctx->owned_schema ? &ctx->owned_schema->labels : nullptr,
         .mutable_edge_label_defs = ctx->owned_schema ? &ctx->owned_schema->edge_labels : nullptr,
@@ -294,7 +312,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // optimizer pass: the binder collected semantic property references, the
     // optimizer turns them into scan/expand property demand.
     optimizer::LogicalOptimizer logical_optimizer;
-    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get(), &ctx->label_vertex_counts);
+    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get(), effective_counts);
 
     // 3. Physical planning. Try CBO-chosen plan first (Phase 4); fall back
     // to planBound (RBO over the optimized logical tree) when no winner.

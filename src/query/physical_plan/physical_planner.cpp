@@ -2686,14 +2686,145 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types), std::move(layout)};
 }
 
+namespace {
+
+size_t hashJoinMaxBuildRows() {
+    const char* env = std::getenv(config::kEnvHashJoinMaxBuildRows);
+    if (env == nullptr || *env == '\0')
+        return 1'000'000;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0')
+        return 1'000'000;
+    return static_cast<size_t>(parsed);
+}
+
+/// 把 join key 表达式解析成某一侧输出列。只支持能直接落到已有列的单列表达式：
+/// ColumnRef、VariableRef、已解析的 PropertyRef/coalesced property。其它表达式
+/// 保持 CrossProduct+Filter（语义正确，避免错误地“猜”key）。
+std::optional<uint32_t> joinKeyColumn(const binder::BoundExpression& expr, const Schema& schema,
+                                      const TupleSlotLayout& layout, PlanContext& ctx) {
+    if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr)) {
+        // Lowered property refs keep the object's display name but carry the
+        // property column's slot_id; prefer the slot to avoid reading `a`
+        // instead of `a.name`.
+        if (cr->slot_id != binder::INVALID_SLOT_ID) {
+            int col = layout.getColumnIndex(cr->slot_id);
+            if (col >= 0)
+                return static_cast<uint32_t>(col);
+        }
+        int col = findColumn(schema, cr->name);
+        if (col >= 0)
+            return static_cast<uint32_t>(col);
+        return std::nullopt;
+    }
+    if (const auto* vr = std::get_if<binder::BoundVariableRef>(&expr)) {
+        int col = findColumn(schema, vr->name);
+        return col >= 0 ? std::optional<uint32_t>(static_cast<uint32_t>(col)) : std::nullopt;
+    }
+    const auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr);
+    if (!pr || !*pr || (*pr)->property_name.empty())
+        return std::nullopt;
+    std::string var;
+    if (const auto* obj = std::get_if<binder::BoundColumnRef>(&(*pr)->object))
+        var = obj->name;
+    else if (const auto* obj = std::get_if<binder::BoundVariableRef>(&(*pr)->object))
+        var = obj->name;
+    if (var.empty())
+        return std::nullopt;
+    auto source_slot = ctx.resolver().slotForName(var);
+    if (source_slot == binder::INVALID_SLOT_ID)
+        return std::nullopt;
+    auto canonical = optimizer::getCanonicalSlot(ctx.alias_map, source_slot);
+    auto plan_it = ctx.extraction_info.find(canonical);
+    if (plan_it == ctx.extraction_info.end())
+        return std::nullopt;
+    const auto& pe = plan_it->second;
+    for (size_t i = 0; i < pe.prop_order.size(); ++i) {
+        auto def_it = ctx.label_defs.find(pe.prop_order[i].first);
+        if (def_it == ctx.label_defs.end())
+            continue;
+        for (const auto& pd : def_it->second.properties) {
+            if (pd.id == pe.prop_order[i].second && pd.name == (*pr)->property_name) {
+                int col = layout.getColumnIndex(pe.prop_slot_ids[i]);
+                if (col >= 0)
+                    return static_cast<uint32_t>(col);
+            }
+        }
+    }
+    auto co_it = pe.coalesce_vertices.find((*pr)->property_name);
+    if (co_it != pe.coalesce_vertices.end()) {
+        int col = layout.getColumnIndex(co_it->second.slot_id);
+        if (col >= 0)
+            return static_cast<uint32_t>(col);
+    }
+    return std::nullopt;
+}
+
+/// 只用无统计信息也安全的子树做上界估计；无法证明有界就放弃 HashJoin。
+std::optional<uint64_t> estimateRowsUpperBound(const binder::BoundLogicalOperator& op, const PlanContext& ctx,
+                                               uint32_t depth = 0) {
+    if (depth > 32)
+        return std::nullopt;
+    return std::visit(
+        [&](const auto& v) -> std::optional<uint64_t> {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                uint64_t sum = 0;
+                for (LabelId lid : v.label_ids) {
+                    auto it = ctx.label_vertex_counts.find(lid);
+                    if (it == ctx.label_vertex_counts.end())
+                        return std::nullopt;
+                    sum += it->second;
+                }
+                return sum;
+            } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
+                uint64_t sum = 0;
+                for (const auto& [lid, count] : ctx.label_vertex_counts) {
+                    (void)lid;
+                    sum += count;
+                }
+                return sum;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
+                auto child = v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
+                if (!child || !v)
+                    return child;
+                if (v->constant.has_value() && *v->constant >= 0)
+                    return std::min<uint64_t>(*child, static_cast<uint64_t>(*v->constant));
+                return child;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
+                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
+            }
+            return std::nullopt;
+        },
+        op);
+}
+
+} // namespace
+
 std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndexJoin(binder::BoundFilterOp& filter,
                                                                                      IAsyncGraphDataStore& store,
                                                                                      IAsyncGraphMetaStore& meta,
                                                                                      PlanContext& ctx) {
-    // The date predicate may be split across a contiguous Filter chain by
-    // the binder/optimizer; absorb the whole chain (including this Filter's
-    // own predicate) so the index scan replaces all predicates that only
-    // reference the expanded destination.
+    auto* expand_ptr = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&filter.child);
+    if (!expand_ptr || !*expand_ptr)
+        return std::nullopt;
+    auto& expand = **expand_ptr;
+    if (expand.src_variable.empty() || expand.dst_variable.empty())
+        return std::nullopt;
+    // 反向索引路径只处理“从 dst 回溯到 src”的方向；正向 Expand 不在本规则内。
+    if (expand.direction != cypher::RelationshipDirection::RIGHT_TO_LEFT)
+        return std::nullopt;
+    if (expand.edge_label_ids.size() != 1)
+        return std::nullopt;
+
+    // 只接受对本 Filter 子树连续 Filter 链的整段吸收；有残差就放弃，避免丢谓词。
     std::vector<const binder::BoundExpression*> predicates{&filter.predicate};
     binder::BoundLogicalOperator* current = &filter.child;
     while (auto* next_filter = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(current)) {
@@ -2703,95 +2834,55 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
         current = &(*next_filter)->child;
     }
 
-    auto* expand_ptr = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(current);
-    if (!expand_ptr || !*expand_ptr)
-        return std::nullopt;
-    auto& expand = **expand_ptr;
-    if (expand.src_variable.empty() || expand.dst_variable.empty())
-        return std::nullopt;
-    if (expand.direction != cypher::RelationshipDirection::RIGHT_TO_LEFT)
-        return std::nullopt;
-    if (expand.edge_label_ids.size() != 1)
+    std::vector<const binder::BoundExpression*> conjuncts;
+    for (auto* predicate : predicates)
+        collectAndConjuncts(*predicate, conjuncts);
+    if (conjuncts.empty())
         return std::nullopt;
 
-    // Enabled for the LDBC Message/HAS_CREATOR shape: the shared Message
-    // label has a weak creationDate index (backfilled over the concrete
-    // Comment/Post labels), so an index range scan resolves the same property
-    // values as the unlabeled pattern's weak property access.
-    if (!expand.dst_label_ids.empty())
-        return std::nullopt;
+    LabelId index_label = INVALID_LABEL_ID;
+    uint16_t index_prop = 0;
+    std::string index_prop_name;
+    uint32_t index_id = 0;
+    std::optional<PropertyValue> equality;
+    std::optional<PropertyValue> lower;
+    std::optional<PropertyValue> upper;
 
-    const auto edge_it = ctx.edge_label_defs.find(expand.edge_label_ids[0]);
-    if (edge_it == ctx.edge_label_defs.end())
-        return std::nullopt;
-    const auto& edge_name = edge_it->second.name;
-    if (edge_name != "HAS_CREATOR" && edge_name != "hasCreator")
-        return std::nullopt;
-
-    auto message_label_it = ctx.label_name_to_id.find("Message");
-    if (message_label_it == ctx.label_name_to_id.end())
-        return std::nullopt;
-    auto message_label_def_it = ctx.label_defs.find(message_label_it->second);
-    if (message_label_def_it == ctx.label_defs.end())
-        return std::nullopt;
-
-    uint16_t creation_date_prop_id = 0;
-    for (const auto& property : message_label_def_it->second.properties) {
-        if (property.name == "creationDate") {
-            creation_date_prop_id = property.id;
-            break;
-        }
-    }
-    if (creation_date_prop_id == 0)
-        return std::nullopt;
-
-    uint32_t message_creation_date_index_id = 0;
-    for (const auto& idx : message_label_def_it->second.indexes) {
-        if (!planUsableIndex(idx, ctx))
-            continue;
-        for (const auto& accessor : idx.accessors) {
-            if (accessor.property_name == "creationDate") {
-                message_creation_date_index_id = idx.index_id;
-                break;
-            }
-        }
-        if (message_creation_date_index_id != 0)
-            break;
-    }
-    if (message_creation_date_index_id == 0)
-        return std::nullopt;
-
-    // Extract the range bounds. scanIndexRange treats both bounds as
-    // exclusive, so >= / <= are adjusted by one for integer timestamps.
-    auto adjustInt64 = [](const PropertyValue& value, int64_t delta) -> std::optional<PropertyValue> {
+    auto adjust_int = [](const PropertyValue& value, int64_t delta) -> std::optional<PropertyValue> {
         if (auto* i = std::get_if<int64_t>(&value))
             return PropertyValue{*i + delta};
         return std::nullopt;
     };
 
-    std::vector<const binder::BoundExpression*> conjuncts;
-    for (auto* predicate : predicates)
-        collectAndConjuncts(*predicate, conjuncts);
-
-    std::optional<PropertyValue> lower;
-    std::optional<PropertyValue> upper;
-    for (auto* conjunct : conjuncts) {
-        auto* binop_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjunct);
+    for (const auto* conjunct : conjuncts) {
+        const auto* binop_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjunct);
         if (!binop_ptr || !*binop_ptr)
             return std::nullopt;
-        auto cond = tryExtractNormalizedBoundCondition(**binop_ptr, ctx);
-        if (!cond || cond->property_name != "creationDate")
+        const auto& binop = **binop_ptr;
+        auto cond = tryExtractNormalizedBoundCondition(binop, ctx);
+        if (!cond || cond->label_id == INVALID_LABEL_ID || cond->property_name.empty())
             return std::nullopt;
-
-        std::string condition_var = expressionVariableName((*binop_ptr)->left);
+        std::string condition_var = expressionVariableName(binop.left);
         if (condition_var != expand.dst_variable)
-            condition_var = expressionVariableName((*binop_ptr)->right);
+            condition_var = expressionVariableName(binop.right);
         if (condition_var != expand.dst_variable)
             return std::nullopt;
+        if (index_label == INVALID_LABEL_ID) {
+            index_label = cond->label_id;
+            index_prop = cond->prop_id;
+            index_prop_name = cond->property_name;
+        } else if (index_label != cond->label_id || index_prop != cond->prop_id) {
+            return std::nullopt;
+        }
 
         switch (cond->op) {
+        case cypher::BinaryOperator::EQ:
+            if (equality)
+                return std::nullopt;
+            equality = cond->value;
+            break;
         case cypher::BinaryOperator::GTE: {
-            auto adjusted = adjustInt64(cond->value, -1);
+            auto adjusted = adjust_int(cond->value, -1);
             if (!adjusted)
                 return std::nullopt;
             lower = std::move(*adjusted);
@@ -2801,7 +2892,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
             lower = cond->value;
             break;
         case cypher::BinaryOperator::LTE: {
-            auto adjusted = adjustInt64(cond->value, 1);
+            auto adjusted = adjust_int(cond->value, 1);
             if (!adjusted)
                 return std::nullopt;
             upper = std::move(*adjusted);
@@ -2814,10 +2905,34 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
             return std::nullopt;
         }
     }
-    if (!lower || !upper)
+    if (index_label == INVALID_LABEL_ID || (equality && (lower || upper)))
+        return std::nullopt;
+    if (!equality && !lower && !upper)
         return std::nullopt;
 
-    // Candidate source (friend) rows.
+    auto label_it = ctx.label_defs.find(index_label);
+    if (label_it == ctx.label_defs.end())
+        return std::nullopt;
+    for (const auto& idx : label_it->second.indexes) {
+        if (!planUsableIndex(idx, ctx))
+            continue;
+        for (const auto& accessor : idx.accessors) {
+            if (accessor.property_name == index_prop_name) {
+                index_id = idx.index_id;
+                break;
+            }
+        }
+        if (index_id != 0)
+            break;
+    }
+    if (index_id == 0)
+        return std::nullopt;
+
+    const size_t max_build_rows = hashJoinMaxBuildRows();
+    if (max_build_rows == 0)
+        return std::nullopt;
+
+    // Candidate source rows (outside the Expand).
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto left_result = planBoundOperator(expand.child, store, meta, ctx, empty_schema, empty_types);
@@ -2828,45 +2943,47 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
     const int left_key = findColumn(lr.output_schema, expand.src_variable);
     if (left_key < 0)
         return std::nullopt;
-    // Bound destination / edge variables need the original Expand semantics.
     if (!expand.dst_variable.empty() && findColumn(lr.output_schema, expand.dst_variable) >= 0)
         return std::nullopt;
     if (!expand.edge_variable.empty() && findColumn(lr.output_schema, expand.edge_variable) >= 0)
         return std::nullopt;
 
-    // Right branch: Message(creationDate) index range -> HAS_CREATOR -> creator.
     Schema right_schema{expand.dst_variable};
     std::vector<binder::BoundType> right_types{binder::BoundType::VertexRef()};
     if (!expand.edge_variable.empty()) {
         right_schema.push_back(expand.edge_variable);
         right_types.push_back(binder::BoundType::EdgeKey());
     }
-    std::string creator_var = "__index_join_creator";
-    while (findColumn(lr.output_schema, creator_var) >= 0 || findColumn(right_schema, creator_var) >= 0)
-        creator_var += "_";
-    right_schema.push_back(creator_var);
+    std::string source_alias = "__index_join_src";
+    while (findColumn(lr.output_schema, source_alias) >= 0 || findColumn(right_schema, source_alias) >= 0)
+        source_alias += "_";
+    right_schema.push_back(source_alias);
     right_types.push_back(binder::BoundType::VertexRef());
 
+    const auto mode = equality ? IndexScanPhysicalOp::ScanMode::EQUALITY : IndexScanPhysicalOp::ScanMode::RANGE;
+    std::vector<PropertyValue> eq_values;
+    if (equality)
+        eq_values.push_back(*equality);
     std::optional<std::vector<PropertyValue>> range_start;
     std::optional<std::vector<PropertyValue>> range_end;
     if (lower)
-        range_start = std::vector<PropertyValue>{std::move(*lower)};
+        range_start = std::vector<PropertyValue>{*lower};
     if (upper)
-        range_end = std::vector<PropertyValue>{std::move(*upper)};
+        range_end = std::vector<PropertyValue>{*upper};
 
     auto index_scan = std::make_unique<IndexScanPhysicalOp>(
-        expand.dst_variable, message_creation_date_index_id, std::vector<uint16_t>{creation_date_prop_id},
-        IndexScanPhysicalOp::ScanMode::RANGE, std::vector<PropertyValue>{}, std::move(range_start),
-        std::move(range_end), std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.schema);
+        expand.dst_variable, index_id, std::vector<uint16_t>{index_prop}, mode, std::move(eq_values),
+        std::move(range_start), std::move(range_end), std::vector<binder::BoundType>{binder::BoundType::VertexRef()},
+        store, ctx.schema);
 
     auto expand_result = std::make_unique<ExpandPhysicalOp>(
-        expand.dst_variable, creator_var, expand.edge_variable, expand.edge_label_ids,
+        expand.dst_variable, source_alias, expand.edge_variable, expand.edge_label_ids,
         cypher::RelationshipDirection::LEFT_TO_RIGHT, store, Schema{expand.dst_variable},
         std::vector<binder::BoundType>(right_types), std::move(index_scan),
         std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, std::vector<LabelId>{}, false,
         false, -1, -1, std::vector<EdgeLabelId>{}, false);
 
-    const int right_key = findColumn(right_schema, creator_var);
+    const int right_key = findColumn(right_schema, source_alias);
     if (right_key < 0)
         return std::nullopt;
 
@@ -2877,16 +2994,118 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
     TupleSlotLayout join_layout = lr.slot_layout;
     join_layout.merge(makeSlotLayout(right_schema, ctx));
 
-    auto hash_join = std::make_unique<HashJoinPhysicalOp>(std::move(lr.op), std::move(expand_result),
-                                                          std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
-                                                          std::vector<uint32_t>{static_cast<uint32_t>(right_key)},
-                                                          std::vector<binder::BoundType>(join_types), join_schema);
+    auto hash_join = std::make_unique<HashJoinPhysicalOp>(
+        std::move(lr.op), std::move(expand_result), std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
+        std::vector<uint32_t>{static_cast<uint32_t>(right_key)}, std::vector<binder::BoundType>(join_types),
+        join_schema, false, max_build_rows);
     hash_join->setEvalContext(ctx.eval_ctx);
-
     auto plan_result =
         PlanOperatorResult{std::move(hash_join), std::move(join_schema), std::move(join_types), std::move(join_layout)};
-    plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
-    return plan_result;
+    return dispatchProjectionExtract(std::move(plan_result), store, ctx);
+}
+
+std::optional<PlanOperatorResult>
+PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
+                                        IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
+                                        Schema input_schema, const std::vector<binder::BoundType>& input_types) {
+    if (join.join_type != binder::JoinType::Cross && join.join_type != binder::JoinType::Inner)
+        return std::nullopt;
+
+    std::vector<const binder::BoundExpression*> conjuncts;
+    collectAndConjuncts(filter.predicate, conjuncts);
+    if (conjuncts.empty())
+        return std::nullopt;
+
+    const size_t max_build_rows = hashJoinMaxBuildRows();
+    if (max_build_rows == 0)
+        return std::nullopt;
+
+    auto left_est = estimateRowsUpperBound(join.left, ctx);
+    auto right_est = estimateRowsUpperBound(join.right, ctx);
+    // 没有两侧上界就不猜：既无法做代价比较，也无法保证构建侧内存。
+    if (!left_est || !right_est)
+        return std::nullopt;
+    // HashJoin 代价 ≈ build + probe；CrossProduct+Filter ≈ left × right。
+    // 只在 HashJoin 更便宜时选择，避免小表 join 反而多一次物化。
+    const long double hash_cost = static_cast<long double>(*left_est) + static_cast<long double>(*right_est);
+    const long double cross_cost = static_cast<long double>(*left_est) * static_cast<long double>(*right_est);
+    // 物理层仍做预算/代价兜底；CBO tag 只表示“允许 HashJoin 候选”，
+    // 不能绕过 build 侧内存和代价门禁。
+    if (hash_cost >= cross_cost)
+        return std::nullopt;
+
+    bool build_left = *left_est < *right_est;
+    const uint64_t build_est = build_left ? *left_est : *right_est;
+    if (build_est > max_build_rows)
+        return std::nullopt;
+
+    auto left_result = planBoundOperator(join.left, store, meta, ctx, input_schema, input_types);
+    if (std::holds_alternative<std::string>(left_result))
+        return std::nullopt;
+    auto lr = extractChildResult(std::move(left_result));
+    ensureSlotLayout(lr, ctx);
+
+    const auto right_offset = static_cast<uint32_t>(lr.output_schema.size());
+    remapLogicalOpColumnIndices(join.right, right_offset);
+    Schema right_input_schema;
+    std::vector<binder::BoundType> right_input_types;
+    auto right_result = planBoundOperator(join.right, store, meta, ctx, right_input_schema, right_input_types);
+    if (std::holds_alternative<std::string>(right_result))
+        return std::nullopt;
+    auto rr = extractChildResult(std::move(right_result));
+    ensureSlotLayout(rr, ctx);
+
+    Schema output_schema = lr.output_schema;
+    output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
+    auto output_types = lr.output_types;
+    output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
+    TupleSlotLayout layout = lr.slot_layout;
+    layout.merge(rr.slot_layout);
+
+    auto fallback_cross_filter = [&]() -> PlanOperatorResult {
+        auto cross = std::make_unique<CrossProductPhysicalOp>(std::move(lr.op), std::move(rr.op),
+                                                              Schema(lr.output_schema), Schema(rr.output_schema),
+                                                              std::vector<binder::BoundType>(output_types));
+        auto filter_op = std::make_unique<FilterPhysicalOp>(optimizer::cloneBoundExpression(filter.predicate),
+                                                            Schema(output_schema), std::move(cross));
+        filter_op->setEvalContext(ctx.eval_ctx);
+        auto result = PlanOperatorResult{std::move(filter_op), std::move(output_schema), std::move(output_types),
+                                         std::move(layout)};
+        return dispatchProjectionExtract(std::move(result), store, ctx);
+    };
+
+    std::vector<uint32_t> left_keys;
+    std::vector<uint32_t> right_keys;
+    for (const auto* conjunct : conjuncts) {
+        const auto* binop_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjunct);
+        if (!binop_ptr || !*binop_ptr || (*binop_ptr)->op != cypher::BinaryOperator::EQ)
+            return fallback_cross_filter();
+        const auto& binop = **binop_ptr;
+        auto ll = joinKeyColumn(binop.left, lr.output_schema, lr.slot_layout, ctx);
+        auto lr_col = joinKeyColumn(binop.right, lr.output_schema, lr.slot_layout, ctx);
+        auto rl = joinKeyColumn(binop.left, rr.output_schema, rr.slot_layout, ctx);
+        auto rr_col = joinKeyColumn(binop.right, rr.output_schema, rr.slot_layout, ctx);
+
+        // Exactly one operand on each side; do not guess if both/neither resolve.
+        if (ll && rr_col && !lr_col && !rl) {
+            left_keys.push_back(*ll);
+            right_keys.push_back(*rr_col);
+        } else if (lr_col && rl && !ll && !rr_col) {
+            left_keys.push_back(*lr_col);
+            right_keys.push_back(*rl);
+        } else {
+            return fallback_cross_filter();
+        }
+    }
+    if (left_keys.empty())
+        return fallback_cross_filter();
+    auto hash_join = std::make_unique<HashJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), std::move(left_keys),
+                                                          std::move(right_keys), output_types, output_schema,
+                                                          build_left, max_build_rows);
+    hash_join->setEvalContext(ctx.eval_ctx);
+    auto plan_result =
+        PlanOperatorResult{std::move(hash_join), std::move(output_schema), std::move(output_types), std::move(layout)};
+    return dispatchProjectionExtract(std::move(plan_result), store, ctx);
 }
 
 /// Bottom-up (post-order) compilation: visit children first so each
@@ -3528,12 +3747,12 @@ void applyMultiEnrich(binder::BoundLogicalOperator& op, const optimizer::VarRequ
 // into the descendant topology source's label_prop_ids / edge_prop_ids
 // and skip them, so planBoundOperator's property-read wraps produce the
 // correct runtime plan.
-binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chosen) {
+binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chosen, PlanContext& ctx) {
     // Enricher nodes: lower into child tree by merging enrich_output
     // into the descendant scan/expand that produces enrich_variable.
     if (chosen.tag == optimizer::PhysicalOpTag::VertexEnrich || chosen.tag == optimizer::PhysicalOpTag::EdgeEnrich ||
         chosen.tag == optimizer::PhysicalOpTag::PathEnrich) {
-        auto child_op = materializeChosen(*chosen.children[0]);
+        auto child_op = materializeChosen(*chosen.children[0], ctx);
         applyMultiEnrich(child_op, chosen.enrich_output);
         return child_op;
     }
@@ -3543,7 +3762,7 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
     if (chosen.tag == optimizer::PhysicalOpTag::VertexPropertyExtract ||
         chosen.tag == optimizer::PhysicalOpTag::EdgePropertyExtract ||
         chosen.tag == optimizer::PhysicalOpTag::PathPropertyExtract) {
-        auto child_op = materializeChosen(*chosen.children[0]);
+        auto child_op = materializeChosen(*chosen.children[0], ctx);
         applyMultiEnrich(child_op, chosen.enrich_output);
         return child_op;
     }
@@ -3552,42 +3771,46 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
     binder::BoundLogicalOperator result = optimizer::cloneBoundLogicalOperator(chosen.op);
 
     if (chosen.children.size() == 1) {
-        optimizer::setChild(result, materializeChosen(*chosen.children[0]));
+        optimizer::setChild(result, materializeChosen(*chosen.children[0], ctx));
     } else if (chosen.children.size() == 2) {
         if (std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>(result)) {
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
-            join->left = materializeChosen(*chosen.children[0]);
-            join->right = materializeChosen(*chosen.children[1]);
+            join->left = materializeChosen(*chosen.children[0], ctx);
+            join->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
-            sj->left = materializeChosen(*chosen.children[0]);
-            sj->right = materializeChosen(*chosen.children[1]);
+            sj->left = materializeChosen(*chosen.children[0], ctx);
+            sj->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result)) {
             auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
-            pc->left = materializeChosen(*chosen.children[0]);
-            pc->right = materializeChosen(*chosen.children[1]);
+            pc->left = materializeChosen(*chosen.children[0], ctx);
+            pc->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(result)) {
             auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(result);
-            fe->child = materializeChosen(*chosen.children[0]);
-            fe->body = materializeChosen(*chosen.children[1]);
+            fe->child = materializeChosen(*chosen.children[0], ctx);
+            fe->body = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(result)) {
             auto& lj = std::get<std::unique_ptr<binder::BoundLeftJoinOp>>(result);
-            lj->left = materializeChosen(*chosen.children[0]);
-            lj->right = materializeChosen(*chosen.children[1]);
+            lj->left = materializeChosen(*chosen.children[0], ctx);
+            lj->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundUnionOp>>(result)) {
             auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(result);
-            uo->left = materializeChosen(*chosen.children[0]);
-            uo->right = materializeChosen(*chosen.children[1]);
+            uo->left = materializeChosen(*chosen.children[0], ctx);
+            uo->right = materializeChosen(*chosen.children[1], ctx);
         }
     } else if (chosen.children.size() > 2) {
         if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
             auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
-            fork->left = materializeChosen(*chosen.children[0]);
-            fork->anchor = materializeChosen(*chosen.children[1]);
+            fork->left = materializeChosen(*chosen.children[0], ctx);
+            fork->anchor = materializeChosen(*chosen.children[1], ctx);
             fork->branches.clear();
             for (size_t i = 2; i < chosen.children.size(); ++i)
-                fork->branches.push_back(materializeChosen(*chosen.children[i]));
+                fork->branches.push_back(materializeChosen(*chosen.children[i], ctx));
         }
+    }
+    if (auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&result)) {
+        if (join && *join)
+            ctx.chosen_join_tags[join->get()] = chosen.tag;
     }
     return result;
 }
@@ -3743,7 +3966,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     ctx.eval_ctx.meta = &meta;
     ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
 
-    binder::BoundLogicalOperator materialized = materializeChosen(chosen);
+    binder::BoundLogicalOperator materialized = materializeChosen(chosen, ctx);
     // A statement with no write operator keeps one read snapshot for its whole
     // execution; only then may correlated sub-plans memoize adjacency scans.
     {
@@ -4138,13 +4361,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
-                    // ── Selective destination index join ──
-                    // `Expand(src -> dst) WHERE dst.prop <range>` can be
-                    // planned as `IndexScan(dst.prop range) -> edge -> src`
-                    // hash-joined against the existing src rows.
-                    if (auto idx_join = tryPlanFilterDestinationIndexJoin(v, store, meta, ctx))
-                        return std::move(*idx_join);
-
                     // Attach OR index-value pruning hints to a child VarLenExpand.
                     if (auto* vle_ptr = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&v.child)) {
                         if (vle_ptr && *vle_ptr)
@@ -4173,6 +4389,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // ── List index join: Filter(CrossProduct) with x.prop IN left.list ──
                     if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
                         if (join_op && *join_op) {
+                            bool cbo_chose_cross = false;
+                            if (auto it = ctx.chosen_join_tags.find(join_op->get()); it != ctx.chosen_join_tags.end())
+                                cbo_chose_cross = it->second == optimizer::PhysicalOpTag::CrossProduct;
+                            if (!cbo_chose_cross) {
+                                if (auto hash_join = tryPlanGenericHashJoin(v, **join_op, store, meta, ctx,
+                                                                            input_schema, input_types))
+                                    return std::move(*hash_join);
+                            }
                             if (auto probe = tryPlanCorrelatedIndexProbe(v, **join_op, store, meta, ctx, input_schema,
                                                                          input_types))
                                 return std::move(*probe);
@@ -4182,6 +4406,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                 return std::move(list_join.value());
                         }
                     }
+
+                    // ── Generic destination index join: dst property index → reverse Expand → HashJoin ──
+                    if (auto dst_idx = tryPlanFilterDestinationIndexJoin(v, store, meta, ctx); dst_idx.has_value())
+                        return std::move(*dst_idx);
 
                     // ── Edge index scan optimization: Filter(Expand) → EdgeIndexScan ──
                     if (std::holds_alternative<std::unique_ptr<binder::BoundExpandOp>>(v.child)) {

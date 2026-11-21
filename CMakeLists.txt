@@ -176,10 +176,13 @@ file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
 # Library target (WiredTiger multi-table backend)
 add_library(eugraph_lib STATIC
     src/common/types/temporal_value.cpp
+    src/common/stats/stats_journal.cpp
+    src/common/stats/stats_snapshot.cpp
     src/common/types/query_error.cpp
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp
     src/storage/kv/index_key_codec.cpp
+    src/storage/stats/graph_stats_store.cpp
     src/storage/wt_cursor.cpp
     src/storage/wt_session.cpp
     src/storage/wt_table_ops.cpp
@@ -368,8 +371,10 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/rules/logical/filter_pushdown.cpp
     src/query/optimizer/rules/logical/edge_uniqueness_pushdown.cpp
     src/query/optimizer/rules/logical/path_count_fusion.cpp
-    src/query/optimizer/rules/logical/tag_anchored_join_reorder.cpp
     src/query/optimizer/rules/logical/pattern_comprehension_anchor_share.cpp
+    src/query/optimizer/rules/logical/join_commute.cpp
+    src/query/optimizer/rules/logical/join_associate.cpp
+    src/query/optimizer/rules/logical/extract_join_conditions.cpp
     src/query/optimizer/rules/physical/impl_rules.cpp
 )
 
@@ -953,6 +958,45 @@ if(EUGRAPH_BUILD_TESTS)
     gtest_add_tests(TARGET index_codec_tests)
 
     # Index runtime model / admission protocol (pure unit tests, no WT data)
+    add_executable(bench_hash_join
+        tests/bench_hash_join.cpp
+    )
+
+    target_include_directories(bench_hash_join PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/tests"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(bench_hash_join PRIVATE
+        eugraph_query_engine
+        eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+    add_dependencies(bench_hash_join wiredtiger_ext)
+
+    add_executable(graph_stats_tests
+        tests/test_graph_stats.cpp
+    )
+
+    target_include_directories(graph_stats_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(graph_stats_tests PRIVATE
+        eugraph_lib
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+    )
+
+    gtest_add_tests(TARGET graph_stats_tests)
+
     add_executable(index_runtime_tests
         tests/test_index_runtime.cpp
     )

@@ -618,7 +618,7 @@ jobs:
     - name: Build
       run: |
         cd build
-        ninja -j$(nproc)
+        ninja -j2
 
     - name: ccache stats
       # See build-gcc for the judgement.
@@ -917,7 +917,7 @@ jobs:
     - name: Build
       run: |
         cd build
-        ninja -j$(nproc)
+        ninja -j2
 
     - name: ccache stats
       # See build-gcc for the judgement.

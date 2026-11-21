@@ -1529,6 +1529,13 @@ void rewriteOp(binder::BoundLogicalOperator& op, const PEPlans& plans, const Slo
                         if (t.expr)
                             rewriteExpr(*t.expr, plans, resolver);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                // CBO equi-join hints are clones of Filter predicates; rewrite
+                // them to the same flat property columns as the Filter.
+                if (v) {
+                    for (auto& cond : v->join_conditions)
+                        rewriteExpr(cond, plans, resolver);
+                }
             }
             // Write ops (Remove/Delete) and pure-passthrough ops
             // (PathBuild/Skip/Limit/Distinct, Expand/VarLenExpand,

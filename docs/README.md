@@ -170,6 +170,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [Cypher 语法参考](query/syntax/cypher-syntax.md) | 支持的 Cypher 语法边界（子句、表达式、聚合、索引 DDL） |
 | [AST 参考](query/syntax/ast-reference.md) | AST 节点层次与类型速查 |
 | [Cypher 解析器](query/syntax/cypher-parser-design.md) | ANTLR4 集成、AST 构建策略、设计决策 |
+| [统计与 Join CBO](query/engine/statistics-and-join-cbo-design.md) | stats journal/并发合并、Cascades HashJoin/IndexJoin 候选、性能验证协议 |
 
 ### 执行引擎
 

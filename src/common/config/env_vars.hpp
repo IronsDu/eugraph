@@ -26,6 +26,8 @@ inline constexpr const char* kEnvLabelMemoMaxVids = "EUGRAPH_LABEL_MEMO_MAX_VIDS
 inline constexpr const char* kEnvIndexBackfillBatch = "EUGRAPH_INDEX_BACKFILL_BATCH";
 /// 构建 SCAN 前等待旧 schema pin 的上限（ms）；0/未设置 = 无限等待。
 inline constexpr const char* kEnvIndexPinWaitTimeoutMs = "EUGRAPH_INDEX_PIN_WAIT_TIMEOUT_MS";
+/// 通用 HashJoin 构建侧行数上限；0 表示由 planner 关闭 HashJoin（保守回退）。
+inline constexpr const char* kEnvHashJoinMaxBuildRows = "EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS";
 inline constexpr const char* kEnvPathCountCacheMaxEntries = "EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES";
 
 } // namespace eugraph::config

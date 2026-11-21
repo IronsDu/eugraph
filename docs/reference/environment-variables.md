@@ -33,6 +33,7 @@
 | `EUGRAPH_LABEL_MEMO_MAX_VIDS` | 65536 | Expand 目的端标签过滤 | 扫描路径按算子 memo 的 vid 总预算；超过后该标签不缓存、逐 chunk 重扫 | 0 或非法值回退默认；只影响缓存，结果不变 |
 | `EUGRAPH_INDEX_BACKFILL_BATCH` | 20000 | 索引回填 | 索引回填事务的行数；上限 1,000,000 | 0 或非法值回退默认 |
 | `EUGRAPH_INDEX_PIN_WAIT_TIMEOUT_MS` | 0 | 索引构建 | SCAN 前等待旧 schema pin 的上限；0=无限等待 | 超时索引置 ERROR，不扫描数据 |
+| `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS` | 1000000 | 查询规划 | 通用 HashJoin 构建侧最大估算行数；0=禁用 HashJoin | 超限回退 CrossProduct+Filter；运行期超限报错避免 OOM |
 | `EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES` | 1,048,576 | PathCount 执行 | 每个 PathCount 算子的 `VertexId -> outdegree` 缓存上限；0 禁用缓存 | 超限后不再插入，改为重新计算 degree；结果不变 |
 | `EUGRAPH_NUMA_BIND` | 关闭 | 线程创建（启动时） | 值为 `1` 时启用 NUMA 绑定 | 单 NUMA 节点上是 no-op；绑定失败有日志 |
 
