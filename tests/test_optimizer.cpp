@@ -16,6 +16,7 @@
 #include "query/optimizer/logical_optimizer.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
@@ -2937,4 +2938,44 @@ TEST(JoinCommuteRuleTest, DisabledForConservativePlans) {
     GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
     JoinCommuteRule rule;
     EXPECT_FALSE(rule.condition(expr, memo));
+}
+
+TEST(JoinAssociateRuleTest, RotatesLeftDeepJoinWhenSafe) {
+    auto inner = std::make_unique<BoundBinaryJoinOp>();
+    inner->join_type = JoinType::Cross;
+    inner->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    inner->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+
+    auto outer = std::make_unique<BoundBinaryJoinOp>();
+    outer->join_type = JoinType::Cross;
+    outer->left = BoundLogicalOperator(std::move(inner));
+    outer->right = makeLabelScanWithLabel("c", 2, LabelId{3});
+    BoundLogicalOperator root(std::move(outer));
+
+    Memo memo;
+    memo.setCommuteSafe(true);
+    auto gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    JoinAssociateRule rule;
+    ASSERT_TRUE(rule.fullMatch(expr, memo));
+    ASSERT_TRUE(memo.commuteSafe());
+    auto* dbg_outer = std::get_if<std::unique_ptr<BoundBinaryJoinOp>>(&expr.op);
+    ASSERT_NE(dbg_outer, nullptr);
+    ASSERT_NE(*dbg_outer, nullptr);
+    EXPECT_TRUE((*dbg_outer)->join_type == JoinType::Cross || (*dbg_outer)->join_type == JoinType::Inner);
+    ASSERT_TRUE(rule.condition(expr, memo));
+    auto candidates = rule.substitute(expr, memo);
+    ASSERT_EQ(candidates.size(), 1u);
+    EXPECT_EQ(candidates[0]->child_groups.size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(candidates[0]->op));
+    // 新结构是 Join(A, Join(B,C))：A 的 group 保留，右 child 是新 (B⋈C) group。
+    const Group& inner_group = memo.getGroup(expr.child_groups[0]);
+    const GroupExpr& old_inner = memo.getExpr(inner_group.logical_exprs.back());
+    EXPECT_EQ(candidates[0]->child_groups[0], old_inner.child_groups[0]);
+    EXPECT_NE(candidates[0]->child_groups[1], expr.child_groups[0]);
+    const Group& new_inner_group = memo.getGroup(candidates[0]->child_groups[1]);
+    ASSERT_FALSE(new_inner_group.logical_exprs.empty());
+    const GroupExpr& new_inner_expr = memo.getExpr(new_inner_group.logical_exprs.back());
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(new_inner_expr.op));
 }
