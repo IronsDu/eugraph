@@ -18,6 +18,7 @@
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
+#include "query/optimizer/rules/logical/push_filter_through_project.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -3005,4 +3006,28 @@ TEST(JoinAssociateRuleTest, RotatesLeftDeepJoinWhenSafe) {
     ASSERT_FALSE(new_inner_group.logical_exprs.empty());
     const GroupExpr& new_inner_expr = memo.getExpr(new_inner_group.logical_exprs.back());
     ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(new_inner_expr.op));
+}
+
+TEST(PushFilterThroughProjectTest, ReplacesSimpleAliasAndPushesBelowProject) {
+    auto project = std::make_unique<BoundProjectOp>();
+    BoundProjectOp::ProjectItem item;
+    item.expr = BoundColumnRef(0, BoundType::Any(), "src");
+    item.alias = "p";
+    item.result_type = BoundType::Any();
+    project->items.push_back(std::move(item));
+    project->child = makeLabelScanWithLabel("src", 0, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(project));
+    filter->predicate = BoundColumnRef(0, BoundType::Any(), "p");
+    BoundLogicalOperator root(std::move(filter));
+
+    pushFilterThroughProject(root);
+
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundProjectOp>>(root));
+    auto& proj = std::get<std::unique_ptr<BoundProjectOp>>(root);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(proj->child));
+    auto& pushed = std::get<std::unique_ptr<BoundFilterOp>>(proj->child);
+    ASSERT_TRUE(std::holds_alternative<BoundColumnRef>(pushed->predicate));
+    EXPECT_EQ(std::get<BoundColumnRef>(pushed->predicate).name, "src");
 }

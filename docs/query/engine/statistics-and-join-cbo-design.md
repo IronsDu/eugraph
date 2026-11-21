@@ -238,6 +238,14 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - 覆盖：小表/大表、选择性高低、索引/无索引、null/重复、LEFT/SEMI；
 - **不按查询文本/label 名开关优化**；LDBC 只是 workload 之一。
 
+## 7.5 旧数据与重建决策
+
+- 统计是 advisory：旧图没有 journal/snapshot 时**不强制全量重建**；
+- label 计数以 schema 为 baseline，只覆盖 stats 明确拥有的 label（防止部分 stats 把旧 label 估成 0）；
+- edge/NDV/索引统计缺失时标记 UNKNOWN/APPROX，CBO 保守回退；
+- 全量重建仅用于显式 `ANALYZE`、批量导入绕过 hook、或需要 edge/分布统计的旧图；
+- journal 压缩不是当前阶段目标：snapshot 与 applied_seq 尚未严格原子，提前删除有漏计风险。
+
 ## 8. 禁止事项
 
 - 不允许用 `labelNameToId("Tag"/"Message")` 或 `edge_name=="HAS_CREATOR"` 产生计划；
@@ -273,3 +281,40 @@ cross    min=189.077ms p50=190.62ms  max=192.163ms
 - `cross` 通过 `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS=0` 强制回退；
 - benchmark 在每次测量前检查 `EXPLAIN` 确实出现/不出现 HashJoin，防止“计时了别的计划”；
 - 这是合成基线，不是 LDBC 最终结论；LDBC/SF1 语义+性能对照仍需按 §Phase 5 执行。
+
+## 11. LDBC SF1 spot check（2026-11-21）
+
+同一 SF1 数据、`eugraph-server`、4 compute / 4 IO / 1GB WT cache、`--wt-txn-sync none`，
+`database=sf1`，固定真实 `personId=933`、`tagName=Hamid_Karzai`，2 warmup + 5 iters：
+
+```text
+c6  rows=10  min=1852.51ms p50=1862.11ms
+c9  rows=20  min=1491.11ms  p50=1520.54ms
+```
+
+结论：**通用规则尚未补回旧硬编码计划的性能**。历史上 c6 专用重排在 SF1 约 45.7ms
+（见 `docs/benchmark/ldbc-snb-sf1-comparison.md`）；移除硬编码后当前 c6 约 1.86s。
+这说明只读 commute/associate 只是搜索空间的一小步，还缺选择性驱动的 anchor/join order、
+semi-join/decorrelation 和 destination-index 的 CBO 决策。当前不能把“移除硬编码”宣称为
+性能等价完成。
+
+## 12. 被否证的尝试：Filter(Cross/InnerJoin) 按变量下推
+
+2026-11-21 尝试在 memo 前把 Filter(Cross/InnerJoin) 的 conjunct 按变量归属
+下推到左右子树，以修复 SF1 c6 中 person/tag 谓词晚过滤的问题。
+
+实现后 `optimizer_tests` 的 `EnricherE2ETest.MultiVariableJoinProducesChosenPlan`
+在 `Memo::findDuplicate → hashBoundLogicalOperator → hashBoundType` 段错误。
+已回退，没有保留半接线代码。下一轮若要再做，必须先定位 predicate clone/move
+后的 BoundType/dangling 问题，并补 memcheck 覆盖；不能直接把该 pass 重新挂上。
+
+### 12.1 第二次尝试（2026-11-21）
+
+- 将 `op = std::move(filter.child)` 改为先落本地 `BoundLogicalOperator moved` 再赋给
+  variant，修掉了 BoundFilterOp 析构段错误；
+- 保守版 join filter 复制下推 + source-only Filter 下推 VLE/Expand 后，
+  query 681/681、optimizer 128/128 通过；
+- 但 SF1 c6 仍约 1.9s，EXPLAIN 显示 Filter 位于 `ProjectionExtract` 之上，
+  VLE 上方仍有 Projection/PE 边界，source 谓词没有真正进入 VLE 的 child；
+- 需要支持“Filter 穿过 Projection/PE 且保持 slot/别名”的规则，不能只推 VLE/Expand。
+  该版本已回退，未保留仅增加冗余 Filter 而无收益的规则。
