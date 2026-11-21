@@ -672,7 +672,13 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
-                return av->join_type == bv->join_type;
+                if (av->join_type != bv->join_type || av->join_conditions.size() != bv->join_conditions.size())
+                    return false;
+                for (size_t i = 0; i < av->join_conditions.size(); ++i) {
+                    if (!equalBoundExpression(av->join_conditions[i], bv->join_conditions[i]))
+                        return false;
+                }
+                return true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

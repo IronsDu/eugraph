@@ -6,8 +6,10 @@ namespace catalog {
 void Catalog::load(std::shared_ptr<const GraphSchema> schema) {
     schema_ = std::move(schema);
     anon_label_id_ = INVALID_LABEL_ID;
+    label_vertex_counts_.clear();
     if (!schema_)
         return;
+    label_vertex_counts_ = schema_->label_vertex_counts;
     auto anon_it = schema_->label_name_to_id.find(std::string(kAnonLabelName));
     if (anon_it != schema_->label_name_to_id.end())
         anon_label_id_ = anon_it->second;

@@ -39,6 +39,10 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
         return Cost(group_lp.cardinality);
 
     // Nested loop join: left × right iterations
+    // Hash join: build + probe; build side selection is handled by the physical plan.
+    case PhysicalOpTag::HashJoin:
+        return Cost(input1Card() + input0Card());
+
     case PhysicalOpTag::NestedLoopJoin:
     case PhysicalOpTag::CrossProduct:
         return Cost(input0Card() * input1Card());

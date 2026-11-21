@@ -5,6 +5,7 @@
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
+#include "query/optimizer/rules/logical/extract_join_conditions.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
@@ -45,6 +46,9 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     memo_ = Memo{};
     rules_ = RuleSet{};
     initRules();
+
+    // 逻辑语义提示：让 CBO 看到 equi-join 条件；Filter 保留作为语义兜底。
+    extractJoinConditions(plan.root);
 
     // Make the catalog available to LogProp derivation. Group::getLogProp
     // picks it up via Memo::getCatalog() during OInputsTask cost computation.
@@ -132,6 +136,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplPathBuildRule>());
     rules_.addRule(std::make_unique<ImplPathCountRule>());
     rules_.addRule(std::make_unique<ImplUnwindRule>());
+    rules_.addRule(std::make_unique<ImplHashJoinRule>());
     rules_.addRule(std::make_unique<ImplBinaryJoinRule>());
     rules_.addRule(std::make_unique<ImplLeftJoinRule>());
     rules_.addRule(std::make_unique<ImplSemiJoinRule>());

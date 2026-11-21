@@ -391,7 +391,6 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     PhysProp localReqdProp = ctx.getPhysProp();
     Cost localUpperBound = ctx.getUpperBound();
     const VarRequirements& localReqdMat = localReqdProp.materializations();
-
     int arity = static_cast<int>(expr.child_groups.size());
 
     // Zero-arity: leaf operator. Cost is its own local cost (e.g. LabelScan
@@ -541,6 +540,10 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     PhysProp provided;
     provided.setMaterializations(expr.physOp().output_mat);
     if (!provided.satisfies(localReqdProp)) {
+        // 该算子不能满足父需求的物化属性：先按“实际提供”的属性注册候选，
+        // 父层会插入 Enricher。注册的代价必须包含本算子 local cost；否则
+        // 所有 join 算法都只按子输入代价比较，HashJoin/CrossProduct 会打平。
+        totalCost = totalCost + localCost;
         Winner* providedWinner = group.getWinner(provided);
         if (providedWinner && providedWinner->plan() != INVALID_EXPR_ID && totalCost >= providedWinner->cost())
             return;

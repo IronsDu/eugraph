@@ -2,6 +2,7 @@
 
 #include "query/dataset/row.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
+#include "query/optimizer/framework/cost_model.hpp"
 #include "query/physical_plan/physical_operator.hpp"
 #include "query/physical_plan/slot_layout.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
@@ -47,6 +48,8 @@ struct PlanContext {
     const std::unordered_map<LabelId, uint64_t>& label_vertex_counts;
     /// 不可变 schema 版本：算子/计划持有它，避免逐语句复制 label 定义。
     std::shared_ptr<const GraphSchema> schema;
+    /// CBO 选出的物理 Join 算法（按 materialized logical node 地址索引）。
+    std::unordered_map<const binder::BoundBinaryJoinOp*, optimizer::PhysicalOpTag> chosen_join_tags;
     /// 写语句的本地可变 schema 副本（DML 隐式更新用）；只读语句为 null。
     std::unordered_map<LabelId, LabelDef>* mutable_label_defs = nullptr;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>* mutable_edge_label_defs = nullptr;
