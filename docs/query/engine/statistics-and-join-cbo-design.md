@@ -224,7 +224,8 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
   → 反向 Expand → HashJoin；条件/索引全部来自 catalog/predicate，无 label 名；
 - ✅ 只读 Cross/Inner join commute（写计划/pattern comprehension 走保守边界，
   暂不交换）；
-- ⏳ join associativity / 选择性 join reorder；
+- ✅ 只读 join associativity：Join(Join(A,B),C) → Join(A,Join(B,C))（同一 safe 边界）；
+- ⏳ 统计驱动的选择性 join reorder（当前只有 commute/associate 候选）；
 - ⏳ SemiJoin/IndexProbe 规则化；
 - ⏳ 共享锚点；
 - ⏳ 统计 confidence 驱动。
