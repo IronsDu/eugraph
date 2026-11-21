@@ -2846,8 +2846,14 @@ TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {
     BoundLogicalPlan plan;
     plan.root = BoundLogicalOperator(std::move(filter));
 
+    auto schema = std::make_shared<GraphSchema>();
+    schema->label_vertex_counts[LabelId{1}] = 2;
+    schema->label_vertex_counts[LabelId{2}] = 20;
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
     LogicalOptimizer optimizer;
-    optimizer.optimize(plan);
+    optimizer.optimize(plan, &catalog);
 
     ASSERT_NE(plan.chosen, nullptr);
     ASSERT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
@@ -2857,4 +2863,39 @@ TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {
     const auto& chosen_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(plan.chosen->children[0]->op);
     ASSERT_NE(chosen_join, nullptr);
     EXPECT_EQ(chosen_join->join_conditions.size(), 1u);
+}
+
+TEST(ChosenPlanTest, EquiJoinCboChoosesCrossWhenCheaper) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundColumnRef(0, BoundType::Any(), "a");
+    eq->right = BoundColumnRef(1, BoundType::Any(), "b");
+    eq->result_type = BoundType::Bool();
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(join));
+    filter->predicate = BoundExpression(std::move(eq));
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    auto schema = std::make_shared<GraphSchema>();
+    schema->label_vertex_counts[LabelId{1}] = 1;
+    schema->label_vertex_counts[LabelId{2}] = 3;
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan, &catalog);
+
+    ASSERT_NE(plan.chosen, nullptr);
+    ASSERT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+    // 1×3：HashJoin 4 > CrossProduct 3，CBO 必须选 CrossProduct。
+    EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::CrossProduct);
 }
