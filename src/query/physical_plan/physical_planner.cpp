@@ -2811,8 +2811,7 @@ std::optional<uint64_t> estimateRowsUpperBound(const binder::BoundLogicalOperato
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
                                         IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
-                                        Schema input_schema, const std::vector<binder::BoundType>& input_types,
-                                        bool force) {
+                                        Schema input_schema, const std::vector<binder::BoundType>& input_types) {
     if (join.join_type != binder::JoinType::Cross && join.join_type != binder::JoinType::Inner)
         return std::nullopt;
 
@@ -4194,15 +4193,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // ── List index join: Filter(CrossProduct) with x.prop IN left.list ──
                     if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
                         if (join_op && *join_op) {
-                            bool chosen_by_cbo = false;
                             bool cbo_chose_cross = false;
-                            if (auto it = ctx.chosen_join_tags.find(join_op->get()); it != ctx.chosen_join_tags.end()) {
-                                chosen_by_cbo = it->second == optimizer::PhysicalOpTag::HashJoin;
+                            if (auto it = ctx.chosen_join_tags.find(join_op->get()); it != ctx.chosen_join_tags.end())
                                 cbo_chose_cross = it->second == optimizer::PhysicalOpTag::CrossProduct;
-                            }
                             if (!cbo_chose_cross) {
                                 if (auto hash_join = tryPlanGenericHashJoin(v, **join_op, store, meta, ctx,
-                                                                            input_schema, input_types, chosen_by_cbo))
+                                                                            input_schema, input_types))
                                     return std::move(*hash_join);
                             }
                             if (auto probe = tryPlanCorrelatedIndexProbe(v, **join_op, store, meta, ctx, input_schema,
