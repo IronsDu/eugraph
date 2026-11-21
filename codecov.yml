@@ -15,5 +15,6 @@ comment:
   require_changes: false
 
 ignore:
+  - "tests/bench_*.cpp"
   - "src/service/thrift/gen-cpp2/**"
   - "src/query/parser/generated/**"
