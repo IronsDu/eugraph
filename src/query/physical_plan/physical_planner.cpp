@@ -2811,7 +2811,8 @@ std::optional<uint64_t> estimateRowsUpperBound(const binder::BoundLogicalOperato
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
                                         IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
-                                        Schema input_schema, const std::vector<binder::BoundType>& input_types) {
+                                        Schema input_schema, const std::vector<binder::BoundType>& input_types,
+                                        bool force) {
     if (join.join_type != binder::JoinType::Cross && join.join_type != binder::JoinType::Inner)
         return std::nullopt;
 
@@ -2833,6 +2834,8 @@ PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::B
     // 只在 HashJoin 更便宜时选择，避免小表 join 反而多一次物化。
     const long double hash_cost = static_cast<long double>(*left_est) + static_cast<long double>(*right_est);
     const long double cross_cost = static_cast<long double>(*left_est) * static_cast<long double>(*right_est);
+    // 物理层仍做预算/代价兜底；CBO tag 只表示“允许 HashJoin 候选”，
+    // 不能绕过 build 侧内存和代价门禁。
     if (hash_cost >= cross_cost)
         return std::nullopt;
 
@@ -3549,12 +3552,12 @@ void applyMultiEnrich(binder::BoundLogicalOperator& op, const optimizer::VarRequ
 // into the descendant topology source's label_prop_ids / edge_prop_ids
 // and skip them, so planBoundOperator's property-read wraps produce the
 // correct runtime plan.
-binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chosen) {
+binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chosen, PlanContext& ctx) {
     // Enricher nodes: lower into child tree by merging enrich_output
     // into the descendant scan/expand that produces enrich_variable.
     if (chosen.tag == optimizer::PhysicalOpTag::VertexEnrich || chosen.tag == optimizer::PhysicalOpTag::EdgeEnrich ||
         chosen.tag == optimizer::PhysicalOpTag::PathEnrich) {
-        auto child_op = materializeChosen(*chosen.children[0]);
+        auto child_op = materializeChosen(*chosen.children[0], ctx);
         applyMultiEnrich(child_op, chosen.enrich_output);
         return child_op;
     }
@@ -3564,7 +3567,7 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
     if (chosen.tag == optimizer::PhysicalOpTag::VertexPropertyExtract ||
         chosen.tag == optimizer::PhysicalOpTag::EdgePropertyExtract ||
         chosen.tag == optimizer::PhysicalOpTag::PathPropertyExtract) {
-        auto child_op = materializeChosen(*chosen.children[0]);
+        auto child_op = materializeChosen(*chosen.children[0], ctx);
         applyMultiEnrich(child_op, chosen.enrich_output);
         return child_op;
     }
@@ -3573,42 +3576,46 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
     binder::BoundLogicalOperator result = optimizer::cloneBoundLogicalOperator(chosen.op);
 
     if (chosen.children.size() == 1) {
-        optimizer::setChild(result, materializeChosen(*chosen.children[0]));
+        optimizer::setChild(result, materializeChosen(*chosen.children[0], ctx));
     } else if (chosen.children.size() == 2) {
         if (std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>(result)) {
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
-            join->left = materializeChosen(*chosen.children[0]);
-            join->right = materializeChosen(*chosen.children[1]);
+            join->left = materializeChosen(*chosen.children[0], ctx);
+            join->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
-            sj->left = materializeChosen(*chosen.children[0]);
-            sj->right = materializeChosen(*chosen.children[1]);
+            sj->left = materializeChosen(*chosen.children[0], ctx);
+            sj->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result)) {
             auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
-            pc->left = materializeChosen(*chosen.children[0]);
-            pc->right = materializeChosen(*chosen.children[1]);
+            pc->left = materializeChosen(*chosen.children[0], ctx);
+            pc->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(result)) {
             auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(result);
-            fe->child = materializeChosen(*chosen.children[0]);
-            fe->body = materializeChosen(*chosen.children[1]);
+            fe->child = materializeChosen(*chosen.children[0], ctx);
+            fe->body = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(result)) {
             auto& lj = std::get<std::unique_ptr<binder::BoundLeftJoinOp>>(result);
-            lj->left = materializeChosen(*chosen.children[0]);
-            lj->right = materializeChosen(*chosen.children[1]);
+            lj->left = materializeChosen(*chosen.children[0], ctx);
+            lj->right = materializeChosen(*chosen.children[1], ctx);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundUnionOp>>(result)) {
             auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(result);
-            uo->left = materializeChosen(*chosen.children[0]);
-            uo->right = materializeChosen(*chosen.children[1]);
+            uo->left = materializeChosen(*chosen.children[0], ctx);
+            uo->right = materializeChosen(*chosen.children[1], ctx);
         }
     } else if (chosen.children.size() > 2) {
         if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
             auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
-            fork->left = materializeChosen(*chosen.children[0]);
-            fork->anchor = materializeChosen(*chosen.children[1]);
+            fork->left = materializeChosen(*chosen.children[0], ctx);
+            fork->anchor = materializeChosen(*chosen.children[1], ctx);
             fork->branches.clear();
             for (size_t i = 2; i < chosen.children.size(); ++i)
-                fork->branches.push_back(materializeChosen(*chosen.children[i]));
+                fork->branches.push_back(materializeChosen(*chosen.children[i], ctx));
         }
+    }
+    if (auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&result)) {
+        if (join && *join)
+            ctx.chosen_join_tags[join->get()] = chosen.tag;
     }
     return result;
 }
@@ -3764,7 +3771,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     ctx.eval_ctx.meta = &meta;
     ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
 
-    binder::BoundLogicalOperator materialized = materializeChosen(chosen);
+    binder::BoundLogicalOperator materialized = materializeChosen(chosen, ctx);
     // A statement with no write operator keeps one read snapshot for its whole
     // execution; only then may correlated sub-plans memoize adjacency scans.
     {
@@ -4187,9 +4194,17 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // ── List index join: Filter(CrossProduct) with x.prop IN left.list ──
                     if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
                         if (join_op && *join_op) {
-                            if (auto hash_join =
-                                    tryPlanGenericHashJoin(v, **join_op, store, meta, ctx, input_schema, input_types))
-                                return std::move(*hash_join);
+                            bool chosen_by_cbo = false;
+                            bool cbo_chose_cross = false;
+                            if (auto it = ctx.chosen_join_tags.find(join_op->get()); it != ctx.chosen_join_tags.end()) {
+                                chosen_by_cbo = it->second == optimizer::PhysicalOpTag::HashJoin;
+                                cbo_chose_cross = it->second == optimizer::PhysicalOpTag::CrossProduct;
+                            }
+                            if (!cbo_chose_cross) {
+                                if (auto hash_join = tryPlanGenericHashJoin(v, **join_op, store, meta, ctx,
+                                                                            input_schema, input_types, chosen_by_cbo))
+                                    return std::move(*hash_join);
+                            }
                             if (auto probe = tryPlanCorrelatedIndexProbe(v, **join_op, store, meta, ctx, input_schema,
                                                                          input_types))
                                 return std::move(*probe);

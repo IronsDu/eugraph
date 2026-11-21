@@ -464,6 +464,7 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
                                                                   *instance->session_pool, executor_config);
     instance->executor->setIndexRegistry(instance->index_registry.get());
     instance->executor->setSchemaGenerationTracker(instance->schema_generations);
+    instance->executor->setStatsStore(instance->stats_store.get());
     instance->executor->setUsageGate(instance->usage);
     // 索引构建服务：CREATE INDEX 改成"投递即返回"，后台线程通过 executor 跑完整条构建分支。
     instance->index_builds = std::make_unique<IndexBuildService>();

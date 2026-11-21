@@ -226,6 +226,18 @@ public:
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 
+class ImplHashJoinRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplHashJoin";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
 class ImplLeftJoinRule : public OptRule {
 public:
     std::string name() const override {

@@ -34,6 +34,7 @@ enum class PhysicalOpTag {
     // Joins
     NestedLoopJoin,
     CrossProduct,
+    HashJoin,
     SemiJoin,
     LeftJoin,
     Union,

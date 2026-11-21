@@ -22,6 +22,7 @@
 #include "storage/meta/i_async_graph_meta_store.hpp"
 #include "storage/session/schema_generation_tracker.hpp"
 #include "storage/session/session_pool.hpp"
+#include "storage/stats/graph_stats_store.hpp"
 
 #include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
@@ -221,6 +222,10 @@ public:
     void setSchemaGenerationTracker(std::shared_ptr<SchemaGenerationTracker> tracker) {
         schema_generations_ = std::move(tracker);
     }
+    /// 图级统计（GraphInstance 注入）；规划时取一次快照，不用 schema 里的近似计数。
+    void setStatsStore(GraphStatsStore* store) {
+        stats_store_ = store;
+    }
     /// 测试钩子：DROP 清理等待旧 pin/读句柄的上限（默认 30s）。
     void setIndexPurgeWaitMs(uint32_t wait_ms) noexcept {
         index_purge_wait_ms_ = wait_ms;
@@ -249,6 +254,7 @@ private:
     IndexRuntimeRegistry* index_registry_ = nullptr;
     IndexBuildService* index_builds_ = nullptr;
     std::shared_ptr<SchemaGenerationTracker> schema_generations_;
+    GraphStatsStore* stats_store_ = nullptr;
     std::shared_ptr<GraphUsageGate> usage_gate_;
     uint32_t index_purge_wait_ms_ = 30000;
 };
