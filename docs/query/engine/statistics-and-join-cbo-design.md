@@ -244,3 +244,24 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - 统计锁竞争：分片锁/原子，不长持；
 - ChosenPlan physical tag 传递是跨层改动，需单独 review；
 - 统计 stale 导致计划差：confidence/age + fallback，而不是错误结果。
+
+## 10. HashJoin 合成 A/B 基线
+
+命令（同一二进制、同一数据、交错 warmup + 7 轮）：
+
+```bash
+EUGRAPH_TEST_DATA_DIR=/home/dodo/.cache/eugraph-bench \
+EUGRAPH_BENCH_N=1000 ./build/release/bench_hash_join
+```
+
+结果（2026-11-21，本机，合成 Person/City 等值 join，结果行数一致）：
+
+```text
+n=1000 runs=7
+hashjoin min=3.21956ms p50=3.27782ms max=3.8148ms
+cross    min=189.077ms p50=190.62ms  max=192.163ms
+```
+
+- `cross` 通过 `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS=0` 强制回退；
+- benchmark 在每次测量前检查 `EXPLAIN` 确实出现/不出现 HashJoin，防止“计时了别的计划”；
+- 这是合成基线，不是 LDBC 最终结论；LDBC/SF1 语义+性能对照仍需按 §Phase 5 执行。

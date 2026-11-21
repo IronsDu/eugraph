@@ -956,6 +956,27 @@ if(EUGRAPH_BUILD_TESTS)
     gtest_add_tests(TARGET index_codec_tests)
 
     # Index runtime model / admission protocol (pure unit tests, no WT data)
+    add_executable(bench_hash_join
+        tests/bench_hash_join.cpp
+    )
+
+    target_include_directories(bench_hash_join PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/tests"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(bench_hash_join PRIVATE
+        eugraph_query_engine
+        eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+    add_dependencies(bench_hash_join wiredtiger_ext)
+
     add_executable(graph_stats_tests
         tests/test_graph_stats.cpp
     )
