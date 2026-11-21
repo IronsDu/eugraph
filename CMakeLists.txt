@@ -180,6 +180,7 @@ add_library(eugraph_lib STATIC
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp
     src/storage/kv/index_key_codec.cpp
+    src/storage/stats/graph_stats_store.cpp
     src/storage/wt_cursor.cpp
     src/storage/wt_session.cpp
     src/storage/wt_table_ops.cpp
@@ -952,6 +953,24 @@ if(EUGRAPH_BUILD_TESTS)
     gtest_add_tests(TARGET index_codec_tests)
 
     # Index runtime model / admission protocol (pure unit tests, no WT data)
+    add_executable(graph_stats_tests
+        tests/test_graph_stats.cpp
+    )
+
+    target_include_directories(graph_stats_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(graph_stats_tests PRIVATE
+        eugraph_lib
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+    )
+
+    gtest_add_tests(TARGET graph_stats_tests)
+
     add_executable(index_runtime_tests
         tests/test_index_runtime.cpp
     )
