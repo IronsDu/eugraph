@@ -12049,3 +12049,48 @@ TEST_F(QueryExecutorTest, GenericHashJoinDoesNotJoinNullKeys) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1); // only 'x'='x'; null=null is null
 }
+
+TEST_F(QueryExecutorTest, GenericHashJoinHandlesReversedPropertyOperands) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'same'}), (b:Person {name:'same'}), "
+                                     "(c:Person {name:'other'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 3);
+    const std::string query = "MATCH (a:Person), (b:Person) WHERE b.name = a.name RETURN count(*) AS c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinSkipsWhenOneSideEstimateIsUnknown) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name:'x'}), (c1:City {name:'x'}), "
+                                     "(c2:City {name:'y'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 1);
+    // 不设置 City 的统计：无法估算构建侧，必须回退。
+    const std::string query = "MATCH (p:Person), (c:City) WHERE p.name = c.name RETURN count(*) AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinSkipsWhenCostNotBetter) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name:'x'}), (c1:City {name:'x'}), "
+                                     "(c2:City {name:'x'}), (c3:City {name:'x'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 1);
+    async_meta_->setLabelVertexCount(CITY_LABEL, 3);
+    // hash ≈ 4 > cross ≈ 3 ⇒ 回退 CrossProduct+Filter。
+    const std::string query = "MATCH (p:Person), (c:City) WHERE p.name = c.name RETURN count(*) AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 3);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << plan;
+}
