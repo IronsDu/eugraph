@@ -191,13 +191,15 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 
 ## 7. 分阶段交付
 
-### Phase 1：StatsStore + StatsDelta + journal 表
+### Phase 1：StatsStore + StatsDelta + journal 表（基础已落地）
 
-- `GraphStatsStore` / `GraphStatsSnapshot`；
-- `GraphSession` stats delta；
-- 数据写路径计数 hook；
-- 同事务 journal 写入；
-- 单测：并发计数、回滚、commit/apply。
+- ✅ `GraphStatsStore` / `GraphStatsSnapshot`（原子槽位、不可变快照）；
+- ✅ `GraphSession` stats delta；
+- ✅ 顶点/边写路径计数 hook（现有 label 去重）；
+- ✅ 同事务 `table:stats_journal` 写入，commit 后合并、rollback 丢弃；
+- ✅ 启动重放 journal（无 snapshot；旧数据可能未被 journal 覆盖）；
+- ✅ 单测：并发计数、正负 delta、快照不可变、journal/rollback；
+- ⏳ 尚未做：snapshot 表、journal 压缩、CBO 读取、重建。
 
 ### Phase 2：崩溃恢复/重建
 

@@ -41,6 +41,7 @@ public:
     /// 为某条语句构造一个轻量、绑定该会话的实例（返回值，不堆分配）✓
     [[nodiscard]] AsyncGraphDataStore for_session(GraphSession& session) const {
         AsyncGraphDataStore store(store_, io_, session);
+        store_.attachStatsSink(session);
         store.profile_counters_ = profile_counters_;
         store.profile_state_ = profile_state_;
         store.registry_ = registry_; // 语句级实例共享同一张注册表（每图一份）

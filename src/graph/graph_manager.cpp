@@ -441,6 +441,10 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
     // 批量装载等 sync 路径用 sync_data 上的端口。
     instance->async_data->setIndexRegistry(instance->index_registry.get());
     instance->sync_data->setIndexRegistry(instance->index_registry.get());
+    instance->stats_store = std::make_shared<GraphStatsStore>();
+    instance->sync_data->setStatsStore(instance->stats_store.get());
+    // 统计 journal 是数据 DB 的一部分；启动先重放（无 snapshot 时从零）。
+    instance->sync_data->replayStatsJournal(*instance->stats_store);
 
     // 会话池：工厂从**连接所有者**取 session ✓（WT 不外泄 ✓）
     // 注：池成员声明在 GraphInstance **最后** ⇒ 最先销毁 ✓（session 在连接关闭前 close ✓，§3.2.1）

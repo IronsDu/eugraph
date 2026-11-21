@@ -6,11 +6,13 @@
 #include "storage/kv/value_codec.hpp"
 #include "storage/schema_ddl.hpp"
 #include "storage/session/cursor_provider.hpp"
+#include "storage/stats/graph_stats_store.hpp"
 #include "storage/wt_connection_store.hpp"
 #include "storage/wt_cursor.hpp"
 
 #include <folly/Function.h>
 
+#include <atomic>
 #include <cassert>
 #include <memory>
 #include <mutex>
@@ -155,6 +157,20 @@ public:
     void setIndexRegistry(IndexRuntimeRegistry* registry) {
         index_registry_ = registry;
     }
+
+    /// 图级统计存储（GraphInstance 注入）；null ⇒ 不做统计/journal。
+    void setStatsStore(GraphStatsStore* store) {
+        stats_store_ = store;
+    }
+    GraphStatsStore* statsStore() const noexcept {
+        return stats_store_;
+    }
+    /// 为一个用户会话绑定：同事务写 stats journal，commit 成功后合并内存统计。
+    void attachStatsSink(GraphSession& session);
+    uint64_t nextStatsJournalSeq();
+    bool writeStatsJournal(WT_SESSION* session, uint64_t seq, const StatsDelta& delta);
+    /// 启动时重放 journal（无 snapshot 时从零重放；旧数据可能未被 journal 覆盖）。
+    void replayStatsJournal(GraphStatsStore& stats);
     IndexRuntimeRegistry* indexRegistry() const override {
         return index_registry_;
     }
@@ -258,6 +274,9 @@ private:
     WtConnectionStore* conn_ = nullptr;
     SchemaDdl schema_ddl_;
     IndexRuntimeRegistry* index_registry_ = nullptr;
+    GraphStatsStore* stats_store_ = nullptr;
+    std::atomic<uint64_t> stats_seq_{0};
+    std::once_flag stats_seq_once_;
     uint32_t adjacency_cache_capacity_ = 0;
     /// Serialize cache invalidation probes/removes; each call uses a short
     /// lived autocommit session, never the user's GraphSession.

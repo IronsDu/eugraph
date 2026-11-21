@@ -1,6 +1,7 @@
 #include "storage/data/sync_graph_data_store.hpp"
 #include <folly/Function.h>
 
+#include "common/stats/stats_journal.hpp"
 #include "storage/session/graph_session.hpp"
 #include "storage/wt_table_ops.hpp"
 
@@ -12,6 +13,7 @@
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "storage/index/index_delta_codec.hpp"
 #include "storage/kv/index_key_codec.hpp"
@@ -209,8 +211,8 @@ bool SyncGraphDataStore::ensure_tables() {
         return false;
     }
     WtSession session = conn().make_session();
-    return schema_ddl_.ensure_tables(
-        session, {TABLE_VERTEX_DATA, TABLE_EDGE_INDEX, TABLE_VERTEX_EXISTENCE, TABLE_VERTEX_SUMMARY});
+    return schema_ddl_.ensure_tables(session, {TABLE_VERTEX_DATA, TABLE_EDGE_INDEX, TABLE_VERTEX_EXISTENCE,
+                                               TABLE_VERTEX_SUMMARY, TABLE_STATS_JOURNAL});
 }
 
 bool SyncGraphDataStore::createLabel(LabelId label_id) {
@@ -342,11 +344,78 @@ bool SyncGraphDataStore::invalidateVertexSummary(GraphSession& gs, VertexId vid)
     }
 }
 
+void SyncGraphDataStore::attachStatsSink(GraphSession& session) {
+    if (stats_store_ == nullptr)
+        return;
+    session.setStatsSink([this] { return nextStatsJournalSeq(); },
+                         [this](WT_SESSION* wt_session, uint64_t seq, const StatsDelta& delta) {
+                             return writeStatsJournal(wt_session, seq, delta);
+                         },
+                         [this](const StatsDelta& delta, uint64_t /*seq*/) {
+                             if (stats_store_ != nullptr)
+                                 stats_store_->applyCommitted(delta);
+                         });
+}
+
+uint64_t SyncGraphDataStore::nextStatsJournalSeq() {
+    std::call_once(stats_seq_once_, [this] {
+        WtSession session = conn().make_session();
+        uint64_t max_seq = 0;
+        wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view key, std::string_view) {
+            if (key.size() == 8) {
+                uint64_t seq = 0;
+                for (int i = 0; i < 8; ++i)
+                    seq = (seq << 8) | static_cast<uint64_t>(static_cast<unsigned char>(key[i]));
+                max_seq = std::max(max_seq, seq);
+            }
+            return true;
+        });
+        stats_seq_.store(max_seq, std::memory_order_relaxed);
+    });
+    return stats_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+void SyncGraphDataStore::replayStatsJournal(GraphStatsStore& stats) {
+    WtSession session = conn().make_session();
+    StatsDelta aggregate;
+    size_t rows = 0;
+    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view value) {
+        StatsDelta decoded;
+        if (!decodeStatsDelta(value, decoded))
+            return true;
+        for (const auto& [id, d] : decoded.vertex_delta)
+            aggregate.vertex_delta[id] += d;
+        for (const auto& [id, d] : decoded.edge_delta)
+            aggregate.edge_delta[id] += d;
+        for (const auto& [id, d] : decoded.index_delta)
+            aggregate.index_delta[id] += d;
+        ++rows;
+        return true;
+    });
+    if (!aggregate.empty())
+        stats.applyCommitted(aggregate);
+    spdlog::info("[stats] replayed {} journal row(s)", rows);
+}
+
+bool SyncGraphDataStore::writeStatsJournal(WT_SESSION* session, uint64_t seq, const StatsDelta& delta) {
+    if (session == nullptr || delta.empty())
+        return true;
+    const std::string key = encodeStatsJournalKey(seq);
+    const std::string value = encodeStatsDelta(delta);
+    return wt::table_put(session, TABLE_STATS_JOURNAL, key, value);
+}
+
 bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
                                       std::span<const std::pair<LabelId, Properties>> label_props) {
     WT_SESSION* session = gs.wt_session();
     if (!session)
         return false;
+
+    // 统计开启时才做一次已有 label 读取，避免对已存在的 label 重复计数。
+    LabelIdSet existing_labels;
+    const bool track_stats = gs.hasStatsSink();
+    if (track_stats)
+        existing_labels = getVertexLabels(gs, vid);
 
     auto ve_key = KeyCodec::encodeVertexExistenceKey(vid);
     if (!wt::table_put(gs, TABLE_VERTEX_EXISTENCE, ve_key, {}))
@@ -406,6 +475,17 @@ bool SyncGraphDataStore::insertVertex(GraphSession& gs, VertexId vid,
         }
     }
 
+    // CBO stats：同一事务 delta；commit 时与数据一起经 journal 持久化。
+    if (track_stats) {
+        auto& delta = gs.statsDelta();
+        std::unordered_set<LabelId> added;
+        for (const auto& [label_id, _] : label_props) {
+            if (label_id != INVALID_LABEL_ID && existing_labels.find(label_id) == existing_labels.end() &&
+                added.insert(label_id).second) {
+                delta.vertex_delta[label_id] += 1;
+            }
+        }
+    }
     return true;
 }
 
@@ -440,6 +520,9 @@ bool SyncGraphDataStore::deleteVertex(GraphSession& gs, VertexId vid) {
 
     wt::table_del(gs, TABLE_VERTEX_EXISTENCE, KeyCodec::encodeVertexExistenceKey(vid));
 
+    auto& delta = gs.statsDelta();
+    for (LabelId label_id : labels)
+        delta.vertex_delta[label_id] -= 1;
     return true;
 }
 
@@ -1268,6 +1351,7 @@ bool SyncGraphDataStore::insertEdge(GraphSession& gs, EdgeId eid, VertexId src_i
         return false;
     if (!insertAdjacencyEdge(gs.wt_session(), dst_id, Direction::IN, label_id, src_id, eid))
         return false;
+    gs.statsDelta().edge_delta[label_id] += 1;
     return true;
 }
 
@@ -1291,6 +1375,7 @@ bool SyncGraphDataStore::deleteEdge(GraphSession& gs, EdgeId eid, EdgeLabelId la
         return true;
     });
 
+    gs.statsDelta().edge_delta[label_id] -= 1;
     return true;
 }
 

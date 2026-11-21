@@ -176,6 +176,7 @@ file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
 # Library target (WiredTiger multi-table backend)
 add_library(eugraph_lib STATIC
     src/common/types/temporal_value.cpp
+    src/common/stats/stats_journal.cpp
     src/common/types/query_error.cpp
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp

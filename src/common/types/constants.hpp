@@ -17,6 +17,8 @@ constexpr const char* TABLE_METADATA = "table:metadata";
 constexpr const char* TABLE_VERTEX_EXISTENCE = "table:vertex_existence";
 // 顶点摘要表：{vid} -> labels + 小属性（读加速，可变缓存）
 constexpr const char* TABLE_VERTEX_SUMMARY = "table:vertex_summary";
+// 统计 journal：与用户数据同事务写入；key=BE64(seq)，value=编码后的 StatsDelta。
+constexpr const char* TABLE_STATS_JOURNAL = "table:stats_journal";
 
 // 按 label_id 分表（dropLabel 时 drop）
 inline std::string labelFwdTable(LabelId id) {
