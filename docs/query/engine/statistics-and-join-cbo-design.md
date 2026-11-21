@@ -281,3 +281,19 @@ cross    min=189.077ms p50=190.62ms  max=192.163ms
 - `cross` 通过 `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS=0` 强制回退；
 - benchmark 在每次测量前检查 `EXPLAIN` 确实出现/不出现 HashJoin，防止“计时了别的计划”；
 - 这是合成基线，不是 LDBC 最终结论；LDBC/SF1 语义+性能对照仍需按 §Phase 5 执行。
+
+## 11. LDBC SF1 spot check（2026-11-21）
+
+同一 SF1 数据、`eugraph-server`、4 compute / 4 IO / 1GB WT cache、`--wt-txn-sync none`，
+`database=sf1`，固定真实 `personId=933`、`tagName=Hamid_Karzai`，2 warmup + 5 iters：
+
+```text
+c6  rows=10  min=1852.51ms p50=1862.11ms
+c9  rows=20  min=1491.11ms  p50=1520.54ms
+```
+
+结论：**通用规则尚未补回旧硬编码计划的性能**。历史上 c6 专用重排在 SF1 约 45.7ms
+（见 `docs/benchmark/ldbc-snb-sf1-comparison.md`）；移除硬编码后当前 c6 约 1.86s。
+这说明只读 commute/associate 只是搜索空间的一小步，还缺选择性驱动的 anchor/join order、
+semi-join/decorrelation 和 destination-index 的 CBO 决策。当前不能把“移除硬编码”宣称为
+性能等价完成。
