@@ -231,6 +231,14 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - 覆盖：小表/大表、选择性高低、索引/无索引、null/重复、LEFT/SEMI；
 - **不按查询文本/label 名开关优化**；LDBC 只是 workload 之一。
 
+## 7.5 旧数据与重建决策
+
+- 统计是 advisory：旧图没有 journal/snapshot 时**不强制全量重建**；
+- label 计数以 schema 为 baseline，只覆盖 stats 明确拥有的 label（防止部分 stats 把旧 label 估成 0）；
+- edge/NDV/索引统计缺失时标记 UNKNOWN/APPROX，CBO 保守回退；
+- 全量重建仅用于显式 `ANALYZE`、批量导入绕过 hook、或需要 edge/分布统计的旧图；
+- journal 压缩不是当前阶段目标：snapshot 与 applied_seq 尚未严格原子，提前删除有漏计风险。
+
 ## 8. 禁止事项
 
 - 不允许用 `labelNameToId("Tag"/"Message")` 或 `edge_name=="HAS_CREATOR"` 产生计划；
