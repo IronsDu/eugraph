@@ -297,24 +297,3 @@ c9  rows=20  min=1491.11ms  p50=1520.54ms
 这说明只读 commute/associate 只是搜索空间的一小步，还缺选择性驱动的 anchor/join order、
 semi-join/decorrelation 和 destination-index 的 CBO 决策。当前不能把“移除硬编码”宣称为
 性能等价完成。
-
-## 12. 被否证的尝试：Filter(Cross/InnerJoin) 按变量下推
-
-2026-11-21 尝试在 memo 前把 Filter(Cross/InnerJoin) 的 conjunct 按变量归属
-下推到左右子树，以修复 SF1 c6 中 person/tag 谓词晚过滤的问题。
-
-实现后 `optimizer_tests` 的 `EnricherE2ETest.MultiVariableJoinProducesChosenPlan`
-在 `Memo::findDuplicate → hashBoundLogicalOperator → hashBoundType` 段错误。
-已回退，没有保留半接线代码。下一轮若要再做，必须先定位 predicate clone/move
-后的 BoundType/dangling 问题，并补 memcheck 覆盖；不能直接把该 pass 重新挂上。
-
-### 12.1 第二次尝试（2026-11-21）
-
-- 将 `op = std::move(filter.child)` 改为先落本地 `BoundLogicalOperator moved` 再赋给
-  variant，修掉了 BoundFilterOp 析构段错误；
-- 保守版 join filter 复制下推 + source-only Filter 下推 VLE/Expand 后，
-  query 681/681、optimizer 128/128 通过；
-- 但 SF1 c6 仍约 1.9s，EXPLAIN 显示 Filter 位于 `ProjectionExtract` 之上，
-  VLE 上方仍有 Projection/PE 边界，source 谓词没有真正进入 VLE 的 child；
-- 需要支持“Filter 穿过 Projection/PE 且保持 slot/别名”的规则，不能只推 VLE/Expand。
-  该版本已回退，未保留仅增加冗余 Filter 而无收益的规则。
