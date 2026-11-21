@@ -19,6 +19,8 @@ constexpr const char* TABLE_VERTEX_EXISTENCE = "table:vertex_existence";
 constexpr const char* TABLE_VERTEX_SUMMARY = "table:vertex_summary";
 // 统计 journal：与用户数据同事务写入；key=BE64(seq)，value=编码后的 StatsDelta。
 constexpr const char* TABLE_STATS_JOURNAL = "table:stats_journal";
+// 统计快照（单行 key "snapshot"）；与 journal 配合恢复。
+constexpr const char* TABLE_STATS_SNAPSHOT = "table:stats_snapshot";
 
 // 按 label_id 分表（dropLabel 时 drop）
 inline std::string labelFwdTable(LabelId id) {

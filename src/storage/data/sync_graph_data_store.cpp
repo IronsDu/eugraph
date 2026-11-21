@@ -2,6 +2,7 @@
 #include <folly/Function.h>
 
 #include "common/stats/stats_journal.hpp"
+#include "common/stats/stats_snapshot.hpp"
 #include "storage/session/graph_session.hpp"
 #include "storage/wt_table_ops.hpp"
 
@@ -212,7 +213,7 @@ bool SyncGraphDataStore::ensure_tables() {
     }
     WtSession session = conn().make_session();
     return schema_ddl_.ensure_tables(session, {TABLE_VERTEX_DATA, TABLE_EDGE_INDEX, TABLE_VERTEX_EXISTENCE,
-                                               TABLE_VERTEX_SUMMARY, TABLE_STATS_JOURNAL});
+                                               TABLE_VERTEX_SUMMARY, TABLE_STATS_JOURNAL, TABLE_STATS_SNAPSHOT});
 }
 
 bool SyncGraphDataStore::createLabel(LabelId label_id) {
@@ -351,9 +352,9 @@ void SyncGraphDataStore::attachStatsSink(GraphSession& session) {
                          [this](WT_SESSION* wt_session, uint64_t seq, const StatsDelta& delta) {
                              return writeStatsJournal(wt_session, seq, delta);
                          },
-                         [this](const StatsDelta& delta, uint64_t /*seq*/) {
+                         [this](const StatsDelta& delta, uint64_t seq) {
                              if (stats_store_ != nullptr)
-                                 stats_store_->applyCommitted(delta);
+                                 stats_store_->applyCommitted(delta, seq);
                          });
 }
 
@@ -370,16 +371,31 @@ uint64_t SyncGraphDataStore::nextStatsJournalSeq() {
             }
             return true;
         });
+        // snapshot 已压缩的 seq 不能回退，否则新 journal 会与恢复 offset 冲突。
+        auto snapshot_value = wt::table_get(session.get(), TABLE_STATS_SNAPSHOT, "snapshot");
+        if (snapshot_value.has_value()) {
+            GraphStatsSnapshot snapshot;
+            if (decodeStatsSnapshot(*snapshot_value, snapshot))
+                max_seq = std::max(max_seq, snapshot.applied_journal_seq);
+        }
         stats_seq_.store(max_seq, std::memory_order_relaxed);
     });
     return stats_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-void SyncGraphDataStore::replayStatsJournal(GraphStatsStore& stats) {
+void SyncGraphDataStore::replayStatsJournal(GraphStatsStore& stats, uint64_t since_seq) {
     WtSession session = conn().make_session();
     StatsDelta aggregate;
+    uint64_t max_seq = since_seq;
     size_t rows = 0;
-    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view value) {
+    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view key, std::string_view value) {
+        if (key.size() != 8)
+            return true;
+        uint64_t seq = 0;
+        for (int i = 0; i < 8; ++i)
+            seq = (seq << 8) | static_cast<uint64_t>(static_cast<unsigned char>(key[i]));
+        if (seq <= since_seq)
+            return true;
         StatsDelta decoded;
         if (!decodeStatsDelta(value, decoded))
             return true;
@@ -389,12 +405,41 @@ void SyncGraphDataStore::replayStatsJournal(GraphStatsStore& stats) {
             aggregate.edge_delta[id] += d;
         for (const auto& [id, d] : decoded.index_delta)
             aggregate.index_delta[id] += d;
+        max_seq = std::max(max_seq, seq);
         ++rows;
         return true;
     });
-    if (!aggregate.empty())
-        stats.applyCommitted(aggregate);
-    spdlog::info("[stats] replayed {} journal row(s)", rows);
+    if (!aggregate.empty() || max_seq > since_seq)
+        stats.applyCommitted(aggregate, max_seq);
+    spdlog::info("[stats] replayed {} journal row(s) after seq {}", rows, since_seq);
+}
+
+bool SyncGraphDataStore::saveStatsSnapshot(const GraphStatsSnapshot& snapshot) {
+    WtSession session = conn().make_session();
+    return wt::table_put(session.get(), TABLE_STATS_SNAPSHOT, "snapshot", encodeStatsSnapshot(snapshot));
+}
+
+bool SyncGraphDataStore::loadStatsSnapshot(GraphStatsSnapshot& out) {
+    WtSession session = conn().make_session();
+    auto value = wt::table_get(session.get(), TABLE_STATS_SNAPSHOT, "snapshot");
+    return value.has_value() && decodeStatsSnapshot(*value, out);
+}
+
+void SyncGraphDataStore::compactStatsJournal(uint64_t seq) {
+    WtSession session = conn().make_session();
+    std::vector<std::string> keys;
+    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view key, std::string_view) {
+        if (key.size() != 8)
+            return true;
+        uint64_t kseq = 0;
+        for (int i = 0; i < 8; ++i)
+            kseq = (kseq << 8) | static_cast<uint64_t>(static_cast<unsigned char>(key[i]));
+        if (kseq <= seq)
+            keys.emplace_back(key);
+        return true;
+    });
+    for (const auto& key : keys)
+        wt::table_del(session.get(), TABLE_STATS_JOURNAL, key);
 }
 
 bool SyncGraphDataStore::writeStatsJournal(WT_SESSION* session, uint64_t seq, const StatsDelta& delta) {

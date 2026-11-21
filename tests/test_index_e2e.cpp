@@ -3049,6 +3049,14 @@ TEST_F(IndexE2ETest, StatsJournalAppliesAndRollbackDiscards) {
     auto snap = env.stats_store->snapshot();
     ASSERT_EQ(snap->labels.count(1), 1u);
     EXPECT_EQ(snap->labels.at(1).vertices, 1);
+    EXPECT_GE(snap->applied_journal_seq, 1u);
+
+    // snapshot 可持久化/恢复（journal offset 一并保留）。
+    ASSERT_TRUE(env.data_store->saveStatsSnapshot(*snap));
+    GraphStatsSnapshot loaded;
+    ASSERT_TRUE(env.data_store->loadStatsSnapshot(loaded));
+    EXPECT_EQ(loaded.labels.at(1).vertices, 1);
+    EXPECT_EQ(loaded.applied_journal_seq, snap->applied_journal_seq);
 
     // journal 已与数据同事务写入；至少有一条可解码记录。
     size_t journal_rows = 0;

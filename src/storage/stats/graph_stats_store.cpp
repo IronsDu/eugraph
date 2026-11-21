@@ -47,7 +47,12 @@ std::shared_ptr<GraphStatsStore::IndexSlot> GraphStatsStore::indexSlot(uint32_t 
     return slot;
 }
 
-void GraphStatsStore::applyCommitted(const StatsDelta& delta) {
+void GraphStatsStore::applyCommitted(const StatsDelta& delta, uint64_t journal_seq) {
+    if (journal_seq != 0) {
+        uint64_t cur = applied_journal_seq_.load(std::memory_order_acquire);
+        while (cur < journal_seq &&
+               !applied_journal_seq_.compare_exchange_weak(cur, journal_seq, std::memory_order_acq_rel)) {}
+    }
     if (delta.empty())
         return;
     // 先复制槽位引用，再在锁外做原子加；槽位生命周期由 shared_ptr 保活。
@@ -76,9 +81,36 @@ void GraphStatsStore::applyCommitted(const StatsDelta& delta) {
     }
 }
 
+void GraphStatsStore::restore(const GraphStatsSnapshot& snapshot) {
+    std::unique_lock<std::shared_mutex> lock(slots_mu_);
+    labels_.clear();
+    edge_labels_.clear();
+    indexes_.clear();
+    for (const auto& [id, st] : snapshot.labels) {
+        auto slot = std::make_shared<LabelSlot>();
+        slot->vertices.store(st.vertices, std::memory_order_relaxed);
+        labels_[id] = std::move(slot);
+    }
+    for (const auto& [id, st] : snapshot.edge_labels) {
+        auto slot = std::make_shared<EdgeSlot>();
+        slot->edges.store(st.edges, std::memory_order_relaxed);
+        edge_labels_[id] = std::move(slot);
+    }
+    for (const auto& [id, st] : snapshot.indexes) {
+        auto slot = std::make_shared<IndexSlot>();
+        slot->rows.store(st.rows, std::memory_order_relaxed);
+        slot->null_keys.store(st.null_keys, std::memory_order_relaxed);
+        slot->ready.store(st.ready, std::memory_order_release);
+        indexes_[id] = std::move(slot);
+    }
+    epoch_.store(snapshot.epoch, std::memory_order_release);
+    applied_journal_seq_.store(snapshot.applied_journal_seq, std::memory_order_release);
+}
+
 std::shared_ptr<const GraphStatsSnapshot> GraphStatsStore::snapshot() const {
     auto snap = std::make_shared<GraphStatsSnapshot>();
     snap->epoch = epoch_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    snap->applied_journal_seq = applied_journal_seq_.load(std::memory_order_acquire);
     {
         std::shared_lock<std::shared_mutex> lock(slots_mu_);
         for (const auto& [id, slot] : labels_)

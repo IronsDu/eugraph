@@ -71,3 +71,25 @@ TEST(GraphStatsStoreTest, SnapshotIsImmutableAndEpochAdvances) {
     // 旧快照不被后续更新修改。
     EXPECT_EQ(first->labels.at(1).vertices, 5);
 }
+
+TEST(GraphStatsStoreTest, RestoreReplacesCountersAndAppliedSeq) {
+    GraphStatsStore source;
+    StatsDelta d;
+    d.vertex_delta[1] = 10;
+    d.edge_delta[2] = 4;
+    d.index_delta[3] = 7;
+    source.applyCommitted(d, /*journal_seq=*/42);
+    auto snap = source.snapshot();
+    ASSERT_EQ(snap->applied_journal_seq, 42u);
+
+    GraphStatsStore restored;
+    StatsDelta stale;
+    stale.vertex_delta[1] = 999;
+    restored.applyCommitted(stale);
+    restored.restore(*snap);
+    auto out = restored.snapshot();
+    EXPECT_EQ(out->labels.at(1).vertices, 10);
+    EXPECT_EQ(out->edge_labels.at(2).edges, 4);
+    EXPECT_EQ(out->indexes.at(3).rows, 7);
+    EXPECT_EQ(out->applied_journal_seq, 42u);
+}

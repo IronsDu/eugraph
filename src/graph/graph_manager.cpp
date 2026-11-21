@@ -443,8 +443,14 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t
     instance->sync_data->setIndexRegistry(instance->index_registry.get());
     instance->stats_store = std::make_shared<GraphStatsStore>();
     instance->sync_data->setStatsStore(instance->stats_store.get());
-    // 统计 journal 是数据 DB 的一部分；启动先重放（无 snapshot 时从零）。
-    instance->sync_data->replayStatsJournal(*instance->stats_store);
+    // 统计 journal 是数据 DB 的一部分：先恢复 snapshot，再重放其后的 journal。
+    GraphStatsSnapshot stats_snapshot;
+    if (instance->sync_data->loadStatsSnapshot(stats_snapshot)) {
+        instance->stats_store->restore(stats_snapshot);
+        instance->sync_data->replayStatsJournal(*instance->stats_store, stats_snapshot.applied_journal_seq);
+    } else {
+        instance->sync_data->replayStatsJournal(*instance->stats_store);
+    }
 
     // 会话池：工厂从**连接所有者**取 session ✓（WT 不外泄 ✓）
     // 注：池成员声明在 GraphInstance **最后** ⇒ 最先销毁 ✓（session 在连接关闭前 close ✓，§3.2.1）
@@ -475,6 +481,13 @@ void GraphManager::checkpointAll() {
         {
             WtSession data_session = inst->data_conn.make_session();
             inst->data_conn.checkpoint(data_session);
+        }
+        // 统计快照与 journal：先发布快照，再压缩 journal（失败下次 checkpoint 重试）。
+        if (inst->stats_store && inst->sync_data) {
+            auto stats_snapshot = inst->stats_store->snapshot();
+            // 先只持久化 snapshot；journal 压缩要求“snapshot 计数与 applied_seq 严格原子”，
+            // 当前近似快照不满足，留给 Phase 2，避免提前删除导致恢复漏计。
+            (void)inst->sync_data->saveStatsSnapshot(*stats_snapshot);
         }
         {
             WtSession meta_session = inst->meta_conn.make_session();

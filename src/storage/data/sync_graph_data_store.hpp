@@ -169,8 +169,12 @@ public:
     void attachStatsSink(GraphSession& session);
     uint64_t nextStatsJournalSeq();
     bool writeStatsJournal(WT_SESSION* session, uint64_t seq, const StatsDelta& delta);
-    /// 启动时重放 journal（无 snapshot 时从零重放；旧数据可能未被 journal 覆盖）。
-    void replayStatsJournal(GraphStatsStore& stats);
+    /// 启动时重放 journal；只应用 seq > since_seq。
+    void replayStatsJournal(GraphStatsStore& stats, uint64_t since_seq = 0);
+    bool saveStatsSnapshot(const GraphStatsSnapshot& snapshot);
+    bool loadStatsSnapshot(GraphStatsSnapshot& out);
+    /// 删除 <= seq 的 journal 行（snapshot 已覆盖）。
+    void compactStatsJournal(uint64_t seq);
     IndexRuntimeRegistry* indexRegistry() const override {
         return index_registry_;
     }
