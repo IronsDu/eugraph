@@ -212,14 +212,39 @@ LogProp LogPropDeriver::deriveLabelScan(const binder::BoundLabelScanOp& op) cons
 // Unary operators
 // ============================================================
 
+double LogPropDeriver::estimateAvgOutDegree(const std::vector<EdgeLabelId>& edge_labels, const LogProp& input,
+                                            const std::string& src_var) const {
+    if (!catalog_ || edge_labels.empty())
+        return 0.0;
+    double source_vertices = 0.0;
+    for (const auto& col : input.columns) {
+        if (col.variable != src_var || col.label_ids.empty())
+            continue;
+        for (LabelId lid : col.label_ids)
+            source_vertices += static_cast<double>(catalog_->getVertexCount(lid));
+        break;
+    }
+    if (source_vertices <= 0.0)
+        source_vertices = input.cardinality;
+    if (source_vertices <= 0.0)
+        return 0.0;
+    double edges = 0.0;
+    for (EdgeLabelId elid : edge_labels)
+        edges += static_cast<double>(catalog_->getEdgeCount(elid));
+    return edges > 0.0 ? edges / source_vertices : 0.0;
+}
+
 LogProp LogPropDeriver::deriveExpand(const binder::BoundExpandOp& op, const LogProp& input) const {
     LogProp lp;
     // avg out-degree: use max across edge_label_ids, or default
     double avgDeg = 0.0;
     for (const auto& elid : op.edge_label_ids) {
         double deg = catalog_ ? catalog_->getAvgOutDegree(elid) : 0.0;
-        avgDeg = std::max(avgDeg, deg > 0 ? deg : kDefaultAvgOutDegree);
+        if (deg > 0)
+            avgDeg = std::max(avgDeg, deg);
     }
+    if (avgDeg == 0.0)
+        avgDeg = estimateAvgOutDegree(op.edge_label_ids, input, op.src_variable);
     if (avgDeg == 0.0)
         avgDeg = kDefaultAvgOutDegree;
 
@@ -249,8 +274,11 @@ LogProp LogPropDeriver::deriveVarLenExpand(const binder::BoundVarLenExpandOp& op
     double avgDeg = 0.0;
     for (const auto& elid : op.edge_label_ids) {
         double deg = catalog_ ? catalog_->getAvgOutDegree(elid) : 0.0;
-        avgDeg = std::max(avgDeg, deg > 0 ? deg : kDefaultAvgOutDegree);
+        if (deg > 0)
+            avgDeg = std::max(avgDeg, deg);
     }
+    if (avgDeg == 0.0)
+        avgDeg = estimateAvgOutDegree(op.edge_label_ids, input, op.src_variable);
     if (avgDeg == 0.0)
         avgDeg = kDefaultAvgOutDegree;
 

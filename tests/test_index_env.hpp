@@ -11,6 +11,7 @@
 #include "storage/session/graph_session.hpp"
 #include "storage/session/schema_generation_tracker.hpp"
 #include "storage/session/session_pool.hpp"
+#include "storage/stats/graph_stats_store.hpp"
 #include "test_sync_store.hpp"
 
 #include <folly/coro/BlockingWait.h>
@@ -47,6 +48,7 @@ struct TestEnv {
     std::unique_ptr<GraphSession> async_session;
     std::unique_ptr<AsyncGraphDataStore> async_data;
     std::shared_ptr<SchemaGenerationTracker> schema_generations;
+    std::shared_ptr<GraphStatsStore> stats_store;
 
     void init(const std::string& name) {
         db_path = makeTempDir(name);
@@ -65,6 +67,8 @@ struct TestEnv {
         async_data = std::make_unique<AsyncGraphDataStore>(*data_store, *io, *async_session);
         session_pool = std::make_shared<SessionPool>(8, [this]() { return data_store->conn().make_session(); });
         schema_generations = std::make_shared<SchemaGenerationTracker>();
+        stats_store = std::make_shared<GraphStatsStore>();
+        data_store->setStatsStore(stats_store.get());
     }
 
     void shutdown() {

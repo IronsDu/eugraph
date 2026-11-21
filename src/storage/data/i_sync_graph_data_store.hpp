@@ -250,6 +250,8 @@ public:
     virtual IndexRuntimeRegistry* indexRegistry() const {
         return nullptr;
     }
+    /// 数据层为会话绑定统计 sink（默认 no-op；生产 SyncGraphDataStore 覆盖）。
+    virtual void attachStatsSink(GraphSession& /*session*/) {}
 
     // ==================== Index Entry Operations ====================
 

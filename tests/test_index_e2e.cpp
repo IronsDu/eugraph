@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "common/config/env_vars.hpp"
+#include "common/stats/stats_journal.hpp"
 #include "common/types/constants.hpp"
 #include "query/executor/query_executor.hpp"
 
@@ -17,6 +18,7 @@
 #include "storage/meta/sync_graph_meta_store.hpp"
 #include "storage/session/schema_generation_tracker.hpp"
 #include "storage/session/schema_pin.hpp"
+#include "storage/wt_table_ops.hpp"
 #include "test_chunk_helpers.hpp"
 #include "test_index_env.hpp"
 #include "test_sync_store.hpp"
@@ -3036,4 +3038,49 @@ TEST_F(IndexE2ETest, IndexDdlWithoutTrackerFailsBeforeBuilding) {
     auto result = execSync(executor, "CREATE INDEX idx_person_id FOR (n:Person) ON (n.id)");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("SchemaGenerationTracker"), std::string::npos) << result.error;
+}
+
+TEST_F(IndexE2ETest, StatsJournalAppliesAndRollbackDiscards) {
+    createLabel(env, "Person", {{0, "id", PropertyType::INT64, false, std::nullopt}});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
+
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:1})").error.empty());
+    auto snap = env.stats_store->snapshot();
+    ASSERT_EQ(snap->labels.count(1), 1u);
+    EXPECT_EQ(snap->labels.at(1).vertices, 1);
+    EXPECT_GE(snap->applied_journal_seq, 1u);
+
+    // snapshot 可持久化/恢复（journal offset 一并保留）。
+    ASSERT_TRUE(env.data_store->saveStatsSnapshot(*snap));
+    GraphStatsSnapshot loaded;
+    ASSERT_TRUE(env.data_store->loadStatsSnapshot(loaded));
+    EXPECT_EQ(loaded.labels.at(1).vertices, 1);
+    EXPECT_EQ(loaded.applied_journal_seq, snap->applied_journal_seq);
+
+    // journal 已与数据同事务写入；至少有一条可解码记录。
+    size_t journal_rows = 0;
+    auto session = env.data_store->conn().make_session();
+    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view value) {
+        StatsDelta delta;
+        EXPECT_TRUE(decodeStatsDelta(value, delta));
+        ++journal_rows;
+        return true;
+    });
+    EXPECT_GE(journal_rows, 1u);
+
+    // rollback 不应改变统计。
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    ASSERT_TRUE((**lease).begin_write());
+    auto store = env.async_data->for_session(**lease);
+    std::vector<std::pair<LabelId, Properties>> label_props;
+    label_props.emplace_back(1, Properties{PropertyValue{int64_t(2)}});
+    ASSERT_TRUE(blockingWait(store.insertVertex(100, std::span<const std::pair<LabelId, Properties>>{label_props})));
+    (*lease)->rollback();
+    lease.reset();
+
+    snap = env.stats_store->snapshot();
+    ASSERT_EQ(snap->labels.count(1), 1u);
+    EXPECT_EQ(snap->labels.at(1).vertices, 1);
 }

@@ -2826,3 +2826,28 @@ TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
     auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
     EXPECT_TRUE(reqs[1].need_whole_vertex);
 }
+TEST(LogPropTest, EdgeCountStatsEstimateAverageOutDegree) {
+    auto schema = std::make_shared<GraphSchema>();
+    schema->labels[LabelId{1}] = LabelDef{};
+    schema->edge_labels[EdgeLabelId{7}] = EdgeLabelDef{};
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    catalog.setLabelStats(LabelId{1}, 100);
+    catalog.setEdgeLabelStats(EdgeLabelId{7}, 500, 0.0);
+
+    BoundLabelScanOp scan;
+    scan.variable = "a";
+    scan.label_ids = {LabelId{1}};
+
+    LogPropDeriver deriver(&catalog);
+    LogProp source = deriver.derive(scan, {});
+
+    BoundExpandOp expand;
+    expand.src_variable = "a";
+    expand.dst_variable = "b";
+    expand.edge_variable = "e";
+    expand.edge_label_ids = {EdgeLabelId{7}};
+    BoundLogicalOperator expand_root(std::make_unique<BoundExpandOp>(std::move(expand)));
+    LogProp out = deriver.derive(expand_root, {source});
+    EXPECT_DOUBLE_EQ(out.cardinality, 500.0);
+}
