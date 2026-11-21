@@ -16,6 +16,7 @@
 #include "query/optimizer/logical_optimizer.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -2898,4 +2899,42 @@ TEST(ChosenPlanTest, EquiJoinCboChoosesCrossWhenCheaper) {
     ASSERT_EQ(plan.chosen->children.size(), 1u);
     // 1×3：HashJoin 4 > CrossProduct 3，CBO 必须选 CrossProduct。
     EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::CrossProduct);
+}
+
+TEST(JoinCommuteRuleTest, SwapsCrossJoinChildrenWhenSafe) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    memo.setCommuteSafe(true);
+    auto gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    JoinCommuteRule rule;
+    ASSERT_TRUE(rule.condition(expr, memo));
+    auto candidates = rule.substitute(expr, memo);
+    ASSERT_EQ(candidates.size(), 1u);
+    auto& swapped = std::get<std::unique_ptr<BoundBinaryJoinOp>>(candidates[0]->op);
+    ASSERT_NE(swapped, nullptr);
+    // 只验证规则交换了 child groups；列顺序/别名安全由上层保守边界保证。
+    EXPECT_EQ(candidates[0]->child_groups[0], expr.child_groups[1]);
+    EXPECT_EQ(candidates[0]->child_groups[1], expr.child_groups[0]);
+}
+
+TEST(JoinCommuteRuleTest, DisabledForConservativePlans) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    memo.setCommuteSafe(false);
+    auto gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+    JoinCommuteRule rule;
+    EXPECT_FALSE(rule.condition(expr, memo));
 }
