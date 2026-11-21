@@ -208,12 +208,13 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - `UNKNOWN→READY` 状态；
 - kill-after-commit 测试。
 
-### Phase 3：CBO HashJoin 候选
+### Phase 3：CBO HashJoin 候选（已落地基础版）
 
-- 逻辑 join_conditions；
-- `ImplHashJoinRule` + cost；
-- ChosenPlan lowering；
-- 删除 physical planner 的 HashJoin 特判，保留为 fallback。
+- ✅ 逻辑 `join_conditions`（Filter 原谓词保留，作为语义兜底）；
+- ✅ `ImplHashJoinRule` + HashJoin cost；
+- ✅ ChosenPlan join tag + physical lowering；
+- ⏳ physical planner 仍保留 HashJoin 代价/预算门禁；equi-join 目前 CBO 只有 HashJoin
+  候选，CrossProduct 由物理层兜底，NestedLoop/IndexJoin 候选未接。
 
 ### Phase 4：通用 Join 规则
 
@@ -222,7 +223,7 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - 共享锚点；
 - 统计 confidence 驱动。
 
-### Phase 5：性能验证
+### Phase 5：性能验证（合成基线已完成，LDBC 待做）
 
 - 同二进制、同数据、交错 A/B；
 - 结果行一致（全量/哈希）；
