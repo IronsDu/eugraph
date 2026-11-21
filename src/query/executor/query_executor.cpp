@@ -148,7 +148,9 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     if (stats_store_ != nullptr) {
         auto stats_snapshot = stats_store_->snapshot();
         if (stats_snapshot && !stats_snapshot->labels.empty()) {
-            stats_counts.reserve(stats_snapshot->labels.size());
+            // 旧数据/新写入混合：以 schema 计数为 baseline，只覆盖 stats 明确拥有的
+            // label。不能因为 stats 非空就丢掉没有 journal 覆盖的旧 label。
+            stats_counts = ctx->label_vertex_counts;
             for (const auto& [lid, st] : stats_snapshot->labels)
                 stats_counts[lid] = st.vertices > 0 ? static_cast<uint64_t>(st.vertices) : 0;
             effective_counts = &stats_counts;
