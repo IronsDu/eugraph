@@ -168,6 +168,7 @@ PatternNode ImplBinaryJoinRule::pattern() const {
 std::vector<std::unique_ptr<GroupExpr>> ImplBinaryJoinRule::substitute(GroupExpr& expr, Memo& memo) const {
     auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
     // 有等值条件时交给 ImplHashJoinRule；无条件的笛卡尔积才用 CrossProduct。
+    // CBO 的 Cross/NestedLoop 候选比较受当前 upper-bound 剪枝限制，后续单独修。
     if (join && *join && !(*join)->join_conditions.empty())
         return {};
     return makePhysicalExpr(expr, memo, PhysicalOpTag::CrossProduct);
