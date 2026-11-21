@@ -217,6 +217,13 @@ private:
                                                              IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                                                              PlanContext& ctx, Schema input_schema,
                                                              const std::vector<binder::BoundType>& input_types);
+
+    /// 通用 destination-index join：Filter(Expand) 的 dst 属性有可用索引时，
+    /// 先 IndexScan(dst)，再反向 Expand 到 source，与 source 行 HashJoin。
+    /// 不依赖 label/edge/property 名；条件/索引完全由 catalog/predicate 决定。
+    std::optional<PlanOperatorResult> tryPlanFilterDestinationIndexJoin(binder::BoundFilterOp& filter,
+                                                                        IAsyncGraphDataStore& store,
+                                                                        IAsyncGraphMetaStore& meta, PlanContext& ctx);
 };
 
 } // namespace compute

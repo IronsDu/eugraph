@@ -2808,6 +2808,202 @@ std::optional<uint64_t> estimateRowsUpperBound(const binder::BoundLogicalOperato
 
 } // namespace
 
+std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndexJoin(binder::BoundFilterOp& filter,
+                                                                                     IAsyncGraphDataStore& store,
+                                                                                     IAsyncGraphMetaStore& meta,
+                                                                                     PlanContext& ctx) {
+    auto* expand_ptr = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&filter.child);
+    if (!expand_ptr || !*expand_ptr)
+        return std::nullopt;
+    auto& expand = **expand_ptr;
+    if (expand.src_variable.empty() || expand.dst_variable.empty())
+        return std::nullopt;
+    // 反向索引路径只处理“从 dst 回溯到 src”的方向；正向 Expand 不在本规则内。
+    if (expand.direction != cypher::RelationshipDirection::RIGHT_TO_LEFT)
+        return std::nullopt;
+    if (expand.edge_label_ids.size() != 1)
+        return std::nullopt;
+
+    // 只接受对本 Filter 子树连续 Filter 链的整段吸收；有残差就放弃，避免丢谓词。
+    std::vector<const binder::BoundExpression*> predicates{&filter.predicate};
+    binder::BoundLogicalOperator* current = &filter.child;
+    while (auto* next_filter = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(current)) {
+        if (!next_filter || !*next_filter)
+            return std::nullopt;
+        predicates.push_back(&(*next_filter)->predicate);
+        current = &(*next_filter)->child;
+    }
+
+    std::vector<const binder::BoundExpression*> conjuncts;
+    for (auto* predicate : predicates)
+        collectAndConjuncts(*predicate, conjuncts);
+    if (conjuncts.empty())
+        return std::nullopt;
+
+    LabelId index_label = INVALID_LABEL_ID;
+    uint16_t index_prop = 0;
+    std::string index_prop_name;
+    uint32_t index_id = 0;
+    std::optional<PropertyValue> equality;
+    std::optional<PropertyValue> lower;
+    std::optional<PropertyValue> upper;
+
+    auto adjust_int = [](const PropertyValue& value, int64_t delta) -> std::optional<PropertyValue> {
+        if (auto* i = std::get_if<int64_t>(&value))
+            return PropertyValue{*i + delta};
+        return std::nullopt;
+    };
+
+    for (const auto* conjunct : conjuncts) {
+        const auto* binop_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjunct);
+        if (!binop_ptr || !*binop_ptr)
+            return std::nullopt;
+        const auto& binop = **binop_ptr;
+        auto cond = tryExtractNormalizedBoundCondition(binop, ctx);
+        if (!cond || cond->label_id == INVALID_LABEL_ID || cond->property_name.empty())
+            return std::nullopt;
+        std::string condition_var = expressionVariableName(binop.left);
+        if (condition_var != expand.dst_variable)
+            condition_var = expressionVariableName(binop.right);
+        if (condition_var != expand.dst_variable)
+            return std::nullopt;
+        if (index_label == INVALID_LABEL_ID) {
+            index_label = cond->label_id;
+            index_prop = cond->prop_id;
+            index_prop_name = cond->property_name;
+        } else if (index_label != cond->label_id || index_prop != cond->prop_id) {
+            return std::nullopt;
+        }
+
+        switch (cond->op) {
+        case cypher::BinaryOperator::EQ:
+            if (equality)
+                return std::nullopt;
+            equality = cond->value;
+            break;
+        case cypher::BinaryOperator::GTE: {
+            auto adjusted = adjust_int(cond->value, -1);
+            if (!adjusted)
+                return std::nullopt;
+            lower = std::move(*adjusted);
+            break;
+        }
+        case cypher::BinaryOperator::GT:
+            lower = cond->value;
+            break;
+        case cypher::BinaryOperator::LTE: {
+            auto adjusted = adjust_int(cond->value, 1);
+            if (!adjusted)
+                return std::nullopt;
+            upper = std::move(*adjusted);
+            break;
+        }
+        case cypher::BinaryOperator::LT:
+            upper = cond->value;
+            break;
+        default:
+            return std::nullopt;
+        }
+    }
+    if (index_label == INVALID_LABEL_ID || (equality && (lower || upper)))
+        return std::nullopt;
+    if (!equality && !lower && !upper)
+        return std::nullopt;
+
+    auto label_it = ctx.label_defs.find(index_label);
+    if (label_it == ctx.label_defs.end())
+        return std::nullopt;
+    for (const auto& idx : label_it->second.indexes) {
+        if (!planUsableIndex(idx, ctx))
+            continue;
+        for (const auto& accessor : idx.accessors) {
+            if (accessor.property_name == index_prop_name) {
+                index_id = idx.index_id;
+                break;
+            }
+        }
+        if (index_id != 0)
+            break;
+    }
+    if (index_id == 0)
+        return std::nullopt;
+
+    const size_t max_build_rows = hashJoinMaxBuildRows();
+    if (max_build_rows == 0)
+        return std::nullopt;
+
+    // Candidate source rows (outside the Expand).
+    Schema empty_schema;
+    std::vector<binder::BoundType> empty_types;
+    auto left_result = planBoundOperator(expand.child, store, meta, ctx, empty_schema, empty_types);
+    if (std::holds_alternative<std::string>(left_result))
+        return std::nullopt;
+    auto lr = extractChildResult(std::move(left_result));
+
+    const int left_key = findColumn(lr.output_schema, expand.src_variable);
+    if (left_key < 0)
+        return std::nullopt;
+    if (!expand.dst_variable.empty() && findColumn(lr.output_schema, expand.dst_variable) >= 0)
+        return std::nullopt;
+    if (!expand.edge_variable.empty() && findColumn(lr.output_schema, expand.edge_variable) >= 0)
+        return std::nullopt;
+
+    Schema right_schema{expand.dst_variable};
+    std::vector<binder::BoundType> right_types{binder::BoundType::VertexRef()};
+    if (!expand.edge_variable.empty()) {
+        right_schema.push_back(expand.edge_variable);
+        right_types.push_back(binder::BoundType::EdgeKey());
+    }
+    std::string source_alias = "__index_join_src";
+    while (findColumn(lr.output_schema, source_alias) >= 0 || findColumn(right_schema, source_alias) >= 0)
+        source_alias += "_";
+    right_schema.push_back(source_alias);
+    right_types.push_back(binder::BoundType::VertexRef());
+
+    const auto mode = equality ? IndexScanPhysicalOp::ScanMode::EQUALITY : IndexScanPhysicalOp::ScanMode::RANGE;
+    std::vector<PropertyValue> eq_values;
+    if (equality)
+        eq_values.push_back(*equality);
+    std::optional<std::vector<PropertyValue>> range_start;
+    std::optional<std::vector<PropertyValue>> range_end;
+    if (lower)
+        range_start = std::vector<PropertyValue>{*lower};
+    if (upper)
+        range_end = std::vector<PropertyValue>{*upper};
+
+    auto index_scan = std::make_unique<IndexScanPhysicalOp>(
+        expand.dst_variable, index_id, std::vector<uint16_t>{index_prop}, mode, std::move(eq_values),
+        std::move(range_start), std::move(range_end), std::vector<binder::BoundType>{binder::BoundType::VertexRef()},
+        store, ctx.schema);
+
+    auto expand_result = std::make_unique<ExpandPhysicalOp>(
+        expand.dst_variable, source_alias, expand.edge_variable, expand.edge_label_ids,
+        cypher::RelationshipDirection::LEFT_TO_RIGHT, store, Schema{expand.dst_variable},
+        std::vector<binder::BoundType>(right_types), std::move(index_scan),
+        std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, std::vector<LabelId>{}, false,
+        false, -1, -1, std::vector<EdgeLabelId>{}, false);
+
+    const int right_key = findColumn(right_schema, source_alias);
+    if (right_key < 0)
+        return std::nullopt;
+
+    Schema join_schema = lr.output_schema;
+    join_schema.insert(join_schema.end(), right_schema.begin(), right_schema.end());
+    auto join_types = lr.output_types;
+    join_types.insert(join_types.end(), right_types.begin(), right_types.end());
+    TupleSlotLayout join_layout = lr.slot_layout;
+    join_layout.merge(makeSlotLayout(right_schema, ctx));
+
+    auto hash_join = std::make_unique<HashJoinPhysicalOp>(
+        std::move(lr.op), std::move(expand_result), std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
+        std::vector<uint32_t>{static_cast<uint32_t>(right_key)}, std::vector<binder::BoundType>(join_types),
+        join_schema, false, max_build_rows);
+    hash_join->setEvalContext(ctx.eval_ctx);
+    auto plan_result =
+        PlanOperatorResult{std::move(hash_join), std::move(join_schema), std::move(join_types), std::move(join_layout)};
+    return dispatchProjectionExtract(std::move(plan_result), store, ctx);
+}
+
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
                                         IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
@@ -4210,6 +4406,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                 return std::move(list_join.value());
                         }
                     }
+
+                    // ── Generic destination index join: dst property index → reverse Expand → HashJoin ──
+                    if (auto dst_idx = tryPlanFilterDestinationIndexJoin(v, store, meta, ctx); dst_idx.has_value())
+                        return std::move(*dst_idx);
 
                     // ── Edge index scan optimization: Filter(Expand) → EdgeIndexScan ──
                     if (std::holds_alternative<std::unique_ptr<binder::BoundExpandOp>>(v.child)) {
