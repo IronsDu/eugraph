@@ -220,10 +220,12 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 
 ### Phase 4：通用 Join 规则
 
-- 选择性 join reorder；
-- 通用 IndexJoin/SemiJoin/IndexProbe；
-- 共享锚点；
-- 统计 confidence 驱动。
+- ✅ 通用 destination-index join：Filter(Expand) 的 dst 属性索引 → IndexScan(dst)
+  → 反向 Expand → HashJoin；条件/索引全部来自 catalog/predicate，无 label 名；
+- ⏳ 选择性 join reorder；
+- ⏳ SemiJoin/IndexProbe 规则化；
+- ⏳ 共享锚点；
+- ⏳ 统计 confidence 驱动。
 
 ### Phase 5：性能验证（合成基线已完成，LDBC 待做）
 

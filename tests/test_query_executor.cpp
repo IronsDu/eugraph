@@ -12094,3 +12094,19 @@ TEST_F(QueryExecutorTest, GenericHashJoinSkipsWhenCostNotBetter) {
     auto plan = getExplainPlanText(*executor_, query);
     EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << plan;
 }
+
+TEST_F(QueryExecutorTest, GenericDestinationIndexJoin) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_name_dst FOR (n:Person) ON (n.name)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'src'}), (b:Person {name:'dst'}), "
+                                     "(a)-[:KNOWS]->(b)")
+                    .error.empty());
+    const std::string query = "MATCH (dst:Person)<-[:KNOWS]-(src:Person) WHERE dst.name = 'dst' RETURN src.name AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "src");
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("IndexScan"), std::string::npos) << plan;
+    // 这个形状 planner 已经能用 IndexScan(dst)+Expand 完成，不需要额外 HashJoin；
+    // 规则本身保留为 source 集合需要独立物化时的通用候选。
+}
