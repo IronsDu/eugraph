@@ -12,16 +12,21 @@
 
 ## 导入
 
-统计 sink 开启时，导入在 Comment 约 35% 处卡住并最终 RPC timeout。  
-禁用统计 sink 后（`EUGRAPH_STATS_DISABLE=1`）：
+第一轮统计 sink 开启时，导入在 Comment 约 35% 处卡住并最终 RPC timeout。
+根因是 `insertVertex` 对每个新顶点都调用 `getVertexLabels` 做 prefix scan；
+改为先点查 `vertex_existence`，仅已存在顶点才读取旧 label。
+
+修复后统计 sink 开启导入成功：
 
 ```text
 Vertices: 3181724 written, 0 skipped
 Edges:    17256038 written, 0 skipped
-All data loaded into graph 'sf1' in 253.0s
+All data loaded into graph 'sf1' in 236.9s
 ```
 
-## LDBC Interactive（固定 personId=933，warmup=1，iters=3）
+`EUGRAPH_STATS_DISABLE=1` 仍保留为隔离导入的诊断开关。
+
+## LDBC Interactive（stats enabled；固定 personId=933，warmup=1，iters=3）
 
 ```text
 query                               rows   min(ms)  median(ms)
@@ -53,3 +58,10 @@ interactive-short-7                    0       1.1         1.1
 - 0 行查询使用了脚本默认/不存在的参数，只作为执行路径/延迟样本，不用于结果正确性结论；
 - 运行前已确认所有索引 `PUBLIC`；
 - 统计 sink 开启时导入卡住是当前已知问题，需要单独定位后才能把 stats 作为默认导入路径。
+
+
+## 对照：stats disabled 的上一轮
+
+stats disabled 导入 253.0s；LDBC c9 3.62s、c5 2.82s、c6 2.06s。
+stats enabled 导入 236.9s；LDBC c9 1.77s、c5 2.83s、c6 2.23s。
+差异还包含缓存/机器状态，不能单独归因于 stats；但 stats-enabled 已不再是导入阻塞。

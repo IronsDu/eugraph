@@ -2840,12 +2840,11 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndex
         return std::nullopt;
     if (expand.edge_label_ids.size() != 1)
         return std::nullopt;
-    // 从 dst 反向回到 source；方向取原 Expand 的反向。
-    cypher::RelationshipDirection reverse_direction = cypher::RelationshipDirection::UNDIRECTED;
-    if (expand.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT)
-        reverse_direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
-    else if (expand.direction == cypher::RelationshipDirection::RIGHT_TO_LEFT)
-        reverse_direction = cypher::RelationshipDirection::LEFT_TO_RIGHT;
+    // 只处理已有测试覆盖的 RTL → 正向反向 Expand；LTR/UNDIRECTED 等
+    // 形状尚未有可触发用例，保持原计划。
+    if (expand.direction != cypher::RelationshipDirection::RIGHT_TO_LEFT)
+        return std::nullopt;
+    const cypher::RelationshipDirection reverse_direction = cypher::RelationshipDirection::LEFT_TO_RIGHT;
 
     // 只接受对本 Filter 子树连续 Filter 链的整段吸收；有残差就放弃，避免丢谓词。
     std::vector<const binder::BoundExpression*> predicates{&filter.predicate};

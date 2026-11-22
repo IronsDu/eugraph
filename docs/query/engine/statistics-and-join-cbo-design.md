@@ -297,3 +297,56 @@ c9  rows=20  min=1491.11ms  p50=1520.54ms
 这说明只读 commute/associate 只是搜索空间的一小步，还缺选择性驱动的 anchor/join order、
 semi-join/decorrelation 和 destination-index 的 CBO 决策。当前不能把“移除硬编码”宣称为
 性能等价完成。
+
+## 12. 被否证的尝试：Filter(Cross/InnerJoin) 按变量下推
+
+2026-11-21 尝试在 memo 前把 Filter(Cross/InnerJoin) 的 conjunct 按变量归属
+下推到左右子树，以修复 SF1 c6 中 person/tag 谓词晚过滤的问题。
+
+实现后 `optimizer_tests` 的 `EnricherE2ETest.MultiVariableJoinProducesChosenPlan`
+在 `Memo::findDuplicate → hashBoundLogicalOperator → hashBoundType` 段错误。
+已回退，没有保留半接线代码。下一轮若要再做，必须先定位 predicate clone/move
+后的 BoundType/dangling 问题，并补 memcheck 覆盖；不能直接把该 pass 重新挂上。
+
+### 12.1 第二次尝试（2026-11-21）
+
+- 将 `op = std::move(filter.child)` 改为先落本地 `BoundLogicalOperator moved` 再赋给
+  variant，修掉了 BoundFilterOp 析构段错误；
+- 保守版 join filter 复制下推 + source-only Filter 下推 VLE/Expand 后，
+  query 681/681、optimizer 128/128 通过；
+- 但 SF1 c6 仍约 1.9s，EXPLAIN 显示 Filter 位于 `ProjectionExtract` 之上，
+  VLE 上方仍有 Projection/PE 边界，source 谓词没有真正进入 VLE 的 child；
+- 需要支持“Filter 穿过 Projection/PE 且保持 slot/别名”的规则，不能只推 VLE/Expand。
+  该版本已回退，未保留仅增加冗余 Filter 而无收益的规则。
+
+### 12.2 Filter(Project) 安全下推（已落地规则）
+
+新增 `pushFilterThroughProject`：只有 Filter 引用的名字都能在 Project item 中找到
+“简单列/变量”别名时，才替换别名并把 Filter 推到 Project 下方；否则不动。
+
+验证：query 681/681、optimizer 129/129。
+
+SF1 c6 仍未改善（约 1.9s）。物理 EXPLAIN 的 Filter 位于 ProjectionExtract 之上，
+说明瓶颈不只在逻辑 Project；下一步需要处理 PE 边界或从 anchor/join order 侧解决。
+
+### 12.3 Cartesian Filter 删除式下推（回退）
+
+尝试对无 equi 条件的 Cross/Inner join，把单侧 conjunct 下推并从原 Filter 删除
+（residual 保留）。query 681/681 通过，但 `EnricherE2ETest.MultiVariableJoinProducesChosenPlan`
+的 `plan.chosen` 变为 null：删除 Filter 后该组没有 CBO winner。说明该 rewrite 与
+Enricher/physical property 需求还没接好。已回退；下一步需要为下推后的组补 winner/
+property 需求，而不是直接删除 Filter。
+
+### 12.4 Filter(Project) 放宽到 property/表达式别名（无 c6 收益）
+
+允许 Project item 的任意表达式作为别名替换目标（Project 不改变行数），
+query 681/681、optimizer 129/129 通过。SF1 c6 仍约 1.98s、c9 约 1.59s；
+说明 c6 的 Filter 并不在逻辑 Project 上，或者物理 PE 边界才是实际成本所在。
+
+### 6.5 edge 统计进入 CBO（已落地）
+
+- `QueryExecutor` 把 `GraphStatsSnapshot.edge_labels` 的 edge_count/avg_out_degree 注入 Catalog；
+- `LogPropDeriver::deriveExpand/VarLenExpand` 在 avg_out_degree 为 0 时用
+  `edge_count / source label vertex count` 估算，缺失才回退默认度数；
+- 修正原实现：未知度数先被默认值填成 10，导致统计永远不生效；
+- 单测：100 source vertices + 500 edges → Expand cardinality 500（5×）。

@@ -88,9 +88,12 @@ void rewriteOne(binder::BoundLogicalOperator& op) {
     for (const auto& item : project.items) {
         if (item.alias.empty() || !filter_names.contains(item.alias))
             continue;
-        // Project 只重命名/计算，不改变行数；谓词替换成 item.expr 后下推到
-        // Project 输入仍然语义等价。property/函数表达式也允许。
-        aliases.emplace(item.alias, cloneBoundExpression(item.expr));
+        // 只接受简单列/变量别名：property/函数表达式下推会改变求值次数和
+        // 错误时机，当前不做。
+        if (std::holds_alternative<binder::BoundColumnRef>(item.expr) ||
+            std::holds_alternative<binder::BoundVariableRef>(item.expr)) {
+            aliases.emplace(item.alias, cloneBoundExpression(item.expr));
+        }
     }
     if (aliases.size() != filter_names.size())
         return;

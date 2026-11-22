@@ -18,6 +18,7 @@
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
+#include "query/optimizer/rules/logical/push_filter_below_vle.hpp"
 #include "query/optimizer/rules/logical/push_filter_through_project.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
@@ -2829,32 +2830,6 @@ TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
     auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
     EXPECT_TRUE(reqs[1].need_whole_vertex);
 }
-<<<<<<< HEAD
-TEST(LogPropTest, EdgeCountStatsEstimateAverageOutDegree) {
-    auto schema = std::make_shared<GraphSchema>();
-    schema->labels[LabelId{1}] = LabelDef{};
-    schema->edge_labels[EdgeLabelId{7}] = EdgeLabelDef{};
-    catalog::Catalog catalog;
-    catalog.load(schema);
-    catalog.setLabelStats(LabelId{1}, 100);
-    catalog.setEdgeLabelStats(EdgeLabelId{7}, 500, 0.0);
-
-    BoundLabelScanOp scan;
-    scan.variable = "a";
-    scan.label_ids = {LabelId{1}};
-
-    LogPropDeriver deriver(&catalog);
-    LogProp source = deriver.derive(scan, {});
-
-    BoundExpandOp expand;
-    expand.src_variable = "a";
-    expand.dst_variable = "b";
-    expand.edge_variable = "e";
-    expand.edge_label_ids = {EdgeLabelId{7}};
-    BoundLogicalOperator expand_root(std::make_unique<BoundExpandOp>(std::move(expand)));
-    LogProp out = deriver.derive(expand_root, {source});
-    EXPECT_DOUBLE_EQ(out.cardinality, 500.0);
-=======
 
 TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {
     auto join = std::make_unique<BoundBinaryJoinOp>();
@@ -2892,7 +2867,6 @@ TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {
     const auto& chosen_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(plan.chosen->children[0]->op);
     ASSERT_NE(chosen_join, nullptr);
     EXPECT_EQ(chosen_join->join_conditions.size(), 1u);
->>>>>>> d14c78c (feat(optimizer): Cascades 产生 HashJoin 候选并保留物理选择)
 }
 
 TEST(ChosenPlanTest, EquiJoinCboChoosesCrossWhenCheaper) {
@@ -3031,26 +3005,29 @@ TEST(PushFilterThroughProjectTest, ReplacesSimpleAliasAndPushesBelowProject) {
     ASSERT_TRUE(std::holds_alternative<BoundColumnRef>(pushed->predicate));
     EXPECT_EQ(std::get<BoundColumnRef>(pushed->predicate).name, "src");
 }
-TEST(PushFilterBelowVleTest, SourceOnlyPredicateMovesBelowVle) {
-    auto vle = std::make_unique<BoundVarLenExpandOp>();
-    vle->src_variable = "a";
-    vle->dst_variable = "b";
-    vle->edge_variable = "e";
-    vle->edge_label_ids = {EdgeLabelId{7}};
-    vle->min_hops = 1;
-    vle->max_hops = 2;
-    vle->child = makeLabelScanWithLabel("a", 0, LabelId{1});
 
-    auto filter = std::make_unique<BoundFilterOp>();
-    filter->child = BoundLogicalOperator(std::move(vle));
-    filter->predicate = BoundColumnRef(0, BoundType::Any(), "a");
-    BoundLogicalOperator root(std::move(filter));
+TEST(LogPropTest, EdgeCountStatsEstimateAverageOutDegree) {
+    auto schema = std::make_shared<GraphSchema>();
+    schema->labels[LabelId{1}] = LabelDef{};
+    schema->edge_labels[EdgeLabelId{7}] = EdgeLabelDef{};
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    catalog.setLabelStats(LabelId{1}, 100);
+    catalog.setEdgeLabelStats(EdgeLabelId{7}, 500, 0.0);
 
-    pushFilterBelowVle(root);
-    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundVarLenExpandOp>>(root));
-    auto& out = std::get<std::unique_ptr<BoundVarLenExpandOp>>(root);
-    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(out->child));
-    auto& pushed = std::get<std::unique_ptr<BoundFilterOp>>(out->child);
-    ASSERT_TRUE(std::holds_alternative<BoundColumnRef>(pushed->predicate));
-    EXPECT_EQ(std::get<BoundColumnRef>(pushed->predicate).name, "a");
+    BoundLabelScanOp scan;
+    scan.variable = "a";
+    scan.label_ids = {LabelId{1}};
+
+    LogPropDeriver deriver(&catalog);
+    LogProp source = deriver.derive(scan, {});
+
+    BoundExpandOp expand;
+    expand.src_variable = "a";
+    expand.dst_variable = "b";
+    expand.edge_variable = "e";
+    expand.edge_label_ids = {EdgeLabelId{7}};
+    BoundLogicalOperator expand_root(std::make_unique<BoundExpandOp>(std::move(expand)));
+    LogProp out = deriver.derive(expand_root, {source});
+    EXPECT_DOUBLE_EQ(out.cardinality, 500.0);
 }
