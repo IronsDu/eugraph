@@ -14,6 +14,7 @@
 #include "query/optimizer/framework/opt_rule.hpp"
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/optimizer/logical_optimizer.hpp"
+#include "query/optimizer/normalization/plan_normalizations.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
@@ -2894,6 +2895,54 @@ TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
 
     auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
     EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(NormalizationTest, ExtractsEqualityJoinConditionAndKeepsFilter) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundColumnRef(0, BoundType::Any(), "a");
+    eq->right = BoundColumnRef(1, BoundType::Any(), "b");
+    eq->result_type = BoundType::Bool();
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(join));
+    filter->predicate = BoundExpression(std::move(eq));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    JoinConditionNormalization pass;
+    pass.apply(root, ctx);
+
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(root));
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child));
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_EQ(out_join->join_conditions.size(), 1u);
+    EXPECT_FALSE(out_filter->predicate.valueless_by_exception());
+}
+
+TEST(NormalizationTest, MarksBoundedShortestPathBatch) {
+    auto vle = std::make_unique<BoundVarLenExpandOp>();
+    vle->src_variable = "a";
+    vle->dst_variable = "b";
+    vle->edge_label_ids = {EdgeLabelId{7}};
+    vle->shortest_path = true;
+    vle->all_shortest_paths = false;
+    vle->max_hops = 3;
+    vle->child = makeLabelScan("a", 0);
+    BoundLogicalOperator root(std::move(vle));
+
+    NormalizationContext ctx;
+    ShortestPathBatchNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out = std::get<std::unique_ptr<BoundVarLenExpandOp>>(root);
+    ASSERT_NE(out, nullptr);
+    EXPECT_TRUE(out->batch_shortest_path);
 }
 
 TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {

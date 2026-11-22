@@ -374,7 +374,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/rules/logical/pattern_comprehension_anchor_share.cpp
     src/query/optimizer/rules/logical/join_commute.cpp
     src/query/optimizer/rules/logical/join_associate.cpp
-    src/query/optimizer/rules/logical/extract_join_conditions.cpp
+    src/query/optimizer/normalization/plan_normalizations.cpp
     src/query/optimizer/rules/physical/impl_rules.cpp
 )
 

@@ -19,6 +19,10 @@ analysis/      Read-only passes that inspect the logical tree
   requirement_collector.*  VarRequirements for Cascades Enrichers
   materialization_req.hpp  materialization property model
 
+normalization/ Pre-memo invariants/annotations; no Cascades alternatives
+  normalization_pass.hpp   NormalizationPass/Pipeline/Context
+  plan_normalizations.*    join conditions, shortestPath batch, join safety
+
 extraction/    Demand-pull extraction decisions + expression lowering
   projection_extraction.*  PEPlan/requirements, slot allocation, alias/slot
                            propagation, column-index lowering
@@ -36,6 +40,8 @@ logical_optimizer.*  pipeline entry: copy-in, task queue, CBO extract, RBO fallb
   physical/plan-shape choices such as per-hop uniqueness filters or scan
   property lists.
 - `analysis/` never mutates a plan.
+- `normalization/` mutates/annotates the logical plan before memoization; it
+  must be idempotent and must not produce alternatives or read CBO cost.
 - `rules/` receive a `GroupExpr` and return equivalent alternatives. A rule
   must not assume it is the only plan: CBO may keep the original expression.
 - `extraction/` consumes the chosen/RBO logical plan and produces PE plans plus
@@ -44,6 +50,13 @@ logical_optimizer.*  pipeline entry: copy-in, task queue, CBO extract, RBO fallb
   different: the former computes logical materialization demand for Cascades
   Enrichers; the latter computes physical flat-property demand/PE columns.
   They must not be merged without first unifying their output contracts.
+
+## Adding a normalization
+
+1. Add a `NormalizationPass` subclass under `normalization/`.
+2. Make it idempotent and independent of cost/statistics.
+3. Register it in `LogicalOptimizer::optimize()`'s pipeline.
+4. Add a focused test; normalizations do not need a CBO alternative test.
 
 ## Adding a rule
 

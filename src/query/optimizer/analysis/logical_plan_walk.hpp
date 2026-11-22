@@ -64,21 +64,5 @@ template <typename OpRef, typename Visit> void forEachLogicalChild(OpRef&& op, V
         op);
 }
 
-/// Optimizer pass: select the bounded multi-target shortestPath strategy. The
-/// physical operator only executes it when this bit is set; it must not infer
-/// the strategy from runtime batch shape.
-inline void markShortestPathBatch(binder::BoundLogicalOperator& op) {
-    std::visit(
-        [](auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v && v->shortest_path && !v->all_shortest_paths && v->max_hops >= 0 && v->max_hops <= 8)
-                    v->batch_shortest_path = true;
-            }
-        },
-        op);
-    forEachLogicalChild(op, [](binder::BoundLogicalOperator& child) { markShortestPathBatch(child); });
-}
-
 } // namespace optimizer
 } // namespace eugraph

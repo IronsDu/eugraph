@@ -1,11 +1,10 @@
 #include "query/optimizer/logical_optimizer.hpp"
 #include "common/config/env_vars.hpp"
 
-#include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
+#include "query/optimizer/normalization/plan_normalizations.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
-#include "query/optimizer/rules/logical/extract_join_conditions.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
@@ -40,37 +39,6 @@ bool hasFullObjectEnricher(const ChosenPlan& plan) {
 
 } // namespace
 
-namespace {
-
-bool subtreeNeedsConservativeJoinOrder(const binder::BoundLogicalOperator& op) {
-    bool unsafe = false;
-    std::visit(
-        [&](const auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                unsafe = true;
-            }
-        },
-        op);
-    if (unsafe)
-        return true;
-    forEachLogicalChild(op, [&](const binder::BoundLogicalOperator& child) {
-        if (!unsafe)
-            unsafe = subtreeNeedsConservativeJoinOrder(child);
-    });
-    return unsafe;
-}
-
-} // namespace
-
 void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog,
                                 const std::unordered_map<LabelId, uint64_t>* label_vertex_counts) {
     // A LogicalOptimizer instance may be reused. Reset per-query state before
@@ -80,22 +48,19 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     rules_ = RuleSet{};
     initRules();
 
-    // Filter 只在引用 Project 的简单列/变量别名时才穿过 Project；其余不动。
-    // 这是 plan metadata（是否允许 commute/associate），不是 rewrite。
-    memo_.setCommuteSafe(!subtreeNeedsConservativeJoinOrder(plan.root));
-
-    // Plan normalization（不是 rewrite rule）：给 Filter 下的 Join 填算法无关的
-    // equi-join 提示，同时保留 Filter 作为语义兜底。当前 OptRule 只能替换
-    // GroupExpr，不能安全改写 child group 内部的 Join 元数据，因此放在 memo 前。
-    extractJoinConditions(plan.root);
+    // Normalization：建立逻辑计划不变量/标注，不产生 Cascades alternative。
+    // 顺序固定、与 RuleSet 分离；结果只通过 NormalizationContext 传回 optimizer。
+    NormalizationPipeline normalization;
+    normalization.add(std::make_unique<JoinSafetyNormalization>());
+    normalization.add(std::make_unique<JoinConditionNormalization>());
+    normalization.add(std::make_unique<ShortestPathBatchNormalization>());
+    NormalizationContext normalization_ctx;
+    normalization.run(plan.root, normalization_ctx);
+    memo_.setCommuteSafe(normalization_ctx.commute_safe);
 
     // Make the catalog available to LogProp derivation. Group::getLogProp
     // picks it up via Memo::getCatalog() during OInputsTask cost computation.
     memo_.setCatalog(catalog);
-
-    // Structural optimizer pass (no CBO statistics): choose the bounded
-    // multi-target shortestPath execution strategy before memoization.
-    markShortestPathBatch(plan.root);
 
     auto root_gid = memo_.copyIn(plan.root);
 

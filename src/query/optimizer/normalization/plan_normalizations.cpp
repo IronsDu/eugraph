@@ -1,4 +1,4 @@
-#include "query/optimizer/rules/logical/extract_join_conditions.hpp"
+#include "query/optimizer/normalization/plan_normalizations.hpp"
 
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/framework/memo.hpp"
@@ -6,9 +6,19 @@
 #include "query/planner/bound_expression/bound_expression_walk.hpp"
 #include "query/planner/bound_expression/bound_variable_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_create_edge_op.hpp"
+#include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
+#include "query/planner/logical_plan/operator/bound_delete_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
+#include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
+#include "query/planner/logical_plan/operator/bound_merge_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
+#include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
+#include "query/planner/logical_plan/operator/bound_set_op.hpp"
+#include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <string>
 #include <unordered_set>
@@ -93,8 +103,8 @@ bool isJoinEquality(const binder::BoundExpression& expr, const std::unordered_se
            ((subset(lv, left_vars) && subset(rv, right_vars)) || (subset(lv, right_vars) && subset(rv, left_vars)));
 }
 
-void rewriteOne(BoundLogicalOperator& op) {
-    forEachLogicalChild(op, [&](BoundLogicalOperator& child) { rewriteOne(child); });
+void extractJoinConditions(binder::BoundLogicalOperator& op) {
+    forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) { extractJoinConditions(child); });
     auto* fp = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&op);
     if (!fp || !*fp)
         return;
@@ -118,10 +128,60 @@ void rewriteOne(BoundLogicalOperator& op) {
             join.join_conditions.push_back(cloneBoundExpression(*c));
     }
 }
+
+void markShortestPathBatch(binder::BoundLogicalOperator& op) {
+    std::visit(
+        [](auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (v && v->shortest_path && !v->all_shortest_paths && v->max_hops >= 0 && v->max_hops <= 8)
+                    v->batch_shortest_path = true;
+            }
+        },
+        op);
+    forEachLogicalChild(op, [](binder::BoundLogicalOperator& child) { markShortestPathBatch(child); });
+}
+
+bool subtreeNeedsConservativeJoinOrder(const binder::BoundLogicalOperator& op) {
+    bool unsafe = false;
+    std::visit(
+        [&](const auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                unsafe = true;
+            }
+        },
+        op);
+    if (unsafe)
+        return true;
+    forEachLogicalChild(op, [&](const binder::BoundLogicalOperator& child) {
+        if (!unsafe)
+            unsafe = subtreeNeedsConservativeJoinOrder(child);
+    });
+    return unsafe;
+}
+
 } // namespace
 
-void extractJoinConditions(BoundLogicalOperator& root) {
-    rewriteOne(root);
+void JoinConditionNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext&) const {
+    extractJoinConditions(root);
 }
+
+void ShortestPathBatchNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext&) const {
+    markShortestPathBatch(root);
+}
+
+void JoinSafetyNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext& ctx) const {
+    ctx.commute_safe = !subtreeNeedsConservativeJoinOrder(root);
+}
+
 } // namespace optimizer
 } // namespace eugraph
