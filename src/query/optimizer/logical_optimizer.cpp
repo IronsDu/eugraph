@@ -81,9 +81,12 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     initRules();
 
     // Filter 只在引用 Project 的简单列/变量别名时才穿过 Project；其余不动。
+    // 这是 plan metadata（是否允许 commute/associate），不是 rewrite。
     memo_.setCommuteSafe(!subtreeNeedsConservativeJoinOrder(plan.root));
 
-    // 逻辑语义提示：让 CBO 看到 equi-join 条件；Filter 保留作为语义兜底。
+    // Plan normalization（不是 rewrite rule）：给 Filter 下的 Join 填算法无关的
+    // equi-join 提示，同时保留 Filter 作为语义兜底。当前 OptRule 只能替换
+    // GroupExpr，不能安全改写 child group 内部的 Join 元数据，因此放在 memo 前。
     extractJoinConditions(plan.root);
 
     // Make the catalog available to LogProp derivation. Group::getLogProp
