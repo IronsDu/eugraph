@@ -12110,3 +12110,17 @@ TEST_F(QueryExecutorTest, GenericDestinationIndexJoin) {
     // 这个形状 planner 已经能用 IndexScan(dst)+Expand 完成，不需要额外 HashJoin；
     // 规则本身保留为 source 集合需要独立物化时的通用候选。
 }
+
+TEST_F(QueryExecutorTest, VleReverseFromDestinationLabelScan) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name:'p1'}), (c:City {name:'c1'}), "
+                                     "(p)-[:LIVES_IN]->(c)")
+                    .error.empty());
+    const std::string query = "MATCH (p:Person)-[:LIVES_IN*1..2]->(c:City) RETURN count(*) AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("LabelScan(variable=c"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("VarLenExpand(src=c"), std::string::npos) << plan;
+}
