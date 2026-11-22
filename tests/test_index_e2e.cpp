@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "common/config/env_vars.hpp"
-#include "common/stats/stats_journal.hpp"
+#include "storage/stats/stats_journal.hpp"
 #include "common/types/constants.hpp"
 #include "query/executor/query_executor.hpp"
 

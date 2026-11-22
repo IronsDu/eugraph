@@ -1,4 +1,4 @@
-#include "common/stats/stats_journal.hpp"
+#include "storage/stats/stats_journal.hpp"
 
 #include <cstring>
 

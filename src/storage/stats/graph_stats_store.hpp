@@ -4,7 +4,7 @@
 /// 不在热路径做 map 的 read-modify-write；提交时把 StatsDelta 的增量
 /// fetch_add 到稳定槽位，因此并发合并不会丢更新。
 
-#include "common/stats/graph_stats.hpp"
+#include "storage/stats/graph_stats.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -47,6 +47,8 @@ private:
         std::atomic<bool> ready{false};
     };
 
+    // slots_mu_ 只保护槽位 map 的结构（创建/遍历/替换）和 shared_ptr 生命周期；
+    // 计数增量由下面各 slot 的 atomic fetch_add 合并，不靠这把锁串行化。
     mutable std::shared_mutex slots_mu_;
     std::unordered_map<LabelId, std::shared_ptr<LabelSlot>> labels_;
     std::unordered_map<EdgeLabelId, std::shared_ptr<EdgeSlot>> edge_labels_;

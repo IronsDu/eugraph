@@ -55,7 +55,8 @@ void GraphStatsStore::applyCommitted(const StatsDelta& delta, uint64_t journal_s
     }
     if (delta.empty())
         return;
-    // 先复制槽位引用，再在锁外做原子加；槽位生命周期由 shared_ptr 保活。
+    // 先复制槽位引用，再在锁外做原子加；slots_mu_ 只保护 map 结构，
+    // 不保护这里的计数器加法。槽位生命周期由 shared_ptr 保活。
     std::vector<std::pair<std::shared_ptr<LabelSlot>, int64_t>> vertex_updates;
     vertex_updates.reserve(delta.vertex_delta.size());
     for (const auto& [id, d] : delta.vertex_delta)

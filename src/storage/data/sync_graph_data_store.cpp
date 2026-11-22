@@ -2,14 +2,13 @@
 #include <folly/Function.h>
 
 #include "common/config/env_vars.hpp"
-#include "common/stats/stats_journal.hpp"
-#include "common/stats/stats_snapshot.hpp"
 #include "storage/session/graph_session.hpp"
+#include "storage/stats/stats_journal.hpp"
+#include "storage/stats/stats_snapshot.hpp"
 #include "storage/wt_table_ops.hpp"
 
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <numeric>
@@ -349,9 +348,6 @@ bool SyncGraphDataStore::invalidateVertexSummary(GraphSession& gs, VertexId vid)
 
 void SyncGraphDataStore::attachStatsSink(GraphSession& session) {
     if (stats_store_ == nullptr)
-        return;
-    // Diagnostic escape hatch: bulk import can disable stats to isolate import cost.
-    if (const char* disabled = std::getenv(config::kEnvStatsDisable); disabled != nullptr && *disabled == '1')
         return;
     session.setStatsSink([this] { return nextStatsJournalSeq(); },
                          [this](WT_SESSION* wt_session, uint64_t seq, const StatsDelta& delta) {

@@ -1,7 +1,7 @@
 #pragma once
 /// 持久化 GraphStatsSnapshot 的编码。
 
-#include "common/stats/graph_stats.hpp"
+#include "storage/stats/graph_stats.hpp"
 
 #include <string>
 #include <string_view>

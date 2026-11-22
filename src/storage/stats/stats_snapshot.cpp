@@ -1,4 +1,4 @@
-#include "common/stats/stats_snapshot.hpp"
+#include "storage/stats/stats_snapshot.hpp"
 
 #include <cstring>
 

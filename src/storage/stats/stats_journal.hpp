@@ -4,7 +4,7 @@
 ///   value = version(u8) + 三个 delta map
 /// 使用固定小端布局；同一进程/架构内 journal 由数据 DB 持有。
 
-#include "common/stats/graph_stats.hpp"
+#include "storage/stats/graph_stats.hpp"
 
 #include <cstdint>
 #include <string>
