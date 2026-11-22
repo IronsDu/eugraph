@@ -12,12 +12,12 @@
 //  - 纯事务状态机在 `TxnController`/`StickyError` ⇒ 可脱离 WT 单测 ✓
 
 #include "common/schema/graph_schema.hpp"
-#include "storage/stats/graph_stats.hpp"
 #include "common/types/graph_types.hpp"
 #include "storage/index/index_runtime_registry.hpp"
 #include "storage/session/cursor_provider.hpp"
 #include "storage/session/session_types.hpp"
 #include "storage/session/txn_controller.hpp"
+#include "storage/stats/graph_stats.hpp"
 #include "storage/wt_error.hpp"
 #include "storage/wt_session.hpp"
 

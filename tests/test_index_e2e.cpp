@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "common/config/env_vars.hpp"
-#include "storage/stats/stats_journal.hpp"
 #include "common/types/constants.hpp"
 #include "query/executor/query_executor.hpp"
+#include "storage/stats/stats_journal.hpp"
 
 #include "query/parser/index_ddl_parser.hpp"
 #include "storage/data/async_graph_data_store.hpp"
