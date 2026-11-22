@@ -86,6 +86,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--queries-dir", required=True)
     ap.add_argument("--uri", default="bolt://127.0.0.1:7688")
+    ap.add_argument("--database", default=None, help="Bolt database/graph name")
     ap.add_argument("--user", default=None)
     ap.add_argument("--password", default=None)
     ap.add_argument("--person-id", type=int, default=933)
@@ -139,7 +140,7 @@ def main() -> int:
         for attempt in attempts:
             times, row_count, note = [], None, ""
             try:
-                with driver.session() as s:
+                with driver.session(database=args.database) as s:
                     for _ in range(args.warmup):
                         list(s.run(text, **attempt))
                     for _ in range(args.iters):

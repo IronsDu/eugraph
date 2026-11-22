@@ -28,6 +28,8 @@ inline constexpr const char* kEnvIndexBackfillBatch = "EUGRAPH_INDEX_BACKFILL_BA
 inline constexpr const char* kEnvIndexPinWaitTimeoutMs = "EUGRAPH_INDEX_PIN_WAIT_TIMEOUT_MS";
 /// 通用 HashJoin 构建侧行数上限；0 表示由 planner 关闭 HashJoin（保守回退）。
 inline constexpr const char* kEnvHashJoinMaxBuildRows = "EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS";
+/// 批量导入诊断：1 = 不挂统计 sink（不写 journal/不合并 stats）。
+inline constexpr const char* kEnvStatsDisable = "EUGRAPH_STATS_DISABLE";
 inline constexpr const char* kEnvPathCountCacheMaxEntries = "EUGRAPH_PATH_COUNT_CACHE_MAX_ENTRIES";
 
 } // namespace eugraph::config
