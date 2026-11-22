@@ -18,8 +18,6 @@
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
-#include "query/optimizer/rules/logical/push_filter_below_vle.hpp"
-#include "query/optimizer/rules/logical/push_filter_through_project.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -176,6 +174,73 @@ TEST(FilterPushdownTest, FilterThroughPathBuildExpand) {
     auto& filt = std::get<std::unique_ptr<BoundFilterOp>>(exp->child);
 
     ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(filt->child));
+}
+
+TEST(FilterPushdownTest, FilterThroughProjectWithAliasIsPushed) {
+    auto project = std::make_unique<BoundProjectOp>();
+    BoundProjectOp::ProjectItem item;
+    item.expr = BoundColumnRef(0, BoundType::Any(), "src");
+    item.alias = "p";
+    item.result_type = BoundType::Any();
+    project->items.push_back(std::move(item));
+    project->child = makeLabelScan("src", 0);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(project));
+    filter->predicate = BoundColumnRef(0, BoundType::Any(), "p");
+    BoundLogicalOperator root(std::move(filter));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& outer = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+    FilterPushdownRule rule;
+    ASSERT_TRUE(rule.condition(outer, memo));
+    auto subs = rule.substitute(outer, memo);
+    ASSERT_EQ(subs.size(), 1u);
+    auto* new_project = std::get_if<std::unique_ptr<BoundProjectOp>>(&subs[0]->op);
+    ASSERT_NE(new_project, nullptr);
+    ASSERT_NE(*new_project, nullptr);
+    ASSERT_EQ(subs[0]->child_groups.size(), 1u);
+    Group& filter_group = memo.getGroup(subs[0]->child_groups[0]);
+    ASSERT_FALSE(filter_group.logical_exprs.empty());
+    GroupExpr& pushed_filter = memo.getExpr(filter_group.logical_exprs.back());
+    auto* filter_op = std::get_if<std::unique_ptr<BoundFilterOp>>(&pushed_filter.op);
+    ASSERT_NE(filter_op, nullptr);
+    ASSERT_NE(*filter_op, nullptr);
+    ASSERT_TRUE(std::holds_alternative<BoundColumnRef>((*filter_op)->predicate));
+    EXPECT_EQ(std::get<BoundColumnRef>((*filter_op)->predicate).name, "src");
+}
+
+TEST(FilterPushdownTest, SourceFilterPushedBelowVleByRule) {
+    auto vle = std::make_unique<BoundVarLenExpandOp>();
+    vle->src_variable = "a";
+    vle->dst_variable = "b";
+    vle->edge_variable = "e";
+    vle->edge_label_ids = {EdgeLabelId{7}};
+    vle->min_hops = 1;
+    vle->max_hops = 2;
+    vle->child = makeLabelScan("a", 0);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(vle));
+    filter->predicate = BoundColumnRef(0, BoundType::Any(), "a");
+    BoundLogicalOperator root(std::move(filter));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& outer = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+    FilterPushdownRule rule;
+    ASSERT_TRUE(rule.condition(outer, memo));
+    auto subs = rule.substitute(outer, memo);
+    ASSERT_EQ(subs.size(), 1u);
+    auto* new_vle = std::get_if<std::unique_ptr<BoundVarLenExpandOp>>(&subs[0]->op);
+    ASSERT_NE(new_vle, nullptr);
+    ASSERT_NE(*new_vle, nullptr);
+    ASSERT_EQ(subs[0]->child_groups.size(), 1u);
+    Group& filter_group = memo.getGroup(subs[0]->child_groups[0]);
+    ASSERT_FALSE(filter_group.logical_exprs.empty());
+    GroupExpr& pushed_filter = memo.getExpr(filter_group.logical_exprs.back());
+    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(pushed_filter.op));
 }
 
 TEST(FilterPushdownTest, FilterAboveProjectNotPushed) {
@@ -2980,30 +3045,6 @@ TEST(JoinAssociateRuleTest, RotatesLeftDeepJoinWhenSafe) {
     ASSERT_FALSE(new_inner_group.logical_exprs.empty());
     const GroupExpr& new_inner_expr = memo.getExpr(new_inner_group.logical_exprs.back());
     ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(new_inner_expr.op));
-}
-
-TEST(PushFilterThroughProjectTest, ReplacesSimpleAliasAndPushesBelowProject) {
-    auto project = std::make_unique<BoundProjectOp>();
-    BoundProjectOp::ProjectItem item;
-    item.expr = BoundColumnRef(0, BoundType::Any(), "src");
-    item.alias = "p";
-    item.result_type = BoundType::Any();
-    project->items.push_back(std::move(item));
-    project->child = makeLabelScanWithLabel("src", 0, LabelId{1});
-
-    auto filter = std::make_unique<BoundFilterOp>();
-    filter->child = BoundLogicalOperator(std::move(project));
-    filter->predicate = BoundColumnRef(0, BoundType::Any(), "p");
-    BoundLogicalOperator root(std::move(filter));
-
-    pushFilterThroughProject(root);
-
-    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundProjectOp>>(root));
-    auto& proj = std::get<std::unique_ptr<BoundProjectOp>>(root);
-    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(proj->child));
-    auto& pushed = std::get<std::unique_ptr<BoundFilterOp>>(proj->child);
-    ASSERT_TRUE(std::holds_alternative<BoundColumnRef>(pushed->predicate));
-    EXPECT_EQ(std::get<BoundColumnRef>(pushed->predicate).name, "src");
 }
 
 TEST(LogPropTest, EdgeCountStatsEstimateAverageOutDegree) {

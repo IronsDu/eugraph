@@ -319,10 +319,11 @@ semi-join/decorrelation 和 destination-index 的 CBO 决策。当前不能把�
 - 需要支持“Filter 穿过 Projection/PE 且保持 slot/别名”的规则，不能只推 VLE/Expand。
   该版本已回退，未保留仅增加冗余 Filter 而无收益的规则。
 
-### 12.2 Filter(Project) 安全下推（已落地规则）
+### 12.2 Filter(Project) 安全下推（已并入 FilterPushdownRule）
 
-新增 `pushFilterThroughProject`：只有 Filter 引用的名字都能在 Project item 中找到
+`FilterPushdownRule` 现在处理 Project：只有 Filter 引用的名字都能在 Project item 中找到
 “简单列/变量”别名时，才替换别名并把 Filter 推到 Project 下方；否则不动。
+Filter(VarLenExpand) 的 source-only 下推也由同一个规则完成，不再有独立 pre-pass。
 
 验证：query 681/681、optimizer 129/129。
 
