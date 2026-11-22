@@ -3031,3 +3031,26 @@ TEST(PushFilterThroughProjectTest, ReplacesSimpleAliasAndPushesBelowProject) {
     ASSERT_TRUE(std::holds_alternative<BoundColumnRef>(pushed->predicate));
     EXPECT_EQ(std::get<BoundColumnRef>(pushed->predicate).name, "src");
 }
+TEST(PushFilterBelowVleTest, SourceOnlyPredicateMovesBelowVle) {
+    auto vle = std::make_unique<BoundVarLenExpandOp>();
+    vle->src_variable = "a";
+    vle->dst_variable = "b";
+    vle->edge_variable = "e";
+    vle->edge_label_ids = {EdgeLabelId{7}};
+    vle->min_hops = 1;
+    vle->max_hops = 2;
+    vle->child = makeLabelScanWithLabel("a", 0, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(vle));
+    filter->predicate = BoundColumnRef(0, BoundType::Any(), "a");
+    BoundLogicalOperator root(std::move(filter));
+
+    pushFilterBelowVle(root);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundVarLenExpandOp>>(root));
+    auto& out = std::get<std::unique_ptr<BoundVarLenExpandOp>>(root);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(out->child));
+    auto& pushed = std::get<std::unique_ptr<BoundFilterOp>>(out->child);
+    ASSERT_TRUE(std::holds_alternative<BoundColumnRef>(pushed->predicate));
+    EXPECT_EQ(std::get<BoundColumnRef>(pushed->predicate).name, "a");
+}

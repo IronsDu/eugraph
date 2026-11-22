@@ -10,6 +10,7 @@
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
+#include "query/optimizer/rules/logical/push_filter_below_vle.hpp"
 #include "query/optimizer/rules/logical/push_filter_through_project.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
@@ -83,6 +84,7 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
     // Filter 只在引用 Project 的简单列/变量别名时才穿过 Project；其余不动。
     pushFilterThroughProject(plan.root);
+    pushFilterBelowVle(plan.root);
     memo_.setCommuteSafe(!subtreeNeedsConservativeJoinOrder(plan.root));
 
     // 逻辑语义提示：让 CBO 看到 equi-join 条件；Filter 保留作为语义兜底。
