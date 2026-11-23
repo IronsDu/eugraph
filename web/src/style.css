@@ -2094,3 +2094,14 @@ html[data-theme='light'] .graph-notice {
   transform: none !important;
   transform-style: flat;
 }
+
+.plan-graph-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.plan-graph-viewport.dragging .plan-graph-canvas {
+  cursor: grabbing;
+}

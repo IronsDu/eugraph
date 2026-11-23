@@ -1523,116 +1523,151 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       return Math.max(PLAN_NODE_WIDTH, total);
     }
 
-    function renderPlanGraph(root: any): HTMLElement {
-      const positions: Array<{ node: any; x: number; y: number; width: number; height: number }> = [];
-      const depthHeight: number[] = [];
-      const place = (node: any, left: number, depth: number): void => {
-        const width = planSubtreeWidth(node);
-        const height = planNodeHeight(node);
-        positions.push({ node, x: left + width / 2, y: 0, width, height });
-        depthHeight[depth] = Math.max(depthHeight[depth] ?? 0, height);
-        const children = Array.isArray(node?.children) ? node.children : [];
-        if (children.length === 0) return;
-        let childWidth = 0;
-        for (const child of children) childWidth += planSubtreeWidth(child);
-        childWidth += PLAN_SIBLING_GAP * (children.length - 1);
-        let childLeft = left + (width - childWidth) / 2;
-        for (const child of children) {
-          place(child, childLeft, depth + 1);
-          childLeft += planSubtreeWidth(child) + PLAN_SIBLING_GAP;
+    type PlanLayoutNode = {
+      node: any;
+      x: number;
+      y: number;
+      depth: number;
+      height: number;
+      lines: string[];
+    };
+
+    function planWrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+      if (!text) return [];
+      const lines: string[] = [];
+      let current = '';
+      for (const ch of text) {
+        const next = current + ch;
+        if (current && ctx.measureText(next).width > maxWidth) {
+          lines.push(current);
+          current = ch;
+        } else {
+          current = next;
         }
+      }
+      if (current) lines.push(current);
+      return lines;
+    }
+
+    function buildPlanGraphLayout(root: any): { nodes: PlanLayoutNode[]; edges: Array<[PlanLayoutNode, PlanLayoutNode]>; width: number; height: number } {
+      const measure = document.createElement('canvas').getContext('2d');
+      const nodes: PlanLayoutNode[] = [];
+      const edges: Array<[PlanLayoutNode, PlanLayoutNode]> = [];
+      if (!measure) return { nodes, edges, width: PLAN_NODE_WIDTH, height: PLAN_NODE_HEIGHT };
+      measure.font = '11.5px monospace';
+      const detailsWidth = PLAN_NODE_WIDTH - 26;
+
+      const place = (node: any, left: number, depth: number): PlanLayoutNode => {
+        const width = planSubtreeWidth(node);
+        const details = planDetails(node);
+        const lines = planWrapText(measure, details || '（无额外信息）', detailsWidth);
+        const height = Math.max(PLAN_NODE_HEIGHT, 44 + lines.length * 15);
+        const entry: PlanLayoutNode = { node, x: left + width / 2, y: 0, depth, height, lines };
+        nodes.push(entry);
+        const children = Array.isArray(node?.children) ? node.children : [];
+        if (children.length > 0) {
+          let childWidth = 0;
+          for (const child of children) childWidth += planSubtreeWidth(child);
+          childWidth += PLAN_SIBLING_GAP * (children.length - 1);
+          let childLeft = left + (width - childWidth) / 2;
+          for (const child of children) {
+            const childEntry = place(child, childLeft, depth + 1);
+            edges.push([entry, childEntry]);
+            childLeft += planSubtreeWidth(child) + PLAN_SIBLING_GAP;
+          }
+        }
+        return entry;
       };
       place(root, 0, 0);
 
+      const depthHeight: number[] = [];
+      for (const entry of nodes) depthHeight[entry.depth] = Math.max(depthHeight[entry.depth] ?? 0, entry.height);
       const depthY: number[] = [];
       let y = 0;
       for (let d = 0; d < depthHeight.length; d += 1) {
         depthY[d] = y;
         y += depthHeight[d] + PLAN_LEVEL_GAP;
       }
-      const totalWidth = Math.max(PLAN_NODE_WIDTH, planSubtreeWidth(root));
-      const totalHeight = Math.max(PLAN_NODE_HEIGHT, y);
+      for (const entry of nodes) entry.y = depthY[entry.depth];
+      return { nodes, edges, width: Math.max(PLAN_NODE_WIDTH, planSubtreeWidth(root)), height: y };
+    }
 
-      const canvas = h('div', { class: 'plan-graph-canvas' });
-      canvas.style.width = `${totalWidth + 24}px`;
-      canvas.style.height = `${totalHeight + 24}px`;
-      const links = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      links.setAttribute('class', 'plan-links');
-      links.setAttribute('width', String(totalWidth + 24));
-      links.setAttribute('height', String(totalHeight + 24));
-      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-      const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-      marker.setAttribute('id', 'plan-arrow');
-      marker.setAttribute('viewBox', '0 0 8 8');
-      marker.setAttribute('refX', '7');
-      marker.setAttribute('refY', '4');
-      marker.setAttribute('markerWidth', '6');
-      marker.setAttribute('markerHeight', '6');
-      marker.setAttribute('orient', 'auto');
-      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      arrow.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
-      arrow.setAttribute('class', 'plan-arrowhead');
-      marker.append(arrow);
-      defs.append(marker);
-      links.append(defs);
-      canvas.append(links);
+    function drawPlanGraph(canvas: HTMLCanvasElement, viewport: HTMLElement, layout: ReturnType<typeof buildPlanGraphLayout>): void {
+      const width = viewport.clientWidth;
+      const height = viewport.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const pixelWidth = Math.round(width * dpr);
+      const pixelHeight = Math.round(height * dpr);
+      // Assigning canvas.width/height clears the backing store and can show a
+      // blank frame. Only resize when the viewport actually changes.
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+      }
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const styles = getComputedStyle(document.documentElement);
+      const textColor = styles.getPropertyValue('--text').trim() || '#e6e9ef';
+      const mutedColor = styles.getPropertyValue('--muted').trim() || '#8b93a7';
+      const bgColor = styles.getPropertyValue('--bg-elevated').trim() || '#161b22';
+      const borderColor = styles.getPropertyValue('--border-strong').trim() || '#c2cbd8';
+      const accent = styles.getPropertyValue('--accent').trim() || '#3b82f6';
 
-      // Fill y after depth heights are known, then add boxes/connectors.
-      const nodes: Array<{ node: any; x: number; y: number; width: number; height: number }> = [];
-      const walk = (node: any, left: number, depth: number): void => {
-        const width = planSubtreeWidth(node);
-        const height = planNodeHeight(node);
-        const x = left + width / 2;
-        nodes.push({ node, x, y: depthY[depth], width, height });
-        const children = Array.isArray(node?.children) ? node.children : [];
-        if (children.length === 0) return;
-        let childWidth = 0;
-        for (const child of children) childWidth += planSubtreeWidth(child);
-        childWidth += PLAN_SIBLING_GAP * (children.length - 1);
-        let childLeft = left + (width - childWidth) / 2;
-        for (const child of children) {
-          walk(child, childLeft, depth + 1);
-          childLeft += planSubtreeWidth(child) + PLAN_SIBLING_GAP;
-        }
-      };
-      walk(root, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.save();
+      ctx.translate(planPanX, planPanY);
+      ctx.scale(planZoom, planZoom);
 
-      const byNode = new Map<any, { x: number; y: number; height: number }>();
-      for (const entry of nodes) byNode.set(entry.node, entry);
-      for (const entry of nodes) {
-        const parent = byNode.get(entry.node);
-        if (!parent) continue;
-        for (const child of entry.node?.children ?? []) {
-          const c = byNode.get(child);
-          if (!c) continue;
-          const x1 = entry.x + 12;
-          const y1 = entry.y + entry.height + 12;
-          const x2 = c.x + 12;
-          const y2 = c.y + 12;
-          const midY = y1 + (y2 - y1) / 2;
-          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          path.setAttribute('d', `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`);
-          path.setAttribute('class', 'plan-link');
-          path.setAttribute('marker-end', 'url(#plan-arrow)');
-          links.append(path);
-        }
+      // Edges first, under the boxes.
+      for (const [parent, child] of layout.edges) {
+        const x1 = parent.x;
+        const y1 = parent.y + parent.height;
+        const x2 = child.x;
+        const y2 = child.y;
+        const midY = y1 + (y2 - y1) / 2;
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1, midY);
+        ctx.lineTo(x2, midY);
+        ctx.lineTo(x2, y2 - 7);
+        ctx.stroke();
+        ctx.fillStyle = borderColor;
+        ctx.beginPath();
+        ctx.moveTo(x2 - 4, y2 - 7);
+        ctx.lineTo(x2 + 4, y2 - 7);
+        ctx.lineTo(x2, y2);
+        ctx.closePath();
+        ctx.fill();
       }
 
-      for (const entry of nodes) {
-        const details = planDetails(entry.node);
-        const box = h(
-          'div',
-          { class: 'plan-graph-node', title: details },
-          h('div', { class: 'plan-node-title' }, String(entry.node?.operatorType ?? '?')),
-          h('div', { class: 'plan-node-detail' }, details || '（无额外信息）')
-        );
-        box.style.left = `${entry.x - PLAN_NODE_WIDTH / 2 + 12}px`;
-        box.style.top = `${entry.y + 12}px`;
-        box.style.width = `${PLAN_NODE_WIDTH}px`;
-        box.style.minHeight = `${entry.height}px`;
-        canvas.append(box);
+      for (const entry of layout.nodes) {
+        const left = entry.x - PLAN_NODE_WIDTH / 2;
+        const top = entry.y;
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(left, top, PLAN_NODE_WIDTH, entry.height, 6);
+        ctx.fillStyle = bgColor;
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = accent;
+        ctx.stroke();
+        ctx.clip();
+        ctx.fillStyle = textColor;
+        ctx.font = 'bold 12px monospace';
+        ctx.fillText(String(entry.node?.operatorType ?? '?'), left + 10, top + 20);
+        ctx.fillStyle = textColor;
+        ctx.font = '11.5px monospace';
+        for (let i = 0; i < entry.lines.length; i += 1)
+          ctx.fillText(entry.lines[i], left + 10, top + 38 + i * 15);
+        ctx.restore();
       }
-      return canvas;
+      ctx.restore();
     }
 
     function renderPlan(): void {
@@ -1671,18 +1706,13 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         planBody.append(raw);
       } else {
         const viewport = h('div', { class: 'plan-graph-viewport' });
-        const panLayer = h('div', { class: 'plan-graph-pan' });
-        const stage = h('div', { class: 'plan-graph-stage' });
-        const canvas = renderPlanGraph(plan);
-        stage.append(canvas);
-        panLayer.append(stage);
-        viewport.append(panLayer);
+        const canvas = document.createElement('canvas');
+        canvas.className = 'plan-graph-canvas';
+        viewport.append(canvas);
         planBody.append(viewport);
-        // Base (unzoomed) canvas size. CSS zoom is used below instead of a
-        // compositor scale, so text is re-laid out at the target size and does
-        // not flicker/re-rasterize during wheel zoom.
-        let canvasWidth = parseFloat(canvas.style.width) || canvas.offsetWidth || 0;
-        let canvasHeight = parseFloat(canvas.style.height) || canvas.offsetHeight || 0;
+        const layout = buildPlanGraphLayout(plan);
+        const canvasWidth = layout.width;
+        const canvasHeight = layout.height;
 
         const clampPan = (): void => {
           const vw = viewport.clientWidth;
@@ -1702,8 +1732,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         const applyViewNow = (): void => {
           planZoom = Math.min(3, Math.max(0.2, planZoom));
           clampPan();
-          panLayer.style.transform = `translate3d(${planPanX}px, ${planPanY}px, 0)`;
-          stage.style.zoom = String(planZoom);
+          drawPlanGraph(canvas, viewport, layout);
           const label = toolbar.querySelector('.plan-zoom-label');
           if (label) label.textContent = `${Math.round(planZoom * 100)}%`;
         };
@@ -1715,14 +1744,13 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
             applyViewNow();
           });
         };
-        // The Plan panel is hidden while applyResult runs; its clientWidth is
-        // zero until activate('plan') re-renders it. Do not compute the initial
-        // center from a hidden (zero-size) viewport.
         if (!planViewInitialized && viewport.clientWidth > 0) {
           centerView();
           planViewInitialized = true;
         }
         applyViewNow();
+        const resizeObserver = new ResizeObserver(() => drawPlanGraph(canvas, viewport, layout));
+        resizeObserver.observe(viewport);
 
         const zoomOut = h('button', { class: 'button small', title: '缩小' }, '−') as HTMLButtonElement;
         const zoomIn = h('button', { class: 'button small', title: '放大' }, '+') as HTMLButtonElement;
