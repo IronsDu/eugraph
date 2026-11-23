@@ -1,13 +1,14 @@
 #include "query/optimizer/logical_optimizer.hpp"
 #include "common/config/env_vars.hpp"
 
-#include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/framework/cbo.hpp"
+#include "query/optimizer/normalization/plan_normalizations.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/join_associate.hpp"
+#include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
-#include "query/optimizer/rules/logical/tag_anchored_join_reorder.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
@@ -47,19 +48,19 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     rules_ = RuleSet{};
     initRules();
 
-    // Join-direction rewrite for the LDBC c6 tag-co-occurrence shape: the
-    // selective knownTag anchor should drive the pattern. Guarded by label
-    // cardinality estimates; other shapes are untouched.
-    if (catalog)
-        rewriteTagAnchoredJoin(plan, catalog, label_vertex_counts);
+    // Normalization：建立逻辑计划不变量/标注，不产生 Cascades alternative。
+    // 顺序固定、与 RuleSet 分离；结果只通过 NormalizationContext 传回 optimizer。
+    NormalizationPipeline normalization;
+    normalization.add(std::make_unique<JoinSafetyNormalization>());
+    normalization.add(std::make_unique<JoinConditionNormalization>());
+    normalization.add(std::make_unique<ShortestPathBatchNormalization>());
+    NormalizationContext normalization_ctx;
+    normalization.run(plan.root, normalization_ctx);
+    memo_.setCommuteSafe(normalization_ctx.commute_safe);
 
     // Make the catalog available to LogProp derivation. Group::getLogProp
     // picks it up via Memo::getCatalog() during OInputsTask cost computation.
     memo_.setCatalog(catalog);
-
-    // Structural optimizer pass (no CBO statistics): choose the bounded
-    // multi-target shortestPath execution strategy before memoization.
-    markShortestPathBatch(plan.root);
 
     auto root_gid = memo_.copyIn(plan.root);
 
@@ -115,6 +116,8 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 void LogicalOptimizer::initRules() {
     // Transformation rules
     rules_.addRule(std::make_unique<FilterPushdownRule>());
+    rules_.addRule(std::make_unique<JoinCommuteRule>());
+    rules_.addRule(std::make_unique<JoinAssociateRule>());
     rules_.addRule(std::make_unique<EdgeUniquenessPushdownRule>());
     rules_.addRule(std::make_unique<PathCountFusionRule>());
 
@@ -139,6 +142,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplPathBuildRule>());
     rules_.addRule(std::make_unique<ImplPathCountRule>());
     rules_.addRule(std::make_unique<ImplUnwindRule>());
+    rules_.addRule(std::make_unique<ImplHashJoinRule>());
     rules_.addRule(std::make_unique<ImplBinaryJoinRule>());
     rules_.addRule(std::make_unique<ImplLeftJoinRule>());
     rules_.addRule(std::make_unique<ImplSemiJoinRule>());

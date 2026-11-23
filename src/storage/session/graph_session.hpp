@@ -17,6 +17,7 @@
 #include "storage/session/cursor_provider.hpp"
 #include "storage/session/session_types.hpp"
 #include "storage/session/txn_controller.hpp"
+#include "storage/stats/graph_stats.hpp"
 #include "storage/wt_error.hpp"
 #include "storage/wt_session.hpp"
 
@@ -74,9 +75,22 @@ public:
         }
 
         TxnOutcome out;
+        uint64_t stats_seq = 0;
+        const bool stats_delta_pending = !stats_delta_.empty();
         if (!session_) {
             out = TxnOutcome{TxnState::Failed, EINVAL, "commit: no WT session", TxnErrorClass::Unknown};
         } else {
+            // journal 必须与用户数据在同一个 WT 事务中；失败则整个事务失败。
+            if (stats_delta_pending && stats_journal_writer_) {
+                stats_seq = stats_seq_allocator_ ? stats_seq_allocator_() : 0;
+                if (!stats_journal_writer_(session_.get(), stats_seq, stats_delta_)) {
+                    out = TxnOutcome{TxnState::Failed, EINVAL, "stats journal write failed", TxnErrorClass::Unknown};
+                    txn_.on_commit_result(out);
+                    err_.set(out);
+                    rollback();
+                    return out;
+                }
+            }
             const int ret = session_.get()->commit_transaction(session_.get(), nullptr);
             if (ret == 0)
                 out = TxnOutcome{TxnState::Committed, 0, {}, TxnErrorClass::None};
@@ -86,6 +100,15 @@ public:
         txn_.on_commit_result(out);
         err_.set(out);
         summary_written_.clear();
+        // 统计是 advisory：commit 成功后合并；失败时随事务丢弃。
+        if (out.state == TxnState::Committed && stats_delta_pending && stats_apply_) {
+            try {
+                stats_apply_(stats_delta_, stats_seq);
+            } catch (...) {
+                // 统计合并失败不能把已提交的数据说成失败；下次重建可修复。
+            }
+        }
+        clearStatsDelta();
         runTransactionEndHooks();
         clearSchemaPin();
         return out;
@@ -178,6 +201,34 @@ public:
     void clearSchemaPin() noexcept {
         schema_pin_ = {};
         releaseIndexAdmissions();
+        clearStatsDelta();
+    }
+
+    // ==================== 统计 delta / journal ====================
+    /// 事务本地统计增量；写路径只改这里，commit 成功后才合并到 GraphStatsStore。
+    StatsDelta& statsDelta() noexcept {
+        return stats_delta_;
+    }
+    const StatsDelta& statsDelta() const noexcept {
+        return stats_delta_;
+    }
+    bool hasStatsDelta() const noexcept {
+        return !stats_delta_.empty();
+    }
+    void clearStatsDelta() noexcept {
+        stats_delta_ = {};
+    }
+    using StatsSeqAllocator = std::function<uint64_t()>;
+    using StatsJournalWriter = std::function<bool(WT_SESSION*, uint64_t, const StatsDelta&)>;
+    using StatsApply = std::function<void(const StatsDelta&, uint64_t)>;
+    /// 由数据层在 for_session() 时绑定：journal 写入同一 WT 事务，提交后 apply。
+    void setStatsSink(StatsSeqAllocator alloc, StatsJournalWriter writer, StatsApply apply) {
+        stats_seq_allocator_ = std::move(alloc);
+        stats_journal_writer_ = std::move(writer);
+        stats_apply_ = std::move(apply);
+    }
+    bool hasStatsSink() const noexcept {
+        return static_cast<bool>(stats_apply_);
     }
 
     // ==================== 事务级索引准入 ====================
@@ -335,6 +386,11 @@ private:
     std::vector<std::function<void()>> txn_end_hooks_;
     /// index_id → 事务级写准入（commit/rollback/close 时统一释放）。
     std::unordered_map<uint32_t, IndexWriteGuard> index_admissions_;
+
+    StatsDelta stats_delta_;
+    StatsSeqAllocator stats_seq_allocator_;
+    StatsJournalWriter stats_journal_writer_;
+    StatsApply stats_apply_;
     bool closed_ = false;
 };
 

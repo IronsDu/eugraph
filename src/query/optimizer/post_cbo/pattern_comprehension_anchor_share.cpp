@@ -1,4 +1,4 @@
-#include "query/optimizer/rules/logical/pattern_comprehension_anchor_share.hpp"
+#include "query/optimizer/post_cbo/pattern_comprehension_anchor_share.hpp"
 
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/framework/memo.hpp"

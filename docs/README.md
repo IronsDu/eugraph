@@ -73,7 +73,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 顶点标签/属性/邻接存储（vertex_data） | [storage/kv-encoding.md](storage/kv-encoding.md) | `src/storage/kv/key_codec.*`, `src/storage/data/sync_graph_data_store.*` |
 | Expand 目标标签过滤优化 | [query/expand-label-filter-optimization.md](query/expand-label-filter-optimization.md) | `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | PatternComprehension 锚点标签扫描 | [query/pattern-comprehension-anchor-label-scan.md](query/pattern-comprehension-anchor-label-scan.md) | `src/query/planner/binder/bind_match.cpp` |
-| PatternComprehension 公共 anchor 共享（计划层 fork） | [query/engine/pattern-comprehension-anchor-sharing.md](query/engine/pattern-comprehension-anchor-sharing.md) | `src/query/optimizer/rules/logical/pattern_comprehension_anchor_share.cpp`, `src/query/physical_plan/operator/pattern_comprehension_fork_physical_op.cpp` |
+| PatternComprehension 公共 anchor 共享（计划层 fork） | [query/engine/pattern-comprehension-anchor-sharing.md](query/engine/pattern-comprehension-anchor-sharing.md) | `src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp`, `src/query/physical_plan/operator/pattern_comprehension_fork_physical_op.cpp` |
 | 表达式求值不应发起 IO（属性读取收敛到算子） | [query/engine/expression-io-boundary.md](query/engine/expression-io-boundary.md) | `src/query/evaluator/`, `src/query/optimizer/extraction/projection_extraction.cpp` |
 | LDBC c5/c9 计划分析 | [query/ldbc-c5-c9-plan-analysis.md](query/ldbc-c5-c9-plan-analysis.md) | `src/query/physical_plan/` |
 | LDBC 慢查询执行层优化（不改存储） | [benchmark/ldbc-storage-unchanged-optimization-plan.md](benchmark/ldbc-storage-unchanged-optimization-plan.md), [benchmark/ldbc-plan-quality-analysis.md](benchmark/ldbc-plan-quality-analysis.md) | `src/query/physical_plan/`, `src/query/planner/`, `src/storage/data/` |
@@ -170,6 +170,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [Cypher 语法参考](query/syntax/cypher-syntax.md) | 支持的 Cypher 语法边界（子句、表达式、聚合、索引 DDL） |
 | [AST 参考](query/syntax/ast-reference.md) | AST 节点层次与类型速查 |
 | [Cypher 解析器](query/syntax/cypher-parser-design.md) | ANTLR4 集成、AST 构建策略、设计决策 |
+| [统计与 Join CBO](query/engine/statistics-and-join-cbo-design.md) | stats journal/并发合并、Cascades HashJoin/IndexJoin 候选、性能验证协议 |
 
 ### 执行引擎
 

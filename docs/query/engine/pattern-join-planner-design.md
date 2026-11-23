@@ -81,7 +81,9 @@ SlotId
 
 **不采纳及理由：**
 
-1. 当前执行计划是 left-deep 树，且 CrossProduct / LeftJoin 的物理算子只支持二叉输入；
+1. 当前执行计划是 left-deep 树，且 CrossProduct / LeftJoin / HashJoin 的物理算子只支持二叉输入；
+   通用等值 `Filter(CrossProduct)` 会由 physical planner 选择 HashJoin（构建侧按基数/预算选择），
+   无法解析成列、存在残差谓词或超过构建预算时回退 CrossProduct+Filter；
    任意 part 图会立刻要求 join-order 决策与 bushy-tree 执行支持，超出本次 TCK 修复范围。
 2. IR 层仍会记录完整的 `(left_part, right_part, kind, equalities)` 关系，
    避免把 AST 顺序写死；实现阶段由 `PatternJoinPlanner` 按 source order 稳定地构造 left-deep tree。
@@ -487,7 +489,7 @@ PatternJoinPlanner ──► PatternJoinPlan
 JoinEqualityBuilder ──► BoundLogicalPlan
         │
         ▼
-DPL (ScopedSlotResolver) ──► PEPlan / rewriteColumnIndices
+DPL (ScopedSlotResolver) ──► PEPlan / lowerColumnIndices
         │
         ▼
 PhysicalPlanner + PhysicalCrossRefResolver ──► PhysicalPlan

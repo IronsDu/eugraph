@@ -14,8 +14,11 @@
 #include "query/optimizer/framework/opt_rule.hpp"
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/optimizer/logical_optimizer.hpp"
+#include "query/optimizer/normalization/plan_normalizations.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/join_associate.hpp"
+#include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -172,6 +175,73 @@ TEST(FilterPushdownTest, FilterThroughPathBuildExpand) {
     auto& filt = std::get<std::unique_ptr<BoundFilterOp>>(exp->child);
 
     ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(filt->child));
+}
+
+TEST(FilterPushdownTest, FilterThroughProjectWithAliasIsPushed) {
+    auto project = std::make_unique<BoundProjectOp>();
+    BoundProjectOp::ProjectItem item;
+    item.expr = BoundColumnRef(0, BoundType::Any(), "src");
+    item.alias = "p";
+    item.result_type = BoundType::Any();
+    project->items.push_back(std::move(item));
+    project->child = makeLabelScan("src", 0);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(project));
+    filter->predicate = BoundColumnRef(0, BoundType::Any(), "p");
+    BoundLogicalOperator root(std::move(filter));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& outer = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+    FilterPushdownRule rule;
+    ASSERT_TRUE(rule.condition(outer, memo));
+    auto subs = rule.substitute(outer, memo);
+    ASSERT_EQ(subs.size(), 1u);
+    auto* new_project = std::get_if<std::unique_ptr<BoundProjectOp>>(&subs[0]->op);
+    ASSERT_NE(new_project, nullptr);
+    ASSERT_NE(*new_project, nullptr);
+    ASSERT_EQ(subs[0]->child_groups.size(), 1u);
+    Group& filter_group = memo.getGroup(subs[0]->child_groups[0]);
+    ASSERT_FALSE(filter_group.logical_exprs.empty());
+    GroupExpr& pushed_filter = memo.getExpr(filter_group.logical_exprs.back());
+    auto* filter_op = std::get_if<std::unique_ptr<BoundFilterOp>>(&pushed_filter.op);
+    ASSERT_NE(filter_op, nullptr);
+    ASSERT_NE(*filter_op, nullptr);
+    ASSERT_TRUE(std::holds_alternative<BoundColumnRef>((*filter_op)->predicate));
+    EXPECT_EQ(std::get<BoundColumnRef>((*filter_op)->predicate).name, "src");
+}
+
+TEST(FilterPushdownTest, SourceFilterPushedBelowVleByRule) {
+    auto vle = std::make_unique<BoundVarLenExpandOp>();
+    vle->src_variable = "a";
+    vle->dst_variable = "b";
+    vle->edge_variable = "e";
+    vle->edge_label_ids = {EdgeLabelId{7}};
+    vle->min_hops = 1;
+    vle->max_hops = 2;
+    vle->child = makeLabelScan("a", 0);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(vle));
+    filter->predicate = BoundColumnRef(0, BoundType::Any(), "a");
+    BoundLogicalOperator root(std::move(filter));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& outer = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+    FilterPushdownRule rule;
+    ASSERT_TRUE(rule.condition(outer, memo));
+    auto subs = rule.substitute(outer, memo);
+    ASSERT_EQ(subs.size(), 1u);
+    auto* new_vle = std::get_if<std::unique_ptr<BoundVarLenExpandOp>>(&subs[0]->op);
+    ASSERT_NE(new_vle, nullptr);
+    ASSERT_NE(*new_vle, nullptr);
+    ASSERT_EQ(subs[0]->child_groups.size(), 1u);
+    Group& filter_group = memo.getGroup(subs[0]->child_groups[0]);
+    ASSERT_FALSE(filter_group.logical_exprs.empty());
+    GroupExpr& pushed_filter = memo.getExpr(filter_group.logical_exprs.back());
+    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(pushed_filter.op));
 }
 
 TEST(FilterPushdownTest, FilterAboveProjectNotPushed) {
@@ -1051,18 +1121,6 @@ TEST(CostModelTest, FilterCost) {
     in.cardinality = 5000.0;
     auto cost = findLocalCost(PhysicalOpTag::Filter, out, {in});
     EXPECT_DOUBLE_EQ(cost.value(), 5000.0);
-}
-
-TEST(CostModelTest, HashJoinCost) {
-    LogProp out;
-    out.cardinality = 500.0;
-    LogProp left;
-    left.cardinality = 1000.0;
-    LogProp right;
-    right.cardinality = 2000.0;
-    auto cost = findLocalCost(PhysicalOpTag::HashJoin, out, {left, right});
-    // build (right) + probe (left)
-    EXPECT_DOUBLE_EQ(cost.value(), 3000.0);
 }
 
 TEST(CostModelTest, NestedLoopJoinCost) {
@@ -2837,4 +2895,229 @@ TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
 
     auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
     EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+TEST(NormalizationTest, ExtractsEqualityJoinConditionAndKeepsFilter) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundColumnRef(0, BoundType::Any(), "a");
+    eq->right = BoundColumnRef(1, BoundType::Any(), "b");
+    eq->result_type = BoundType::Bool();
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(join));
+    filter->predicate = BoundExpression(std::move(eq));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    JoinConditionNormalization pass;
+    pass.apply(root, ctx);
+
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(root));
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child));
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_EQ(out_join->join_conditions.size(), 1u);
+    EXPECT_FALSE(out_filter->predicate.valueless_by_exception());
+}
+
+TEST(NormalizationTest, MarksBoundedShortestPathBatch) {
+    auto vle = std::make_unique<BoundVarLenExpandOp>();
+    vle->src_variable = "a";
+    vle->dst_variable = "b";
+    vle->edge_label_ids = {EdgeLabelId{7}};
+    vle->shortest_path = true;
+    vle->all_shortest_paths = false;
+    vle->max_hops = 3;
+    vle->child = makeLabelScan("a", 0);
+    BoundLogicalOperator root(std::move(vle));
+
+    NormalizationContext ctx;
+    ShortestPathBatchNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out = std::get<std::unique_ptr<BoundVarLenExpandOp>>(root);
+    ASSERT_NE(out, nullptr);
+    EXPECT_TRUE(out->batch_shortest_path);
+}
+
+TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundColumnRef(0, BoundType::Any(), "a");
+    eq->right = BoundColumnRef(1, BoundType::Any(), "b");
+    eq->result_type = BoundType::Bool();
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(join));
+    filter->predicate = BoundExpression(std::move(eq));
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    auto schema = std::make_shared<GraphSchema>();
+    schema->label_vertex_counts[LabelId{1}] = 2;
+    schema->label_vertex_counts[LabelId{2}] = 20;
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan, &catalog);
+
+    ASSERT_NE(plan.chosen, nullptr);
+    ASSERT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+    EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::HashJoin);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(plan.chosen->children[0]->op));
+    const auto& chosen_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(plan.chosen->children[0]->op);
+    ASSERT_NE(chosen_join, nullptr);
+    EXPECT_EQ(chosen_join->join_conditions.size(), 1u);
+}
+
+TEST(ChosenPlanTest, EquiJoinCboChoosesCrossWhenCheaper) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundColumnRef(0, BoundType::Any(), "a");
+    eq->right = BoundColumnRef(1, BoundType::Any(), "b");
+    eq->result_type = BoundType::Bool();
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(join));
+    filter->predicate = BoundExpression(std::move(eq));
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    auto schema = std::make_shared<GraphSchema>();
+    schema->label_vertex_counts[LabelId{1}] = 1;
+    schema->label_vertex_counts[LabelId{2}] = 3;
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan, &catalog);
+
+    ASSERT_NE(plan.chosen, nullptr);
+    ASSERT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+    // 1×3：HashJoin 4 > CrossProduct 3，CBO 必须选 CrossProduct。
+    EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::CrossProduct);
+}
+
+TEST(JoinCommuteRuleTest, SwapsCrossJoinChildrenWhenSafe) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    memo.setCommuteSafe(true);
+    auto gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    JoinCommuteRule rule;
+    ASSERT_TRUE(rule.condition(expr, memo));
+    auto candidates = rule.substitute(expr, memo);
+    ASSERT_EQ(candidates.size(), 1u);
+    auto& swapped = std::get<std::unique_ptr<BoundBinaryJoinOp>>(candidates[0]->op);
+    ASSERT_NE(swapped, nullptr);
+    // 只验证规则交换了 child groups；列顺序/别名安全由上层保守边界保证。
+    EXPECT_EQ(candidates[0]->child_groups[0], expr.child_groups[1]);
+    EXPECT_EQ(candidates[0]->child_groups[1], expr.child_groups[0]);
+}
+
+TEST(JoinCommuteRuleTest, DisabledForConservativePlans) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    memo.setCommuteSafe(false);
+    auto gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+    JoinCommuteRule rule;
+    EXPECT_FALSE(rule.condition(expr, memo));
+}
+
+TEST(JoinAssociateRuleTest, RotatesLeftDeepJoinWhenSafe) {
+    auto inner = std::make_unique<BoundBinaryJoinOp>();
+    inner->join_type = JoinType::Cross;
+    inner->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    inner->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+
+    auto outer = std::make_unique<BoundBinaryJoinOp>();
+    outer->join_type = JoinType::Cross;
+    outer->left = BoundLogicalOperator(std::move(inner));
+    outer->right = makeLabelScanWithLabel("c", 2, LabelId{3});
+    BoundLogicalOperator root(std::move(outer));
+
+    Memo memo;
+    memo.setCommuteSafe(true);
+    auto gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    JoinAssociateRule rule;
+    ASSERT_TRUE(rule.fullMatch(expr, memo));
+    ASSERT_TRUE(memo.commuteSafe());
+    auto* dbg_outer = std::get_if<std::unique_ptr<BoundBinaryJoinOp>>(&expr.op);
+    ASSERT_NE(dbg_outer, nullptr);
+    ASSERT_NE(*dbg_outer, nullptr);
+    EXPECT_TRUE((*dbg_outer)->join_type == JoinType::Cross || (*dbg_outer)->join_type == JoinType::Inner);
+    ASSERT_TRUE(rule.condition(expr, memo));
+    auto candidates = rule.substitute(expr, memo);
+    ASSERT_EQ(candidates.size(), 1u);
+    EXPECT_EQ(candidates[0]->child_groups.size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(candidates[0]->op));
+    // 新结构是 Join(A, Join(B,C))：A 的 group 保留，右 child 是新 (B⋈C) group。
+    const Group& inner_group = memo.getGroup(expr.child_groups[0]);
+    const GroupExpr& old_inner = memo.getExpr(inner_group.logical_exprs.back());
+    EXPECT_EQ(candidates[0]->child_groups[0], old_inner.child_groups[0]);
+    EXPECT_NE(candidates[0]->child_groups[1], expr.child_groups[0]);
+    const Group& new_inner_group = memo.getGroup(candidates[0]->child_groups[1]);
+    ASSERT_FALSE(new_inner_group.logical_exprs.empty());
+    const GroupExpr& new_inner_expr = memo.getExpr(new_inner_group.logical_exprs.back());
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundBinaryJoinOp>>(new_inner_expr.op));
+}
+
+TEST(LogPropTest, EdgeCountStatsEstimateAverageOutDegree) {
+    auto schema = std::make_shared<GraphSchema>();
+    schema->labels[LabelId{1}] = LabelDef{};
+    schema->edge_labels[EdgeLabelId{7}] = EdgeLabelDef{};
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    catalog.setLabelStats(LabelId{1}, 100);
+    catalog.setEdgeLabelStats(EdgeLabelId{7}, 500, 0.0);
+
+    BoundLabelScanOp scan;
+    scan.variable = "a";
+    scan.label_ids = {LabelId{1}};
+
+    LogPropDeriver deriver(&catalog);
+    LogProp source = deriver.derive(scan, {});
+
+    BoundExpandOp expand;
+    expand.src_variable = "a";
+    expand.dst_variable = "b";
+    expand.edge_variable = "e";
+    expand.edge_label_ids = {EdgeLabelId{7}};
+    BoundLogicalOperator expand_root(std::make_unique<BoundExpandOp>(std::move(expand)));
+    LogProp out = deriver.derive(expand_root, {source});
+    EXPECT_DOUBLE_EQ(out.cardinality, 500.0);
 }

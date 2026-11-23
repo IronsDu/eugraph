@@ -313,6 +313,15 @@ public:
         catalog_ = catalog;
     }
 
+    /// 逻辑规则的安全边界：写计划/pattern-comprehension 的列顺序假设尚未审计，
+    /// 不允许一般 join 交换规则进入这些计划。
+    void setCommuteSafe(bool safe) noexcept {
+        commute_safe_ = safe;
+    }
+    bool commuteSafe() const noexcept {
+        return commute_safe_;
+    }
+
 private:
     std::vector<std::unique_ptr<Group>> groups_;
     std::vector<std::unique_ptr<GroupExpr>> exprs_;
@@ -327,6 +336,7 @@ private:
 
     // CBO: shared catalog pointer for LogProp derivation
     const catalog::Catalog* catalog_ = nullptr;
+    bool commute_safe_ = false;
 };
 
 // ============================================================

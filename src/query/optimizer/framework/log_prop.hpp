@@ -70,6 +70,8 @@ private:
     LogProp deriveSingleton() const;
     LogProp deriveCorrelatedSource(const binder::BoundCorrelatedSourceOp& op) const;
     LogProp deriveExpand(const binder::BoundExpandOp& op, const LogProp& input) const;
+    double estimateAvgOutDegree(const std::vector<EdgeLabelId>& edge_labels, const LogProp& input,
+                                const std::string& src_var) const;
     LogProp deriveVarLenExpand(const binder::BoundVarLenExpandOp& op, const LogProp& input) const;
     LogProp deriveFilter(const binder::BoundFilterOp& op, const LogProp& input) const;
     LogProp deriveProject(const binder::BoundProjectOp& op, const LogProp& input) const;

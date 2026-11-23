@@ -169,6 +169,17 @@ std::vector<std::unique_ptr<GroupExpr>> ImplBinaryJoinRule::substitute(GroupExpr
     return makePhysicalExpr(expr, memo, PhysicalOpTag::CrossProduct);
 }
 
+PatternNode ImplHashJoinRule::pattern() const {
+    return {OptNodeType::BinaryJoin, {{}, {}}};
+}
+
+std::vector<std::unique_ptr<GroupExpr>> ImplHashJoinRule::substitute(GroupExpr& expr, Memo& memo) const {
+    auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
+    if (!join || !*join || (*join)->join_conditions.empty())
+        return {};
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::HashJoin);
+}
+
 PatternNode ImplLeftJoinRule::pattern() const {
     return {OptNodeType::LeftJoin, {{}, {}}};
 }

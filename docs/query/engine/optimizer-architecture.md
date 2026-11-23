@@ -9,7 +9,9 @@ layout, and the remaining Columbia gaps.
 |---|---|---|
 | Binder | AST → logical operators; names/scopes/types; collect semantic references | choose filter placement, scan property lists, join order |
 | analysis/ | read-only plan/expression analysis | mutate plans |
+| normalization/ | pre-memo invariants/annotations (join conditions, batch strategy, join safety) | produce Cascades alternatives or use cost |
 | rules/ | equivalent-plan alternatives (Columbia `RULE`) | mutate the source expression |
+| post_cbo/ | one-way logical rewrites after CBO/lowering (no alternatives) | be registered as an OptRule |
 | framework/ | memo, tasks, rule matching, CBO, cost/log properties | know query semantics |
 | extraction/ | PE demand, slot allocation, expression lowering | be a transformation rule |
 | physical planner | physical operators, access paths, PE dispatch | re-run logical optimization |
@@ -40,9 +42,16 @@ See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
 - `framework/` — memo/tasks/rules/CBO.
 - `analysis/` — `requirement_collector` + materialization model.
 - `extraction/` — `projection_extraction` (PEPlan, slot and expression lowering).
-- `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`, plus the
-  guarded `TagAnchoredJoinReorder` pre-pass (c6 shape only).
+- `normalization/` — `NormalizationPipeline`：`JoinConditionNormalization`
+  （Filter→Join 等值提示）、`ShortestPathBatchNormalization`、`JoinSafetyNormalization`；
+  这些是 memo 前的不变量/标注，不参与 alternative 搜索。
+- `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`,
+  `PathCountFusion`, `PatternComprehensionAnchorShare`；不包含按 LDBC
+  label/关系名特判的规则。
 - `rules/physical/` — implementation rules.
+- `post_cbo/` — one-way logical rewrites after CBO/lowering, currently
+  `pattern_comprehension_anchor_share` (PatternComprehensionApply has no CBO
+  implementation rule).
 
 ## 3. Columbia mapping and gaps
 
@@ -57,8 +66,11 @@ Implemented:
 
 Deliberately not yet implemented (framework supports adding them):
 
-- general join-order enumeration/reordering rules (the c6 tag-anchored
-  pre-pass is a single guarded shape, not a general reorder);
+- general join-order enumeration/reordering rules；
+- 通用 HashJoin 目前只覆盖可落到已有列的等值 join（Filter+CrossProduct），
+  属性表达式/残差谓词仍回退；构建侧按标签基数估算选择，超过
+  `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS` 回退，运行期有硬上限防 OOM；
+  后续接入 CBO 代价选择；
 - general projection/column-pruning rules (projection pushdown is currently a
   deterministic pass, not a memo rule);
 - aggregate/distinct pushdown rules;
@@ -74,12 +86,10 @@ Known framework debt:
 2. `projection_extraction` is still a large unit (PE demand + PEPlan + slot
    lowering). The directory now separates it from rules/analysis, but a future
    split into `property_demand` and `slot_lowering` is desirable.
-3. Rule subsumption masks are not exposed. A transformation that is always
-   better must currently rely on CBO cost; if the cost model cannot see the
-   benefit, the original expression can win. `EdgeUniquenessPushdownRule`
-   produces a valid alternative and is selected when its estimated cost is
-   lower; a future `subsumes` API would let mandatory normalizations mark the
-   source.
+3. Mandatory normalizations are now separated into `normalization/` rather than
+   being hidden as rules. `OptRule::substitute` still cannot rewrite nested
+   child-group metadata; extending Memo with a child-group normalization API
+   would let `JoinConditionNormalization` become a true rule if desired.
 4. RuleSet registration is explicit in `initRules`; `LogicalOptimizer::addRule`
    is the extension hook for experiments (one optimizer instance per query).
 

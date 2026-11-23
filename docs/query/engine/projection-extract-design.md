@@ -120,7 +120,7 @@ Phase 3: 别名透传
   lowerAliasPassthrough    → 为每个 WITH alias 传播 PE 派生 slot
 
 Phase 4: 表达式改写
-  rewriteColumnIndices     → BoundPropertyRef → BoundColumnRef(slot_id)
+  lowerColumnIndices     → BoundPropertyRef → BoundColumnRef(slot_id)
 ```
 
 完成上述 Pass 后进入 `planBoundOperator`（RBO 遍历 Bound 树生成物理算子），最后 `compileOperatorTree` 把 `slot_id` 映射为物理列下标。
@@ -167,7 +167,7 @@ Phase 4: 表达式改写
 
 ### Phase 4: 表达式改写
 
-`rewriteColumnIndices` → `rewriteOp` → `rewriteExpr` 递归处理所有 BoundExpression：
+`lowerColumnIndices` → `rewriteOp` → `rewriteExpr` 递归处理所有 BoundExpression：
 
 - `BoundPropertyRef(n.name)`：若 `n` 有 `object_slot_id`，重定向 `n` 的内层 `BoundColumnRef.slot_id` 到 `object_slot_id`，保留 `BoundPropertyRef` 外壳（运行时从 `VertexValue` 取值）。否则，用 `prop_order[i]` 匹配 `candidates`，找到后整体替换为 `BoundColumnRef(prop_slot_ids[i])`。
 - `BoundVariableRef` / `BoundColumnRef`：若有 `object_slot_id`，重定向到对象列。

@@ -1,10 +1,20 @@
 #include "query/physical_plan/operator/hash_join_physical_op.hpp"
 
+#include <stdexcept>
+
 namespace eugraph {
 namespace compute {
 
 namespace {
 using Key = std::vector<Value>;
+
+bool hasNullKey(const Key& key) {
+    for (const auto& value : key) {
+        if (std::holds_alternative<std::monostate>(value))
+            return true;
+    }
+    return false;
+}
 
 // 1 = vertex-like, 2 = edge-like. VertexValue/VertexRef (and EdgeValue/
 // EdgeKey) denote the same graph entity with the same identity even when one
@@ -58,70 +68,96 @@ struct KeyEq {
 } // namespace
 
 folly::coro::AsyncGenerator<DataChunk> HashJoinPhysicalOp::executeChunk() {
-    // Build phase: materialize all right rows.
+    // The build side is materialized; the other side is streamed. The planner
+    // chooses the smaller side as build and passes an upper bound so a bad
+    // estimate cannot silently consume all memory.
+    auto& build = build_left_ ? *left_ : *right_;
+    auto& probe = build_left_ ? *right_ : *left_;
+    const auto& build_key_cols = build_left_ ? left_key_cols_ : right_key_cols_;
+    const auto& probe_key_cols = build_left_ ? right_key_cols_ : left_key_cols_;
+
     std::unordered_map<Key, std::vector<std::vector<Value>>, KeyHash, KeyEq> hash_table;
-    size_t right_cols = 0;
+    size_t build_rows = 0;
     {
-        auto right_gen = cancellable(right_->executeChunkTraced());
-        while (auto chunk = co_await right_gen.next()) {
+        auto build_gen = cancellable(build.executeChunkTraced());
+        while (auto chunk = co_await build_gen.next()) {
             if (!chunk || chunk->count == 0)
                 continue;
-            right_cols = chunk->numColumns();
+            const size_t build_cols = chunk->numColumns();
             for (size_t row = 0; row < chunk->count; ++row) {
+                if (max_build_rows_ > 0 && build_rows >= max_build_rows_) {
+                    throw std::runtime_error("HashJoin build side exceeded memory row budget (" +
+                                             std::to_string(max_build_rows_) + "); planner estimate was too small");
+                }
                 Key key;
-                key.reserve(right_key_cols_.size());
-                for (uint32_t col : right_key_cols_)
+                key.reserve(build_key_cols.size());
+                for (uint32_t col : build_key_cols)
                     key.push_back(chunk->getValue(col, row));
+                // Cypher: null = null is null, not true; null keys never join.
+                if (hasNullKey(key))
+                    continue;
                 std::vector<Value> vals;
-                vals.reserve(right_cols);
-                for (size_t c = 0; c < right_cols; ++c)
+                vals.reserve(build_cols);
+                for (size_t c = 0; c < build_cols; ++c)
                     vals.push_back(chunk->getValue(c, row));
                 hash_table[std::move(key)].push_back(std::move(vals));
+                ++build_rows;
             }
         }
     }
 
-    // Probe phase.
-    auto left_gen = cancellable(left_->executeChunkTraced());
-    while (auto left_chunk = co_await left_gen.next()) {
-        if (!left_chunk || left_chunk->count == 0)
-            continue;
-        const size_t left_cols = left_chunk->numColumns();
+    const size_t left_cols = left_->outputSchema().size();
+    const size_t right_cols = right_->outputSchema().size();
+    const size_t total_cols = left_cols + right_cols;
+    if (output_types_.size() != total_cols) {
+        throw std::runtime_error("HashJoin output type count does not match child schemas");
+    }
 
+    auto make_output = [&] {
         DataChunk output;
-        output.columns.reserve(left_cols + right_cols);
-        for (size_t c = 0; c < left_cols; ++c)
-            output.columns.push_back(Column::flat(left_chunk->columns[c].type));
-        for (size_t c = 0; c < right_cols; ++c)
-            output.columns.push_back(Column::flat(output_types_[left_cols + c].kind));
+        output.columns.reserve(total_cols);
+        for (size_t c = 0; c < total_cols; ++c)
+            output.columns.push_back(Column::flat(output_types_[c].kind));
         output.reserve(DataChunk::DEFAULT_CAPACITY);
+        return output;
+    };
 
-        for (size_t row = 0; row < left_chunk->count; ++row) {
+    auto probe_gen = cancellable(probe.executeChunkTraced());
+    while (auto probe_chunk = co_await probe_gen.next()) {
+        if (!probe_chunk || probe_chunk->count == 0)
+            continue;
+        const size_t probe_cols = probe_chunk->numColumns();
+        DataChunk output = make_output();
+
+        for (size_t row = 0; row < probe_chunk->count; ++row) {
             Key key;
-            key.reserve(left_key_cols_.size());
-            for (uint32_t col : left_key_cols_)
-                key.push_back(left_chunk->getValue(col, row));
+            key.reserve(probe_key_cols.size());
+            for (uint32_t col : probe_key_cols)
+                key.push_back(probe_chunk->getValue(col, row));
+            if (hasNullKey(key))
+                continue;
             auto it = hash_table.find(key);
             if (it == hash_table.end())
                 continue;
-            for (const auto& right_vals : it->second) {
+
+            for (const auto& build_vals : it->second) {
+                const size_t left_count = build_left_ ? build_vals.size() : probe_cols;
+                const size_t right_count = build_left_ ? probe_cols : build_vals.size();
+                if (left_count != left_cols || right_count != right_cols)
+                    throw std::runtime_error("HashJoin child schema mismatch");
                 for (size_t c = 0; c < left_cols; ++c) {
-                    if (!output.columns[c].copyValueFrom(left_chunk->columns[c], row, output.count))
-                        output.columns[c].setValue(output.count, left_chunk->getValue(c, row));
+                    output.columns[c].setValue(output.count,
+                                               build_left_ ? build_vals[c] : probe_chunk->getValue(c, row));
                 }
-                for (size_t c = 0; c < right_cols; ++c)
-                    output.columns[left_cols + c].setValue(output.count, right_vals[c]);
+                for (size_t c = 0; c < right_cols; ++c) {
+                    output.columns[left_cols + c].setValue(output.count,
+                                                           build_left_ ? probe_chunk->getValue(c, row) : build_vals[c]);
+                }
                 output.count++;
                 if (output.count >= DataChunk::DEFAULT_CAPACITY) {
                     output.sel = SelectionVector::identity(output.count);
                     co_yield std::move(output);
-                    output = DataChunk();
-                    output.columns.reserve(left_cols + right_cols);
-                    for (size_t c = 0; c < left_cols; ++c)
-                        output.columns.push_back(Column::flat(left_chunk->columns[c].type));
-                    for (size_t c = 0; c < right_cols; ++c)
-                        output.columns.push_back(Column::flat(output_types_[left_cols + c].kind));
-                    output.reserve(DataChunk::DEFAULT_CAPACITY);
+                    output = make_output();
                 }
             }
         }

@@ -218,8 +218,8 @@ c9 的 `message.id` 预取（Sort key，53,192 行）与 c5 的 89,415 行 patte
 配套改动：
 
 - `valueEquals` 按 id 折叠 `VertexRef`/`VertexValue`、`EdgeKey`/`EdgeValue`；
-- `x IN list` 的 x 降到 source 引用（`rewriteRefCompatiblePredicates`）；
-- `__edge_unique` 参数降到 source `EdgeKey`（`rewriteInternalEdgeUniqueness`）。
+- `x IN list` 的 x 降到 source 引用（`lowerPredicateRefs`）；
+- `__edge_unique` 参数降到 source `EdgeKey`（`lowerEdgeUniquenessRefs`）。
 
 当前计划（c5 右侧）：
 

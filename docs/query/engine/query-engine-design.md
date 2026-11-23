@@ -829,10 +829,10 @@ Cypher 的节点/关系相等是**身份相等**。`valueEquals` 现在把
 
 在此基础上：
 
-- `rewriteRefCompatiblePredicates` 在 requirements collection 之前把
+- `lowerPredicateRefs` 在 requirements collection 之前把
   `x IN list` 的 `x` 降到 source `VERTEX_REF` / `EDGE_KEY` 列，membership-only 的变量
   不再产生 Construct 列；
-- `rewriteInternalEdgeUniqueness` 把 `__edge_unique` 的参数改绑 source `EdgeKey`
+- `lowerEdgeUniquenessRefs` 把 `__edge_unique` 的参数改绑 source `EdgeKey`
   （`edgeUniqueScalar` 接受 EdgeKey，只用 edge id），关系唯一性不再要求构造整条边。
 
 两者都只改变“从哪一列读”，不改变谓词结果；c5 的右子计划因此从

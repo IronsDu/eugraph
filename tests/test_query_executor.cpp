@@ -11495,52 +11495,6 @@ TEST_F(QueryExecutorTest, DeferredDestinationLabelFilterDropsRows) {
 /// LDBC c6 tag co-occurrence: the selective knownTag anchor must drive the
 /// pattern instead of expanding every friend's posts first. The rewrite is
 /// gated by Tag << Post cardinality and a one-row friends aggregate.
-TEST_F(QueryExecutorTest, C6TagAnchoredReorder) {
-    auto tag_id = blockingWait(async_meta_->createLabel("Tag"));
-    ASSERT_NE(tag_id, INVALID_LABEL_ID);
-    auto post_id = blockingWait(async_meta_->createLabel("Post"));
-    ASSERT_NE(post_id, INVALID_LABEL_ID);
-    blockingWait(async_data_->createLabel(tag_id));
-    blockingWait(async_data_->createLabel(post_id));
-    async_meta_->setLabelVertexCount(tag_id, 100);
-    async_meta_->setLabelVertexCount(post_id, 1000);
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, *session_pool_, QueryExecutor::Config{});
-    executor_->setSchemaGenerationTracker(std::make_shared<SchemaGenerationTracker>());
-
-    ASSERT_TRUE(execSync(*executor_, "CREATE (known:Tag {id: 100, name: 'known'}), "
-                                     "(co:Tag {id: 101, name: 'co'}), "
-                                     "(p1:Person {id: 1})-[:KNOWS]->(p2:Person {id: 2}), "
-                                     "(post:Post {id: 10}), "
-                                     "(post)-[:HAS_CREATOR]->(p2), "
-                                     "(post)-[:HAS_TAG]->(known), "
-                                     "(post)-[:HAS_TAG]->(co)")
-                    .error.empty());
-
-    const std::string query = "MATCH (knownTag:Tag {name: 'known'}) "
-                              "WITH knownTag.id AS knownTagId "
-                              "MATCH (person:Person {id: 1})-[:KNOWS*1..2]-(friend) "
-                              "WHERE NOT person = friend "
-                              "WITH knownTagId, collect(distinct friend) AS friends "
-                              "UNWIND friends AS f "
-                              "MATCH (f)<-[:HAS_CREATOR]-(post:Post), "
-                              "      (post)-[:HAS_TAG]->(t:Tag {id: knownTagId}), "
-                              "      (post)-[:HAS_TAG]->(tag:Tag) "
-                              "WHERE NOT t = tag "
-                              "WITH tag.name AS tagName, count(post) AS postCount "
-                              "RETURN tagName, postCount ORDER BY postCount DESC, tagName ASC LIMIT 10";
-
-    auto result = execSync(*executor_, query);
-    ASSERT_TRUE(result.error.empty()) << result.error;
-    ASSERT_EQ(result.rows.size(), 1u);
-    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "co");
-    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1);
-
-    std::string plan = getExplainPlanText(*executor_, query);
-    ASSERT_FALSE(plan.empty());
-    EXPECT_NE(plan.find("Expand(src=knownTag"), std::string::npos) << plan;
-    EXPECT_EQ(plan.find("Expand(src=f, dst=post"), std::string::npos) << plan;
-}
-
 // ==================== operator-level trace attribution ====================
 
 namespace {
@@ -12002,4 +11956,171 @@ RETURN weight1, weight2
     ASSERT_FALSE(plan.empty());
     EXPECT_EQ(plan.find("PatternComprehensionFork"), std::string::npos) << plan;
     EXPECT_NE(plan.find("PatternComprehensionApply"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinOnPropertyEquality) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'same'}), (b:Person {name:'same'}), "
+                                     "(c:Person {name:'other'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 3);
+
+    const std::string query = "MATCH (a:Person), (b:Person) WHERE a.name = b.name RETURN count(*) AS c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5); // 2x2 same + 1x1 other
+
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinHonorsBuildBudget) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'same'}), (b:Person {name:'same'})").error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 2);
+
+    const char* old = std::getenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS");
+    std::string old_value = old ? old : "";
+    setenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS", "1", 1);
+    const std::string query = "MATCH (a:Person), (b:Person) WHERE a.name = b.name RETURN count(*) AS c";
+    auto plan = getExplainPlanText(*executor_, query);
+    auto result = execSync(*executor_, query);
+    if (old)
+        setenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS", old_value.c_str(), 1);
+    else
+        unsetenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS");
+
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4);
+    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << "预算不足时应回退 CrossProduct+Filter";
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinCanBuildSmallerLeftSide) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'only'}), (a2:Person {name:'only'})").error.empty());
+    std::string cities = "CREATE ";
+    for (int i = 0; i < 20; ++i) {
+        if (i)
+            cities += ", ";
+        cities += "(c" + std::to_string(i) + ":City {name:'only'})";
+    }
+    ASSERT_TRUE(execSync(*executor_, cities).error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 2);
+    async_meta_->setLabelVertexCount(CITY_LABEL, 20);
+
+    const std::string query = "MATCH (a:Person), (b:City) WHERE a.name = b.name RETURN count(*) AS c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 40);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
+
+    // build_left 时输出仍必须是 left columns + right columns。
+    auto projected = execSync(*executor_, "MATCH (a:Person), (b:City) WHERE a.name = b.name "
+                                          "RETURN a.name AS an, b.name AS bn LIMIT 1");
+    ASSERT_TRUE(projected.error.empty()) << projected.error;
+    ASSERT_EQ(projected.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(projected.rows[0][0]), "only");
+    EXPECT_EQ(std::get<std::string>(projected.rows[0][1]), "only");
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinFallsBackWithResidualPredicate) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'same'}), (b:Person {name:'same'}), "
+                                     "(c:Person {name:'other'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 3);
+    const std::string query =
+        "MATCH (a:Person), (b:Person) WHERE a.name = b.name AND a.name = 'same' RETURN count(*) AS c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << "残差谓词应回退到 CrossProduct+Filter";
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinDoesNotJoinNullKeys) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'x'}), (b:Person), (c:Person)").error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 3);
+    const std::string query = "MATCH (a:Person), (b:Person) WHERE a.name = b.name RETURN count(*) AS c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1); // only 'x'='x'; null=null is null
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinHandlesReversedPropertyOperands) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'same'}), (b:Person {name:'same'}), "
+                                     "(c:Person {name:'other'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 3);
+    const std::string query = "MATCH (a:Person), (b:Person) WHERE b.name = a.name RETURN count(*) AS c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinSkipsWhenOneSideEstimateIsUnknown) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name:'x'}), (c1:City {name:'x'}), "
+                                     "(c2:City {name:'y'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 1);
+    // 不设置 City 的统计：无法估算构建侧，必须回退。
+    const std::string query = "MATCH (p:Person), (c:City) WHERE p.name = c.name RETURN count(*) AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, GenericHashJoinSkipsWhenCostNotBetter) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name:'x'}), (c1:City {name:'x'}), "
+                                     "(c2:City {name:'x'}), (c3:City {name:'x'})")
+                    .error.empty());
+    async_meta_->setLabelVertexCount(PERSON_LABEL, 1);
+    async_meta_->setLabelVertexCount(CITY_LABEL, 3);
+    // hash ≈ 4 > cross ≈ 3 ⇒ 回退 CrossProduct+Filter。
+    const std::string query = "MATCH (p:Person), (c:City) WHERE p.name = c.name RETURN count(*) AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 3);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, GenericDestinationIndexJoin) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_name_dst FOR (n:Person) ON (n.name)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'src'}), (b:Person {name:'dst'}), "
+                                     "(a)-[:KNOWS]->(b)")
+                    .error.empty());
+    const std::string query = "MATCH (dst:Person)<-[:KNOWS]-(src:Person) WHERE dst.name = 'dst' RETURN src.name AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "src");
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("IndexScan"), std::string::npos) << plan;
+    // 这个形状 planner 已经能用 IndexScan(dst)+Expand 完成，不需要额外 HashJoin；
+    // 规则本身保留为 source 集合需要独立物化时的通用候选。
+}
+
+TEST_F(QueryExecutorTest, VleReverseFromDestinationLabelScan) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name:'p1'}), (c:City {name:'c1'}), "
+                                     "(p)-[:LIVES_IN]->(c)")
+                    .error.empty());
+    const std::string query = "MATCH (p:Person)-[:LIVES_IN*1..2]->(c:City) RETURN count(*) AS n";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("LabelScan(variable=c"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("VarLenExpand(src=c"), std::string::npos) << plan;
 }

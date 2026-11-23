@@ -13,6 +13,7 @@
 #include "storage/meta/sync_graph_meta_store.hpp"
 #include "storage/session/schema_generation_tracker.hpp"
 #include "storage/session/session_pool.hpp"
+#include "storage/stats/graph_stats_store.hpp"
 #include "storage/wt_connection_store.hpp"
 
 #include <atomic>
@@ -41,6 +42,8 @@ struct GraphInstance {
     std::unique_ptr<GraphSession> async_session;
     std::unique_ptr<AsyncGraphDataStore> async_data;
     std::unique_ptr<AsyncGraphMetaStore> async_meta;
+    /// CBO 统计（每图一份；启动为空/近似，后续从 journal/重建填充）。
+    std::shared_ptr<GraphStatsStore> stats_store;
 
     /// v2 索引运行时注册表（每图一份）。executor/算子只持裸指针 ⇒ **必须先于 executor 声明**（后销毁）。
     std::shared_ptr<IndexRuntimeRegistry> index_registry;

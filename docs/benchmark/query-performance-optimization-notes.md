@@ -351,7 +351,8 @@ c5 ~230ms、c9 ~161ms），远端 A/B 只能确认 Expand 对 c5 有稳定收益
 ### 8.9 已回退：Message.creationDate 索引 join 不计入公平对比
 
 2026-10-29 曾临时给 eugraph 建 `Message.creationDate` 索引并放宽
-`tryPlanFilterDestinationIndexJoin` 对显式 `(message:Message)` 的限制，本地 c9
+`tryPlanFilterDestinationIndexJoin` 对显式 `(message:Message)` 的限制（该函数已随 LDBC
+硬编码清理移除），本地 c9
 从 160.6ms 降到 71.4ms。但 **neo4j 基线没有该索引**，这属于给 eugraph 单方面增加
 访问路径，不能作为同 schema 的对比结论。
 
@@ -454,8 +455,8 @@ slot；子树规划时置 `ctx.deferred_slots`，Filter 包装后用普通 PE
 **机制 2：实体引用不物化（`row.hpp` + `projection_extraction.cpp`）**
 
 - `valueEquals` 把 `VertexRef`/`VertexValuePtr`、`EdgeKey`/`EdgeValuePtr` 折叠到 id；
-- `rewriteRefCompatiblePredicates` 把 `x IN list` 的 x 降到 source `VERTEX_REF`/`EDGE_KEY`；
-- `rewriteInternalEdgeUniqueness` 把 `__edge_unique` 参数降到 source `EdgeKey`。
+- `lowerPredicateRefs` 把 `x IN list` 的 x 降到 source `VERTEX_REF`/`EDGE_KEY`；
+- `lowerEdgeUniquenessRefs` 把 `__edge_unique` 参数降到 source `EdgeKey`。
 
 c5 的 `friend IN friends` 因此不再要求 Filter 前构造 friend；`__edge_unique` 也不再
 要求构造两条匿名边，PE 在 89,415 行上直接消失（Filter 前只剩 Expand + Filter）。

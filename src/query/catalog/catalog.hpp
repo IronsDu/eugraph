@@ -84,6 +84,14 @@ public:
         auto it = label_vertex_counts_.find(lid);
         return it != label_vertex_counts_.end() ? it->second : 0;
     }
+    void setLabelVertexCounts(std::unordered_map<LabelId, uint64_t> counts) {
+        label_vertex_counts_ = std::move(counts);
+    }
+    /// Returns edge count for edge label, or 0 if unknown.
+    uint64_t getEdgeCount(EdgeLabelId elid) const {
+        auto it = edge_label_counts_.find(elid);
+        return it != edge_label_counts_.end() ? it->second : 0;
+    }
     /// Returns avg out-degree for edge label, or 0.0 if unknown.
     double getAvgOutDegree(EdgeLabelId elid) const {
         auto it = edge_avg_out_degrees_.find(elid);
