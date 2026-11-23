@@ -48,7 +48,7 @@ log-prop derivation follow that order.
 ## Rewrite
 
 `optimizer::rewritePatternComprehensionAnchorShare()` in
-`src/query/optimizer/rules/logical/pattern_comprehension_anchor_share.cpp`,
+`src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp`,
 called from `PhysicalPlanner::planBound` **after** slot allocation,
 materialisation requirements and column-index lowering.
 

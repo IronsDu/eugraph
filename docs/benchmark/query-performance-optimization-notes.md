@@ -455,8 +455,8 @@ slot；子树规划时置 `ctx.deferred_slots`，Filter 包装后用普通 PE
 **机制 2：实体引用不物化（`row.hpp` + `projection_extraction.cpp`）**
 
 - `valueEquals` 把 `VertexRef`/`VertexValuePtr`、`EdgeKey`/`EdgeValuePtr` 折叠到 id；
-- `rewriteRefCompatiblePredicates` 把 `x IN list` 的 x 降到 source `VERTEX_REF`/`EDGE_KEY`；
-- `rewriteInternalEdgeUniqueness` 把 `__edge_unique` 参数降到 source `EdgeKey`。
+- `lowerPredicateRefs` 把 `x IN list` 的 x 降到 source `VERTEX_REF`/`EDGE_KEY`；
+- `lowerEdgeUniquenessRefs` 把 `__edge_unique` 参数降到 source `EdgeKey`。
 
 c5 的 `friend IN friends` 因此不再要求 Filter 前构造 friend；`__edge_unique` 也不再
 要求构造两条匿名边，PE 在 89,415 行上直接消失（Filter 前只剩 Expand + Filter）。

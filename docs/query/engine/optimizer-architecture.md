@@ -11,6 +11,7 @@ layout, and the remaining Columbia gaps.
 | analysis/ | read-only plan/expression analysis | mutate plans |
 | normalization/ | pre-memo invariants/annotations (join conditions, batch strategy, join safety) | produce Cascades alternatives or use cost |
 | rules/ | equivalent-plan alternatives (Columbia `RULE`) | mutate the source expression |
+| post_cbo/ | one-way logical rewrites after CBO/lowering (no alternatives) | be registered as an OptRule |
 | framework/ | memo, tasks, rule matching, CBO, cost/log properties | know query semantics |
 | extraction/ | PE demand, slot allocation, expression lowering | be a transformation rule |
 | physical planner | physical operators, access paths, PE dispatch | re-run logical optimization |
@@ -48,6 +49,9 @@ See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
   `PathCountFusion`, `PatternComprehensionAnchorShare`；不包含按 LDBC
   label/关系名特判的规则。
 - `rules/physical/` — implementation rules.
+- `post_cbo/` — one-way logical rewrites after CBO/lowering, currently
+  `pattern_comprehension_anchor_share` (PatternComprehensionApply has no CBO
+  implementation rule).
 
 ## 3. Columbia mapping and gaps
 

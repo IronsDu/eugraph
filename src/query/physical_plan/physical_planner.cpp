@@ -7,7 +7,7 @@
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
 #include "query/optimizer/framework/memo.hpp"
-#include "query/optimizer/rules/logical/pattern_comprehension_anchor_share.hpp"
+#include "query/optimizer/post_cbo/pattern_comprehension_anchor_share.hpp"
 #include "query/physical_plan/operator/apply_physical_op.hpp"
 #include "query/physical_plan/operator/call_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
@@ -3632,8 +3632,8 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     optimizer::allocateAllSlots(bound_plan.root, ctx.var_slots, ctx.slot_allocator);
     // Relationship uniqueness only needs edge ids: keep it on the source
     // EDGE_KEY column so PE does not construct EdgeValues for every row.
-    optimizer::rewriteInternalEdgeUniqueness(bound_plan.root, ctx.var_slots);
-    optimizer::rewriteRefCompatiblePredicates(bound_plan.root, ctx.var_slots);
+    optimizer::lowerEdgeUniquenessRefs(bound_plan.root, ctx.var_slots);
+    optimizer::lowerPredicateRefs(bound_plan.root, ctx.var_slots);
     // Correlated chain endpoints: fold the binder's post-Expand
     // `id(dst) == id(saved)` filter into a bound Expand destination, so the
     // Expand can do one exact seek per row instead of scanning every edge of
@@ -3702,8 +3702,11 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // Phase 4 (Lower): Rewrite BoundPropertyRef → BoundColumnRef using the
     // slot_ids allocated above. No base_col / ProjectResetMap machinery —
     // slot_ids are stable across schema-changing operators.
-    optimizer::rewriteColumnIndices(bound_plan.root, ctx.extraction_info, ctx.resolver());
+    optimizer::lowerColumnIndices(bound_plan.root, ctx.extraction_info, ctx.resolver());
 
+    // Post-CBO logical rewrite (not a Cascades OptRule): PatternComprehensionApply
+    // has no implementation rule and cannot own a CBO winner, so this one-way
+    // rewrite runs after slot/PE/lowering and before physical planning.
     // Shared-anchor rewrite. It runs after the analysis/lowering phases above
     // (slot allocation, PE plans, column-index lowering) so those passes see the
     // same plan they always have; the fork only re-parents already-lowered
@@ -3997,8 +4000,8 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
         ctx.read_only = !has_write;
     }
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
-    optimizer::rewriteInternalEdgeUniqueness(materialized, ctx.var_slots);
-    optimizer::rewriteRefCompatiblePredicates(materialized, ctx.var_slots);
+    optimizer::lowerEdgeUniquenessRefs(materialized, ctx.var_slots);
+    optimizer::lowerPredicateRefs(materialized, ctx.var_slots);
     ctx.alias_map = optimizer::collectAliasSlotMap(materialized, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(materialized, SubtreeTrait::PatternComprehension);
     ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver(), nullptr, &ctx.label_defs);
@@ -4009,7 +4012,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     ctx.extraction_info = ctx.split_pe_plans.all;
     optimizer::lowerAliasPassthrough(materialized, ctx.extraction_info, ctx.var_slots, ctx.alias_map,
                                      ctx.slot_allocator);
-    optimizer::rewriteColumnIndices(materialized, ctx.extraction_info, ctx.resolver());
+    optimizer::lowerColumnIndices(materialized, ctx.extraction_info, ctx.resolver());
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);

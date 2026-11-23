@@ -1552,7 +1552,7 @@ void rewriteOp(binder::BoundLogicalOperator& op, const PEPlans& plans, const Slo
 /// to the given Project. Also register the alias name → slot in name_to_slot.
 ///
 /// The ref carries the alias name so ExpressionCompiler resolves its slot_id
-/// against the child layout. rewriteColumnIndices only promotes *semantic
+/// against the child layout. lowerColumnIndices only promotes *semantic
 /// graph* refs, so the scalar/ANY/List types used here are left untouched.
 /// (An anonymous ref would skip slot resolution and read column 0.)
 void appendAliasPassthroughItem(binder::BoundProjectOp& proj, const std::string& alias_name, binder::SlotId source_slot,
@@ -2077,7 +2077,7 @@ std::string describeBoundExpression(const binder::BoundExpression& expr) {
     return out;
 }
 
-void rewriteInternalEdgeUniqueness(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots) {
+void lowerEdgeUniquenessRefs(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots) {
     std::visit(
         [&](auto& v) {
             using T = std::decay_t<decltype(v)>;
@@ -2100,10 +2100,10 @@ void rewriteInternalEdgeUniqueness(binder::BoundLogicalOperator& op, const NameS
             }
         },
         op);
-    forEachChild(op, [&](auto& child) { rewriteInternalEdgeUniqueness(child, var_slots); });
+    forEachChild(op, [&](auto& child) { lowerEdgeUniquenessRefs(child, var_slots); });
 }
 
-void rewriteRefCompatiblePredicates(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots) {
+void lowerPredicateRefs(binder::BoundLogicalOperator& op, const NameSlotMap& var_slots) {
     std::visit(
         [&](auto& v) {
             using T = std::decay_t<decltype(v)>;
@@ -2131,10 +2131,10 @@ void rewriteRefCompatiblePredicates(binder::BoundLogicalOperator& op, const Name
             }
         },
         op);
-    forEachChild(op, [&](auto& child) { rewriteRefCompatiblePredicates(child, var_slots); });
+    forEachChild(op, [&](auto& child) { lowerPredicateRefs(child, var_slots); });
 }
 
-void rewriteColumnIndices(binder::BoundLogicalOperator& op, const PEPlans& plans, const SlotResolver& resolver) {
+void lowerColumnIndices(binder::BoundLogicalOperator& op, const PEPlans& plans, const SlotResolver& resolver) {
     rewriteOp(op, plans, resolver);
 }
 

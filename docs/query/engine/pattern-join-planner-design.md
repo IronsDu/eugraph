@@ -489,7 +489,7 @@ PatternJoinPlanner ──► PatternJoinPlan
 JoinEqualityBuilder ──► BoundLogicalPlan
         │
         ▼
-DPL (ScopedSlotResolver) ──► PEPlan / rewriteColumnIndices
+DPL (ScopedSlotResolver) ──► PEPlan / lowerColumnIndices
         │
         ▼
 PhysicalPlanner + PhysicalCrossRefResolver ──► PhysicalPlan

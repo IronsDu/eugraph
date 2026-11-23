@@ -9,7 +9,9 @@
 namespace eugraph {
 namespace optimizer {
 
-/// Share the anchor expansion of two sibling pattern comprehensions.
+/// Post-CBO logical rewrite: share the anchor expansion of two sibling
+/// pattern comprehensions. PatternComprehensionApply has no CBO implementation
+/// rule, so this is a one-way lowering-time rewrite, not an OptRule.
 ///
 /// LDBC complex-14 computes two weights over the same prefix:
 ///

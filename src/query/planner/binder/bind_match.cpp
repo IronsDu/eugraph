@@ -1837,7 +1837,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     // The reference type is VERTEX_REF (not VERTEX) on purpose: the source
     // emits topology-stage VertexRef values and Expand writes a topology-stage
     // VertexRef into the dst column. Declaring VERTEX would make PE allocate
-    // Construct slots for both columns and rewriteColumnIndices would retarget
+    // Construct slots for both columns and lowerColumnIndices would retarget
     // the slot_id to those Construct columns, but the runtime EQ on the
     // resulting VertexValues misbehaves (likely because the evaluator's
     // genericEqBatch path has subtle issues with VERTEX columns). Comparing
