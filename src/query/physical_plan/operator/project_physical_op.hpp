@@ -67,6 +67,28 @@ public:
         slot_layout_ = input_layout;
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "Project";
+        std::vector<std::string> items;
+        for (const auto& item : items_) {
+            std::string expr = formatExplainExpression(item.expr, ctx);
+            // Property reads are already lowered to internal refs by PE. Keep the
+            // user-facing alias when it names a property, instead of showing an
+            // opaque input column such as "p AS p.id".
+            if (std::holds_alternative<binder::BoundColumnRef>(item.expr) && !item.name.empty() &&
+                item.name.find('.') != std::string::npos)
+                expr = item.name;
+            items.push_back(expr + " AS " + item.name);
+        }
+        std::string mapping;
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (i > 0)
+                mapping += ", ";
+            mapping += items[i];
+        }
+        node.details.push_back("mapping=[" + mapping + "]");
+    }
+
 private:
     std::vector<ProjectItem> items_;
     Schema input_schema_;

@@ -758,3 +758,30 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
 } // namespace compute
 } // namespace eugraph
+
+namespace eugraph {
+namespace compute {
+
+void VarLenExpandPhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) const {
+    node.operator_name = "VarLenExpand";
+    node.details.push_back("src=" + src_var_);
+    node.details.push_back("dst=" + dst_var_);
+    if (!edge_var_.empty())
+        node.details.push_back("edge=" + edge_var_);
+    if (!path_var_.empty())
+        node.details.push_back("path=" + path_var_);
+    if (label_filters_ && !label_filters_->empty())
+        node.details.push_back("labels=[" + explainEdgeLabelList(*label_filters_, ctx) + "]");
+    else
+        node.details.push_back("labels=<any>");
+    node.details.push_back("hops=[" + std::to_string(min_hops_) + ".." + std::to_string(max_hops_) + "]");
+    const char* dir = direction_ == cypher::RelationshipDirection::LEFT_TO_RIGHT
+                          ? "OUT"
+                          : (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT ? "IN" : "ANY");
+    node.details.push_back(std::string("direction=") + dir);
+    if (!dst_label_ids_.empty())
+        node.details.push_back("dstLabels=[" + explainLabelList(dst_label_ids_, ctx) + "]");
+}
+
+} // namespace compute
+} // namespace eugraph

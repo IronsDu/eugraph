@@ -65,6 +65,36 @@ public:
         slot_layout_ = std::move(out);
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "Aggregate";
+        std::string keys;
+        for (size_t i = 0; i < group_keys_.size(); ++i) {
+            if (i > 0)
+                keys += ", ";
+            keys += formatExplainExpression(group_keys_[i].expr, ctx);
+        }
+        std::string aggs;
+        for (size_t i = 0; i < aggregates_.size(); ++i) {
+            if (i > 0)
+                aggs += ", ";
+            const auto& agg = aggregates_[i];
+            aggs += agg.func_def ? agg.func_def->name : "aggregate";
+            if (agg.distinct)
+                aggs += " DISTINCT";
+            aggs += "(";
+            for (size_t j = 0; j < agg.arguments.size(); ++j) {
+                if (j > 0)
+                    aggs += ", ";
+                aggs += formatExplainExpression(agg.arguments[j], ctx);
+            }
+            aggs += ")";
+            if (!agg.name.empty())
+                aggs += " AS " + agg.name;
+        }
+        node.details.push_back("groupBy=[" + keys + "]");
+        node.details.push_back("aggs=[" + aggs + "]");
+    }
+
 private:
     std::vector<GroupKey> group_keys_;
     std::vector<AggregateExpr> aggregates_;

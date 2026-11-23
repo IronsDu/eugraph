@@ -50,6 +50,18 @@ public:
         PhysicalOperator::setLimitHint(limit);
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "Sort";
+        std::string keys;
+        for (size_t i = 0; i < sort_items_.size(); ++i) {
+            if (i > 0)
+                keys += ", ";
+            keys += formatExplainExpression(sort_items_[i].expr, ctx);
+            keys += sort_items_[i].ascending ? " ASC" : " DESC";
+        }
+        node.details.push_back("keys=[" + keys + "]");
+    }
+
 private:
     std::vector<SortItem> sort_items_;
     std::unique_ptr<PhysicalOperator> child_;

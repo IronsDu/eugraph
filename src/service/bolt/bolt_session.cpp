@@ -1,4 +1,5 @@
 #include "service/bolt/bolt_session.hpp"
+#include "query/physical_plan/explain/explain.hpp"
 
 #include "common/types/query_error.hpp"
 
@@ -40,6 +41,53 @@ PackList stringsToPackList(const std::vector<std::string>& values) {
     for (const auto& value : values)
         list.push_back(ps(value));
     return list;
+}
+
+std::string neo4jOperatorType(const std::string& name) {
+    // Neo4j Browser/cypher-shell recognize the standard operator names; keep
+    // eugraph-specific operators readable but map the common ones.
+    if (name == "Project")
+        return "Projection";
+    if (name == "Aggregate")
+        return "Aggregation";
+    if (name == "Expand")
+        return "Expand(All)";
+    if (name == "VarLenExpand")
+        return "VarLengthExpand(All)";
+    if (name == "ProjectionExtract" || name == "LateMaterialize")
+        return "Projection";
+    if (name == "LeftJoin")
+        return "Optional";
+    return name;
+}
+
+PackMap planNodeToValue(const compute::ExplainNode& node) {
+    PackMap map;
+    map.emplace("operatorType", ps(neo4jOperatorType(node.operator_name)));
+    PackMap args;
+    std::string details;
+    for (size_t i = 0; i < node.details.size(); ++i) {
+        if (i > 0)
+            details += ", ";
+        details += node.details[i];
+    }
+    args.emplace("Details", ps(std::move(details)));
+    if (!node.plan_source.empty())
+        args.emplace("PlanSource", ps(node.plan_source));
+    args.emplace("EstimatedRows", ps(node.estimated_rows.value_or(0.0)));
+    map.emplace("args", psMap(std::move(args)));
+    PackList identifiers;
+    for (const auto& id : node.identifiers)
+        identifiers.push_back(ps(id));
+    map.emplace("identifiers", psList(std::move(identifiers)));
+    map.emplace("estimatedRows", ps(node.estimated_rows.value_or(0.0)));
+    PackList children;
+    for (const auto& child : node.children) {
+        if (child)
+            children.push_back(packstream::PackStreamValueStorage{planNodeToValue(*child)});
+    }
+    map.emplace("children", psList(std::move(children)));
+    return map;
 }
 
 PackMap profileEugraphNode(const compute::ProfileNode& node) {
@@ -794,6 +842,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
                 meta["profile"] = profileNodeToValue(*profile.roots.front(), &profile, /*root=*/true);
             meta["eugraph"] = PackValue{profileSummaryEugraph(profile)};
         }
+        if (stream->explain_node)
+            meta["plan"] = planNodeToValue(*stream->explain_node);
         stream.reset();
 
         meta["has_more"] = false;

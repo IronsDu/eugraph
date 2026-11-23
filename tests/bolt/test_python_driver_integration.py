@@ -737,6 +737,36 @@ class TestConnectionLifetime:
             driver.close()
 
 
+
+class TestExplain:
+    """EXPLAIN returns a structured Bolt plan summary in addition to Plan rows."""
+
+    def test_explain_returns_plan_metadata(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run("CREATE (:ExplainTest {v: 1})")
+                result = session.run("EXPLAIN MATCH (n:ExplainTest {v: 1}) RETURN n.v")
+                records = list(result)
+                summary = result.consume()
+
+            assert records
+            assert summary.plan is not None
+            assert summary.plan["operatorType"] in ("Projection", "Project", "Projection@eugraph")
+            assert "Details" in summary.plan["args"]
+            assert isinstance(summary.plan.get("children"), list)
+
+            def walk(node):
+                yield node
+                for child in node.get("children", []):
+                    yield from walk(child)
+
+            nodes = list(walk(summary.plan))
+            assert any(node.get("operatorType") in ("NodeByLabelScan", "IndexScan", "AllNodeScan") for node in nodes)
+        finally:
+            driver.close()
+
+
 class TestProfile:
     """PROFILE syntax returns the normal rows plus an execution plan summary."""
 

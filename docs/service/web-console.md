@@ -3,7 +3,7 @@
 > 当前实现状态：内嵌 HTTP 资产 + Bolt-over-WebSocket 控制台。
 > 已具备连接、Cypher 执行、Table/Graph/RAW 三视图、`:` 命令、参数、CSV 导出、
 > best-effort Stop、可折叠 Database Sidebar、上下文补全、节点拖拽/实时力布局与选中 halo；
-> 图布局 Worker、Plan 视图、PNG 导出等仍在后续里程碑。
+> 图布局 Worker、PNG 导出等仍在后续里程碑；Plan 视图已支持 EXPLAIN 文本树和图形树。
 
 ## 1. 目标与边界
 
@@ -177,7 +177,7 @@ eugraph-server --data-dir ./eugraph-data --bolt-port 7687 --web-port 0
 - 图布局在主线程同步执行（未使用 Worker）；更大规模请先用 `LIMIT`/标签过滤。
 - 自动补全目前是文本前缀 + schema 的轻量补全，不是完整语言服务器；变量类型只做词法级
   `(n:Label)` / `[r:TYPE]` / `n::Label` 推断，不实现完整作用域/别名/参数名/函数签名检查。
-- 无 Plan 专用视图、PNG 导出（后续里程碑）。
+- 无 PNG 导出（后续里程碑）；Plan tab 已支持 EXPLAIN。
 - 前端 bundle 约 1.10 MB raw / 256 KB gzip（含 neo4j-driver + Sigma）。
 - Drogon 是进程级单例：一个进程只能启动一次 Web Console，且 stop 后不能重启；
   集成测试通过独立进程启动。

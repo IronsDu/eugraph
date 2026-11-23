@@ -169,3 +169,35 @@ std::string EdgeIndexScanPhysicalOp::toString() const {
 
 } // namespace compute
 } // namespace eugraph
+
+namespace eugraph {
+namespace compute {
+
+void EdgeIndexScanPhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) const {
+    ExplainContext local = ctx;
+    if (schema_ != nullptr)
+        local.schema = schema_.get();
+    node.operator_name = "EdgeIndexScan";
+    node.details.push_back("src=" + src_var_);
+    node.details.push_back("dst=" + dst_var_);
+    if (!edge_var_.empty())
+        node.details.push_back("edge=" + edge_var_);
+    node.details.push_back("label=" + explainEdgeLabelName(label_id_, local));
+    if (!prop_ids_.empty())
+        node.details.push_back("properties=[" + explainPropertyList(INVALID_LABEL_ID, prop_ids_, local) + "]");
+    node.details.push_back(std::string("mode=") + (mode_ == ScanMode::EQUALITY ? "eq" : "range"));
+    if (schema_ != nullptr && label_id_ != INVALID_EDGE_LABEL_ID) {
+        auto it = schema_->edge_labels.find(label_id_);
+        if (it != schema_->edge_labels.end()) {
+            for (const auto& idx : it->second.indexes) {
+                if (idx.index_id == index_id_ && !idx.name.empty()) {
+                    node.details.push_back("index=" + idx.name);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+} // namespace compute
+} // namespace eugraph

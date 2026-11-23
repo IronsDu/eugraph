@@ -27,6 +27,14 @@ public:
         return {child_.get()};
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "Limit";
+        if (limit_.has_value())
+            node.details.push_back(std::to_string(*limit_));
+        else if (expr_.has_value())
+            node.details.push_back(formatExplainExpression(*expr_, ctx));
+    }
+
 private:
     std::optional<int64_t> limit_;
     std::optional<binder::BoundExpression> expr_;

@@ -26,7 +26,7 @@ type Info = {
 };
 
 type Theme = 'dark' | 'light';
-type Tab = 'table' | 'graph' | 'raw' | 'profile';
+type Tab = 'table' | 'graph' | 'plan' | 'raw' | 'profile';
 type TableMode = 'compact' | 'json';
 
 type FrameHandle = {
@@ -1225,6 +1225,12 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     let hasGraph = graphResult.graph.order > 0;
     let summaryText = summarizeResult(records, resultSummary);
     let profile: any = resultSummary?.profile || null;
+    let plan: any = resultSummary?.plan || null;
+    let planMode: 'graph' | 'tree' | 'raw' = 'graph';
+    let planZoom = 1;
+    let planPanX = 20;
+    let planPanY = 12;
+    let planViewInitialized = false;
     let activeTab: Tab = 'table';
     let tableMode: TableMode = 'compact';
     let tablePage = 0;
@@ -1235,16 +1241,19 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     const tablePanel = h('div', { class: 'view-panel' });
     const graphPanel = h('div', { class: 'view-panel graph-panel' });
     const rawPanel = h('div', { class: 'view-panel raw-panel' });
+    const planPanel = h('div', { class: 'view-panel plan-panel' });
     const profilePanel = h('div', { class: 'view-panel profile-panel' });
 
     const tabButtons: Record<Tab, HTMLButtonElement> = {
       table: h('button', { class: 'tab active' }, 'Table') as HTMLButtonElement,
       graph: h('button', { class: 'tab', disabled: '' }, 'Graph') as HTMLButtonElement,
+      plan: h('button', { class: 'tab hidden' }, 'Plan') as HTMLButtonElement,
       raw: h('button', { class: 'tab' }, 'RAW') as HTMLButtonElement,
       profile: h('button', { class: 'tab hidden' }, 'Profile') as HTMLButtonElement,
     };
     tabButtons.graph.disabled = !hasGraph;
     tabButtons.graph.textContent = hasGraph ? 'Graph' : 'Graph (无点边)';
+    tabButtons.plan.classList.toggle('hidden', !plan);
 
     const modeSelect = h(
       'select',
@@ -1264,6 +1273,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       { class: 'frame-toolbar' },
       tabButtons.table,
       tabButtons.graph,
+      tabButtons.plan,
       tabButtons.raw,
       tabButtons.profile,
       h('span', { class: 'spacer' }),
@@ -1282,7 +1292,8 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     header.insertBefore(queryEditor, header.firstChild);
     header.insertBefore(executeEditButton, close);
     header.insertBefore(cancelEditButton, close);
-    const body = h('div', { class: 'frame-body' }, tablePanel, graphPanel, rawPanel, profilePanel);
+    const body = h('div', { class: 'frame-body' }, tablePanel, graphPanel, planPanel, rawPanel, profilePanel);
+    body.classList.toggle('has-plan', !!plan);
     const root = h('article', { class: 'result-frame' }, header, editError, toolbar, body);
 
     function renderTable(): void {
@@ -1458,6 +1469,363 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       profilePanel.append(tree);
     }
 
+    function planArgs(node: any): any {
+      // Official Neo4j JS driver exposes Plan.arguments; the Python driver
+      // (and raw Bolt map) uses args. Accept both so the UI is client-agnostic.
+      return node?.arguments ?? node?.args ?? {};
+    }
+
+    function planDetails(node: any): string {
+      const args = planArgs(node);
+      const parts: string[] = [];
+      const details = String(args.Details ?? '');
+      if (details) parts.push(details);
+      const source = String(args.PlanSource ?? '');
+      if (source) parts.push(`source=${source}`);
+      const identifiers = Array.isArray(node?.identifiers) ? node.identifiers : [];
+      if (identifiers.length > 0) parts.push(`outputs=[${identifiers.join(', ')}]`);
+      const rows = Number(node?.estimatedRows ?? args.EstimatedRows ?? 0);
+      if (rows > 0) parts.push(`rows≈${rows}`);
+      return parts.join(' · ');
+    }
+
+    function planTreeText(node: any, prefix = '', last = true, root = true): string {
+      const connector = root ? '' : last ? '└─ ' : '├─ ';
+      const details = planDetails(node);
+      let line = `${prefix}${connector}${String(node?.operatorType ?? '?')}`;
+      if (details) line += `(${details})`;
+      const lines = [line];
+      const children = Array.isArray(node?.children) ? node.children : [];
+      for (let i = 0; i < children.length; i += 1) {
+        const childPrefix = prefix + (root ? '' : last ? '   ' : '│  ');
+        lines.push(planTreeText(children[i], childPrefix, i === children.length - 1, false));
+      }
+      return lines.join('\n');
+    }
+
+    const PLAN_NODE_WIDTH = 250;
+    const PLAN_NODE_HEIGHT = 92;
+    const PLAN_LEVEL_GAP = 62;
+    const PLAN_SIBLING_GAP = 22;
+
+    function planNodeHeight(node: any): number {
+      const details = planDetails(node);
+      const lines = Math.max(1, Math.ceil(details.length / 44));
+      return Math.max(PLAN_NODE_HEIGHT, 48 + lines * 13);
+    }
+
+    function planSubtreeWidth(node: any): number {
+      const children = Array.isArray(node?.children) ? node.children : [];
+      if (children.length === 0) return PLAN_NODE_WIDTH;
+      let total = 0;
+      for (const child of children) total += planSubtreeWidth(child);
+      total += PLAN_SIBLING_GAP * (children.length - 1);
+      return Math.max(PLAN_NODE_WIDTH, total);
+    }
+
+    type PlanLayoutNode = {
+      node: any;
+      x: number;
+      y: number;
+      depth: number;
+      height: number;
+      lines: string[];
+    };
+
+    function planWrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+      if (!text) return [];
+      const lines: string[] = [];
+      let current = '';
+      for (const ch of text) {
+        const next = current + ch;
+        if (current && ctx.measureText(next).width > maxWidth) {
+          lines.push(current);
+          current = ch;
+        } else {
+          current = next;
+        }
+      }
+      if (current) lines.push(current);
+      return lines;
+    }
+
+    function buildPlanGraphLayout(root: any): { nodes: PlanLayoutNode[]; edges: Array<[PlanLayoutNode, PlanLayoutNode]>; width: number; height: number } {
+      const measure = document.createElement('canvas').getContext('2d');
+      const nodes: PlanLayoutNode[] = [];
+      const edges: Array<[PlanLayoutNode, PlanLayoutNode]> = [];
+      if (!measure) return { nodes, edges, width: PLAN_NODE_WIDTH, height: PLAN_NODE_HEIGHT };
+      measure.font = '11.5px monospace';
+      const detailsWidth = PLAN_NODE_WIDTH - 26;
+
+      const place = (node: any, left: number, depth: number): PlanLayoutNode => {
+        const width = planSubtreeWidth(node);
+        const details = planDetails(node);
+        const lines = planWrapText(measure, details || '（无额外信息）', detailsWidth);
+        const height = Math.max(PLAN_NODE_HEIGHT, 44 + lines.length * 15);
+        const entry: PlanLayoutNode = { node, x: left + width / 2, y: 0, depth, height, lines };
+        nodes.push(entry);
+        const children = Array.isArray(node?.children) ? node.children : [];
+        if (children.length > 0) {
+          let childWidth = 0;
+          for (const child of children) childWidth += planSubtreeWidth(child);
+          childWidth += PLAN_SIBLING_GAP * (children.length - 1);
+          let childLeft = left + (width - childWidth) / 2;
+          for (const child of children) {
+            const childEntry = place(child, childLeft, depth + 1);
+            edges.push([entry, childEntry]);
+            childLeft += planSubtreeWidth(child) + PLAN_SIBLING_GAP;
+          }
+        }
+        return entry;
+      };
+      place(root, 0, 0);
+
+      const depthHeight: number[] = [];
+      for (const entry of nodes) depthHeight[entry.depth] = Math.max(depthHeight[entry.depth] ?? 0, entry.height);
+      const depthY: number[] = [];
+      let y = 0;
+      for (let d = 0; d < depthHeight.length; d += 1) {
+        depthY[d] = y;
+        y += depthHeight[d] + PLAN_LEVEL_GAP;
+      }
+      for (const entry of nodes) entry.y = depthY[entry.depth];
+      return { nodes, edges, width: Math.max(PLAN_NODE_WIDTH, planSubtreeWidth(root)), height: y };
+    }
+
+    function drawPlanGraph(canvas: HTMLCanvasElement, viewport: HTMLElement, layout: ReturnType<typeof buildPlanGraphLayout>): void {
+      const width = viewport.clientWidth;
+      const height = viewport.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const pixelWidth = Math.round(width * dpr);
+      const pixelHeight = Math.round(height * dpr);
+      // Assigning canvas.width/height clears the backing store and can show a
+      // blank frame. Only resize when the viewport actually changes.
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+      }
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const styles = getComputedStyle(document.documentElement);
+      const textColor = styles.getPropertyValue('--text').trim() || '#e6e9ef';
+      const mutedColor = styles.getPropertyValue('--muted').trim() || '#8b93a7';
+      const bgColor = styles.getPropertyValue('--bg-elevated').trim() || '#161b22';
+      const borderColor = styles.getPropertyValue('--border-strong').trim() || '#c2cbd8';
+      const accent = styles.getPropertyValue('--accent').trim() || '#3b82f6';
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.save();
+      ctx.translate(planPanX, planPanY);
+      ctx.scale(planZoom, planZoom);
+
+      // Edges first, under the boxes.
+      for (const [parent, child] of layout.edges) {
+        const x1 = parent.x;
+        const y1 = parent.y + parent.height;
+        const x2 = child.x;
+        const y2 = child.y;
+        const midY = y1 + (y2 - y1) / 2;
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1, midY);
+        ctx.lineTo(x2, midY);
+        ctx.lineTo(x2, y2 - 7);
+        ctx.stroke();
+        ctx.fillStyle = borderColor;
+        ctx.beginPath();
+        ctx.moveTo(x2 - 4, y2 - 7);
+        ctx.lineTo(x2 + 4, y2 - 7);
+        ctx.lineTo(x2, y2);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      for (const entry of layout.nodes) {
+        const left = entry.x - PLAN_NODE_WIDTH / 2;
+        const top = entry.y;
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(left, top, PLAN_NODE_WIDTH, entry.height, 6);
+        ctx.fillStyle = bgColor;
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = accent;
+        ctx.stroke();
+        ctx.clip();
+        ctx.fillStyle = textColor;
+        ctx.font = 'bold 12px monospace';
+        ctx.fillText(String(entry.node?.operatorType ?? '?'), left + 10, top + 20);
+        ctx.fillStyle = textColor;
+        ctx.font = '11.5px monospace';
+        for (let i = 0; i < entry.lines.length; i += 1)
+          ctx.fillText(entry.lines[i], left + 10, top + 38 + i * 15);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    function renderPlan(): void {
+      planPanel.replaceChildren();
+      if (!plan) {
+        planPanel.append(h('div', { class: 'empty' }, '这条语句没有执行计划（需要 EXPLAIN 或 PROFILE）'));
+        return;
+      }
+      const toolbar = h('div', { class: 'plan-toolbar' });
+      const planBody = h('div', { class: 'plan-body' });
+      const modes: Array<[typeof planMode, string]> = [
+        ['graph', 'Graph'],
+        ['tree', 'Tree'],
+        ['raw', 'Raw'],
+      ];
+      for (const [mode, label] of modes) {
+        const button = h('button', { class: `button small plan-mode${planMode === mode ? ' active' : ''}` }, label);
+        button.addEventListener('click', () => {
+          planMode = mode;
+          renderPlan();
+        });
+        toolbar.append(button);
+      }
+      planPanel.append(toolbar, planBody);
+      if (planMode === 'tree') {
+        const text = h('pre', { class: 'plan-text' });
+        text.textContent = planTreeText(plan);
+        planBody.append(text);
+      } else if (planMode === 'raw') {
+        const raw = h('pre', { class: 'plan-text plan-raw' });
+        try {
+          raw.textContent = JSON.stringify(plan, null, 2);
+        } catch (error) {
+          raw.textContent = String(error);
+        }
+        planBody.append(raw);
+      } else {
+        const viewport = h('div', { class: 'plan-graph-viewport' });
+        const canvas = document.createElement('canvas');
+        canvas.className = 'plan-graph-canvas';
+        viewport.append(canvas);
+        planBody.append(viewport);
+        const layout = buildPlanGraphLayout(plan);
+        const canvasWidth = layout.width;
+        const canvasHeight = layout.height;
+
+        const clampPan = (): void => {
+          const vw = viewport.clientWidth;
+          const vh = viewport.clientHeight;
+          if (vw <= 0 || vh <= 0)
+            return;
+          const w = canvasWidth * planZoom;
+          const h = canvasHeight * planZoom;
+          const margin = 64;
+          planPanX = Math.min(vw - margin, Math.max(margin - w, planPanX));
+          planPanY = Math.min(vh - margin, Math.max(margin - h, planPanY));
+        };
+        const centerView = (): void => {
+          planPanX = Math.max(12, (viewport.clientWidth - canvasWidth * planZoom) / 2);
+          planPanY = 12;
+        };
+        const applyViewNow = (): void => {
+          planZoom = Math.min(3, Math.max(0.2, planZoom));
+          clampPan();
+          drawPlanGraph(canvas, viewport, layout);
+          const label = toolbar.querySelector('.plan-zoom-label');
+          if (label) label.textContent = `${Math.round(planZoom * 100)}%`;
+        };
+        let viewRaf = 0;
+        const applyView = (): void => {
+          if (viewRaf !== 0) return;
+          viewRaf = requestAnimationFrame(() => {
+            viewRaf = 0;
+            applyViewNow();
+          });
+        };
+        if (!planViewInitialized && viewport.clientWidth > 0) {
+          centerView();
+          planViewInitialized = true;
+        }
+        applyViewNow();
+        const resizeObserver = new ResizeObserver(() => drawPlanGraph(canvas, viewport, layout));
+        resizeObserver.observe(viewport);
+
+        const zoomOut = h('button', { class: 'button small', title: '缩小' }, '−') as HTMLButtonElement;
+        const zoomIn = h('button', { class: 'button small', title: '放大' }, '+') as HTMLButtonElement;
+        const reset = h('button', { class: 'button small', title: '重置视图' }, 'Reset') as HTMLButtonElement;
+        const zoomLabel = h('span', { class: 'plan-zoom-label' }, '100%');
+        zoomOut.addEventListener('click', () => {
+          planZoom *= 0.85;
+          applyView();
+        });
+        zoomIn.addEventListener('click', () => {
+          planZoom *= 1.15;
+          applyView();
+        });
+        reset.addEventListener('click', () => {
+          planZoom = 1;
+          centerView();
+          applyView();
+        });
+        toolbar.append(h('span', { class: 'plan-toolbar-sep' }), zoomOut, zoomLabel, zoomIn, reset);
+
+        viewport.addEventListener(
+          'wheel',
+          (event: WheelEvent) => {
+            event.preventDefault();
+            const rect = viewport.getBoundingClientRect();
+            const mx = event.clientX - rect.left;
+            const my = event.clientY - rect.top;
+            const oldZoom = planZoom;
+            planZoom *= event.deltaY < 0 ? 1.1 : 0.9;
+            planZoom = Math.min(3, Math.max(0.2, planZoom));
+            const ratio = planZoom / oldZoom;
+            planPanX = mx - (mx - planPanX) * ratio;
+            planPanY = my - (my - planPanY) * ratio;
+            applyView();
+          },
+          { passive: false }
+        );
+
+        let dragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let panStartX = 0;
+        let panStartY = 0;
+        viewport.addEventListener('pointerdown', (event: PointerEvent) => {
+          if (event.button !== 0) return;
+          dragging = true;
+          dragStartX = event.clientX;
+          dragStartY = event.clientY;
+          panStartX = planPanX;
+          panStartY = planPanY;
+          viewport.classList.add('dragging');
+          viewport.setPointerCapture(event.pointerId);
+        });
+        viewport.addEventListener('pointermove', (event: PointerEvent) => {
+          if (!dragging) return;
+          planPanX = panStartX + event.clientX - dragStartX;
+          planPanY = panStartY + event.clientY - dragStartY;
+          applyView();
+        });
+        const endDrag = (event: PointerEvent): void => {
+          if (!dragging) return;
+          dragging = false;
+          viewport.classList.remove('dragging');
+          if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+        };
+        viewport.addEventListener('pointerup', endDrag);
+        viewport.addEventListener('pointercancel', endDrag);
+        viewport.addEventListener('dblclick', () => {
+          planZoom = 1;
+          centerView();
+          applyView();
+        });
+      }
+    }
+
     function renderRaw(): void {
       rawPanel.replaceChildren();
       if (columns.length === 0) {
@@ -1479,16 +1847,22 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
 
     function activate(tab: Tab): void {
       if (tab === 'graph' && !hasGraph) tab = 'table';
+      if (tab === 'plan' && !plan) tab = 'table';
       if (tab === 'profile' && !profile) tab = 'table';
       activeTab = tab;
-      if (tab === 'profile') renderProfile();
       for (const [name, button] of Object.entries(tabButtons)) {
         button.classList.toggle('active', name === tab);
       }
       tablePanel.classList.toggle('hidden', tab !== 'table');
       graphPanel.classList.toggle('hidden', tab !== 'graph');
+      planPanel.classList.toggle('hidden', tab !== 'plan');
       rawPanel.classList.toggle('hidden', tab !== 'raw');
       profilePanel.classList.toggle('hidden', tab !== 'profile');
+
+      // Render after the panel is visible: Plan Graph needs clientWidth to
+      // center the initial view; rendering a hidden panel yields 0x0.
+      if (tab === 'plan') renderPlan();
+      if (tab === 'profile') renderProfile();
 
       if (tab === 'graph') {
         if (!graphView) {
@@ -1522,6 +1896,14 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       graphResult = extractGraph(records);
       hasGraph = graphResult.graph.order > 0;
       profile = nextSummary?.profile || null;
+      const previousPlan = plan;
+      plan = nextSummary?.plan || null;
+      if (plan !== previousPlan) {
+        planZoom = 1;
+        planPanX = 20;
+        planPanY = 12;
+        planViewInitialized = false;
+      }
       summaryText = summarizeResult(records, nextSummary);
       handle.query = query;
       handle.summaryText = summaryText;
@@ -1535,7 +1917,10 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       tabButtons.graph.disabled = !hasGraph;
       tabButtons.graph.textContent = hasGraph ? 'Graph' : 'Graph (无点边)';
       tabButtons.profile.classList.toggle('hidden', !profile);
+      tabButtons.plan.classList.toggle('hidden', !plan);
+      body.classList.toggle('has-plan', !!plan);
       renderProfile();
+      renderPlan();
 
       graphView?.destroy();
       graphView = null;
@@ -1553,6 +1938,11 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         requestAnimationFrame(() => {
           if (destroyed || version !== resultVersion || !root.isConnected) return;
           activate('graph');
+        });
+      } else if (plan && /^\s*EXPLAIN\b/i.test(query)) {
+        requestAnimationFrame(() => {
+          if (destroyed || version !== resultVersion || !root.isConnected) return;
+          activate('plan');
         });
       }
     }
@@ -1622,6 +2012,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
 
     tabButtons.table.addEventListener('click', () => activate('table'));
     tabButtons.graph.addEventListener('click', () => activate('graph'));
+    tabButtons.plan.addEventListener('click', () => activate('plan'));
     tabButtons.raw.addEventListener('click', () => activate('raw'));
     tabButtons.profile.addEventListener('click', () => activate('profile'));
     modeSelect.addEventListener('change', () => {

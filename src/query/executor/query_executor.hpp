@@ -40,6 +40,8 @@
 namespace eugraph {
 namespace compute {
 
+struct ExplainNode;
+
 struct StreamContext {
     Schema columns;
     std::string error;
@@ -87,6 +89,9 @@ struct StreamContext {
     /// drained (and, for auto-commit, after the transaction commit).
     bool profile_requested = false;
     std::optional<QueryProfile> profile;
+    /// Structured EXPLAIN tree for Bolt/Web Console plan metadata. Only set when
+    /// the statement is EXPLAIN; execution never reads it.
+    std::shared_ptr<const ExplainNode> explain_node;
     uint64_t planning_ns = 0;
     std::optional<std::chrono::steady_clock::time_point> execution_start;
 

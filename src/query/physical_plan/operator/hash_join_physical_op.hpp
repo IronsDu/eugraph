@@ -37,6 +37,27 @@ public:
         return {left_.get(), right_.get()};
     }
 
+    void explain(ExplainNode& node, const ExplainContext&) const override {
+        node.operator_name = "HashJoin";
+        node.details.push_back(std::string("build=") + (build_left_ ? "left" : "right"));
+        std::string keys;
+        const auto& left_names = left_->outputSchema();
+        const auto& right_names = right_->outputSchema();
+        for (size_t i = 0; i < left_key_cols_.size() && i < right_key_cols_.size(); ++i) {
+            if (i > 0)
+                keys += " AND ";
+            auto l = left_key_cols_[i] < left_names.size() ? left_names[left_key_cols_[i]]
+                                                           : "#" + std::to_string(left_key_cols_[i]);
+            auto r = right_key_cols_[i] < right_names.size() ? right_names[right_key_cols_[i]]
+                                                             : "#" + std::to_string(right_key_cols_[i]);
+            keys += l + " = " + r;
+        }
+        if (!keys.empty())
+            node.details.push_back("keys=[" + keys + "]");
+        if (max_build_rows_ > 0)
+            node.details.push_back("max_build_rows=" + std::to_string(max_build_rows_));
+    }
+
 private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;

@@ -40,6 +40,16 @@ public:
                               : "AllNodeScan(variable=" + variable_ + ", labels=" + labels + ")";
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        ExplainContext local = ctx;
+        if (local.schema == nullptr)
+            local.schema = schema_.get();
+        node.operator_name = "AllNodeScan";
+        node.details.push_back("variable=" + variable_);
+        if (!candidate_labels_.empty())
+            node.details.push_back("labels=" + explainLabelList(candidate_labels_, local));
+    }
+
 private:
     std::string variable_;
     std::vector<binder::BoundType> output_types_;

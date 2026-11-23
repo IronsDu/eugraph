@@ -36,6 +36,11 @@ public:
         compiler.compile(list_expr_);
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "Unwind";
+        node.details.push_back("expr=" + formatExplainExpression(list_expr_, ctx));
+    }
+
 private:
     binder::BoundExpression list_expr_;
     uint32_t output_col_index_;

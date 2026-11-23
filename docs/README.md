@@ -76,6 +76,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | PatternComprehension 公共 anchor 共享（计划层 fork） | [query/engine/pattern-comprehension-anchor-sharing.md](query/engine/pattern-comprehension-anchor-sharing.md) | `src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp`, `src/query/physical_plan/operator/pattern_comprehension_fork_physical_op.cpp` |
 | 表达式求值不应发起 IO（属性读取收敛到算子） | [query/engine/expression-io-boundary.md](query/engine/expression-io-boundary.md) | `src/query/evaluator/`, `src/query/optimizer/extraction/projection_extraction.cpp` |
 | LDBC c5/c9 计划分析 | [query/ldbc-c5-c9-plan-analysis.md](query/ldbc-c5-c9-plan-analysis.md) | `src/query/physical_plan/` |
+| EXPLAIN 计划树 | [query/engine/explain-design.md](query/engine/explain-design.md) | `src/query/physical_plan/explain/` |
 | LDBC 慢查询执行层优化（不改存储） | [benchmark/ldbc-storage-unchanged-optimization-plan.md](benchmark/ldbc-storage-unchanged-optimization-plan.md), [benchmark/ldbc-plan-quality-analysis.md](benchmark/ldbc-plan-quality-analysis.md) | `src/query/physical_plan/`, `src/query/planner/`, `src/storage/data/` |
 | 添加 DDL 操作 | [storage/ddl.md], [storage/metadata-service-design.md], [storage/session-cursor-pool-design.md] | `src/storage/schema_ddl.*`, `src/storage/meta/`, `src/storage/data/` |
 | 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/graph/graph_manager.hpp` |

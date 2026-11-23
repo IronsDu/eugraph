@@ -328,8 +328,10 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // to planBound (RBO over the optimized logical tree) when no winner.
     PhysicalPlanner physical_planner;
     std::variant<std::unique_ptr<PhysicalOperator>, std::string> phys_result = std::string("");
+    bool used_cbo = false;
     if (bound_stmt->plan.chosen) {
         phys_result = physical_planner.planChosen(*bound_stmt->plan.chosen, query_data, async_meta_, plan_ctx);
+        used_cbo = !std::holds_alternative<std::string>(phys_result);
         if (std::holds_alternative<std::string>(phys_result)) {
             // planChosen failed — log and fall through to planBound rather than
             // aborting the whole query. The RBO path produces a known-good plan.
@@ -348,84 +350,29 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     }
     auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
 
-    // 5.5. If EXPLAIN, format plan into generator without executing
+    // 5.5. If EXPLAIN, format the physical tree without executing it.
     if (is_explain) {
-        // Build output schema description for an operator
-        auto formatOutput = [](const PhysicalOperator& op) -> std::string {
-            const auto& schema = op.outputSchema();
-            const auto& types = op.outputTypes();
-            if (schema.empty())
-                return "  output: []";
-            std::string result = "  output: [";
-            for (size_t i = 0; i < schema.size(); ++i) {
-                if (i > 0)
-                    result += ", ";
-                result += schema[i] + ":" + types[i].toString();
-            }
-            result += "]";
-            return result;
-        };
-
-        // Collect operator info: toString + output schema for each operator
-        struct OpInfo {
-            std::string to_string;
-            std::string output;
-        };
-        std::vector<OpInfo> ops;
-        std::function<void(const PhysicalOperator&)> collect;
-        collect = [&](const PhysicalOperator& op) {
-            ops.push_back({op.toString(), formatOutput(op)});
-            for (const auto* child : op.children()) {
-                collect(*child);
-            }
-        };
-        collect(*phys_op);
-
+        ExplainContext explain_ctx;
+        explain_ctx.schema = schema_version.get();
+        explain_ctx.plan_source = used_cbo ? "CBO" : "RBO";
+        auto plan_root = std::make_shared<ExplainNode>(ExplainBuilder::build(*phys_op, explain_ctx));
+        plan_root->plan_source = explain_ctx.plan_source;
+        ctx->explain_node = plan_root;
+        const std::string plan_text = formatExplainTree(*plan_root, explain_ctx);
         ctx->columns.clear();
         ctx->columns.push_back("Plan");
-
-        // Calculate box width from all lines
-        size_t box_width = 0;
-        for (const auto& op : ops) {
-            box_width = std::max(box_width, op.to_string.size());
-            box_width = std::max(box_width, op.output.size());
-        }
-        box_width += 2; // padding inside box
-
         std::vector<Row> plan_rows;
-        for (size_t i = 0; i < ops.size(); i++) {
-            // Top border
-            Row top_row;
-            top_row.push_back("+" + std::string(box_width, '-') + "+");
-            plan_rows.push_back(std::move(top_row));
-
-            // Operator name line
-            Row name_row;
-            name_row.push_back("| " + ops[i].to_string + std::string(box_width - 1 - ops[i].to_string.size(), ' ') +
-                               "|");
-            plan_rows.push_back(std::move(name_row));
-
-            // Output schema line
-            Row out_row;
-            out_row.push_back("| " + ops[i].output + std::string(box_width - 1 - ops[i].output.size(), ' ') + "|");
-            plan_rows.push_back(std::move(out_row));
-
-            // Bottom border
-            Row bot_row;
-            bot_row.push_back("+" + std::string(box_width, '-') + "+");
-            plan_rows.push_back(std::move(bot_row));
-
-            // Arrow between operators
-            if (i + 1 < ops.size()) {
-                size_t arrow_pad = box_width / 2;
-                Row arrow_row;
-                arrow_row.push_back(std::string(arrow_pad, ' ') + "\xe2\x86\x93");
-                plan_rows.push_back(std::move(arrow_row));
-            }
+        size_t begin = 0;
+        while (begin <= plan_text.size()) {
+            size_t end = plan_text.find('\n', begin);
+            Row row;
+            row.push_back(plan_text.substr(begin, end == std::string::npos ? std::string::npos : end - begin));
+            plan_rows.push_back(std::move(row));
+            if (end == std::string::npos)
+                break;
+            begin = end + 1;
         }
-
         ctx->gen = wrapRowsToChunkGenerator(std::move(plan_rows));
-
         ctx->rollback();
         ctx->should_commit = false;
         co_return ctx;
