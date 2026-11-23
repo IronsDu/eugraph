@@ -9,3 +9,14 @@ std::string LateMaterializePhysicalOp::toString() const {
 
 } // namespace compute
 } // namespace eugraph
+
+namespace eugraph {
+namespace compute {
+
+void LateMaterializePhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) const {
+    ProjectionExtractPhysicalOp::explain(node, ctx);
+    node.operator_name = "LateMaterialize";
+}
+
+} // namespace compute
+} // namespace eugraph

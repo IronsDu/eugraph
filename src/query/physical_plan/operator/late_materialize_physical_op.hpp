@@ -25,6 +25,7 @@ public:
     using ProjectionExtractPhysicalOp::ProjectionExtractPhysicalOp;
 
     std::string toString() const override;
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override;
 };
 
 } // namespace compute

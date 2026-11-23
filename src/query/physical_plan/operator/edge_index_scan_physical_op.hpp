@@ -44,6 +44,8 @@ public:
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override;
+
 private:
     std::string src_var_;
     std::string dst_var_;

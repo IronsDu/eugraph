@@ -764,3 +764,79 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
 
 } // namespace compute
 } // namespace eugraph
+
+namespace eugraph {
+namespace compute {
+
+void ProjectionExtractPhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) const {
+    ExplainContext local = ctx;
+    if (local.schema == nullptr && !vertex_label_names_.empty()) {
+        // Names are already available in the operator maps; keep the context
+        // schema-less and use those maps below.
+    }
+    node.operator_name = "ProjectionExtract";
+    std::string materialize;
+    std::string loads;
+    for (const auto& sp : specs_) {
+        switch (sp.kind) {
+        case ColumnSpec::Kind::Passthrough:
+            if (ctx.verbose)
+                loads += (loads.empty() ? "" : ", ") + sp.output_name;
+            break;
+        case ColumnSpec::Kind::LoadVertexProp:
+        case ColumnSpec::Kind::LoadVertexPropCoalesce: {
+            std::string label;
+            auto vit = vertex_label_names_.find(sp.label_id);
+            if (vit != vertex_label_names_.end())
+                label = vit->second;
+            else if (sp.label_id != INVALID_LABEL_ID)
+                label = explainLabelName(sp.label_id, local);
+            std::string prop = sp.property_name;
+            if (prop.empty() && sp.label_id != INVALID_LABEL_ID)
+                prop = explainPropertyName(sp.label_id, sp.prop_id, local);
+            if (prop.empty())
+                prop = "prop#" + std::to_string(sp.prop_id);
+            loads += (loads.empty() ? "" : ", ") + (label.empty() ? prop : label + "." + prop);
+            break;
+        }
+        case ColumnSpec::Kind::LoadEdgeProp: {
+            auto eit = edge_label_names_.find(sp.edge_label_id);
+            std::string label =
+                eit != edge_label_names_.end() ? eit->second : explainEdgeLabelName(sp.edge_label_id, local);
+            loads += (loads.empty() ? "" : ", ") + label + "." + std::to_string(sp.prop_id);
+            break;
+        }
+        case ColumnSpec::Kind::LoadVertexLabels:
+            loads += (loads.empty() ? "" : ", ") + sp.output_name + ".labels";
+            break;
+        case ColumnSpec::Kind::LoadEdgeType:
+            loads += (loads.empty() ? "" : ", ") + sp.output_name + ".type";
+            break;
+        case ColumnSpec::Kind::ConstructVertex:
+        case ColumnSpec::Kind::ConstructEdge: {
+            std::string name = sp.output_name;
+            if (!ctx.verbose && name.rfind("__pe", 0) == 0) {
+                name = sp.source_col < input_schema_.size()
+                           ? input_schema_[sp.source_col]
+                           : (sp.kind == ColumnSpec::Kind::ConstructVertex ? "vertex" : "edge");
+            }
+            materialize += (materialize.empty() ? "" : ", ") + name;
+            break;
+        }
+        }
+    }
+    if (!materialize.empty())
+        node.details.push_back("materialize=[" + materialize + "]");
+    if (!loads.empty())
+        node.details.push_back("load=[" + loads + "]");
+    std::vector<LabelId> filter_labels;
+    for (const auto& sp : specs_)
+        for (LabelId lid : sp.required_labels)
+            if (std::find(filter_labels.begin(), filter_labels.end(), lid) == filter_labels.end())
+                filter_labels.push_back(lid);
+    if (!filter_labels.empty())
+        node.details.push_back("filterLabels=[" + explainLabelList(filter_labels, local) + "]");
+}
+
+} // namespace compute
+} // namespace eugraph

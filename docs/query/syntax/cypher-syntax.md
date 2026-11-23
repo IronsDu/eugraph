@@ -310,7 +310,17 @@ LIMIT toInteger(ceil(1.7))   -- 无变量常量表达式在运行时求值并校
 EXPLAIN MATCH (n:Person) RETURN n
 ```
 
-仅构建物理算子树并格式化为文本返回，不实际执行。
+仅构建物理算子树并格式化为树形文本返回，不实际执行。输出包含：
+
+```text
+Plan source: CBO|RBO
+Project(mapping=[...])
+└─ Filter(predicate=...)
+   └─ NodeByLabelScan(variable=n, labels=Person)
+```
+
+每个节点显示用户语义（标签/关系/属性名、索引、谓词、join key、sort/aggregate 表达式）；
+父子关系用 `├─` / `└─` 缩进表示。内部 `__pe_*` 列和裸标签/属性 ID 默认不显示。
 
 ### PROFILE — 执行并查看性能
 

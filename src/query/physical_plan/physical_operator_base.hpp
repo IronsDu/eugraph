@@ -3,6 +3,7 @@
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
+#include "query/physical_plan/explain/explain.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "query/physical_plan/slot_layout.hpp"
 #include "query/planner/bound_type.hpp"
@@ -34,6 +35,12 @@ public:
     folly::coro::AsyncGenerator<DataChunk> executeChunkTraced();
 
     virtual std::string toString() const = 0;
+    /// User-facing EXPLAIN details. The default is the short trace/debug name;
+    /// operators with semantic details (predicate/labels/index/keys) override
+    /// this without changing toString() used by tracing/logging.
+    virtual void explain(ExplainNode& node, const ExplainContext& /*ctx*/) const {
+        node.operator_name = toString();
+    }
     virtual std::vector<const PhysicalOperator*> children() const {
         return {};
     }

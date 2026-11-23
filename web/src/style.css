@@ -1832,3 +1832,265 @@ html[data-theme='light'] .graph-notice {
 .tab.hidden {
   display: none;
 }
+
+/* EXPLAIN plan tab: textual tree + box-and-connector graph. */
+.plan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.plan-section-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.plan-text {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--code);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.plan-graph {
+  overflow: auto;
+  padding: 8px 4px 16px;
+}
+
+.plan-node-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.plan-node {
+  min-width: 220px;
+  max-width: 560px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 12%, transparent);
+}
+
+.plan-node-title {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.plan-node-detail {
+  margin-top: 3px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.plan-children {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: 22px;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+
+.plan-raw {
+  max-height: 320px;
+}
+
+/* Graph-mode plan: centered boxes, symmetric child branches, SVG connectors. */
+.plan-panel {
+  min-height: 420px;
+  overflow: auto;
+}
+
+.plan-toolbar {
+  display: flex;
+  gap: 6px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 4px;
+  background: var(--bg-elevated);
+}
+
+.plan-mode.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.plan-graph-canvas {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 4px auto 12px;
+  overflow: visible;
+}
+
+.plan-links {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.plan-link {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+}
+
+.plan-graph-node {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 8px 10px;
+  /* Uniform thick accent border: no single-edge highlight. */
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 12%, transparent);
+}
+
+.plan-graph-node .plan-node-detail {
+  max-height: 46px;
+  overflow: auto;
+}
+
+/* Give EXPLAIN plan frames more vertical room than ordinary result tables. */
+.frame-body.has-plan {
+  min-height: 460px;
+  max-height: max(560px, calc(100vh - 260px));
+}
+
+.frame-body.has-plan .view-panel {
+  max-height: max(560px, calc(100vh - 260px));
+}
+
+.plan-graph-node .plan-node-detail {
+  max-height: 86px;
+  overflow: auto;
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.plan-arrowhead {
+  fill: var(--border-strong);
+}
+
+/* Keep the Plan toolbar fixed in the panel while only the graph/content scrolls. */
+.plan-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.plan-toolbar {
+  position: static;
+  flex: 0 0 auto;
+}
+
+.plan-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.plan-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+.plan-zoom-label {
+  min-width: 38px;
+  text-align: center;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 11px;
+}
+
+.plan-graph-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 0)
+    0 0 / 18px 18px,
+    var(--bg-input);
+  cursor: grab;
+  touch-action: none;
+  contain: layout paint;
+  isolation: isolate;
+}
+
+.plan-graph-viewport.dragging {
+  cursor: grabbing;
+}
+
+.plan-graph-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  /* Keep a flat 2D compositing layer. preserve-3d makes scaled text
+     re-rasterize/flicker in Chromium during wheel zoom. */
+  transform-style: flat;
+  isolation: isolate;
+}
+
+.plan-graph-viewport,
+.plan-graph-stage,
+.plan-graph-node {
+  user-select: none;
+}
+
+.plan-graph-stage {
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+}
+
+.plan-graph-pan {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.plan-graph-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: none !important;
+  transform-style: flat;
+}

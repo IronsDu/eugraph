@@ -41,6 +41,18 @@ public:
         return {child_.get()};
     }
 
+    void explain(ExplainNode& node, const ExplainContext&) const override {
+        node.operator_name = "PathBuild";
+        node.details.push_back("path=" + path_var_);
+        std::string elements;
+        for (size_t i = 0; i < element_vars_.size(); ++i) {
+            if (i > 0)
+                elements += ", ";
+            elements += element_vars_[i];
+        }
+        node.details.push_back("elements=[" + elements + "]");
+    }
+
 private:
     std::string path_var_;
     std::vector<std::string> element_vars_;

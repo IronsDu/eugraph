@@ -43,6 +43,11 @@ public:
         slot_layout_ = left_->slotLayout();
     }
 
+    void explain(ExplainNode& node, const ExplainContext&) const override {
+        node.operator_name = anti_ ? "AntiSemiJoin" : "SemiJoin";
+        node.details.push_back("correlation_columns=" + std::to_string(left_correlation_cols_.size()));
+    }
+
 private:
     folly::coro::AsyncGenerator<DataChunk> executePerRow();
     folly::coro::AsyncGenerator<DataChunk> executeBatch(std::vector<Row> left_rows,

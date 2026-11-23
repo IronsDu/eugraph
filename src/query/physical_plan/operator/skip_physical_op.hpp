@@ -27,6 +27,14 @@ public:
         return {child_.get()};
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "Skip";
+        if (skip_.has_value())
+            node.details.push_back("count=" + std::to_string(*skip_));
+        else if (expr_.has_value())
+            node.details.push_back("count=" + formatExplainExpression(*expr_, ctx));
+    }
+
 private:
     std::optional<int64_t> skip_;
     std::optional<binder::BoundExpression> expr_;

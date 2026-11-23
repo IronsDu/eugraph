@@ -354,6 +354,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/path_element_property_read_physical_op.cpp
     src/query/physical_plan/physical_operator_base.cpp
     src/query/physical_plan/physical_planner.cpp
+    src/query/physical_plan/explain/explain.cpp
     src/query/executor/query_executor.cpp
     src/query/optimizer/framework/memo.cpp
     src/query/optimizer/extraction/projection_extraction.cpp

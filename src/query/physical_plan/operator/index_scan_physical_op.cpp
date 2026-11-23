@@ -145,3 +145,94 @@ std::string IndexScanPhysicalOp::toString() const {
 
 } // namespace compute
 } // namespace eugraph
+
+namespace eugraph {
+namespace compute {
+
+void IndexScanPhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) const {
+    ExplainContext local = ctx;
+    if (schema_ != nullptr)
+        local.schema = schema_.get();
+    node.operator_name = "IndexScan";
+    node.details.push_back("variable=" + variable_);
+
+    LabelId effective_label = label_id_;
+    std::vector<uint16_t> effective_props = prop_ids_;
+    std::string index_name;
+    std::vector<std::string> accessor_names;
+    if (schema_ != nullptr) {
+        if (effective_label == INVALID_LABEL_ID && index_id_ != 0) {
+            for (const auto& [lid, def] : schema_->labels) {
+                for (const auto& idx : def.indexes) {
+                    if (idx.index_id != index_id_)
+                        continue;
+                    effective_label = lid;
+                    if (effective_props.empty())
+                        effective_props = idx.prop_ids;
+                    index_name = idx.name;
+                    for (const auto& acc : idx.accessors) {
+                        if (!acc.property_name.empty())
+                            accessor_names.push_back(acc.property_name);
+                    }
+                    break;
+                }
+                if (effective_label != INVALID_LABEL_ID)
+                    break;
+            }
+        } else {
+            auto it = schema_->labels.find(effective_label);
+            if (it != schema_->labels.end()) {
+                for (const auto& idx : it->second.indexes) {
+                    if (idx.index_id != index_id_)
+                        continue;
+                    if (effective_props.empty())
+                        effective_props = idx.prop_ids;
+                    index_name = idx.name;
+                    for (const auto& acc : idx.accessors) {
+                        if (!acc.property_name.empty())
+                            accessor_names.push_back(acc.property_name);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    node.details.push_back("label=" + explainLabelName(effective_label, local));
+    if (!effective_props.empty()) {
+        node.details.push_back("properties=[" + explainPropertyList(effective_label, effective_props, local) + "]");
+    } else if (!accessor_names.empty()) {
+        std::string props;
+        for (size_t i = 0; i < accessor_names.size(); ++i) {
+            if (i > 0)
+                props += ", ";
+            props += accessor_names[i];
+        }
+        node.details.push_back("properties=[" + props + "]");
+    }
+    node.details.push_back(std::string("mode=") + (mode_ == ScanMode::EQUALITY ? "eq"
+                                                   : mode_ == ScanMode::PREFIX ? "prefix"
+                                                                               : "range"));
+    std::string key_desc;
+    for (size_t i = 0; i < eq_values_.size(); ++i) {
+        if (i > 0)
+            key_desc += ", ";
+        key_desc += formatExplainPropertyValue(eq_values_[i]);
+    }
+    if (!key_desc.empty()) {
+        node.details.push_back("keyValues=[" + key_desc + "]");
+    } else if (range_start_.has_value() || range_end_.has_value()) {
+        std::string start = range_start_.has_value() && !range_start_->empty()
+                                ? formatExplainPropertyValue(range_start_->front())
+                                : "-inf";
+        std::string end =
+            range_end_.has_value() && !range_end_->empty() ? formatExplainPropertyValue(range_end_->front()) : "+inf";
+        node.details.push_back("range=[" + start + ".." + end + "]");
+    }
+    if (!index_name.empty())
+        node.details.push_back("index=" + index_name);
+    else if (index_id_ != 0)
+        node.details.push_back("index_id=" + std::to_string(index_id_));
+}
+
+} // namespace compute
+} // namespace eugraph

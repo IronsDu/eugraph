@@ -132,6 +132,8 @@ public:
     static uint64_t deferredLabelFilterCount() noexcept;
     static void resetDeferredLabelFilterCount() noexcept;
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override;
+
 private:
     static std::atomic<uint64_t> deferred_label_filter_count_;
     std::vector<ColumnSpec> specs_;

@@ -26,7 +26,7 @@ type Info = {
 };
 
 type Theme = 'dark' | 'light';
-type Tab = 'table' | 'graph' | 'raw' | 'profile';
+type Tab = 'table' | 'graph' | 'plan' | 'raw' | 'profile';
 type TableMode = 'compact' | 'json';
 
 type FrameHandle = {
@@ -1225,6 +1225,12 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     let hasGraph = graphResult.graph.order > 0;
     let summaryText = summarizeResult(records, resultSummary);
     let profile: any = resultSummary?.profile || null;
+    let plan: any = resultSummary?.plan || null;
+    let planMode: 'graph' | 'tree' | 'raw' = 'graph';
+    let planZoom = 1;
+    let planPanX = 20;
+    let planPanY = 12;
+    let planViewInitialized = false;
     let activeTab: Tab = 'table';
     let tableMode: TableMode = 'compact';
     let tablePage = 0;
@@ -1235,16 +1241,19 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     const tablePanel = h('div', { class: 'view-panel' });
     const graphPanel = h('div', { class: 'view-panel graph-panel' });
     const rawPanel = h('div', { class: 'view-panel raw-panel' });
+    const planPanel = h('div', { class: 'view-panel plan-panel' });
     const profilePanel = h('div', { class: 'view-panel profile-panel' });
 
     const tabButtons: Record<Tab, HTMLButtonElement> = {
       table: h('button', { class: 'tab active' }, 'Table') as HTMLButtonElement,
       graph: h('button', { class: 'tab', disabled: '' }, 'Graph') as HTMLButtonElement,
+      plan: h('button', { class: 'tab hidden' }, 'Plan') as HTMLButtonElement,
       raw: h('button', { class: 'tab' }, 'RAW') as HTMLButtonElement,
       profile: h('button', { class: 'tab hidden' }, 'Profile') as HTMLButtonElement,
     };
     tabButtons.graph.disabled = !hasGraph;
     tabButtons.graph.textContent = hasGraph ? 'Graph' : 'Graph (无点边)';
+    tabButtons.plan.classList.toggle('hidden', !plan);
 
     const modeSelect = h(
       'select',
@@ -1264,6 +1273,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       { class: 'frame-toolbar' },
       tabButtons.table,
       tabButtons.graph,
+      tabButtons.plan,
       tabButtons.raw,
       tabButtons.profile,
       h('span', { class: 'spacer' }),
@@ -1282,7 +1292,8 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
     header.insertBefore(queryEditor, header.firstChild);
     header.insertBefore(executeEditButton, close);
     header.insertBefore(cancelEditButton, close);
-    const body = h('div', { class: 'frame-body' }, tablePanel, graphPanel, rawPanel, profilePanel);
+    const body = h('div', { class: 'frame-body' }, tablePanel, graphPanel, planPanel, rawPanel, profilePanel);
+    body.classList.toggle('has-plan', !!plan);
     const root = h('article', { class: 'result-frame' }, header, editError, toolbar, body);
 
     function renderTable(): void {
@@ -1458,6 +1469,335 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       profilePanel.append(tree);
     }
 
+    function planArgs(node: any): any {
+      // Official Neo4j JS driver exposes Plan.arguments; the Python driver
+      // (and raw Bolt map) uses args. Accept both so the UI is client-agnostic.
+      return node?.arguments ?? node?.args ?? {};
+    }
+
+    function planDetails(node: any): string {
+      const args = planArgs(node);
+      const parts: string[] = [];
+      const details = String(args.Details ?? '');
+      if (details) parts.push(details);
+      const source = String(args.PlanSource ?? '');
+      if (source) parts.push(`source=${source}`);
+      const identifiers = Array.isArray(node?.identifiers) ? node.identifiers : [];
+      if (identifiers.length > 0) parts.push(`outputs=[${identifiers.join(', ')}]`);
+      const rows = Number(node?.estimatedRows ?? args.EstimatedRows ?? 0);
+      if (rows > 0) parts.push(`rows≈${rows}`);
+      return parts.join(' · ');
+    }
+
+    function planTreeText(node: any, prefix = '', last = true, root = true): string {
+      const connector = root ? '' : last ? '└─ ' : '├─ ';
+      const details = planDetails(node);
+      let line = `${prefix}${connector}${String(node?.operatorType ?? '?')}`;
+      if (details) line += `(${details})`;
+      const lines = [line];
+      const children = Array.isArray(node?.children) ? node.children : [];
+      for (let i = 0; i < children.length; i += 1) {
+        const childPrefix = prefix + (root ? '' : last ? '   ' : '│  ');
+        lines.push(planTreeText(children[i], childPrefix, i === children.length - 1, false));
+      }
+      return lines.join('\n');
+    }
+
+    const PLAN_NODE_WIDTH = 250;
+    const PLAN_NODE_HEIGHT = 92;
+    const PLAN_LEVEL_GAP = 62;
+    const PLAN_SIBLING_GAP = 22;
+
+    function planNodeHeight(node: any): number {
+      const details = planDetails(node);
+      const lines = Math.max(1, Math.ceil(details.length / 44));
+      return Math.max(PLAN_NODE_HEIGHT, 48 + lines * 13);
+    }
+
+    function planSubtreeWidth(node: any): number {
+      const children = Array.isArray(node?.children) ? node.children : [];
+      if (children.length === 0) return PLAN_NODE_WIDTH;
+      let total = 0;
+      for (const child of children) total += planSubtreeWidth(child);
+      total += PLAN_SIBLING_GAP * (children.length - 1);
+      return Math.max(PLAN_NODE_WIDTH, total);
+    }
+
+    function renderPlanGraph(root: any): HTMLElement {
+      const positions: Array<{ node: any; x: number; y: number; width: number; height: number }> = [];
+      const depthHeight: number[] = [];
+      const place = (node: any, left: number, depth: number): void => {
+        const width = planSubtreeWidth(node);
+        const height = planNodeHeight(node);
+        positions.push({ node, x: left + width / 2, y: 0, width, height });
+        depthHeight[depth] = Math.max(depthHeight[depth] ?? 0, height);
+        const children = Array.isArray(node?.children) ? node.children : [];
+        if (children.length === 0) return;
+        let childWidth = 0;
+        for (const child of children) childWidth += planSubtreeWidth(child);
+        childWidth += PLAN_SIBLING_GAP * (children.length - 1);
+        let childLeft = left + (width - childWidth) / 2;
+        for (const child of children) {
+          place(child, childLeft, depth + 1);
+          childLeft += planSubtreeWidth(child) + PLAN_SIBLING_GAP;
+        }
+      };
+      place(root, 0, 0);
+
+      const depthY: number[] = [];
+      let y = 0;
+      for (let d = 0; d < depthHeight.length; d += 1) {
+        depthY[d] = y;
+        y += depthHeight[d] + PLAN_LEVEL_GAP;
+      }
+      const totalWidth = Math.max(PLAN_NODE_WIDTH, planSubtreeWidth(root));
+      const totalHeight = Math.max(PLAN_NODE_HEIGHT, y);
+
+      const canvas = h('div', { class: 'plan-graph-canvas' });
+      canvas.style.width = `${totalWidth + 24}px`;
+      canvas.style.height = `${totalHeight + 24}px`;
+      const links = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      links.setAttribute('class', 'plan-links');
+      links.setAttribute('width', String(totalWidth + 24));
+      links.setAttribute('height', String(totalHeight + 24));
+      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+      marker.setAttribute('id', 'plan-arrow');
+      marker.setAttribute('viewBox', '0 0 8 8');
+      marker.setAttribute('refX', '7');
+      marker.setAttribute('refY', '4');
+      marker.setAttribute('markerWidth', '6');
+      marker.setAttribute('markerHeight', '6');
+      marker.setAttribute('orient', 'auto');
+      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      arrow.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
+      arrow.setAttribute('class', 'plan-arrowhead');
+      marker.append(arrow);
+      defs.append(marker);
+      links.append(defs);
+      canvas.append(links);
+
+      // Fill y after depth heights are known, then add boxes/connectors.
+      const nodes: Array<{ node: any; x: number; y: number; width: number; height: number }> = [];
+      const walk = (node: any, left: number, depth: number): void => {
+        const width = planSubtreeWidth(node);
+        const height = planNodeHeight(node);
+        const x = left + width / 2;
+        nodes.push({ node, x, y: depthY[depth], width, height });
+        const children = Array.isArray(node?.children) ? node.children : [];
+        if (children.length === 0) return;
+        let childWidth = 0;
+        for (const child of children) childWidth += planSubtreeWidth(child);
+        childWidth += PLAN_SIBLING_GAP * (children.length - 1);
+        let childLeft = left + (width - childWidth) / 2;
+        for (const child of children) {
+          walk(child, childLeft, depth + 1);
+          childLeft += planSubtreeWidth(child) + PLAN_SIBLING_GAP;
+        }
+      };
+      walk(root, 0, 0);
+
+      const byNode = new Map<any, { x: number; y: number; height: number }>();
+      for (const entry of nodes) byNode.set(entry.node, entry);
+      for (const entry of nodes) {
+        const parent = byNode.get(entry.node);
+        if (!parent) continue;
+        for (const child of entry.node?.children ?? []) {
+          const c = byNode.get(child);
+          if (!c) continue;
+          const x1 = entry.x + 12;
+          const y1 = entry.y + entry.height + 12;
+          const x2 = c.x + 12;
+          const y2 = c.y + 12;
+          const midY = y1 + (y2 - y1) / 2;
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`);
+          path.setAttribute('class', 'plan-link');
+          path.setAttribute('marker-end', 'url(#plan-arrow)');
+          links.append(path);
+        }
+      }
+
+      for (const entry of nodes) {
+        const details = planDetails(entry.node);
+        const box = h(
+          'div',
+          { class: 'plan-graph-node', title: details },
+          h('div', { class: 'plan-node-title' }, String(entry.node?.operatorType ?? '?')),
+          h('div', { class: 'plan-node-detail' }, details || '（无额外信息）')
+        );
+        box.style.left = `${entry.x - PLAN_NODE_WIDTH / 2 + 12}px`;
+        box.style.top = `${entry.y + 12}px`;
+        box.style.width = `${PLAN_NODE_WIDTH}px`;
+        box.style.minHeight = `${entry.height}px`;
+        canvas.append(box);
+      }
+      return canvas;
+    }
+
+    function renderPlan(): void {
+      planPanel.replaceChildren();
+      if (!plan) {
+        planPanel.append(h('div', { class: 'empty' }, '这条语句没有执行计划（需要 EXPLAIN 或 PROFILE）'));
+        return;
+      }
+      const toolbar = h('div', { class: 'plan-toolbar' });
+      const planBody = h('div', { class: 'plan-body' });
+      const modes: Array<[typeof planMode, string]> = [
+        ['graph', 'Graph'],
+        ['tree', 'Tree'],
+        ['raw', 'Raw'],
+      ];
+      for (const [mode, label] of modes) {
+        const button = h('button', { class: `button small plan-mode${planMode === mode ? ' active' : ''}` }, label);
+        button.addEventListener('click', () => {
+          planMode = mode;
+          renderPlan();
+        });
+        toolbar.append(button);
+      }
+      planPanel.append(toolbar, planBody);
+      if (planMode === 'tree') {
+        const text = h('pre', { class: 'plan-text' });
+        text.textContent = planTreeText(plan);
+        planBody.append(text);
+      } else if (planMode === 'raw') {
+        const raw = h('pre', { class: 'plan-text plan-raw' });
+        try {
+          raw.textContent = JSON.stringify(plan, null, 2);
+        } catch (error) {
+          raw.textContent = String(error);
+        }
+        planBody.append(raw);
+      } else {
+        const viewport = h('div', { class: 'plan-graph-viewport' });
+        const panLayer = h('div', { class: 'plan-graph-pan' });
+        const stage = h('div', { class: 'plan-graph-stage' });
+        const canvas = renderPlanGraph(plan);
+        stage.append(canvas);
+        panLayer.append(stage);
+        viewport.append(panLayer);
+        planBody.append(viewport);
+        // Base (unzoomed) canvas size. CSS zoom is used below instead of a
+        // compositor scale, so text is re-laid out at the target size and does
+        // not flicker/re-rasterize during wheel zoom.
+        let canvasWidth = parseFloat(canvas.style.width) || canvas.offsetWidth || 0;
+        let canvasHeight = parseFloat(canvas.style.height) || canvas.offsetHeight || 0;
+
+        const clampPan = (): void => {
+          const vw = viewport.clientWidth;
+          const vh = viewport.clientHeight;
+          if (vw <= 0 || vh <= 0)
+            return;
+          const w = canvasWidth * planZoom;
+          const h = canvasHeight * planZoom;
+          const margin = 64;
+          planPanX = Math.min(vw - margin, Math.max(margin - w, planPanX));
+          planPanY = Math.min(vh - margin, Math.max(margin - h, planPanY));
+        };
+        const centerView = (): void => {
+          planPanX = Math.max(12, (viewport.clientWidth - canvasWidth * planZoom) / 2);
+          planPanY = 12;
+        };
+        const applyViewNow = (): void => {
+          planZoom = Math.min(3, Math.max(0.2, planZoom));
+          clampPan();
+          panLayer.style.transform = `translate3d(${planPanX}px, ${planPanY}px, 0)`;
+          stage.style.zoom = String(planZoom);
+          const label = toolbar.querySelector('.plan-zoom-label');
+          if (label) label.textContent = `${Math.round(planZoom * 100)}%`;
+        };
+        let viewRaf = 0;
+        const applyView = (): void => {
+          if (viewRaf !== 0) return;
+          viewRaf = requestAnimationFrame(() => {
+            viewRaf = 0;
+            applyViewNow();
+          });
+        };
+        // The Plan panel is hidden while applyResult runs; its clientWidth is
+        // zero until activate('plan') re-renders it. Do not compute the initial
+        // center from a hidden (zero-size) viewport.
+        if (!planViewInitialized && viewport.clientWidth > 0) {
+          centerView();
+          planViewInitialized = true;
+        }
+        applyViewNow();
+
+        const zoomOut = h('button', { class: 'button small', title: '缩小' }, '−') as HTMLButtonElement;
+        const zoomIn = h('button', { class: 'button small', title: '放大' }, '+') as HTMLButtonElement;
+        const reset = h('button', { class: 'button small', title: '重置视图' }, 'Reset') as HTMLButtonElement;
+        const zoomLabel = h('span', { class: 'plan-zoom-label' }, '100%');
+        zoomOut.addEventListener('click', () => {
+          planZoom *= 0.85;
+          applyView();
+        });
+        zoomIn.addEventListener('click', () => {
+          planZoom *= 1.15;
+          applyView();
+        });
+        reset.addEventListener('click', () => {
+          planZoom = 1;
+          centerView();
+          applyView();
+        });
+        toolbar.append(h('span', { class: 'plan-toolbar-sep' }), zoomOut, zoomLabel, zoomIn, reset);
+
+        viewport.addEventListener(
+          'wheel',
+          (event: WheelEvent) => {
+            event.preventDefault();
+            const rect = viewport.getBoundingClientRect();
+            const mx = event.clientX - rect.left;
+            const my = event.clientY - rect.top;
+            const oldZoom = planZoom;
+            planZoom *= event.deltaY < 0 ? 1.1 : 0.9;
+            planZoom = Math.min(3, Math.max(0.2, planZoom));
+            const ratio = planZoom / oldZoom;
+            planPanX = mx - (mx - planPanX) * ratio;
+            planPanY = my - (my - planPanY) * ratio;
+            applyView();
+          },
+          { passive: false }
+        );
+
+        let dragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let panStartX = 0;
+        let panStartY = 0;
+        viewport.addEventListener('pointerdown', (event: PointerEvent) => {
+          if (event.button !== 0) return;
+          dragging = true;
+          dragStartX = event.clientX;
+          dragStartY = event.clientY;
+          panStartX = planPanX;
+          panStartY = planPanY;
+          viewport.classList.add('dragging');
+          viewport.setPointerCapture(event.pointerId);
+        });
+        viewport.addEventListener('pointermove', (event: PointerEvent) => {
+          if (!dragging) return;
+          planPanX = panStartX + event.clientX - dragStartX;
+          planPanY = panStartY + event.clientY - dragStartY;
+          applyView();
+        });
+        const endDrag = (event: PointerEvent): void => {
+          if (!dragging) return;
+          dragging = false;
+          viewport.classList.remove('dragging');
+          if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+        };
+        viewport.addEventListener('pointerup', endDrag);
+        viewport.addEventListener('pointercancel', endDrag);
+        viewport.addEventListener('dblclick', () => {
+          planZoom = 1;
+          centerView();
+          applyView();
+        });
+      }
+    }
+
     function renderRaw(): void {
       rawPanel.replaceChildren();
       if (columns.length === 0) {
@@ -1479,16 +1819,22 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
 
     function activate(tab: Tab): void {
       if (tab === 'graph' && !hasGraph) tab = 'table';
+      if (tab === 'plan' && !plan) tab = 'table';
       if (tab === 'profile' && !profile) tab = 'table';
       activeTab = tab;
-      if (tab === 'profile') renderProfile();
       for (const [name, button] of Object.entries(tabButtons)) {
         button.classList.toggle('active', name === tab);
       }
       tablePanel.classList.toggle('hidden', tab !== 'table');
       graphPanel.classList.toggle('hidden', tab !== 'graph');
+      planPanel.classList.toggle('hidden', tab !== 'plan');
       rawPanel.classList.toggle('hidden', tab !== 'raw');
       profilePanel.classList.toggle('hidden', tab !== 'profile');
+
+      // Render after the panel is visible: Plan Graph needs clientWidth to
+      // center the initial view; rendering a hidden panel yields 0x0.
+      if (tab === 'plan') renderPlan();
+      if (tab === 'profile') renderProfile();
 
       if (tab === 'graph') {
         if (!graphView) {
@@ -1522,6 +1868,14 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       graphResult = extractGraph(records);
       hasGraph = graphResult.graph.order > 0;
       profile = nextSummary?.profile || null;
+      const previousPlan = plan;
+      plan = nextSummary?.plan || null;
+      if (plan !== previousPlan) {
+        planZoom = 1;
+        planPanX = 20;
+        planPanY = 12;
+        planViewInitialized = false;
+      }
       summaryText = summarizeResult(records, nextSummary);
       handle.query = query;
       handle.summaryText = summaryText;
@@ -1535,7 +1889,10 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
       tabButtons.graph.disabled = !hasGraph;
       tabButtons.graph.textContent = hasGraph ? 'Graph' : 'Graph (无点边)';
       tabButtons.profile.classList.toggle('hidden', !profile);
+      tabButtons.plan.classList.toggle('hidden', !plan);
+      body.classList.toggle('has-plan', !!plan);
       renderProfile();
+      renderPlan();
 
       graphView?.destroy();
       graphView = null;
@@ -1553,6 +1910,11 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
         requestAnimationFrame(() => {
           if (destroyed || version !== resultVersion || !root.isConnected) return;
           activate('graph');
+        });
+      } else if (plan && /^\s*EXPLAIN\b/i.test(query)) {
+        requestAnimationFrame(() => {
+          if (destroyed || version !== resultVersion || !root.isConnected) return;
+          activate('plan');
         });
       }
     }
@@ -1622,6 +1984,7 @@ function mount(root: HTMLElement): { setInfo: (info: Info) => void } {
 
     tabButtons.table.addEventListener('click', () => activate('table'));
     tabButtons.graph.addEventListener('click', () => activate('graph'));
+    tabButtons.plan.addEventListener('click', () => activate('plan'));
     tabButtons.raw.addEventListener('click', () => activate('raw'));
     tabButtons.profile.addEventListener('click', () => activate('profile'));
     modeSelect.addEventListener('change', () => {

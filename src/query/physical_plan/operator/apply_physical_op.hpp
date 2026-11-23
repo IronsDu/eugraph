@@ -46,6 +46,13 @@ public:
         return {left_.get(), right_.get()};
     }
 
+    void explain(ExplainNode& node, const ExplainContext&) const override {
+        node.operator_name = "Apply";
+        if (value_sink_ != nullptr)
+            node.details.push_back("index_probe=true");
+        node.details.push_back("correlation_columns=" + std::to_string(left_correlation_cols_.size()));
+    }
+
 private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;

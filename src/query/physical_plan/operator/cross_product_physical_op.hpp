@@ -62,6 +62,10 @@ public:
         slot_layout_.merge(right_->slotLayout());
     }
 
+    void explain(ExplainNode& node, const ExplainContext&) const override {
+        node.operator_name = "CrossProduct";
+    }
+
 private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;

@@ -1828,6 +1828,39 @@ TEST_F(QueryExecutorTest, ExplainWithFilter) {
     EXPECT_NE(plan_text.find("LabelScan"), std::string::npos);
 }
 
+TEST_F(QueryExecutorTest, ExplainRendersSemanticTree) {
+    auto result = execSync(*executor_, "EXPLAIN MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    std::string plan;
+    for (const auto& row : result.rows)
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan += std::get<std::string>(row[0]) + "\n";
+
+    EXPECT_TRUE(plan.find("Plan source: CBO") != std::string::npos ||
+                plan.find("Plan source: RBO") != std::string::npos)
+        << plan;
+    EXPECT_TRUE(plan.find("├─") != std::string::npos || plan.find("└─") != std::string::npos) << plan;
+    EXPECT_NE(plan.find("NodeByLabelScan(variable=a, labels=Person)"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("Expand(src=a, dst=b"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("labels=[KNOWS]"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("direction=OUT"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, ExplainShowsFilterAndProjectExpressions) {
+    auto result = execSync(*executor_, "EXPLAIN MATCH (n:Person) WHERE n.name <> 'x' RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    std::string plan;
+    for (const auto& row : result.rows)
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan += std::get<std::string>(row[0]) + "\n";
+
+    EXPECT_NE(plan.find("Filter(predicate="), std::string::npos) << plan;
+    EXPECT_NE(plan.find("n.name"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("Project(mapping="), std::string::npos) << plan;
+}
+
 TEST_F(QueryExecutorTest, ExplainWithLimit) {
     auto result = execSync(*executor_, "EXPLAIN MATCH (n:Person) RETURN n LIMIT 5");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -10130,24 +10163,35 @@ protected:
         for (const auto& row : result.rows) {
             if (row.empty() || !std::holds_alternative<std::string>(row[0]))
                 continue;
-            const auto& line = std::get<std::string>(row[0]);
-            // Operator name lines: "| Name...|". Skip borders ("+---"), arrows, and
-            // output lines ("|  output:" has two spaces after the pipe).
-            if (line.size() < 3 || line[0] != '|')
+            std::string line = std::get<std::string>(row[0]);
+            if (line.empty() || line.find("Plan source:") == 0 || line.find("outputs:") != std::string::npos)
                 continue;
-            if (line.find("+---") != std::string::npos)
-                continue;
-            if (line.find("output:") != std::string::npos)
-                continue; // skip output schema lines
-            if (line.find("\xe2\x86\x93") != std::string::npos)
-                continue; // ↓ arrow
-            // Extract name between "| " and trailing "|".
-            std::string content = line.substr(2);
-            while (!content.empty() && (content.back() == ' '))
-                content.pop_back();
-            if (!content.empty() && content.back() == '|')
-                content.pop_back();
-            // Also trim trailing spaces after removing the trailing pipe.
+            // Tree lines: [prefix]├─ Operator(...) / [prefix]└─ Operator(...)
+            // Strip indentation and box-drawing connectors; the remaining text is
+            // the same operator summary used by the old box format.
+            size_t pos = 0;
+            while (pos < line.size()) {
+                if (line.compare(pos, 3, "\xe2\x94\x9c") == 0 || line.compare(pos, 3, "\xe2\x94\x94") == 0) {
+                    pos += 3;
+                    if (pos < line.size() && line.compare(pos, 3, "\xe2\x94\x80") == 0)
+                        pos += 3;
+                    if (pos < line.size() && line[pos] == ' ')
+                        ++pos;
+                    break;
+                }
+                if (line.compare(pos, 3, "\xe2\x94\x82") == 0) {
+                    pos += 3;
+                    if (pos < line.size() && line[pos] == ' ')
+                        ++pos;
+                    continue;
+                }
+                if (line[pos] == ' ') {
+                    ++pos;
+                    continue;
+                }
+                break;
+            }
+            std::string content = line.substr(pos);
             while (!content.empty() && content.back() == ' ')
                 content.pop_back();
             if (!content.empty())
@@ -11648,7 +11692,7 @@ TEST_F(QueryExecutorTest, WithForwardedVertexReturnedWholeKeepsObject) {
 
     std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person) WITH n RETURN n");
     ASSERT_FALSE(plan.empty());
-    EXPECT_NE(plan.find("ctor-vertex"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("materialize="), std::string::npos) << plan;
 
     auto result = execSync(*executor_, "MATCH (n:Person) WITH n RETURN n");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -11690,7 +11734,7 @@ TEST_F(QueryExecutorTest, PropertiesFunctionStillConstructsObject) {
 
     const std::string plan = getExplainPlanText(*executor_, "MATCH (n:Person) RETURN properties(n)");
     ASSERT_FALSE(plan.empty());
-    EXPECT_NE(plan.find("ctor-vertex"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("materialize="), std::string::npos) << plan;
 }
 
 /// c5 shape: `WITH forum, collect(friend)` / `WITH forum, count(post)` only
@@ -11752,17 +11796,16 @@ TEST_F(QueryExecutorTest, C5LikeGroupKeyDoesNotConstructForumBeforeMembershipFil
     ASSERT_GE(expand_idx, 0) << plan;
     int pe_idx = -1;
     for (int i = expand_idx - 1; i >= 0; --i) {
-        if (lines[i].find("ProjectionExtract(specs=") != std::string::npos) {
+        if (lines[i].find("ProjectionExtract(") != std::string::npos) {
             pe_idx = i;
             break;
         }
     }
     ASSERT_GE(pe_idx, 0) << plan;
-    EXPECT_NE(lines[pe_idx].find("forum<pass>"), std::string::npos) << lines[pe_idx];
-    const size_t ctor_pos = lines[pe_idx].find("ctor-vertex");
-    const size_t second_ctor =
-        ctor_pos == std::string::npos ? std::string::npos : lines[pe_idx].find("ctor-vertex", ctor_pos + 1);
-    EXPECT_EQ(second_ctor, std::string::npos) << lines[pe_idx];
+    // The forum identity is a group key and must not be materialized as a
+    // VertexValue before the membership filter. Default EXPLAIN lists the
+    // materialized outputs; "pass" columns are intentionally hidden.
+    EXPECT_EQ(lines[pe_idx].find("materialize=[forum"), std::string::npos) << lines[pe_idx];
 }
 
 /// A correlated anti-join above a VarLenExpand used to see an empty left slot

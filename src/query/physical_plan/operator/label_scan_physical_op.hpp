@@ -38,6 +38,15 @@ public:
         return "LabelScan(variable=" + variable_ + ", labels=" + label_name + ")";
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        ExplainContext local = ctx;
+        if (local.schema == nullptr)
+            local.schema = schema_.get();
+        node.operator_name = "NodeByLabelScan";
+        node.details.push_back("variable=" + variable_);
+        node.details.push_back("labels=" + explainLabelList(label_ids_, local));
+    }
+
 private:
     std::string variable_;
     std::vector<LabelId> label_ids_;

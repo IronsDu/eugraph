@@ -128,6 +128,8 @@ public:
         return {child_.get()};
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override;
+
 private:
     /// One accumulated edge for the current chunk (source row + adjacency).
     struct EdgeEntryScratch {

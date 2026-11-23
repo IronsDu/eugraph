@@ -34,6 +34,11 @@ public:
         return predicate_;
     }
 
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "Filter";
+        node.details.push_back("predicate=" + formatExplainExpression(predicate_, ctx));
+    }
+
 private:
     binder::BoundExpression predicate_;
     Schema schema_;
