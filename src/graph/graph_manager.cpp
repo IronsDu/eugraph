@@ -483,12 +483,11 @@ void GraphManager::checkpointAll() {
             WtSession data_session = inst->data_conn.make_session();
             inst->data_conn.checkpoint(data_session);
         }
-        // 统计快照与 journal：先发布快照，再压缩 journal（失败下次 checkpoint 重试）。
+        // 统计 snapshot 与 journal 压缩在同一 WT transaction 中提交：
+        // 从旧 snapshot + journal 重建绝对基线，再删除已覆盖的 journal 行。
         if (inst->stats_store && inst->sync_data) {
-            auto stats_snapshot = inst->stats_store->snapshot();
-            // 先只持久化 snapshot；journal 压缩要求“snapshot 计数与 applied_seq 严格原子”，
-            // 当前近似快照不满足，留给 Phase 2，避免提前删除导致恢复漏计。
-            (void)inst->sync_data->saveStatsSnapshot(*stats_snapshot);
+            if (!inst->sync_data->checkpointStats())
+                spdlog::error("stats checkpoint failed for graph '{}'", name);
         }
         {
             WtSession meta_session = inst->meta_conn.make_session();

@@ -27,6 +27,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -77,6 +78,11 @@ public:
         TxnOutcome out;
         uint64_t stats_seq = 0;
         const bool stats_delta_pending = !stats_delta_.empty();
+        // Held across journal write + data commit + apply so a stats checkpoint
+        // cannot scan/compact a journal row before its transaction is committed.
+        std::shared_lock<std::shared_mutex> stats_commit_guard;
+        if (stats_delta_pending && stats_commit_guard_)
+            stats_commit_guard = stats_commit_guard_();
         if (!session_) {
             out = TxnOutcome{TxnState::Failed, EINVAL, "commit: no WT session", TxnErrorClass::Unknown};
         } else {
@@ -221,11 +227,16 @@ public:
     using StatsSeqAllocator = std::function<uint64_t()>;
     using StatsJournalWriter = std::function<bool(WT_SESSION*, uint64_t, const StatsDelta&)>;
     using StatsApply = std::function<void(const StatsDelta&, uint64_t)>;
+    /// 返回 commit 期间持有的 shared lock；checkpoint 用 unique lock 阻止
+    /// journal scan/compact 与尚未提交的 journal 行交错。
+    using StatsCommitGuard = std::function<std::shared_lock<std::shared_mutex>()>;
     /// 由数据层在 for_session() 时绑定：journal 写入同一 WT 事务，提交后 apply。
-    void setStatsSink(StatsSeqAllocator alloc, StatsJournalWriter writer, StatsApply apply) {
+    void setStatsSink(StatsSeqAllocator alloc, StatsJournalWriter writer, StatsApply apply,
+                      StatsCommitGuard commit_guard = {}) {
         stats_seq_allocator_ = std::move(alloc);
         stats_journal_writer_ = std::move(writer);
         stats_apply_ = std::move(apply);
+        stats_commit_guard_ = std::move(commit_guard);
     }
     bool hasStatsSink() const noexcept {
         return static_cast<bool>(stats_apply_);
@@ -391,6 +402,7 @@ private:
     StatsSeqAllocator stats_seq_allocator_;
     StatsJournalWriter stats_journal_writer_;
     StatsApply stats_apply_;
+    StatsCommitGuard stats_commit_guard_;
     bool closed_ = false;
 };
 

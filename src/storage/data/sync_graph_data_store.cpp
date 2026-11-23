@@ -356,7 +356,8 @@ void SyncGraphDataStore::attachStatsSink(GraphSession& session) {
                          [this](const StatsDelta& delta, uint64_t seq) {
                              if (stats_store_ != nullptr)
                                  stats_store_->applyCommitted(delta, seq);
-                         });
+                         },
+                         [this] { return std::shared_lock<std::shared_mutex>(stats_checkpoint_mu_); });
 }
 
 uint64_t SyncGraphDataStore::nextStatsJournalSeq() {
@@ -383,6 +384,30 @@ uint64_t SyncGraphDataStore::nextStatsJournalSeq() {
     });
     return stats_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
+
+namespace {
+
+bool decodeJournalSeq(std::string_view key, uint64_t& seq) {
+    if (key.size() != 8)
+        return false;
+    seq = 0;
+    for (int i = 0; i < 8; ++i)
+        seq = (seq << 8) | static_cast<uint64_t>(static_cast<unsigned char>(key[i]));
+    return true;
+}
+
+void applyDeltaToSnapshot(GraphStatsSnapshot& snapshot, const StatsDelta& delta) {
+    for (const auto& [id, d] : delta.vertex_delta)
+        snapshot.labels[id].vertices += d;
+    for (const auto& [id, d] : delta.edge_delta)
+        snapshot.edge_labels[id].edges += d;
+    for (const auto& [id, d] : delta.index_delta) {
+        snapshot.indexes[id].rows += d;
+        snapshot.indexes[id].ready = true;
+    }
+}
+
+} // namespace
 
 void SyncGraphDataStore::replayStatsJournal(GraphStatsStore& stats, uint64_t since_seq) {
     WtSession session = conn().make_session();
@@ -415,32 +440,99 @@ void SyncGraphDataStore::replayStatsJournal(GraphStatsStore& stats, uint64_t sin
     spdlog::info("[stats] replayed {} journal row(s) after seq {}", rows, since_seq);
 }
 
-bool SyncGraphDataStore::saveStatsSnapshot(const GraphStatsSnapshot& snapshot) {
-    WtSession session = conn().make_session();
-    return wt::table_put(session.get(), TABLE_STATS_SNAPSHOT, "snapshot", encodeStatsSnapshot(snapshot));
-}
-
 bool SyncGraphDataStore::loadStatsSnapshot(GraphStatsSnapshot& out) {
     WtSession session = conn().make_session();
     auto value = wt::table_get(session.get(), TABLE_STATS_SNAPSHOT, "snapshot");
     return value.has_value() && decodeStatsSnapshot(*value, out);
 }
 
-void SyncGraphDataStore::compactStatsJournal(uint64_t seq) {
+bool SyncGraphDataStore::checkpointStats() {
+    // Commit 路径持 shared lock 到 journal write + data commit + apply 结束；
+    // 这里持 unique lock，保证 scan 期间没有“已分配 seq 但尚未提交”的 journal.
+    std::unique_lock<std::shared_mutex> checkpoint_lock(stats_checkpoint_mu_);
     WtSession session = conn().make_session();
-    std::vector<std::string> keys;
-    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view key, std::string_view) {
-        if (key.size() != 8)
+    WT_SESSION* wt_session = session.get();
+    if (wt_session == nullptr)
+        return false;
+
+    if (wt_session->begin_transaction(wt_session, "isolation=snapshot") != 0) {
+        spdlog::error("[stats] checkpoint: begin_transaction failed");
+        return false;
+    }
+
+    bool ok = true;
+    bool had_snapshot = false;
+    GraphStatsSnapshot snapshot;
+    if (auto value = wt::table_get(wt_session, TABLE_STATS_SNAPSHOT, "snapshot"); value.has_value()) {
+        had_snapshot = true;
+        if (!decodeStatsSnapshot(*value, snapshot)) {
+            spdlog::error("[stats] checkpoint: corrupt snapshot");
+            ok = false;
+        }
+    }
+    if (!ok) {
+        wt_session->rollback_transaction(wt_session, nullptr);
+        return false;
+    }
+
+    uint64_t max_seq = snapshot.applied_journal_seq;
+    std::vector<std::string> covered_keys;
+    wt::table_scan(wt_session, TABLE_STATS_JOURNAL, {}, [&](std::string_view key, std::string_view value) {
+        if (!ok)
             return true;
-        uint64_t kseq = 0;
-        for (int i = 0; i < 8; ++i)
-            kseq = (kseq << 8) | static_cast<uint64_t>(static_cast<unsigned char>(key[i]));
-        if (kseq <= seq)
-            keys.emplace_back(key);
+        uint64_t seq = 0;
+        if (!decodeJournalSeq(key, seq)) {
+            spdlog::error("[stats] checkpoint: malformed journal key");
+            ok = false;
+            return true;
+        }
+        covered_keys.emplace_back(key);
+        if (seq <= snapshot.applied_journal_seq)
+            return true;
+        StatsDelta delta;
+        if (!decodeStatsDelta(value, delta)) {
+            spdlog::error("[stats] checkpoint: corrupt journal row seq={}", seq);
+            ok = false;
+            return true;
+        }
+        applyDeltaToSnapshot(snapshot, delta);
+        max_seq = std::max(max_seq, seq);
         return true;
     });
-    for (const auto& key : keys)
-        wt::table_del(session.get(), TABLE_STATS_JOURNAL, key);
+    if (!ok) {
+        wt_session->rollback_transaction(wt_session, nullptr);
+        return false;
+    }
+
+    if (had_snapshot || !covered_keys.empty()) {
+        snapshot.applied_journal_seq = max_seq;
+        snapshot.epoch += 1;
+        snapshot.approximate = true;
+        if (!wt::table_put(wt_session, TABLE_STATS_SNAPSHOT, "snapshot", encodeStatsSnapshot(snapshot))) {
+            spdlog::error("[stats] checkpoint: snapshot write failed");
+            ok = false;
+        }
+    }
+    if (ok) {
+        for (const auto& key : covered_keys) {
+            if (!wt::table_del(wt_session, TABLE_STATS_JOURNAL, key)) {
+                spdlog::error("[stats] checkpoint: journal delete failed");
+                ok = false;
+                break;
+            }
+        }
+    }
+    if (!ok) {
+        wt_session->rollback_transaction(wt_session, nullptr);
+        return false;
+    }
+    if (wt_session->commit_transaction(wt_session, nullptr) != 0) {
+        spdlog::error("[stats] checkpoint: commit failed");
+        wt_session->rollback_transaction(wt_session, nullptr);
+        return false;
+    }
+    spdlog::info("[stats] checkpoint committed at seq {} ({} journal row(s) compacted)", max_seq, covered_keys.size());
+    return true;
 }
 
 bool SyncGraphDataStore::writeStatsJournal(WT_SESSION* session, uint64_t seq, const StatsDelta& delta) {

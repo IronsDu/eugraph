@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
@@ -171,10 +172,11 @@ public:
     bool writeStatsJournal(WT_SESSION* session, uint64_t seq, const StatsDelta& delta);
     /// 启动时重放 journal；只应用 seq > since_seq。
     void replayStatsJournal(GraphStatsStore& stats, uint64_t since_seq = 0);
-    bool saveStatsSnapshot(const GraphStatsSnapshot& snapshot);
+    /// 原子 checkpoint：从旧 snapshot + journal 重建绝对基线，在同一个 WT
+    /// transaction 中写 snapshot 并删除已覆盖的 journal 行。返回 false 时
+    /// transaction 已回滚，journal 未删除。
+    bool checkpointStats();
     bool loadStatsSnapshot(GraphStatsSnapshot& out);
-    /// 删除 <= seq 的 journal 行（snapshot 已覆盖）。
-    void compactStatsJournal(uint64_t seq);
     IndexRuntimeRegistry* indexRegistry() const override {
         return index_registry_;
     }
@@ -281,6 +283,9 @@ private:
     GraphStatsStore* stats_store_ = nullptr;
     std::atomic<uint64_t> stats_seq_{0};
     std::once_flag stats_seq_once_;
+    // 统计写入事务持有 shared lock 到 commit/apply 结束；checkpointStats()
+    // 持 unique lock 做 journal scan + snapshot/delete 原子提交。
+    std::shared_mutex stats_checkpoint_mu_;
     uint32_t adjacency_cache_capacity_ = 0;
     /// Serialize cache invalidation probes/removes; each call uses a short
     /// lived autocommit session, never the user's GraphSession.

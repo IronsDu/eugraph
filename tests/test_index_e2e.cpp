@@ -4,6 +4,7 @@
 #include "common/types/constants.hpp"
 #include "query/executor/query_executor.hpp"
 #include "storage/stats/stats_journal.hpp"
+#include "storage/stats/stats_snapshot.hpp"
 
 #include "query/parser/index_ddl_parser.hpp"
 #include "storage/data/async_graph_data_store.hpp"
@@ -3040,6 +3041,158 @@ TEST_F(IndexE2ETest, IndexDdlWithoutTrackerFailsBeforeBuilding) {
     EXPECT_NE(result.error.find("SchemaGenerationTracker"), std::string::npos) << result.error;
 }
 
+TEST(StatsCheckpointRestartTest, EmptyStoreCheckpointIsNoop) {
+    const std::string dir = eugraph::test::makeTempDir("StatsCheckpointEmpty");
+    eugraph::test::TestSyncGraphDataStore store;
+    ASSERT_TRUE(store.open(dir + "/data"));
+    ASSERT_TRUE(store.checkpointStats());
+    GraphStatsSnapshot snapshot;
+    EXPECT_FALSE(store.loadStatsSnapshot(snapshot));
+    size_t journal_rows = 0;
+    {
+        auto session = store.conn().make_session();
+        wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view) {
+            ++journal_rows;
+            return true;
+        });
+    }
+    EXPECT_EQ(journal_rows, 0u);
+    store.close();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(StatsCheckpointRestartTest, CorruptSnapshotRollsBackWithoutDeletingJournal) {
+    const std::string dir = eugraph::test::makeTempDir("StatsCheckpointCorruptSnapshot");
+    eugraph::test::TestSyncGraphDataStore store;
+    ASSERT_TRUE(store.open(dir + "/data"));
+    {
+        auto session = store.conn().make_session();
+        ASSERT_TRUE(wt::table_put(session.get(), TABLE_STATS_SNAPSHOT, "snapshot", "bad-snapshot"));
+        StatsDelta delta;
+        delta.vertex_delta[LabelId{1}] = 1;
+        ASSERT_TRUE(
+            wt::table_put(session.get(), TABLE_STATS_JOURNAL, encodeStatsJournalKey(1), encodeStatsDelta(delta)));
+    }
+    EXPECT_FALSE(store.checkpointStats());
+    size_t journal_rows = 0;
+    {
+        auto session = store.conn().make_session();
+        wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view) {
+            ++journal_rows;
+            return true;
+        });
+    }
+    EXPECT_EQ(journal_rows, 1u);
+    store.close();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(StatsCheckpointRestartTest, MalformedJournalKeyRollsBack) {
+    const std::string dir = eugraph::test::makeTempDir("StatsCheckpointMalformedKey");
+    eugraph::test::TestSyncGraphDataStore store;
+    ASSERT_TRUE(store.open(dir + "/data"));
+    {
+        auto session = store.conn().make_session();
+        ASSERT_TRUE(wt::table_put(session.get(), TABLE_STATS_JOURNAL, "bad-key", "bad-value"));
+    }
+    EXPECT_FALSE(store.checkpointStats());
+    store.close();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(StatsCheckpointRestartTest, CorruptJournalValueRollsBack) {
+    const std::string dir = eugraph::test::makeTempDir("StatsCheckpointCorruptDelta");
+    eugraph::test::TestSyncGraphDataStore store;
+    ASSERT_TRUE(store.open(dir + "/data"));
+    {
+        auto session = store.conn().make_session();
+        ASSERT_TRUE(wt::table_put(session.get(), TABLE_STATS_JOURNAL, encodeStatsJournalKey(1), "bad-delta"));
+    }
+    EXPECT_FALSE(store.checkpointStats());
+    store.close();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(StatsCheckpointRestartTest, CoveredJournalRowsAreSkippedAndDeleted) {
+    const std::string dir = eugraph::test::makeTempDir("StatsCheckpointCoveredRows");
+    eugraph::test::TestSyncGraphDataStore store;
+    ASSERT_TRUE(store.open(dir + "/data"));
+    {
+        auto session = store.conn().make_session();
+        GraphStatsSnapshot snapshot;
+        snapshot.applied_journal_seq = 5;
+        ASSERT_TRUE(wt::table_put(session.get(), TABLE_STATS_SNAPSHOT, "snapshot", encodeStatsSnapshot(snapshot)));
+        StatsDelta delta;
+        delta.vertex_delta[LabelId{1}] = 99; // 已被 snapshot 覆盖，不能重复加
+        ASSERT_TRUE(
+            wt::table_put(session.get(), TABLE_STATS_JOURNAL, encodeStatsJournalKey(5), encodeStatsDelta(delta)));
+    }
+    ASSERT_TRUE(store.checkpointStats());
+    GraphStatsSnapshot loaded;
+    ASSERT_TRUE(store.loadStatsSnapshot(loaded));
+    EXPECT_EQ(loaded.applied_journal_seq, 5u);
+    EXPECT_EQ(loaded.labels.count(1), 0u);
+    store.close();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(StatsCheckpointRestartTest, RestartReplaysCompactedBaseline) {
+    const std::string dir = eugraph::test::makeTempDir("StatsCheckpointRestart");
+    {
+        eugraph::test::TestSyncGraphDataStore store;
+        ASSERT_TRUE(store.open(dir + "/data"));
+        GraphStatsStore stats;
+        store.setStatsStore(&stats);
+        ASSERT_TRUE(store.createLabel(LabelId{1}));
+
+        {
+            auto wt_session = store.conn().make_session();
+            GraphSession session(std::move(wt_session));
+            store.attachStatsSink(session);
+            ASSERT_TRUE(session.begin_write());
+            const std::vector<std::pair<LabelId, Properties>> first{{LabelId{1}, Properties{}}};
+            const std::vector<std::pair<LabelId, Properties>> second{{LabelId{1}, Properties{}}};
+            ASSERT_TRUE(store.insertVertex(session, 1, std::span<const std::pair<LabelId, Properties>>{first}));
+            ASSERT_TRUE(store.insertVertex(session, 2, std::span<const std::pair<LabelId, Properties>>{second}));
+            ASSERT_EQ(session.commit().state, TxnState::Committed);
+        }
+        ASSERT_TRUE(store.checkpointStats());
+        store.close();
+    }
+    {
+        eugraph::test::TestSyncGraphDataStore store;
+        ASSERT_TRUE(store.open(dir + "/data"));
+        GraphStatsStore restored;
+        store.setStatsStore(&restored);
+        ASSERT_TRUE(store.createLabel(LabelId{1}));
+        GraphStatsSnapshot snapshot;
+        ASSERT_TRUE(store.loadStatsSnapshot(snapshot));
+        restored.restore(snapshot);
+        store.replayStatsJournal(restored, snapshot.applied_journal_seq);
+        auto out = restored.snapshot();
+        ASSERT_EQ(out->labels.count(1), 1u);
+        EXPECT_EQ(out->labels.at(1).vertices, 2);
+
+        size_t journal_rows = 0;
+        {
+            auto session = store.conn().make_session();
+            wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view) {
+                ++journal_rows;
+                return true;
+            });
+        }
+        EXPECT_EQ(journal_rows, 0u);
+        store.close();
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
 TEST_F(IndexE2ETest, StatsJournalAppliesAndRollbackDiscards) {
     createLabel(env, "Person", {{0, "id", PropertyType::INT64, false, std::nullopt}});
     QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
@@ -3051,14 +3204,7 @@ TEST_F(IndexE2ETest, StatsJournalAppliesAndRollbackDiscards) {
     EXPECT_EQ(snap->labels.at(1).vertices, 1);
     EXPECT_GE(snap->applied_journal_seq, 1u);
 
-    // snapshot 可持久化/恢复（journal offset 一并保留）。
-    ASSERT_TRUE(env.data_store->saveStatsSnapshot(*snap));
-    GraphStatsSnapshot loaded;
-    ASSERT_TRUE(env.data_store->loadStatsSnapshot(loaded));
-    EXPECT_EQ(loaded.labels.at(1).vertices, 1);
-    EXPECT_EQ(loaded.applied_journal_seq, snap->applied_journal_seq);
-
-    // journal 已与数据同事务写入；至少有一条可解码记录。
+    // journal 已与数据同事务写入；checkpoint 前至少有一条可解码记录。
     size_t journal_rows = 0;
     auto session = env.data_store->conn().make_session();
     wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view value) {
@@ -3068,6 +3214,19 @@ TEST_F(IndexE2ETest, StatsJournalAppliesAndRollbackDiscards) {
         return true;
     });
     EXPECT_GE(journal_rows, 1u);
+
+    // checkpoint 原子写 snapshot 并压缩已覆盖的 journal。
+    ASSERT_TRUE(env.data_store->checkpointStats());
+    GraphStatsSnapshot loaded;
+    ASSERT_TRUE(env.data_store->loadStatsSnapshot(loaded));
+    EXPECT_EQ(loaded.labels.at(1).vertices, 1);
+    EXPECT_GE(loaded.applied_journal_seq, 1u);
+    journal_rows = 0;
+    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view) {
+        ++journal_rows;
+        return true;
+    });
+    EXPECT_EQ(journal_rows, 0u);
 
     // rollback 不应改变统计。
     auto lease = env.session_pool->acquire();
@@ -3083,4 +3242,41 @@ TEST_F(IndexE2ETest, StatsJournalAppliesAndRollbackDiscards) {
     snap = env.stats_store->snapshot();
     ASSERT_EQ(snap->labels.count(1), 1u);
     EXPECT_EQ(snap->labels.at(1).vertices, 1);
+}
+
+TEST_F(IndexE2ETest, StatsCheckpointCompactsJournalAndKeepsBaseline) {
+    createLabel(env, "Person", {{0, "id", PropertyType::INT64, false, std::nullopt}});
+    QueryExecutor executor(*env.async_data, *env.async_meta, *env.session_pool, {});
+    executor.setSchemaGenerationTracker(env.schema_generations);
+
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:1})").error.empty());
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:2})").error.empty());
+
+    ASSERT_TRUE(env.data_store->checkpointStats());
+    GraphStatsSnapshot loaded;
+    ASSERT_TRUE(env.data_store->loadStatsSnapshot(loaded));
+    ASSERT_EQ(loaded.labels.count(1), 1u);
+    EXPECT_EQ(loaded.labels.at(1).vertices, 2);
+    EXPECT_GE(loaded.applied_journal_seq, 1u);
+
+    size_t journal_rows = 0;
+    auto session = env.data_store->conn().make_session();
+    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view) {
+        ++journal_rows;
+        return true;
+    });
+    EXPECT_EQ(journal_rows, 0u);
+
+    // 下一次 checkpoint 从已压缩的 baseline 继续累加，而不是重复计算。
+    ASSERT_TRUE(execSync(executor, "CREATE (p:Person {id:3})").error.empty());
+    ASSERT_TRUE(env.data_store->checkpointStats());
+    ASSERT_TRUE(env.data_store->loadStatsSnapshot(loaded));
+    EXPECT_EQ(loaded.labels.at(1).vertices, 3);
+
+    journal_rows = 0;
+    wt::table_scan(session.get(), TABLE_STATS_JOURNAL, {}, [&](std::string_view, std::string_view) {
+        ++journal_rows;
+        return true;
+    });
+    EXPECT_EQ(journal_rows, 0u);
 }

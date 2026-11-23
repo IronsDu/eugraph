@@ -85,7 +85,8 @@ value = {version, StatsDelta, txn_id?}
 - 与用户数据在**同一个 WiredTiger 事务**写入；
 - 统计写入失败 ⇒ 整个数据事务失败，不允许“数据提交、统计半写”；
 - 提交后把 delta 合并到内存 `GraphStatsStore`；
-- journal 保留到下一次 stats snapshot；之后按 `applied_journal_seq` 压缩。
+- journal 在 stats checkpoint 时压缩；snapshot 与 journal 删除在同一 WT
+  transaction 中提交（见 §3.4）。
 
 ### 3.2 提交顺序
 
@@ -99,7 +100,24 @@ value = {version, StatsDelta, txn_id?}
 
 **不要**在 commit 前合并内存统计；失败会产生假统计。
 
-### 3.3 崩溃恢复
+### 3.3 Checkpoint / 压缩
+
+每个图默认每 60s 执行一次 stats checkpoint：
+
+```text
+1. 读旧 snapshot（绝对基线）
+2. 扫描 journal 中 seq > snapshot.applied_seq 的行，重放到基线
+3. 在同一 WT transaction 中：
+   - 写新 snapshot（绝对 counts + applied_seq）
+   - 删除 seq <= applied_seq 的 journal 行
+4. commit；失败则回滚，journal 不删除
+```
+
+提交路径（journal write + data commit + stats apply）持有 stats checkpoint
+的 shared lock；checkpoint 持 unique lock，因此 scan 期间不会出现“已分配
+seq、尚未提交”的 journal 行。基线不依赖内存 atomic snapshot。
+
+### 3.4 崩溃恢复
 
 - 数据+journal 原子提交；崩溃不会出现“数据有、journal 无”；
 - 启动：
@@ -199,14 +217,18 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - ✅ 同事务 `table:stats_journal` 写入，commit 后合并、rollback 丢弃；
 - ✅ 启动重放 journal（无 snapshot；旧数据可能未被 journal 覆盖）；
 - ✅ 单测：并发计数、正负 delta、快照不可变、journal/rollback；
-- ⏳ 尚未做：snapshot 表、journal 压缩、CBO 读取、重建。
+- ✅ snapshot 表、journal replay offset、journal 压缩；
+- ✅ CBO 读取内存 snapshot（label/edge 统计）；
+- ⏳ 尚未做：旧数据全量重建/ANALYZE、NDV/直方图/索引统计。
 
 ### Phase 2：崩溃恢复/重建
 
-- snapshot 持久化 + journal offset；
-- 启动重放/重建；
-- `UNKNOWN→READY` 状态；
-- kill-after-commit 测试。
+- ✅ snapshot 持久化 + journal offset；
+- ✅ 启动重放；
+- ✅ checkpoint：snapshot + journal 压缩同一事务；
+- ⏳ `UNKNOWN→READY` 状态；
+- ✅ journal 压缩后 close/reopen，load snapshot + replay 的完整重启测试；
+- ⏳ kill-after-commit / checkpoint 崩溃窗口测试。
 
 ### Phase 3：CBO HashJoin 候选（已落地基础版）
 
@@ -244,7 +266,8 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - label 计数以 schema 为 baseline，只覆盖 stats 明确拥有的 label（防止部分 stats 把旧 label 估成 0）；
 - edge/NDV/索引统计缺失时标记 UNKNOWN/APPROX，CBO 保守回退；
 - 全量重建仅用于显式 `ANALYZE`、批量导入绕过 hook、或需要 edge/分布统计的旧图；
-- journal 压缩不是当前阶段目标：snapshot 与 applied_seq 尚未严格原子，提前删除有漏计风险。
+- journal 压缩已落地：checkpoint 从旧 snapshot + journal 重建绝对基线，
+  同一 WT transaction 写 snapshot 并删除已覆盖 journal。
 
 ## 8. 禁止事项
 
