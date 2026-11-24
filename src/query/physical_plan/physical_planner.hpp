@@ -224,6 +224,13 @@ private:
     std::optional<PlanOperatorResult> tryPlanFilterDestinationIndexJoin(binder::BoundFilterOp& filter,
                                                                         IAsyncGraphDataStore& store,
                                                                         IAsyncGraphMetaStore& meta, PlanContext& ctx);
+
+    /// 通用 destination-index 链：Filter + 连续固定长度 Expand 链。
+    /// 最外层 destination 属性有索引时，从 index seek 反向展开整条链，
+    /// 再与链底部 source 子树按 source 变量 HashJoin；保留 source 侧其他列。
+    std::optional<PlanOperatorResult> tryPlanFilterDestinationChain(binder::BoundFilterOp& filter,
+                                                                    IAsyncGraphDataStore& store,
+                                                                    IAsyncGraphMetaStore& meta, PlanContext& ctx);
 };
 
 } // namespace compute
