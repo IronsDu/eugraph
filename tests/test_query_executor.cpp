@@ -12154,6 +12154,44 @@ TEST_F(QueryExecutorTest, GenericDestinationIndexJoin) {
     // 规则本身保留为 source 集合需要独立物化时的通用候选。
 }
 
+TEST_F(QueryExecutorTest, ReverseDestinationChainUsesTargetIndex) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_chain_name FOR (n:Person) ON (n.name)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a1:Person {name:'a1'}), (b1:Person {name:'b1'}), "
+                                     "(c1:Person {name:'dst'}), (a2:Person {name:'a2'}), "
+                                     "(b2:Person {name:'b2'}), (c2:Person {name:'other'}), "
+                                     "(a1)-[:KNOWS]->(b1), (b1)-[:KNOWS]->(c1), "
+                                     "(a2)-[:KNOWS]->(b2), (b2)-[:KNOWS]->(c2)")
+                    .error.empty());
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person) "
+                              "WHERE c.name = 'dst' RETURN a.name AS a, b.name AS b, c.name AS c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "a1");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "b1");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][2]), "dst");
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("IndexScan(variable=c"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, ReverseDestinationChainRangeUsesTargetIndex) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_chain_age FOR (n:Person) ON (n.age)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a1:Person {name:'young-src'}), (b1:Person {name:'young', age:10}), "
+                                     "(a2:Person {name:'old-src'}), (b2:Person {name:'old', age:30}), "
+                                     "(a1)-[:KNOWS]->(b1), (a2)-[:KNOWS]->(b2)")
+                    .error.empty());
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.age >= 20 RETURN a.name AS a, b.name AS b";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "old-src");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "old");
+    auto plan = getExplainPlanText(*executor_, query);
+    EXPECT_NE(plan.find("IndexScan(variable=b"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("mode=range"), std::string::npos) << plan;
+}
+
 TEST_F(QueryExecutorTest, VleReverseFromDestinationLabelScan) {
     ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {name:'p1'}), (c:City {name:'c1'}), "
                                      "(p)-[:LIVES_IN]->(c)")

@@ -244,6 +244,9 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 
 - ✅ 通用 destination-index join：Filter(Expand) 的 dst 属性索引 → IndexScan(dst)
   → 反向 Expand → HashJoin；条件/索引全部来自 catalog/predicate，无 label 名；
+- ✅ 多跳 destination-index 链：Filter + 连续固定单边 Expand 链 → 最外层 dst 索引
+  → 反向展开整条链 → 与链底部 source 子树 HashJoin；索引按 Expand 的目标 label
+  集合解析（兼容 Comment/Post 的 Message 索引），identity Project 可穿透；
 - ✅ 只读 Cross/Inner join commute（写计划/pattern comprehension 走保守边界，
   暂不交换）；
 - ✅ 只读 join associativity：Join(Join(A,B),C) → Join(A,Join(B,C))（同一 safe 边界）；
