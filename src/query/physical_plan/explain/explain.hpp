@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace eugraph {
@@ -57,6 +58,12 @@ std::string formatExplainTree(const ExplainNode& root, const ExplainContext& ctx
 std::string formatExplainExpression(const binder::BoundExpression& expr, const ExplainContext& ctx);
 
 /// Schema-aware name helpers; fall back to explicit IDs instead of hiding them.
+/// Strip internal `__` conventions for user-facing EXPLAIN output. The
+/// mapping is presentation-only and never changes operator/schema names.
+std::string explainVariableName(std::string_view name);
+bool explainIsInternalAlias(std::string_view name);
+std::string explainFunctionName(std::string_view name);
+
 std::string explainLabelName(LabelId id, const ExplainContext& ctx);
 std::string explainEdgeLabelName(EdgeLabelId id, const ExplainContext& ctx);
 std::string explainPropertyName(LabelId label_id, uint16_t prop_id, const ExplainContext& ctx);

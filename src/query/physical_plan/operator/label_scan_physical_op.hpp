@@ -43,7 +43,7 @@ public:
         if (local.schema == nullptr)
             local.schema = schema_.get();
         node.operator_name = "NodeByLabelScan";
-        node.details.push_back("variable=" + variable_);
+        node.details.push_back("variable=" + explainVariableName(variable_));
         node.details.push_back("labels=" + explainLabelList(label_ids_, local));
     }
 

@@ -1845,6 +1845,7 @@ TEST_F(QueryExecutorTest, ExplainRendersSemanticTree) {
     EXPECT_NE(plan.find("Expand(src=a, dst=b"), std::string::npos) << plan;
     EXPECT_NE(plan.find("labels=[KNOWS]"), std::string::npos) << plan;
     EXPECT_NE(plan.find("direction=OUT"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("__"), std::string::npos) << plan;
 }
 
 TEST_F(QueryExecutorTest, ExplainShowsFilterAndProjectExpressions) {

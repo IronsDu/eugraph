@@ -4038,7 +4038,7 @@ static void buildExplainSymbols(PlanContext& ctx) {
         std::string var;
         auto oit = owner.find(plan.source_slot_id);
         if (oit != owner.end())
-            var = oit->second;
+            var = explainVariableName(oit->second);
         if (plan.object_slot_id != binder::INVALID_SLOT_ID && !var.empty()) {
             ExplainSymbol sym;
             sym.kind = ExplainSymbol::Kind::WholeObject;

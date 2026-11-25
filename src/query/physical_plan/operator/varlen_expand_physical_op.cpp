@@ -764,10 +764,10 @@ namespace compute {
 
 void VarLenExpandPhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) const {
     node.operator_name = "VarLenExpand";
-    node.details.push_back("src=" + src_var_);
-    node.details.push_back("dst=" + dst_var_);
+    node.details.push_back("src=" + explainVariableName(src_var_));
+    node.details.push_back("dst=" + explainVariableName(dst_var_));
     if (!edge_var_.empty())
-        node.details.push_back("edge=" + edge_var_);
+        node.details.push_back("edge=" + explainVariableName(edge_var_));
     if (!path_var_.empty())
         node.details.push_back("path=" + path_var_);
     if (label_filters_ && !label_filters_->empty())

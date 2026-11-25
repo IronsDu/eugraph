@@ -88,8 +88,9 @@ public:
                 aggs += formatExplainExpression(agg.arguments[j], ctx);
             }
             aggs += ")";
-            if (!agg.name.empty())
-                aggs += " AS " + agg.name;
+            if (!agg.name.empty() && (!explainIsInternalAlias(agg.name) || ctx.verbose))
+                aggs +=
+                    " AS " + explainVariableName(agg.name) + (explainIsInternalAlias(agg.name) ? " [internal]" : "");
         }
         node.details.push_back("groupBy=[" + keys + "]");
         node.details.push_back("aggs=[" + aggs + "]");

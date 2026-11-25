@@ -154,7 +154,7 @@ void IndexScanPhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) 
     if (schema_ != nullptr)
         local.schema = schema_.get();
     node.operator_name = "IndexScan";
-    node.details.push_back("variable=" + variable_);
+    node.details.push_back("variable=" + explainVariableName(variable_));
 
     LabelId effective_label = label_id_;
     std::vector<uint16_t> effective_props = prop_ids_;

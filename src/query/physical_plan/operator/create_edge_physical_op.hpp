@@ -39,6 +39,13 @@ public:
         return "CreateEdge(variable=" + variable_ + ", src_col=" + std::to_string(src_col_idx_) +
                ", dst_col=" + std::to_string(dst_col_idx_) + ")";
     }
+    void explain(ExplainNode& node, const ExplainContext&) const override {
+        node.operator_name = "CreateEdge";
+        node.details.push_back("variable=" + explainVariableName(variable_));
+        node.details.push_back("src_col=" + std::to_string(src_col_idx_));
+        node.details.push_back("dst_col=" + std::to_string(dst_col_idx_));
+    }
+
     bool mayHaveSideEffects() const override {
         return true;
     }

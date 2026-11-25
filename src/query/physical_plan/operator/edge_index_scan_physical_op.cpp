@@ -178,10 +178,10 @@ void EdgeIndexScanPhysicalOp::explain(ExplainNode& node, const ExplainContext& c
     if (schema_ != nullptr)
         local.schema = schema_.get();
     node.operator_name = "EdgeIndexScan";
-    node.details.push_back("src=" + src_var_);
-    node.details.push_back("dst=" + dst_var_);
+    node.details.push_back("src=" + explainVariableName(src_var_));
+    node.details.push_back("dst=" + explainVariableName(dst_var_));
     if (!edge_var_.empty())
-        node.details.push_back("edge=" + edge_var_);
+        node.details.push_back("edge=" + explainVariableName(edge_var_));
     node.details.push_back("label=" + explainEdgeLabelName(label_id_, local));
     if (!prop_ids_.empty())
         node.details.push_back("properties=[" + explainPropertyList(INVALID_LABEL_ID, prop_ids_, local) + "]");
