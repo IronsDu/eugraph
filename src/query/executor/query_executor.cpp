@@ -383,6 +383,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         explain_ctx.schema = schema_version.get();
         explain_ctx.plan_source = used_cbo ? "CBO" : "RBO";
         explain_ctx.slot_semantics = &binder.ctx().slot_semantics;
+        explain_ctx.symbols = &plan_ctx.explain_symbols;
         auto plan_root = std::make_shared<ExplainNode>(ExplainBuilder::build(*phys_op, explain_ctx));
         plan_root->plan_source = explain_ctx.plan_source;
         ctx->explain_node = plan_root;

@@ -125,6 +125,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [Value 拷贝审计](query/engine/value-copy-audit.md) | 查询热路径中不必要的 Value 物化、统一 cell 访问入口、仍必须拥有的拷贝清单与后续候选 |
 | [Aggregate typed execution 设计](query/engine/aggregate-typed-execution-design.md) | 聚合参数 chunk 级 typed 列视图、函数指针回调、null/count(*)/DISTINCT 不变量与 DuckDB 对照 |
 | [Optimizer 架构与 Columbia 迁移](query/engine/optimizer-architecture.md) | binder/analysis/passes/rules/extraction/framework 分层、规则扩展点、Columbia 已迁移项与剩余缺口 |
+| [EXPLAIN 语义元信息](query/engine/explain-semantic-metadata.md) | SlotSemantics + PEPlan + Catalog 驱动的 EXPLAIN 渲染、LDBC 前后对比、回退与扩展方式 |
 | [Optimizer / Access Path 后续规划](query/engine/optimizer-next-steps.md) | IndexJoin descriptor、slot ownership、PE enforcer、degree/selectivity、c3 与 EXPLAIN 语义化的统一优先级队列 |
 | [PatternComprehensionApply batching](query/engine/pattern-comprehension-batching.md) | 相关子计划按 batch key 分组、一次执行并分发列表；c10 sf0.1 41→20ms，existence-only 回退逐行 |
 | [Late materialization 设计](query/engine/late-materialization-design.md) | 输出/LIMIT 延迟物化；whole-object 需求规则（含 `collect` 列表仅 size/pattern 消费时保持拓扑阶段） |

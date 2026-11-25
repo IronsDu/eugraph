@@ -1861,6 +1861,20 @@ TEST_F(QueryExecutorTest, ExplainShowsFilterAndProjectExpressions) {
     EXPECT_NE(plan.find("Project(mapping="), std::string::npos) << plan;
 }
 
+TEST_F(QueryExecutorTest, ExplainUsesSlotAndPeSymbols) {
+    auto result = execSync(*executor_, "EXPLAIN MATCH (n:Person) WHERE n.name <> 'x' RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    std::string plan;
+    for (const auto& row : result.rows)
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan += std::get<std::string>(row[0]) + "\n";
+
+    EXPECT_NE(plan.find("n.name"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("<prop#"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("ProjectionExtract"), std::string::npos) << plan;
+}
+
 TEST_F(QueryExecutorTest, ExplainWithLimit) {
     auto result = execSync(*executor_, "EXPLAIN MATCH (n:Person) RETURN n LIMIT 5");
     ASSERT_TRUE(result.error.empty()) << result.error;

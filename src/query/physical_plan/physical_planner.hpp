@@ -67,6 +67,8 @@ struct PlanContext {
     optimizer::PEPlans extraction_info;
     /// Extraction-owned split of PE columns into pre-LIMIT and deferred sets.
     optimizer::SplitPEPlans split_pe_plans;
+    /// Presentation-only symbols for PE-appended internal slots.
+    ExplainSymbolMap explain_symbols;
     /// Maps variable name → globally-unique SlotId. Populated by
     /// optimizer::allocateAllSlots at the start of planBound (covers all
     /// variable names in the bound tree, including aliases).
