@@ -180,8 +180,29 @@ std::string explainPropertyName(LabelId label_id, uint16_t prop_id, const Explai
                     return prop.name;
             }
         }
+        // Property ids are shared by the label hierarchy (e.g. Message base
+        // properties are not repeated on every derived label). Fall back to a
+        // schema-wide lookup before exposing an opaque <prop#N>.
+        for (const auto& [_, def] : ctx.schema->labels) {
+            for (const auto& prop : def.properties) {
+                if (prop.id == prop_id)
+                    return prop.name;
+            }
+        }
     }
     return "<prop#" + std::to_string(prop_id) + ">";
+}
+
+std::string explainEdgePropertyName(EdgeLabelId label_id, uint16_t prop_id, const ExplainContext& ctx) {
+    if (ctx.schema != nullptr) {
+        auto it = ctx.schema->edge_labels.find(label_id);
+        if (it != ctx.schema->edge_labels.end()) {
+            for (const auto& prop : it->second.properties)
+                if (prop.id == prop_id)
+                    return prop.name;
+        }
+    }
+    return "<eprop#" + std::to_string(prop_id) + ">";
 }
 
 std::string explainLabelList(const std::vector<LabelId>& ids, const ExplainContext& ctx) {
@@ -246,7 +267,15 @@ std::string formatExplainExpression(const binder::BoundExpression& expr, const E
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
                 out = val.name;
-                if (ctx.slot_semantics != nullptr) {
+                bool resolved = false;
+                if (ctx.symbols != nullptr) {
+                    auto it = ctx.symbols->find(val.slot_id);
+                    if (it != ctx.symbols->end() && !it->second.display.empty()) {
+                        out = it->second.display;
+                        resolved = true;
+                    }
+                }
+                if (!resolved && ctx.slot_semantics != nullptr) {
                     auto it = ctx.slot_semantics->find(val.slot_id);
                     if (it != ctx.slot_semantics->end() && it->second.kind == binder::SlotSemanticKind::Property &&
                         !it->second.property_name.empty())

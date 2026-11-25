@@ -796,14 +796,22 @@ void ProjectionExtractPhysicalOp::explain(ExplainNode& node, const ExplainContex
                 prop = explainPropertyName(sp.label_id, sp.prop_id, local);
             if (prop.empty())
                 prop = "prop#" + std::to_string(sp.prop_id);
-            loads += (loads.empty() ? "" : ", ") + (label.empty() ? prop : label + "." + prop);
+            std::string owner;
+            if (sp.source_col < input_schema_.size())
+                owner = input_schema_[sp.source_col];
+            std::string display = owner.empty() ? (label.empty() ? prop : label + "." + prop) : owner + "." + prop;
+            loads += (loads.empty() ? "" : ", ") + display;
             break;
         }
         case ColumnSpec::Kind::LoadEdgeProp: {
             auto eit = edge_label_names_.find(sp.edge_label_id);
             std::string label =
                 eit != edge_label_names_.end() ? eit->second : explainEdgeLabelName(sp.edge_label_id, local);
-            loads += (loads.empty() ? "" : ", ") + label + "." + std::to_string(sp.prop_id);
+            std::string prop = explainEdgePropertyName(sp.edge_label_id, sp.prop_id, local);
+            std::string owner;
+            if (sp.source_col < input_schema_.size())
+                owner = input_schema_[sp.source_col];
+            loads += (loads.empty() ? "" : ", ") + (owner.empty() ? label + "." + prop : owner + "." + prop);
             break;
         }
         case ColumnSpec::Kind::LoadVertexLabels:

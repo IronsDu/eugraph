@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "query/physical_plan/explain/explain_symbols.hpp"
 #include "query/planner/bound_expression/bound_expression_fwd.hpp"
 #include "query/planner/slot_semantics.hpp"
 
@@ -28,6 +29,8 @@ struct ExplainContext {
     /// Binder-era slot semantics; used to render property columns without
     /// relying on physical-plan shape heuristics.
     const binder::SlotSemanticMap* slot_semantics = nullptr;
+    /// Binder/user + PE-internal symbols, resolved by SlotId.
+    const ExplainSymbolMap* symbols = nullptr;
 };
 
 struct ExplainNode {
@@ -57,6 +60,7 @@ std::string formatExplainExpression(const binder::BoundExpression& expr, const E
 std::string explainLabelName(LabelId id, const ExplainContext& ctx);
 std::string explainEdgeLabelName(EdgeLabelId id, const ExplainContext& ctx);
 std::string explainPropertyName(LabelId label_id, uint16_t prop_id, const ExplainContext& ctx);
+std::string explainEdgePropertyName(EdgeLabelId label_id, uint16_t prop_id, const ExplainContext& ctx);
 
 std::string explainLabelList(const std::vector<LabelId>& ids, const ExplainContext& ctx);
 std::string explainEdgeLabelList(const std::vector<EdgeLabelId>& ids, const ExplainContext& ctx);

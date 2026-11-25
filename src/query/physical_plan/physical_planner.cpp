@@ -49,6 +49,8 @@
 namespace eugraph {
 namespace compute {
 
+static void buildExplainSymbols(PlanContext& ctx);
+
 namespace {
 namespace {
 
@@ -3517,6 +3519,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
         optimizer::buildExtractionPlans(ctx.requirements, source_types, ctx.resolver(),
                                         optimizer::analyzePlan(bound_plan.root).property, ctx.slot_allocator);
     ctx.extraction_info = ctx.split_pe_plans.all;
+    buildExplainSymbols(ctx);
 
     // Phase 3 (Alias passthrough): For each Project item of the form
     // `BoundVariableRef(X) AS Y`, propagate X's derived PE columns through Y
@@ -3835,6 +3838,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
         optimizer::buildExtractionPlans(ctx.requirements, source_types, ctx.resolver(),
                                         optimizer::analyzePlan(materialized).property, ctx.slot_allocator);
     ctx.extraction_info = ctx.split_pe_plans.all;
+    buildExplainSymbols(ctx);
     optimizer::lowerAliasPassthrough(materialized, ctx.extraction_info, ctx.var_slots, ctx.alias_map,
                                      ctx.slot_allocator);
     optimizer::lowerColumnIndices(materialized, ctx.extraction_info, ctx.resolver());
@@ -4010,6 +4014,98 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
     join->setEvalContext(ctx.eval_ctx);
     auto result = PlanOperatorResult{std::move(join), std::move(js), std::move(jt), std::move(lay)};
     return dispatchProjectionExtract(std::move(result), store, ctx);
+}
+
+static void buildExplainSymbols(PlanContext& ctx) {
+    std::unordered_map<binder::SlotId, std::string> owner;
+    for (const auto& [name, slot] : ctx.var_slots)
+        if (slot != binder::INVALID_SLOT_ID)
+            owner.emplace(slot, name);
+    auto propertyName = [&](LabelId label, uint16_t prop) -> std::string {
+        auto it = ctx.label_defs.find(label);
+        if (it != ctx.label_defs.end())
+            for (const auto& pd : it->second.properties)
+                if (pd.id == prop)
+                    return pd.name;
+        return "<prop#" + std::to_string(prop) + ">";
+    };
+    auto put = [&](binder::SlotId slot, ExplainSymbol sym) {
+        if (slot != binder::INVALID_SLOT_ID)
+            ctx.explain_symbols.emplace(slot, std::move(sym));
+    };
+    for (const auto& [source_slot, plan] : ctx.split_pe_plans.all) {
+        (void)source_slot;
+        std::string var;
+        auto oit = owner.find(plan.source_slot_id);
+        if (oit != owner.end())
+            var = oit->second;
+        if (plan.object_slot_id != binder::INVALID_SLOT_ID && !var.empty()) {
+            ExplainSymbol sym;
+            sym.kind = ExplainSymbol::Kind::WholeObject;
+            sym.display = var;
+            sym.variable = var;
+            sym.internal = plan.object_slot_id != plan.source_slot_id;
+            put(plan.object_slot_id, std::move(sym));
+        }
+        for (size_t i = 0; i < plan.prop_slot_ids.size() && i < plan.prop_order.size(); ++i) {
+            const auto& [label, prop] = plan.prop_order[i];
+            std::string pname = propertyName(label, prop);
+            ExplainSymbol sym;
+            sym.kind = ExplainSymbol::Kind::Property;
+            sym.property = pname;
+            sym.variable = var;
+            sym.label = label;
+            sym.prop_id = prop;
+            sym.display = var.empty() ? pname : var + "." + pname;
+            sym.internal = true;
+            put(plan.prop_slot_ids[i], std::move(sym));
+        }
+        for (size_t i = 0; i < plan.edge_prop_slot_ids.size() && i < plan.edge_prop_order.size(); ++i) {
+            const auto& [label, prop] = plan.edge_prop_order[i];
+            std::string pname = "<eprop#" + std::to_string(prop) + ">";
+            auto eit = ctx.edge_label_defs.find(label);
+            if (eit != ctx.edge_label_defs.end())
+                for (const auto& pd : eit->second.properties)
+                    if (pd.id == prop) {
+                        pname = pd.name;
+                        break;
+                    }
+            ExplainSymbol sym;
+            sym.kind = ExplainSymbol::Kind::Property;
+            sym.property = pname;
+            sym.variable = var;
+            sym.label = INVALID_LABEL_ID;
+            sym.prop_id = prop;
+            sym.display = var.empty() ? sym.property : var + "." + sym.property;
+            sym.internal = true;
+            put(plan.edge_prop_slot_ids[i], std::move(sym));
+        }
+        if (plan.labels_slot_id != binder::INVALID_SLOT_ID) {
+            ExplainSymbol sym;
+            sym.kind = ExplainSymbol::Kind::VertexLabels;
+            sym.display = var.empty() ? "labels" : "labels(" + var + ")";
+            sym.variable = var;
+            sym.internal = true;
+            put(plan.labels_slot_id, std::move(sym));
+        }
+        if (plan.type_slot_id != binder::INVALID_SLOT_ID) {
+            ExplainSymbol sym;
+            sym.kind = ExplainSymbol::Kind::EdgeType;
+            sym.display = var.empty() ? "type" : "type(" + var + ")";
+            sym.variable = var;
+            sym.internal = true;
+            put(plan.type_slot_id, std::move(sym));
+        }
+        for (const auto& [pname, co] : plan.coalesce_vertices) {
+            ExplainSymbol sym;
+            sym.kind = ExplainSymbol::Kind::Coalesced;
+            sym.property = pname;
+            sym.variable = var;
+            sym.display = var.empty() ? pname : var + "." + pname;
+            sym.internal = true;
+            put(co.slot_id, std::move(sym));
+        }
+    }
 }
 
 std::variant<PlanOperatorResult, std::string>

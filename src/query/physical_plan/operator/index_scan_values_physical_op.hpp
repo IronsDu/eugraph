@@ -1,7 +1,9 @@
 #pragma once
 
+#include "common/schema/graph_schema.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
+#include "query/physical_plan/explain/explain.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
@@ -26,6 +28,25 @@ public:
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "IndexScanValues(variable=" + variable_ + ", index_id=" + std::to_string(index_id_) + ")";
+    }
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override {
+        node.operator_name = "IndexScanValues";
+        node.details.push_back("variable=" + variable_);
+        if (ctx.schema != nullptr) {
+            for (const auto& [lid, def] : ctx.schema->labels) {
+                for (const auto& idx : def.indexes) {
+                    if (idx.index_id != index_id_)
+                        continue;
+                    node.details.push_back("label=" + explainLabelName(lid, ctx));
+                    if (!idx.name.empty())
+                        node.details.push_back("index=" + idx.name);
+                    if (!idx.prop_ids.empty())
+                        node.details.push_back("properties=[" + explainPropertyList(lid, idx.prop_ids, ctx) + "]");
+                    return;
+                }
+            }
+        }
+        node.details.push_back("index_id=" + std::to_string(index_id_));
     }
     void setValues(std::shared_ptr<std::vector<PropertyValue>> values) {
         values_ = std::move(values);
