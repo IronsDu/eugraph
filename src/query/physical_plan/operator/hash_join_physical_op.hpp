@@ -46,9 +46,9 @@ public:
         for (size_t i = 0; i < left_key_cols_.size() && i < right_key_cols_.size(); ++i) {
             if (i > 0)
                 keys += " AND ";
-            auto l = left_key_cols_[i] < left_names.size() ? left_names[left_key_cols_[i]]
+            auto l = left_key_cols_[i] < left_names.size() ? explainVariableName(left_names[left_key_cols_[i]])
                                                            : "#" + std::to_string(left_key_cols_[i]);
-            auto r = right_key_cols_[i] < right_names.size() ? right_names[right_key_cols_[i]]
+            auto r = right_key_cols_[i] < right_names.size() ? explainVariableName(right_names[right_key_cols_[i]])
                                                              : "#" + std::to_string(right_key_cols_[i]);
             keys += l + " = " + r;
         }

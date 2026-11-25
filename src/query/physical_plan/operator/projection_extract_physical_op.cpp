@@ -798,7 +798,7 @@ void ProjectionExtractPhysicalOp::explain(ExplainNode& node, const ExplainContex
                 prop = "prop#" + std::to_string(sp.prop_id);
             std::string owner;
             if (sp.source_col < input_schema_.size())
-                owner = input_schema_[sp.source_col];
+                owner = explainVariableName(input_schema_[sp.source_col]);
             std::string display = owner.empty() ? (label.empty() ? prop : label + "." + prop) : owner + "." + prop;
             loads += (loads.empty() ? "" : ", ") + display;
             break;
@@ -810,22 +810,28 @@ void ProjectionExtractPhysicalOp::explain(ExplainNode& node, const ExplainContex
             std::string prop = explainEdgePropertyName(sp.edge_label_id, sp.prop_id, local);
             std::string owner;
             if (sp.source_col < input_schema_.size())
-                owner = input_schema_[sp.source_col];
+                owner = explainVariableName(input_schema_[sp.source_col]);
             loads += (loads.empty() ? "" : ", ") + (owner.empty() ? label + "." + prop : owner + "." + prop);
             break;
         }
-        case ColumnSpec::Kind::LoadVertexLabels:
-            loads += (loads.empty() ? "" : ", ") + sp.output_name + ".labels";
+        case ColumnSpec::Kind::LoadVertexLabels: {
+            std::string owner = sp.source_col < input_schema_.size() ? explainVariableName(input_schema_[sp.source_col])
+                                                                     : explainVariableName(sp.output_name);
+            loads += (loads.empty() ? "" : ", ") + owner + ".labels";
             break;
-        case ColumnSpec::Kind::LoadEdgeType:
-            loads += (loads.empty() ? "" : ", ") + sp.output_name + ".type";
+        }
+        case ColumnSpec::Kind::LoadEdgeType: {
+            std::string owner = sp.source_col < input_schema_.size() ? explainVariableName(input_schema_[sp.source_col])
+                                                                     : explainVariableName(sp.output_name);
+            loads += (loads.empty() ? "" : ", ") + owner + ".type";
             break;
+        }
         case ColumnSpec::Kind::ConstructVertex:
         case ColumnSpec::Kind::ConstructEdge: {
             std::string name = sp.output_name;
             if (!ctx.verbose && name.rfind("__pe", 0) == 0) {
                 name = sp.source_col < input_schema_.size()
-                           ? input_schema_[sp.source_col]
+                           ? explainVariableName(input_schema_[sp.source_col])
                            : (sp.kind == ColumnSpec::Kind::ConstructVertex ? "vertex" : "edge");
             }
             materialize += (materialize.empty() ? "" : ", ") + name;

@@ -71,6 +71,7 @@ public:
         node.operator_name = "Project";
         std::vector<std::string> items;
         for (const auto& item : items_) {
+            const bool internal = explainIsInternalAlias(item.name);
             std::string expr = formatExplainExpression(item.expr, ctx);
             // Property reads are already lowered to internal refs by PE. Keep the
             // user-facing alias when it names a property, instead of showing an
@@ -78,7 +79,7 @@ public:
             if (std::holds_alternative<binder::BoundColumnRef>(item.expr) && !item.name.empty() &&
                 item.name.find('.') != std::string::npos)
                 expr = item.name;
-            items.push_back(expr + " AS " + item.name);
+            items.push_back(expr + " AS " + explainVariableName(item.name) + (internal ? " [internal]" : ""));
         }
         std::string mapping;
         for (size_t i = 0; i < items.size(); ++i) {

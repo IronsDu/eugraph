@@ -45,7 +45,7 @@ public:
         if (local.schema == nullptr)
             local.schema = schema_.get();
         node.operator_name = "AllNodeScan";
-        node.details.push_back("variable=" + variable_);
+        node.details.push_back("variable=" + explainVariableName(variable_));
         if (!candidate_labels_.empty())
             node.details.push_back("labels=" + explainLabelList(candidate_labels_, local));
     }

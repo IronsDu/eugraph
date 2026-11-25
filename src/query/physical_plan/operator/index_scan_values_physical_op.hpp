@@ -31,7 +31,7 @@ public:
     }
     void explain(ExplainNode& node, const ExplainContext& ctx) const override {
         node.operator_name = "IndexScanValues";
-        node.details.push_back("variable=" + variable_);
+        node.details.push_back("variable=" + explainVariableName(variable_));
         if (ctx.schema != nullptr) {
             for (const auto& [lid, def] : ctx.schema->labels) {
                 for (const auto& idx : def.indexes) {

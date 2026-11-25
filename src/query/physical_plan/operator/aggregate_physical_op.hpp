@@ -89,7 +89,8 @@ public:
             }
             aggs += ")";
             if (!agg.name.empty())
-                aggs += " AS " + agg.name;
+                aggs +=
+                    " AS " + explainVariableName(agg.name) + (explainIsInternalAlias(agg.name) ? " [internal]" : "");
         }
         node.details.push_back("groupBy=[" + keys + "]");
         node.details.push_back("aggs=[" + aggs + "]");

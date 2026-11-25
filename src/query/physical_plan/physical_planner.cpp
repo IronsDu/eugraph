@@ -2840,6 +2840,18 @@ public:
     std::string toString() const override {
         return "ReexecuteSource";
     }
+    void explain(ExplainNode& node, const ExplainContext&) const override {
+        node.operator_name = "ReexecuteSource";
+        node.details.push_back("reason=dynamic-index-key");
+        node.details.push_back("source=non-owning");
+        if (child_ != nullptr) {
+            std::string schema;
+            for (const auto& name : child_->outputSchema())
+                schema += (schema.empty() ? "" : ", ") + explainVariableName(name);
+            if (!schema.empty())
+                node.details.push_back("sourceColumns=[" + schema + "]");
+        }
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {};
     }
@@ -4038,7 +4050,7 @@ static void buildExplainSymbols(PlanContext& ctx) {
         std::string var;
         auto oit = owner.find(plan.source_slot_id);
         if (oit != owner.end())
-            var = oit->second;
+            var = explainVariableName(oit->second);
         if (plan.object_slot_id != binder::INVALID_SLOT_ID && !var.empty()) {
             ExplainSymbol sym;
             sym.kind = ExplainSymbol::Kind::WholeObject;

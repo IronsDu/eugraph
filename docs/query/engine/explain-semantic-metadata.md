@@ -69,21 +69,40 @@ Project(mapping=[message.id AS postOrCommentId, coalesce(message.content, messag
 - `index_id=N` 未解析索引：6 → **0**；
 - 29 条 interactive 语句（含 update）全部成功生成计划。
 
-仍保留的物理标识：
+## 4. alias / 匿名变量清理
 
-- `__anon_*`：binder 生成的匿名变量；
-- `__index_join_src`：IndexJoin 内部 join key 别名；
-- `ReexecuteSource`：动态 key 的 shared-source 债务（见
-  [optimizer-next-steps](optimizer-next-steps.md) P1）。
+原则：**只改名称，不删除实际算子/Filter/列**；内部 alias 保留并标 `[internal]`，
+verbose 显示完整名称。性能分析必须能看到实际工作。
 
-## 4. 扩展方式
+- `__anon_edge_N` → `anon_edge_N`；
+- `__anon_N` → `anon_N`；
+- `__index_join_src` → `index_join_source`；
+- `__fwd_*` / `__pe_*` / `__agg_*` / `__lc_*` / `__pc_*` / `__exists_*`
+  保留在 Project/Aggregate mapping 中，并标 `[internal]`；
+- `__edge_unique` → `edge_uniqueness`，Filter 算子保留；
+- `ReexecuteSource` 保留，并输出 `reason=dynamic-index-key`、`source=non-owning`。
+
+29 条 LDBC EXPLAIN 快照：
+
+```text
+before: "__" 220 次，[internal] 0 次，edge_uniqueness 0 次
+after:  "__" 0 次，[internal] 39 次，edge_uniqueness 15 次
+```
+
+不隐藏实际执行节点：
+
+- `edge_uniqueness` 是真实 Filter；
+- `ReexecuteSource` 是真实执行路径，且是 P1 shared-source 债务
+  （见 [optimizer-next-steps](optimizer-next-steps.md) P1）。
+
+## 5. 扩展方式
 
 - 新用户语义：在 Binder `SlotSemantics` 增加字段，`formatExplainExpression` 消费；
 - 新 PE 列：在 `buildExplainSymbols` 注册 internal slot；
 - 新索引/属性来源：扩展 `explainPropertyName` / `explainEdgePropertyName`；
 - operator 只在 `explain()` 中追加语义 detail，不解析 slot。
 
-## 5. 验证
+## 6. 验证
 
 ```text
 query_executor_tests  687/687 passed

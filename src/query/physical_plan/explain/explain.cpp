@@ -149,6 +149,49 @@ void renderNode(const ExplainNode& node, const std::string& prefix, bool last, b
 
 } // namespace
 
+std::string explainVariableName(std::string_view name) {
+    constexpr std::string_view anon_edge = "__anon_edge_";
+    constexpr std::string_view anon = "__anon_";
+    constexpr std::string_view index_join = "__index_join_src";
+    constexpr std::string_view pe = "__pe_";
+    constexpr std::string_view fwd = "__fwd_";
+    constexpr std::string_view pc = "__pc_";
+    if (name == index_join)
+        return "index_join_source";
+    if (name.starts_with(anon_edge))
+        return "anon_edge_" + std::string(name.substr(anon_edge.size()));
+    if (name.starts_with(anon))
+        return "anon_" + std::string(name.substr(anon.size()));
+    if (name.starts_with(pe))
+        return "pe_" + std::string(name.substr(pe.size()));
+    if (name.starts_with(fwd))
+        return "fwd_" + std::string(name.substr(fwd.size()));
+    if (name.starts_with(pc))
+        return "pc_" + std::string(name.substr(pc.size()));
+    if (name.starts_with("__"))
+        return std::string(name.substr(2));
+    return std::string(name);
+}
+
+bool explainIsInternalAlias(std::string_view name) {
+    static constexpr std::string_view prefixes[] = {"__fwd_", "__pe_",     "__agg_",           "__lc_",
+                                                    "__pc_",  "__exists_", "__temporal_field", "__edge_unique"};
+    for (auto prefix : prefixes)
+        if (name.starts_with(prefix))
+            return true;
+    return false;
+}
+
+std::string explainFunctionName(std::string_view name) {
+    if (name == "__edge_unique")
+        return "edge_uniqueness";
+    while (name.starts_with("__"))
+        name.remove_prefix(2);
+    while (name.ends_with("__"))
+        name.remove_suffix(2);
+    return std::string(name);
+}
+
 std::string explainLabelName(LabelId id, const ExplainContext& ctx) {
     if (id == INVALID_LABEL_ID && ctx.schema == nullptr)
         return "<unknown-label>";
@@ -266,7 +309,7 @@ std::string formatExplainExpression(const binder::BoundExpression& expr, const E
         [&](const auto& val) {
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
-                out = val.name;
+                out = explainVariableName(val.name);
                 bool resolved = false;
                 if (ctx.symbols != nullptr) {
                     auto it = ctx.symbols->find(val.slot_id);
@@ -284,7 +327,7 @@ std::string formatExplainExpression(const binder::BoundExpression& expr, const E
                 if (ctx.verbose && val.slot_id != 0)
                     out += "#slot" + std::to_string(val.slot_id);
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
-                out = val.name;
+                out = explainVariableName(val.name);
             } else if constexpr (std::is_same_v<T, binder::BoundLiteral>) {
                 out = formatValue(val.value);
             } else if constexpr (std::is_same_v<T, binder::BoundParameter>) {
@@ -313,7 +356,7 @@ std::string formatExplainExpression(const binder::BoundExpression& expr, const E
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 if (val && val->func_def) {
-                    out = val->func_def->name;
+                    out = explainFunctionName(val->func_def->name);
                     if (val->distinct)
                         out += " DISTINCT";
                     out += "(";
