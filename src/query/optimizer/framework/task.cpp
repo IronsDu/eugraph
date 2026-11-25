@@ -1,5 +1,7 @@
 #include "query/optimizer/framework/task.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <unordered_set>
 

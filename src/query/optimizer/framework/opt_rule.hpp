@@ -41,6 +41,7 @@ enum class OptNodeType {
     Foreach,                   // 27
     PathCount,                 // 28
     PatternComprehensionFork,  // 29
+    IndexJoin,                 // 30
     Unknown                    // out-of-range / future operator
 };
 

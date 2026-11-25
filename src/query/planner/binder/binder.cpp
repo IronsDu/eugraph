@@ -1,4 +1,5 @@
 #include "query/planner/binder.hpp"
+#include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/planner/binder/join_equality.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_call_op.hpp"
@@ -415,7 +416,7 @@ std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {
     errors_.clear();
     ctx_ = BindContext{};
 
-    return std::visit(
+    auto bound_result = std::visit(
         [this](const auto& ptr) -> std::optional<BoundStatement> {
             using T = std::decay_t<decltype(ptr)>;
             using Elem = typename T::element_type;
@@ -462,6 +463,23 @@ std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {
             }
         },
         stmt);
+
+    if (!bound_result.has_value())
+        return std::nullopt;
+
+    // Slot assignment is logical identity, not optimization: finalize all user
+    // slots before returning the bound plan.
+    ctx_.var_slots.clear();
+    for (const auto& [name, info] : ctx_.symbols) {
+        if (info.slot_id != INVALID_SLOT_ID)
+            ctx_.var_slots.emplace(name, info.slot_id);
+    }
+    for (const auto& binding : ctx_.binding_order) {
+        if (binding.slot != INVALID_SLOT_ID)
+            ctx_.var_slots.emplace(binding.name, binding.slot);
+    }
+    optimizer::allocateAllSlots(bound_result->plan.root, ctx_.var_slots, ctx_.slot_allocator);
+    return bound_result;
 }
 
 bool Binder::bindRegularQuery(const cypher::RegularQuery& query, BoundStatement& result) {

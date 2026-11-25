@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/planner/bound_expression/bound_expression_fwd.hpp"
+#include "query/planner/slot_semantics.hpp"
 
 #include <memory>
 #include <optional>
@@ -24,6 +25,9 @@ struct ExplainContext {
     bool verbose = false;
     /// CBO / RBO; copied to the root node by the builder.
     std::string plan_source;
+    /// Binder-era slot semantics; used to render property columns without
+    /// relying on physical-plan shape heuristics.
+    const binder::SlotSemanticMap* slot_semantics = nullptr;
 };
 
 struct ExplainNode {

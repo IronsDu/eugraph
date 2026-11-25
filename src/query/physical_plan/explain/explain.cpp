@@ -246,6 +246,12 @@ std::string formatExplainExpression(const binder::BoundExpression& expr, const E
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
                 out = val.name;
+                if (ctx.slot_semantics != nullptr) {
+                    auto it = ctx.slot_semantics->find(val.slot_id);
+                    if (it != ctx.slot_semantics->end() && it->second.kind == binder::SlotSemanticKind::Property &&
+                        !it->second.property_name.empty())
+                        out = it->second.property_name;
+                }
                 if (ctx.verbose && val.slot_id != 0)
                     out += "#slot" + std::to_string(val.slot_id);
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {

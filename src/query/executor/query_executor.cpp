@@ -8,6 +8,7 @@
 #include "common/types/constants.hpp"
 #include "query/catalog/catalog.hpp"
 #include "query/function/function_registry.hpp"
+#include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/logical_optimizer.hpp"
 #include "query/parser/index_ddl_parser.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
@@ -290,39 +291,65 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // create labels/properties between bind time and execution time.
     plan_ctx.eval_ctx.allow_static_schema_pruning = !binder.ctx().has_mutation;
 
-    // Populate variable → SlotId mapping from the Binder's symbol table.
-    // This covers ALL variables (including intermediate anon edges/nodes),
-    // not just the RETURN-level output schema.
+    // SlotIds are finalized by the Binder (logical identity); reuse them.
+    plan_ctx.var_slots = binder.ctx().var_slots;
     for (const auto& [name, info] : binder.ctx().symbols) {
         if (info.slot_id != binder::INVALID_SLOT_ID)
-            plan_ctx.var_slots[name] = info.slot_id;
+            plan_ctx.var_slots.emplace(name, info.slot_id);
     }
-    // Also seed from the binder's ordered binding log, but only for names
-    // absent from the final symbol table. WITH clauses narrow ctx().symbols
-    // to their outputs, and inner scopes may bind the same name to a fresh
-    // slot; neither must overwrite the visible outer binding.
-    for (const auto& binding : binder.ctx().binding_order) {
-        if (binding.slot != binder::INVALID_SLOT_ID && plan_ctx.var_slots.count(binding.name) == 0)
-            plan_ctx.var_slots[binding.name] = binding.slot;
-    }
-    // Scope-aware records for DPL: (scope, name) → slot.
     plan_ctx.scoped_var_slots = binder.ctx().scoped_bindings;
-    // Query-time label presentation order (source_labels are already in
-    // pattern order for bound node variables).
     for (const auto& [name, info] : binder.ctx().symbols) {
         if (!info.source_labels.empty())
             plan_ctx.label_order_by_name[name] = info.source_labels;
     }
-    // Seed the planner's slot allocator to continue after the binder's slots.
-    // Start from the next slot after the binder's allocation.
     ctx->label_order = plan_ctx.label_order_by_name;
     plan_ctx.slot_allocator.seed(binder.ctx().slot_allocator.current());
+
+    std::function<void(binder::BoundLogicalOperator&)> collect_slot_semantics = [&](binder::BoundLogicalOperator& op) {
+        std::visit(
+            [&](auto& val) {
+                using T = std::decay_t<decltype(val)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                    if (!val)
+                        return;
+                    for (const auto& item : val->items) {
+                        binder::SlotId slot =
+                            item.output_slot != binder::INVALID_SLOT_ID ? item.output_slot : item.alias_slot;
+                        if (slot == binder::INVALID_SLOT_ID)
+                            continue;
+                        binder::SlotSemantics sem;
+                        sem.slot = slot;
+                        sem.name = item.alias;
+                        sem.type = item.result_type;
+                        if (auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&item.expr);
+                            prop && *prop) {
+                            sem.kind = binder::SlotSemanticKind::Property;
+                            sem.property_name = (*prop)->property_name;
+                            for (const auto& cand : (*prop)->candidates) {
+                                sem.property_labels.push_back(cand.label_id);
+                                sem.property_ids.push_back(cand.prop_id);
+                            }
+                            sem.strong = (*prop)->strong_mode;
+                        } else if (auto* ref = std::get_if<binder::BoundColumnRef>(&item.expr); ref) {
+                            auto src = binder.ctx().slot_semantics.find(ref->slot_id);
+                            if (src != binder.ctx().slot_semantics.end())
+                                sem = src->second, sem.slot = slot;
+                        }
+                        binder.ctx().recordSlotSemantics(sem);
+                    }
+                }
+                optimizer::forEachLogicalChild(
+                    op, [&](binder::BoundLogicalOperator& child) { collect_slot_semantics(child); });
+            },
+            op);
+    };
+    collect_slot_semantics(bound_stmt->plan.root);
 
     // 2.5. Logical optimization. Projection pushdown is a pre-Cascades
     // optimizer pass: the binder collected semantic property references, the
     // optimizer turns them into scan/expand property demand.
     optimizer::LogicalOptimizer logical_optimizer;
-    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get(), effective_counts);
+    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get(), &binder.ctx().slot_semantics, effective_counts);
 
     // 3. Physical planning. Try CBO-chosen plan first (Phase 4); fall back
     // to planBound (RBO over the optimized logical tree) when no winner.
@@ -355,6 +382,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         ExplainContext explain_ctx;
         explain_ctx.schema = schema_version.get();
         explain_ctx.plan_source = used_cbo ? "CBO" : "RBO";
+        explain_ctx.slot_semantics = &binder.ctx().slot_semantics;
         auto plan_root = std::make_shared<ExplainNode>(ExplainBuilder::build(*phys_op, explain_ctx));
         plan_root->plan_source = explain_ctx.plan_source;
         ctx->explain_node = plan_root;

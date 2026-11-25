@@ -69,6 +69,28 @@ public:
 };
 
 // ---- Unary operators ----
+class GenerateIndexJoinRule : public OptRule {
+public:
+    std::string name() const override {
+        return "GenerateIndexJoin";
+    }
+    PatternNode pattern() const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
+class ImplIndexJoinRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplIndexJoin";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
 class ImplFilterRule : public OptRule {
 public:
     std::string name() const override {

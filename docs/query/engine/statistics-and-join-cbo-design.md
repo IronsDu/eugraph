@@ -247,6 +247,13 @@ UNKNOWN / BUILDING / STALE / APPROX / READY
 - ✅ 多跳 destination-index 链：Filter + 连续固定单边 Expand 链 → 最外层 dst 索引
   → 反向展开整条链 → 与链底部 source 子树 HashJoin；索引按 Expand 的目标 label
   集合解析（兼容 Comment/Post 的 Message 索引），identity Project 可穿透；
+- ✅ 动态目标索引：`target.prop = column` 时，先对 key 去重，再用
+  IndexScanValues/Apply 驱动反向链；source 子树直接重执行（不缓存）；
+  `EUGRAPH_DISABLE_DYNAMIC_CHAIN=1` 可回退；
+- ✅ `ImplIndexJoinRule`：Filter(Expand chain) 生成 IndexJoin 物理候选，
+  CostModel 使用专门 tag；命中形状时 physical planner 只做 lowering，未命中
+  自动回退普通 Filter；当前是 access-path candidate 的第一步，逻辑
+  IndexJoin 候选/残差谓词尚未拆出；
 - ✅ 只读 Cross/Inner join commute（写计划/pattern comprehension 走保守边界，
   暂不交换）；
 - ✅ 只读 join associativity：Join(Join(A,B),C) → Join(A,Join(B,C))（同一 safe 边界）；
