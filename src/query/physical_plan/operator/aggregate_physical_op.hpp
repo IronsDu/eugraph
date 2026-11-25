@@ -88,7 +88,7 @@ public:
                 aggs += formatExplainExpression(agg.arguments[j], ctx);
             }
             aggs += ")";
-            if (!agg.name.empty() && (!explainIsInternalAlias(agg.name) || ctx.verbose))
+            if (!agg.name.empty())
                 aggs +=
                     " AS " + explainVariableName(agg.name) + (explainIsInternalAlias(agg.name) ? " [internal]" : "");
         }

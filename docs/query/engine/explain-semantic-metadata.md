@@ -71,26 +71,29 @@ Project(mapping=[message.id AS postOrCommentId, coalesce(message.content, messag
 
 ## 4. alias / 匿名变量清理
 
+原则：**只改名称，不删除实际算子/Filter/列**；内部 alias 保留并标 `[internal]`，
+verbose 显示完整名称。性能分析必须能看到实际工作。
+
 - `__anon_edge_N` → `anon_edge_N`；
 - `__anon_N` → `anon_N`；
 - `__index_join_src` → `index_join_source`；
 - `__fwd_*` / `__pe_*` / `__agg_*` / `__lc_*` / `__pc_*` / `__exists_*`
-  等内部 alias：非 verbose 下从 Project/Aggregate mapping 隐藏；
-- 内部函数名（如 `__edge_unique`）去掉 `__` 前后缀。
+  保留在 Project/Aggregate mapping 中，并标 `[internal]`；
+- `__edge_unique` → `edge_uniqueness`，Filter 算子保留；
+- `ReexecuteSource` 保留，并输出 `reason=dynamic-index-key`、`source=non-owning`。
 
 29 条 LDBC EXPLAIN 快照：
 
 ```text
-before: "__" 220 次，__anon 120 次，__index_join_src 8 次
-after:  "__" 0 次，__anon 0 次，__index_join_src 0 次
-        index_join_source 8 次
+before: "__" 220 次，[internal] 0 次，edge_uniqueness 0 次
+after:  "__" 0 次，[internal] 39 次，edge_uniqueness 15 次
 ```
 
-仍保留的物理标识：
+不隐藏实际执行节点：
 
-- `index_join_source`：IndexJoin 内部 join key 的人类可读别名；
-- `ReexecuteSource`：动态 key 的 shared-source 债务（见
-  [optimizer-next-steps](optimizer-next-steps.md) P1）。
+- `edge_uniqueness` 是真实 Filter；
+- `ReexecuteSource` 是真实执行路径，且是 P1 shared-source 债务
+  （见 [optimizer-next-steps](optimizer-next-steps.md) P1）。
 
 ## 5. 扩展方式
 

@@ -183,6 +183,8 @@ bool explainIsInternalAlias(std::string_view name) {
 }
 
 std::string explainFunctionName(std::string_view name) {
+    if (name == "__edge_unique")
+        return "edge_uniqueness";
     while (name.starts_with("__"))
         name.remove_prefix(2);
     while (name.ends_with("__"))

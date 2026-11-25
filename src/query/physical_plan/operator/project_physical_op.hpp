@@ -72,8 +72,6 @@ public:
         std::vector<std::string> items;
         for (const auto& item : items_) {
             const bool internal = explainIsInternalAlias(item.name);
-            if (internal && !ctx.verbose)
-                continue;
             std::string expr = formatExplainExpression(item.expr, ctx);
             // Property reads are already lowered to internal refs by PE. Keep the
             // user-facing alias when it names a property, instead of showing an
