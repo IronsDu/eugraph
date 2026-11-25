@@ -1071,6 +1071,61 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
         conjuncts.push_back(std::move(expr));
     };
     collectConjuncts(std::move(*bound_pred));
+    if (conjuncts.size() > 1) {
+        // Do not split a conjunction that references the same variable set into
+        // separate Filters. Range predicates such as
+        // `$end > m.date AND m.date >= $start` must stay together so composite
+        // index selection sees both bounds; physically splitting them made the
+        // scan consume only one bound.
+        auto referencedVars = [](const BoundExpression& expr) {
+            std::set<std::string> vars;
+            std::function<void(const BoundExpression&)> walk = [&](const BoundExpression& e) {
+                std::visit(
+                    [&](const auto& value) {
+                        using T = std::decay_t<decltype(value)>;
+                        if constexpr (std::is_same_v<T, BoundColumnRef> || std::is_same_v<T, BoundVariableRef>) {
+                            vars.insert(value.name);
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryOp>>) {
+                            if (value) {
+                                walk(value->left);
+                                walk(value->right);
+                            }
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnaryOp>>) {
+                            if (value)
+                                walk(value->operand);
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPropertyRef>>) {
+                            if (value)
+                                walk(value->object);
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundDynamicPropertyRef>>) {
+                            if (value)
+                                walk(value->object);
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundLabelCast>>) {
+                            if (value)
+                                walk(value->object);
+                        }
+                    },
+                    e);
+            };
+            walk(expr);
+            return vars;
+        };
+        std::vector<BoundExpression> merged;
+        for (auto& conjunct : conjuncts) {
+            auto vars = referencedVars(conjunct);
+            if (!merged.empty() && !vars.empty() && referencedVars(merged.back()) == vars) {
+                auto lhs = std::move(merged.back());
+                auto and_expr = std::make_unique<BoundBinaryOp>();
+                and_expr->op = cypher::BinaryOperator::AND;
+                and_expr->left = std::move(lhs);
+                and_expr->right = std::move(conjunct);
+                and_expr->result_type = BoundType::Bool();
+                merged.back() = BoundExpression{std::move(and_expr)};
+            } else {
+                merged.push_back(std::move(conjunct));
+            }
+        }
+        conjuncts = std::move(merged);
+    }
     if (conjuncts.size() == 1) {
         auto filter = std::make_unique<BoundFilterOp>();
         filter->predicate = std::move(conjuncts.front());

@@ -1860,11 +1860,11 @@ std::optional<PlanOperatorResult>
 PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                                    const std::vector<const binder::BoundBinaryOp*>& conditions, LabelId label_id,
                                    const LabelDef& label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
-    std::unordered_map<std::string, BoundIndexableCondition> prop_conditions;
+    std::unordered_map<std::string, std::vector<BoundIndexableCondition>> prop_conditions;
     for (auto* cond : conditions) {
-        auto extracted = tryExtractBoundCondition(*cond, ctx);
+        auto extracted = tryExtractNormalizedBoundCondition(*cond, ctx);
         if (extracted.has_value())
-            prop_conditions[extracted->property_name] = std::move(*extracted);
+            prop_conditions[extracted->property_name].push_back(std::move(*extracted));
     }
 
     if (prop_conditions.empty())
@@ -1904,7 +1904,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             auto it = prop_conditions.find(acc.property_name);
             if (it == prop_conditions.end())
                 break;
-            auto& cond = it->second;
+            const auto& conds = it->second;
+            const auto& cond = conds.front();
             // Index and access must use the SAME view: a strong index only sees
             // the source label's column, a weak index sees every source. Mixing
             // them would return false positives (weak index answering a strong
@@ -1952,20 +1953,82 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                     break;
                 }
             } else {
-                if (cond.op == cypher::BinaryOperator::EQ) {
-                    eq_values.push_back(std::move(cond.value));
+                // Multiple conjuncts on the same indexed property (e.g.
+                // `x.date >= lo AND x.date < hi`) must be merged. Keeping one
+                // map entry per property silently dropped the other bound and
+                // turned a bounded range into `(-inf, hi)` or `[lo, +inf)`.
+                auto pv_compare = [](const PropertyValue& a, const PropertyValue& b) -> int {
+                    if (auto* ai = std::get_if<int64_t>(&a)) {
+                        if (auto* bi = std::get_if<int64_t>(&b))
+                            return *ai < *bi ? -1 : (*ai > *bi ? 1 : 0);
+                    }
+                    if (auto* ad = std::get_if<double>(&a)) {
+                        if (auto* bd = std::get_if<double>(&b))
+                            return *ad < *bd ? -1 : (*ad > *bd ? 1 : 0);
+                    }
+                    if (auto* as = std::get_if<std::string>(&a)) {
+                        if (auto* bs = std::get_if<std::string>(&b))
+                            return *as < *bs ? -1 : (*as > *bs ? 1 : 0);
+                    }
+                    if (auto* ab = std::get_if<bool>(&a)) {
+                        if (auto* bb = std::get_if<bool>(&b))
+                            return *ab < *bb ? -1 : (*ab > *bb ? 1 : 0);
+                    }
+                    return 0;
+                };
+                std::optional<PropertyValue> lower;
+                std::optional<PropertyValue> upper;
+                bool lower_inclusive = false;
+                bool upper_inclusive = false;
+                bool has_eq = false;
+                bool has_prefix = false;
+                for (const auto& c : conds) {
+                    if (c.op == cypher::BinaryOperator::EQ) {
+                        eq_values.push_back(c.value);
+                        has_eq = true;
+                    } else if (c.op == cypher::BinaryOperator::STARTS_WITH &&
+                               std::holds_alternative<std::string>(c.value)) {
+                        eq_values.push_back(c.value);
+                        has_prefix = true;
+                    } else if (c.op == cypher::BinaryOperator::GT || c.op == cypher::BinaryOperator::GTE) {
+                        if (!lower || pv_compare(c.value, *lower) > 0) {
+                            lower = c.value;
+                            lower_inclusive = (c.op == cypher::BinaryOperator::GTE);
+                        }
+                    } else if (c.op == cypher::BinaryOperator::LT || c.op == cypher::BinaryOperator::LTE) {
+                        if (!upper || pv_compare(c.value, *upper) < 0) {
+                            upper = c.value;
+                            upper_inclusive = (c.op == cypher::BinaryOperator::LTE);
+                        }
+                    }
+                }
+                if (has_eq) {
                     match_count++;
-                } else if (cond.op == cypher::BinaryOperator::STARTS_WITH &&
-                           std::holds_alternative<std::string>(cond.value)) {
-                    eq_values.push_back(std::move(cond.value));
+                } else if (has_prefix) {
                     last_is_prefix = true;
                     match_count++;
-                } else if (cond.op == cypher::BinaryOperator::GT || cond.op == cypher::BinaryOperator::GTE) {
-                    range_start = std::move(cond.value);
-                    last_is_range = true;
-                    match_count++;
-                } else if (cond.op == cypher::BinaryOperator::LT || cond.op == cypher::BinaryOperator::LTE) {
-                    range_end = std::move(cond.value);
+                } else if (lower || upper) {
+                    // Storage range cursors are [start, end): start is
+                    // exclusive and end is exclusive. Shift integer inclusive
+                    // bounds by one so GTE/LTE keep their boundary rows.
+                    auto inclusive_start = [](PropertyValue v) -> PropertyValue {
+                        if (auto* i = std::get_if<int64_t>(&v))
+                            return PropertyValue{*i - 1};
+                        if (auto* d = std::get_if<double>(&v))
+                            return PropertyValue{std::nextafter(*d, -std::numeric_limits<double>::infinity())};
+                        return v;
+                    };
+                    auto inclusive_end = [](PropertyValue v) -> PropertyValue {
+                        if (auto* i = std::get_if<int64_t>(&v))
+                            return PropertyValue{*i + 1};
+                        if (auto* d = std::get_if<double>(&v))
+                            return PropertyValue{std::nextafter(*d, std::numeric_limits<double>::infinity())};
+                        return v;
+                    };
+                    if (lower)
+                        range_start = lower_inclusive ? inclusive_start(std::move(*lower)) : std::move(*lower);
+                    if (upper)
+                        range_end = upper_inclusive ? inclusive_end(std::move(*upper)) : std::move(*upper);
                     last_is_range = true;
                     match_count++;
                 } else {
@@ -2042,7 +2105,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
     EdgeLabelId label_id, const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
     std::unordered_map<uint16_t, BoundIndexableCondition> prop_conditions;
     for (auto* cond : conditions) {
-        auto extracted = tryExtractBoundCondition(*cond, ctx);
+        auto extracted = tryExtractNormalizedBoundCondition(*cond, ctx);
         if (extracted.has_value())
             prop_conditions[extracted->prop_id] = std::move(*extracted);
     }

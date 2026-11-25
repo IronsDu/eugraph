@@ -2,8 +2,8 @@
 
 > 最新测量：2026-11-25（eugraph + neo4j 同轮，3 轮 warmup/5 轮计时，取 min）；
 > 固定参数：`personId=933`、`person1Id=933, person2Id=1129`、`messageId=3`。
-> c13/c14 已返回有效行（1/12 行），进入正式对比；c3 出现 eugraph 0 行 / neo4j 1 行，
-> 标为 N/A，c4 两边 0 行也标 N/A。
+> c13/c14 已返回有效行（1/12 行），c3 已修复并返回与 neo4j 相同的 1 行；
+> c4 两边 0 行，标为 N/A。
 > eugraph 侧索引集合已与 LDBC `indices.cypher` 对齐：15 个索引全部 PUBLIC
 > （9 个 id 索引 + Country.name / Message.creationDate / Person.firstName /
 > Post.creationDate / Tag.name / TagClass.name；Message.id 为非 unique，其余 id 为 unique）；额外的 Place.id / TagClass.id
@@ -57,7 +57,7 @@
 |---|---:|---:|---|
 | complex-1 | 30.30 | 15.50 | 🟡 慢 1.95× |
 | complex-2 | 34.00 | 15.70 | 🟡 慢 2.17× |
-| complex-3 | 286.90 | 509.70 | ⚪ N/A（行数不一致 0/1） |
+| complex-3 | 1567.30 | 460.80 | 🟠 慢 3.40× |
 | complex-4 | 46.10 | 16.50 | ⚪ N/A（两边 0 行） |
 | complex-5 | 2642.60 | 1168.20 | 🟡 慢 2.26× |
 | complex-6 | 10.20 | 427.80 | 🟢 快 41.94× |
@@ -95,16 +95,21 @@
 
 **汇总（min 求和）：**
 
-- Complex 可比较 12 条（剔除 c3 行数不一致、c4 两边 0 行）：
-  **4,949.00 ms vs 2,836.70 ms = 1.74×**
+- Complex 可比较 13 条（剔除 c4 两边 0 行）：
+  **6,516.30 ms vs 3,297.50 ms = 1.98×**
 - Short 7 条：**6.70 ms vs 12.60 ms = 0.53×**（eugraph 更快；亚毫秒逐条受噪声主导）
-- 全部 19 条有效样本：**4,955.70 ms vs 2,849.30 ms = 1.74×**
+- 全部 20 条有效样本（剔除 c4）：**6,523.00 ms vs 3,310.10 ms = 1.97×**
 - c6 从历史 45.69 ms 降到 **10.20 ms**，同轮快于 neo4j **41.94×**。
 - c9 本轮 **984.40 ms**，同轮 neo4j 531.60 ms，差距 1.85×。
 - c13/c14 不再 N/A：c13 1 行 / 1.00 ms，c14 12 行 / 576.40 ms。
-- c3 本轮 eugraph 0 行、neo4j 1 行，不计入性能比值；需单独排查
-  `messageId=3` 下的结果差异。
-- 合计值按逐条 min 求和，被 c5/c9/c14/c12 主导；不要把它当成 14 条的平均水平。
+- c3 已修复范围为 1 行结果（此前 0 行）：根因是链式比较
+  `$end > m.date >= $start` 被拆成多个 Filter 后，反向操作数未走
+  `tryExtractNormalizedBoundCondition`，索引只保留一个边界；
+  同时同一属性多个范围条件在 `tryBoundIndexScan` 中互相覆盖。
+  修复后 eugraph/neo4j 均为 1 行，c3 1567.30 vs 460.80 ms（7 轮 min）。
+- c3 修复验证：同轮 eugraph 1 行 / neo4j 1 行，内容一致；
+  全量 `query_executor_tests` 687/687。
+- 合计值按逐条 min 求和，被 c5/c3/c9/c14/c12 主导；不要把它当成 14 条的平均水平。
 
 ### 2.4 并发下的百分位延迟（p50 / p95 / p99，2026-11-13）
 
