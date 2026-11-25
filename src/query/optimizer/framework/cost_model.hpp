@@ -63,6 +63,8 @@ enum class PhysicalOpTag {
     PathPropertyExtract,
     // Fixed-path count fusion: count final-hop edges from prefix rows.
     PathCount,
+    // Destination-index / reverse-chain access path candidate.
+    IndexJoin,
 };
 
 // ============================================================

@@ -146,6 +146,39 @@ ColumnInfo Binder::makeColumnInfo(const std::string& name, BoundType type, std::
     info.source_labels = std::move(source_labels);
     info.source_prop_id = source_prop_id;
     info.strong_typed = strong_typed;
+
+    SlotSemantics sem;
+    sem.slot = info.slot_id;
+    sem.name = info.name;
+    sem.type = info.type;
+    sem.strong = strong_typed;
+    sem.vertex_labels = info.source_labels;
+    if (info.type.kind == BoundTypeKind::VERTEX) {
+        sem.kind = SlotSemanticKind::Vertex;
+    } else if (info.type.kind == BoundTypeKind::EDGE) {
+        sem.kind = SlotSemanticKind::Edge;
+    } else if (info.type.kind == BoundTypeKind::LIST) {
+        sem.kind = SlotSemanticKind::List;
+    } else if (info.source_prop_id && !info.source_labels.empty()) {
+        sem.kind = SlotSemanticKind::Property;
+        sem.property_name = "<prop>";
+        sem.property_labels = info.source_labels;
+        sem.property_ids.push_back(*info.source_prop_id);
+        for (LabelId lid : info.source_labels) {
+            auto it = catalog_.allLabels().find(lid);
+            if (it == catalog_.allLabels().end())
+                continue;
+            for (const auto& pd : it->second.properties) {
+                if (pd.id == *info.source_prop_id) {
+                    sem.property_name = pd.name;
+                    break;
+                }
+            }
+            if (sem.property_name != "<prop>")
+                break;
+        }
+    }
+    ctx_.recordSlotSemantics(sem);
     return info;
 }
 

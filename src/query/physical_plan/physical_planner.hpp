@@ -179,6 +179,11 @@ public:
                                                                             PlanContext& ctx);
 
 private:
+    std::variant<PlanOperatorResult, std::string> planIndexJoin(binder::BoundIndexJoinOp& index_join,
+                                                                IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
+                                                                PlanContext& ctx, Schema input_schema,
+                                                                const std::vector<binder::BoundType>& input_types);
+
     std::variant<PlanOperatorResult, std::string>
     planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                       PlanContext& ctx, Schema input_schema, const std::vector<binder::BoundType>& input_types);
@@ -217,20 +222,6 @@ private:
                                                              IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                                                              PlanContext& ctx, Schema input_schema,
                                                              const std::vector<binder::BoundType>& input_types);
-
-    /// 通用 destination-index join：Filter(Expand) 的 dst 属性有可用索引时，
-    /// 先 IndexScan(dst)，再反向 Expand 到 source，与 source 行 HashJoin。
-    /// 不依赖 label/edge/property 名；条件/索引完全由 catalog/predicate 决定。
-    std::optional<PlanOperatorResult> tryPlanFilterDestinationIndexJoin(binder::BoundFilterOp& filter,
-                                                                        IAsyncGraphDataStore& store,
-                                                                        IAsyncGraphMetaStore& meta, PlanContext& ctx);
-
-    /// 通用 destination-index 链：Filter + 连续固定长度 Expand 链。
-    /// 最外层 destination 属性有索引时，从 index seek 反向展开整条链，
-    /// 再与链底部 source 子树按 source 变量 HashJoin；保留 source 侧其他列。
-    std::optional<PlanOperatorResult> tryPlanFilterDestinationChain(binder::BoundFilterOp& filter,
-                                                                    IAsyncGraphDataStore& store,
-                                                                    IAsyncGraphMetaStore& meta, PlanContext& ctx);
 };
 
 } // namespace compute

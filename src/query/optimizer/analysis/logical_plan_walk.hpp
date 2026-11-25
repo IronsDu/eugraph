@@ -2,6 +2,7 @@
 
 #include "query/planner/bound_logical_plan.hpp"
 
+#include "query/planner/logical_plan/operator/bound_index_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include <type_traits>
 #include <utility>
@@ -34,6 +35,9 @@ template <typename OpRef, typename Visit> void forEachLogicalChild(OpRef&& op, V
                           std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
                 if (v)
                     visit(v->child);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
+                if (v)
+                    visit(v->left);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child)
                     visit(*v->child);

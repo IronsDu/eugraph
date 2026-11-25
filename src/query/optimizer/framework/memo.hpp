@@ -6,6 +6,7 @@
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/planner/bound_expression/bound_expression_fwd.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
+#include "query/planner/slot_semantics.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -312,6 +313,12 @@ public:
     void setCatalog(const catalog::Catalog* catalog) {
         catalog_ = catalog;
     }
+    void setSlotSemantics(const binder::SlotSemanticMap* semantics) {
+        slot_semantics_ = semantics;
+    }
+    const binder::SlotSemanticMap* getSlotSemantics() const {
+        return slot_semantics_;
+    }
 
     /// 逻辑规则的安全边界：写计划/pattern-comprehension 的列顺序假设尚未审计，
     /// 不允许一般 join 交换规则进入这些计划。
@@ -336,6 +343,7 @@ private:
 
     // CBO: shared catalog pointer for LogProp derivation
     const catalog::Catalog* catalog_ = nullptr;
+    const binder::SlotSemanticMap* slot_semantics_ = nullptr;
     bool commute_safe_ = false;
 };
 

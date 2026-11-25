@@ -4,6 +4,7 @@
 #include "query/planner/bound_type.hpp"
 #include "query/planner/scope_id.hpp"
 #include "query/planner/slot_id.hpp"
+#include "query/planner/slot_semantics.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -84,6 +85,21 @@ struct BindContext {
     /// Global SlotId allocator.  SlotIds survive sub-scope resets
     /// (beginSubScope) — they are query-global, not scope-local.
     SlotAllocator slot_allocator;
+
+    /// Query-global semantic view of slots. Populated by the binder so the
+    /// optimizer and EXPLAIN can resolve a BoundColumnRef slot without
+    /// re-inferring property aliases from physical-plan shapes.
+    SlotSemanticMap slot_semantics;
+    /// Binder-finalized variable-name → SlotId map (all user bindings/aliases).
+    std::unordered_map<std::string, SlotId> var_slots;
+
+    void recordSlotSemantics(const SlotSemantics& semantics) {
+        if (semantics.slot == INVALID_SLOT_ID)
+            return;
+        auto [it, inserted] = slot_semantics.emplace(semantics.slot, semantics);
+        if (!inserted && it->second.name != semantics.name)
+            it->second.kind = SlotSemanticKind::Scalar; // conflicting alias: do not claim stronger semantics
+    }
 
     /// Record a new binding in the current scope. A new binding must always
     /// carry a freshly allocated SlotId; callers must not reuse a slot across

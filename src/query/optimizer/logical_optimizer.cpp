@@ -40,6 +40,7 @@ bool hasFullObjectEnricher(const ChosenPlan& plan) {
 } // namespace
 
 void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog,
+                                const binder::SlotSemanticMap* slot_semantics,
                                 const std::unordered_map<LabelId, uint64_t>* label_vertex_counts) {
     // A LogicalOptimizer instance may be reused. Reset per-query state before
     // building a fresh search space; otherwise rules_ accumulates duplicate
@@ -61,6 +62,7 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     // Make the catalog available to LogProp derivation. Group::getLogProp
     // picks it up via Memo::getCatalog() during OInputsTask cost computation.
     memo_.setCatalog(catalog);
+    memo_.setSlotSemantics(slot_semantics);
 
     auto root_gid = memo_.copyIn(plan.root);
 
@@ -115,6 +117,7 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
 void LogicalOptimizer::initRules() {
     // Transformation rules
+    rules_.addRule(std::make_unique<GenerateIndexJoinRule>());
     rules_.addRule(std::make_unique<FilterPushdownRule>());
     rules_.addRule(std::make_unique<JoinCommuteRule>());
     rules_.addRule(std::make_unique<JoinAssociateRule>());
@@ -130,6 +133,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplCorrelatedSourceRule>());
     rules_.addRule(std::make_unique<ImplScanRule>());
     rules_.addRule(std::make_unique<ImplLabelScanRule>());
+    rules_.addRule(std::make_unique<ImplIndexJoinRule>());
     rules_.addRule(std::make_unique<ImplFilterRule>());
     rules_.addRule(std::make_unique<ImplProjectRule>());
     rules_.addRule(std::make_unique<ImplExpandRule>());

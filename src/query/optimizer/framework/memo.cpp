@@ -9,6 +9,7 @@
 #include "query/planner/bound_logical_plan.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_semi_join_op.hpp"
@@ -60,6 +61,9 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
                 // Binary/multi-input operators carry their inputs in their own
                 // fields (or several of them); a single `child` cannot be
                 // attached here.
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
+                if (val)
+                    val->left = std::move(child);
             } else {
                 // All non-leaf operators are wrapped in unique_ptr
                 // BoundCreateNodeOp has optional<BoundLogicalOperator> child,
@@ -183,6 +187,10 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                     auto c = std::move(val->child.value());
                     val->child = std::nullopt;
+                    return c;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
+                    auto c = std::move(val->left);
+                    val->left = binder::BoundScanOp{};
                     return c;
                 } else {
                     if (!val)
@@ -1095,6 +1103,22 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->variable = val->variable;
                 c->variable_column_index = val->variable_column_index;
                 c->variable_slot_id = val->variable_slot_id;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
+                auto c = std::make_unique<binder::BoundIndexJoinOp>();
+                c->source_variable = val->source_variable;
+                c->target_variable = val->target_variable;
+                c->target_label = val->target_label;
+                c->index_id = val->index_id;
+                c->index_prop = val->index_prop;
+                c->index_property_name = val->index_property_name;
+                c->equality = val->equality;
+                c->lower = val->lower;
+                c->upper = val->upper;
+                c->dynamic_key = val->dynamic_key;
+                c->dynamic_key_variable = val->dynamic_key_variable;
+                c->build_left = val->build_left;
+                c->chain = val->chain;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 auto c = std::make_unique<binder::BoundForeachOp>();

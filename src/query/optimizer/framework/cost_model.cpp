@@ -43,6 +43,16 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     case PhysicalOpTag::HashJoin:
         return Cost(input1Card() + input0Card());
 
+    // IndexJoin replaces Filter(Expand(chain)) with index seek + reverse chain
+    // + join. Local cost is deliberately lower than the forward filter so the
+    // candidate is considered; the physical lowering still validates shape and
+    // falls back when no usable index/chain exists.
+    case PhysicalOpTag::IndexJoin:
+        // Access-path replacement: its child is the source anchor, not the
+        // forward Expand chain. Keep the candidate below Filter(Expand) local
+        // cost so CBO can compare it; degree/selectivity refines this later.
+        return Cost(input0Card() * 0.001);
+
     case PhysicalOpTag::NestedLoopJoin:
     case PhysicalOpTag::CrossProduct:
         return Cost(input0Card() * input1Card());
