@@ -47,22 +47,23 @@ Physical planner
 - 删除 `tryPlan*`；
 - c6/c9/c2 结果一致，SF1 不回归。
 
-### P1（立即）— 动态 IndexJoin 的 shared-source 语义
+### P1 — 动态 IndexJoin 的 shared-source 语义（已完成）
 
-**问题**：动态 key 路径当前在 `planIndexJoin` 中复用
-`ReexecutePhysicalOp`（非 owning、`children()` 为空、隐式重复执行 source）。
-这违反了 operator 生命周期与 EXPLAIN 遍历契约，并对有状态/不可重入 source 有正确性风险。
+动态 key 路径已改为 `DynamicIndexJoinPhysicalOp`：
 
-**必须改成显式语义**：
+- source 是 owning child，只执行一次；
+- 同一次扫描同时构建 source hash table 和 distinct index keys；
+- 删除 `ReexecutePhysicalOp`；
+- EXPLAIN 直接显示 `DynamicIndexJoin` 和两个 child；
+- 当前按 `max_build_rows` 限制内存，超限明确报错。
 
-- optimizer descriptor 明确 `dynamic_key_source` 的共享/物化要求；
-- physical 层使用 owning 的 `SharedSource` / `Spool` / 单算子
-  `DynamicIndexJoin(Source, IndexStream, Join)`；
-- 禁止 physical planner 自行决定“重执行 source”；
-- 增加可重入性/生命周期测试与 EXPLAIN 可见性测试。
+详细设计与后续 spill 路线见
+[Dynamic IndexJoin 单次 Source 消费](dynamic-index-join-shared-source.md)。
 
-**触发**：P0 合并后立即处理，优先于 slot ownership 和 PE enforcer。
+**后续 P1.2**：`SpillableRowStore` → 按 join key 分区 → 磁盘 spill；
+预算按字节、成本模型计入 spill；source 仍只执行一次。
 
+### P1.1 — Slot ownership 收尾
 ### P1.1 — Slot ownership 收尾
 
 - optimizer 规则生成 Project/alias 时同步创建/继承 SlotId；
