@@ -1,16 +1,18 @@
 # LDBC SNB Interactive SF1 对照（最终版）
 
-> 最新测量：2026-11-24（eugraph，`perf/dynamic-dest-index` release，3 轮 warmup/5 轮计时，取 min）；
-> neo4j 列为 2026-11-13 同轮历史值，**本轮没有重跑 neo4j**，因此比值仅用于历史参照。
+> 最新测量：2026-11-25（eugraph + neo4j 同轮，3 轮 warmup/5 轮计时，取 min）；
+> 固定参数：`personId=933`、`person1Id=933, person2Id=1129`、`messageId=3`。
+> c13/c14 已返回有效行（1/12 行），进入正式对比；c3 出现 eugraph 0 行 / neo4j 1 行，
+> 标为 N/A，c4 两边 0 行也标 N/A。
 > eugraph 侧索引集合已与 LDBC `indices.cypher` 对齐：15 个索引全部 PUBLIC
 > （9 个 id 索引 + Country.name / Message.creationDate / Person.firstName /
 > Post.creationDate / Tag.name / TagClass.name；Message.id 为非 unique，其余 id 为 unique）；额外的 Place.id / TagClass.id
-> 索引已移除。c13/c14 本轮参数不匹配返回 0 行，标为 N/A。
+> 索引已移除。
 > 核对本机 benchmark neo4j（`/home/dodo/code/fuck/neo4j-sf1`）：15 个命名二级索引
 > + 2 个内部 LOOKUP 索引；eugraph 侧为 15 个命名索引，没有比 neo4j 多建二级索引。
 >
-> 本轮 eugraph 数据来自 `perf/dynamic-dest-index` 的 release 构建，包含动态
-> destination-index 优化；c6 已从历史 45.69 ms 降到 22.3 ms。
+> 本轮 eugraph 数据来自 `main` 的 release 构建，包含动态 destination-index 与
+> DynamicIndexJoin 单次 source 消费；c6 已从历史 45.69 ms 降到 10.2 ms。
 > - 本表是**单客户端、逐条 min** 的延迟口径：任一时刻只有 1 条查询在飞，跨调度器 hop 与
 >   并发缓存压力都不参与，因此上表相对上一轮的变化主要是**跨轮机器状态**，不归因于本轮改动。
 >   同二进制 A/B（pool vs same）在 7 条 short 上差 ≤0.05 ms（0.58–0.91 vs 0.63–0.87 ms）。
@@ -29,8 +31,7 @@
   `--wt-txn-sync none`，默认存储调度 `same`（数据操作走 compute 池，会话控制留在 IO 池）+
   默认 tcmalloc；neo4j 5.26.32，2 GB heap / 2 GB pagecache，Bolt 8688，
   auth disabled。两边均未为本轮新增二级索引。
-- 测量：2026-11-12；同机、同轮、两条查询文件；**10 轮计时 + 3 轮 warmup**，每轮两引擎各执行一次，
-  取 min。客户端为官方 Bolt driver。
+- 测量：2026-11-25；同机、同轮；**3 轮 warmup + 5 轮计时**，取 min；客户端为官方 Bolt driver。
 - 参数：complex/short 用 `personId=933`、`messageId=3`；complex-13/14 用
   `person1Id=933, person2Id=1129`；complex-1 的 `firstName` 保持文件默认 `Jose`。
 - c1 结果说明（**差异已消除**）：曾经的差异是 eugraph 旧索引的等值扫描缺少 value
@@ -54,29 +55,29 @@
 
 | 查询 | eugraph (ms) | neo4j (ms) | 状态 |
 |---|---:|---:|---|
-| complex-1 | 29.40 | 8.70 | 🟠 慢 3.38× |
-| complex-2 | 35.80 | 13.61 | 🟡 慢 2.63× |
-| complex-3 | 1527.70 | 518.33 | 🟡 慢 2.95× |
-| complex-4 | 46.50 | 14.64 | 🟠 慢 3.18× |
-| complex-5 | 2524.00 | 1186.41 | 🟡 慢 2.13× |
-| complex-6 | 22.30 | 428.36 | 🟢 快 19.21× |
-| complex-7 | 3.30 | 1.27 | 🟡 慢 2.60× |
-| complex-8 | 2.20 | 1.61 | 🟡 慢 1.37× |
-| complex-9 | 888.40 | 554.10 | 🟡 慢 1.60× |
-| complex-10 | 223.60 | 100.36 | 🟡 慢 2.23× |
-| complex-11 | 29.50 | 11.74 | 🟡 慢 2.51× |
-| complex-12 | 398.40 | 196.04 | 🟡 慢 2.03× |
-| complex-13 | 0.60 | 1.04 | ⚪ N/A（0 行） |
-| complex-14 | 1.40 | 272.90 | ⚪ N/A（0 行） |
-| short-1 | 0.80 | 0.63 | 🟡 慢 1.27× |
-| short-2 | 1.90 | 1.09 | 🟡 慢 1.74× |
-| short-3 | 0.90 | 0.54 | 🟡 慢 1.67× |
-| short-4 | 0.60 | 0.41 | 🟡 慢 1.46× |
-| short-5 | 0.60 | 0.44 | 🟡 慢 1.36× |
-| short-6 | 0.80 | 0.51 | 🟡 慢 1.57× |
-| short-7 | 0.90 | 0.52 | 🟡 慢 1.73× |
+| complex-1 | 30.30 | 15.50 | 🟡 慢 1.95× |
+| complex-2 | 34.00 | 15.70 | 🟡 慢 2.17× |
+| complex-3 | 286.90 | 509.70 | ⚪ N/A（行数不一致 0/1） |
+| complex-4 | 46.10 | 16.50 | ⚪ N/A（两边 0 行） |
+| complex-5 | 2642.60 | 1168.20 | 🟡 慢 2.26× |
+| complex-6 | 10.20 | 427.80 | 🟢 快 41.94× |
+| complex-7 | 3.30 | 2.80 | 🟡 慢 1.18× |
+| complex-8 | 2.10 | 2.90 | 🟢 快 1.38× |
+| complex-9 | 984.40 | 531.60 | 🟡 慢 1.85× |
+| complex-10 | 228.70 | 144.80 | 🟡 慢 1.58× |
+| complex-11 | 39.00 | 18.70 | 🟡 慢 2.09× |
+| complex-12 | 397.00 | 197.70 | 🟡 慢 2.01× |
+| complex-13 | 1.00 | 2.30 | 🟢 快 2.30× |
+| complex-14 | 576.40 | 308.70 | 🟡 慢 1.87× |
+| short-1 | 0.80 | 1.70 | 🟢 快 2.13× |
+| short-2 | 2.10 | 2.70 | 🟢 快 1.29× |
+| short-3 | 0.80 | 1.70 | 🟢 快 2.13× |
+| short-4 | 0.60 | 1.40 | 🟢 快 2.33× |
+| short-5 | 0.60 | 1.50 | 🟢 快 2.50× |
+| short-6 | 1.00 | 2.10 | 🟢 快 2.10× |
+| short-7 | 0.80 | 1.50 | 🟢 快 1.88× |
 
-**速度图例**（以历史 neo4j 列为参照，按 eugraph/neo4j 耗时比值；neo4j 非同轮）：
+**速度图例**（同轮 neo4j 为参照，按 eugraph/neo4j 耗时比值）：
 
 | 图标 | 含义 |
 |---|---|
@@ -86,26 +87,24 @@
 | 🔴 | neo4j 更快，慢 5–10× |
 | 🔴🔴 | neo4j 更快，慢 10× 以上 |
 
-> **2026-11-25 IndexJoin descriptor 轮次（同机冷/热稳定后，warmup 3 + iters 5）：**
-> c6 **11.90 ms**、c9 **979.20 ms**、c3 **285.20 ms**；complex 12 条合计
-> **4,604.30 ms**、short 7 条 **6.80 ms**、全部 19 条 **4,611.10 ms**。
-> 本轮 c6/c9 的访问路径由 `GenerateIndexJoinRule → BoundIndexJoinOp → planIndexJoin`
-> 决定，physical planner 不再调用 `tryPlan*`。
+> **2026-11-25 固定参数同轮测量（warmup 3 + iters 5）：**
+> c13/c14 使用 `person1Id=933, person2Id=1129`，分别返回 1/12 行，进入正式对比。
+> c6 **10.20 ms**、c13 **1.00 ms**、c14 **576.40 ms**。
 >
 > c1 的数据差异已消除（见 §1），其耗时计入下方汇总。
 
 **汇总（min 求和）：**
 
-- Complex 12 条（c13/c14 本轮 0 行，剔除）：**5,731.10 ms vs 3,035.17 ms = 1.89×**
-- Short 7 条：**6.50 ms vs 4.13 ms = 1.57×**（亚毫秒，逐条受噪声主导，见 §1 说明）
-- 全部 19 条有效样本：**5,737.60 ms vs 3,039.31 ms = 1.89×**
-- c6 从历史 45.69 ms 降到 **22.30 ms**，本轮快于历史 neo4j 列（19.21×）。
-- c9 从上一版 1763.80 ms 降到 **888.40 ms**（reverse destination-index），
-  与历史 neo4j 列 554.10 ms 的差距缩到 1.60×。
-- 合计值按逐条 min 求和，被 c5/c3/c9/c12 主导；不要把它当成 14 条的平均水平。
-
-> 注：§2.4 的并发百分位表是 2026-11-13 的历史测量，**未用 2026-11-24 的
-> 单客户端结果重算**；其中 c6 行仍是旧计划（c6 动态索引优化之前）的值。
+- Complex 可比较 12 条（剔除 c3 行数不一致、c4 两边 0 行）：
+  **4,949.00 ms vs 2,836.70 ms = 1.74×**
+- Short 7 条：**6.70 ms vs 12.60 ms = 0.53×**（eugraph 更快；亚毫秒逐条受噪声主导）
+- 全部 19 条有效样本：**4,955.70 ms vs 2,849.30 ms = 1.74×**
+- c6 从历史 45.69 ms 降到 **10.20 ms**，同轮快于 neo4j **41.94×**。
+- c9 本轮 **984.40 ms**，同轮 neo4j 531.60 ms，差距 1.85×。
+- c13/c14 不再 N/A：c13 1 行 / 1.00 ms，c14 12 行 / 576.40 ms。
+- c3 本轮 eugraph 0 行、neo4j 1 行，不计入性能比值；需单独排查
+  `messageId=3` 下的结果差异。
+- 合计值按逐条 min 求和，被 c5/c9/c14/c12 主导；不要把它当成 14 条的平均水平。
 
 ### 2.4 并发下的百分位延迟（p50 / p95 / p99，2026-11-13）
 
