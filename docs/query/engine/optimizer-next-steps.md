@@ -64,12 +64,32 @@ Physical planner
 预算按字节、成本模型计入 spill；source 仍只执行一次。
 
 ### P1.1 — Slot ownership 收尾
-### P1.1 — Slot ownership 收尾
 
 - optimizer 规则生成 Project/alias 时同步创建/继承 SlotId；
 - 删除 physical planner 的 `allocateAllSlots` backfill；
 - 明确 user slot / internal column 的分配者；
 - 增加“optimizer 后不存在未登记用户 slot”的校验。
+
+### P1.3 — IndexCondition extraction resolver
+
+**问题**：`tryExtractBoundCondition` / `resolveColumnProperty` 仍留在 physical planner，
+因为把 `BoundPropertyRef` / `BoundColumnRef` 还原为 `{label, prop_id, property_name,
+strong}` 需要 `PlanContext.extraction_info`（PEPlan 的 `prop_slot_ids` / `prop_order` /
+coalesce）。
+
+这使 range 合并/inclusive 已进入 `optimizer/analysis/index_condition`，但条件“是谁的
+property”这一步仍依赖 physical 状态。
+
+**目标**：
+
+- 提供不依赖 `PlanContext` 的 `IndexConditionResolver` 接口；
+- `BinderSlotSemanticResolver` 消费 SlotSemanticMap；
+- `PEPlanResolver` 消费 PEPlan（physical 适配器）；
+- extraction + merge + inclusive 统一进 optimizer/analysis；
+- physical planner 只把描述符实例化为 IndexScan。
+
+**验收**：c3、string/int inclusive range、c2/c6/c9 及 689 tests 通过；physical planner
+不再包含 property 反解实现。
 
 ### P2 — PE / LateMaterialize enforcer 化
 
