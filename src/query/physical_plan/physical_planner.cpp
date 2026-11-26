@@ -1,6 +1,7 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
+#include "query/optimizer/analysis/index_condition.hpp"
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/plan_analysis.hpp"
 #include "query/optimizer/analysis/property_demand.hpp"
@@ -15,6 +16,7 @@
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
+#include "query/physical_plan/operator/dynamic_index_join_physical_op.hpp"
 #include "query/physical_plan/operator/foreach_physical_op.hpp"
 #include "query/physical_plan/operator/hash_join_physical_op.hpp"
 #include "query/physical_plan/operator/index_scan_physical_op.hpp"
@@ -1859,30 +1861,32 @@ std::optional<PlanOperatorResult>
 PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                                    const std::vector<const binder::BoundBinaryOp*>& conditions, LabelId label_id,
                                    const LabelDef& label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
-    std::unordered_map<std::string, BoundIndexableCondition> prop_conditions;
+    std::unordered_map<std::string, std::vector<BoundIndexableCondition>> prop_conditions;
     for (auto* cond : conditions) {
-        auto extracted = tryExtractBoundCondition(*cond, ctx);
+        auto extracted = tryExtractNormalizedBoundCondition(*cond, ctx);
         if (extracted.has_value())
-            prop_conditions[extracted->property_name] = std::move(*extracted);
+            prop_conditions[extracted->property_name].push_back(std::move(*extracted));
     }
 
     if (prop_conditions.empty())
         return std::nullopt;
 
     using ScanMode = IndexScanPhysicalOp::ScanMode;
-    auto make_index_scan = [&](const LabelDef::IndexDef& idx, ScanMode mode, std::vector<PropertyValue> eq_values,
-                               std::optional<std::vector<PropertyValue>> range_start,
-                               std::optional<std::vector<PropertyValue>> range_end,
-                               std::vector<binder::BoundType> output_types,
-                               size_t prefix_col = 0) -> std::unique_ptr<IndexScanPhysicalOp> {
+    auto make_index_scan =
+        [&](const LabelDef::IndexDef& idx, ScanMode mode, std::vector<PropertyValue> eq_values,
+            std::optional<std::vector<PropertyValue>> range_start, std::optional<std::vector<PropertyValue>> range_end,
+            std::vector<binder::BoundType> output_types, size_t prefix_col = 0, bool range_start_inclusive = false,
+            bool range_end_inclusive = false) -> std::unique_ptr<IndexScanPhysicalOp> {
         if (idx.index_id != 0) {
             return std::make_unique<IndexScanPhysicalOp>(
                 scan_op.variable, idx.index_id, idx.prop_ids, mode, std::move(eq_values), std::move(range_start),
-                std::move(range_end), std::move(output_types), store, ctx.schema, prefix_col);
+                std::move(range_end), std::move(output_types), store, ctx.schema, prefix_col, range_start_inclusive,
+                range_end_inclusive);
         }
         return std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, mode,
                                                      std::move(eq_values), std::move(range_start), std::move(range_end),
-                                                     std::move(output_types), store, ctx.schema, prefix_col);
+                                                     std::move(output_types), store, ctx.schema, prefix_col,
+                                                     range_start_inclusive, range_end_inclusive);
     };
 
     for (const auto& idx : label_def.indexes) {
@@ -1895,6 +1899,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         std::vector<PropertyValue> eq_values;
         std::optional<PropertyValue> range_start;
         std::optional<PropertyValue> range_end;
+        bool range_start_inclusive = false;
+        bool range_end_inclusive = false;
 
         // Accessor path. Conditions are matched by property name; strong
         // accessors additionally require the source label match.
@@ -1903,7 +1909,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             auto it = prop_conditions.find(acc.property_name);
             if (it == prop_conditions.end())
                 break;
-            auto& cond = it->second;
+            const auto& conds = it->second;
+            const auto& cond = conds.front();
             // Index and access must use the SAME view: a strong index only sees
             // the source label's column, a weak index sees every source. Mixing
             // them would return false positives (weak index answering a strong
@@ -1951,20 +1958,41 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                     break;
                 }
             } else {
-                if (cond.op == cypher::BinaryOperator::EQ) {
-                    eq_values.push_back(std::move(cond.value));
+                // Multiple conjuncts on the same indexed property (e.g.
+                // `x.date >= lo AND x.date < hi`) must be merged. Keeping one
+                // map entry per property silently dropped the other bound and
+                // turned a bounded range into `(-inf, hi)` or `[lo, +inf)`.
+                optimizer::IndexRange bounds;
+                bool has_eq = false;
+                bool has_prefix = false;
+                for (const auto& c : conds) {
+                    if (c.op == cypher::BinaryOperator::EQ) {
+                        eq_values.push_back(c.value);
+                        has_eq = true;
+                    } else if (c.op == cypher::BinaryOperator::STARTS_WITH &&
+                               std::holds_alternative<std::string>(c.value)) {
+                        eq_values.push_back(c.value);
+                        has_prefix = true;
+                    } else if (c.op == cypher::BinaryOperator::GT || c.op == cypher::BinaryOperator::GTE) {
+                        optimizer::mergeIndexLower(bounds, c.value, c.op == cypher::BinaryOperator::GTE);
+                    } else if (c.op == cypher::BinaryOperator::LT || c.op == cypher::BinaryOperator::LTE) {
+                        optimizer::mergeIndexUpper(bounds, c.value, c.op == cypher::BinaryOperator::LTE);
+                    }
+                }
+                if (has_eq) {
                     match_count++;
-                } else if (cond.op == cypher::BinaryOperator::STARTS_WITH &&
-                           std::holds_alternative<std::string>(cond.value)) {
-                    eq_values.push_back(std::move(cond.value));
+                } else if (has_prefix) {
                     last_is_prefix = true;
                     match_count++;
-                } else if (cond.op == cypher::BinaryOperator::GT || cond.op == cypher::BinaryOperator::GTE) {
-                    range_start = std::move(cond.value);
-                    last_is_range = true;
-                    match_count++;
-                } else if (cond.op == cypher::BinaryOperator::LT || cond.op == cypher::BinaryOperator::LTE) {
-                    range_end = std::move(cond.value);
+                } else if (bounds.lower || bounds.upper) {
+                    if (bounds.lower) {
+                        range_start = std::move(bounds.lower->value);
+                        range_start_inclusive = bounds.lower->inclusive;
+                    }
+                    if (bounds.upper) {
+                        range_end = std::move(bounds.upper->value);
+                        range_end_inclusive = bounds.upper->inclusive;
+                    }
                     last_is_range = true;
                     match_count++;
                 } else {
@@ -2025,7 +2053,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 composite_end = std::move(end_vec);
             }
             result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::RANGE, std::vector<PropertyValue>{},
-                                     std::move(composite_start), std::move(composite_end), std::move(output_types));
+                                     std::move(composite_start), std::move(composite_end), std::move(output_types), 0,
+                                     range_start_inclusive, range_end_inclusive);
         }
 
         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
@@ -2041,7 +2070,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
     EdgeLabelId label_id, const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
     std::unordered_map<uint16_t, BoundIndexableCondition> prop_conditions;
     for (auto* cond : conditions) {
-        auto extracted = tryExtractBoundCondition(*cond, ctx);
+        auto extracted = tryExtractNormalizedBoundCondition(*cond, ctx);
         if (extracted.has_value())
             prop_conditions[extracted->prop_id] = std::move(*extracted);
     }
@@ -2829,39 +2858,6 @@ namespace {
 /// Non-owning replay of an already planned read subtree. Used to derive a
 /// distinct correlation-key stream without cloning binder expressions (the
 /// binder clone intentionally drops children and cannot be replanned safely).
-class ReexecutePhysicalOp final : public PhysicalOperator {
-public:
-    ReexecutePhysicalOp(PhysicalOperator* child, Schema schema, std::vector<binder::BoundType> types) : child_(child) {
-        setOutputSchema(std::move(schema), std::move(types));
-    }
-    folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
-        return child_->executeChunk();
-    }
-    std::string toString() const override {
-        return "ReexecuteSource";
-    }
-    void explain(ExplainNode& node, const ExplainContext&) const override {
-        node.operator_name = "ReexecuteSource";
-        node.details.push_back("reason=dynamic-index-key");
-        node.details.push_back("source=non-owning");
-        if (child_ != nullptr) {
-            std::string schema;
-            for (const auto& name : child_->outputSchema())
-                schema += (schema.empty() ? "" : ", ") + explainVariableName(name);
-            if (!schema.empty())
-                node.details.push_back("sourceColumns=[" + schema + "]");
-        }
-    }
-    std::vector<const PhysicalOperator*> children() const override {
-        return {};
-    }
-    bool mayHaveSideEffects() const override {
-        return false;
-    }
-
-private:
-    PhysicalOperator* child_;
-};
 } // namespace
 
 std::optional<PlanOperatorResult>
@@ -3896,7 +3892,7 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
     int lk = findColumn(lr.output_schema, ij.source_variable);
     if (lk < 0)
         return "IndexJoin: source missing";
-    std::string alias = "__index_join_src";
+    std::string alias = "index_join_source";
     while (findColumn(lr.output_schema, alias) >= 0)
         alias += "_";
     auto rd = [](cypher::RelationshipDirection d) {
@@ -3906,33 +3902,25 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
             return cypher::RelationshipDirection::LEFT_TO_RIGHT;
         return cypher::RelationshipDirection::UNDIRECTED;
     };
+
     std::unique_ptr<PhysicalOperator> rev;
     Schema rs{ij.target_variable};
     std::vector<binder::BoundType> rt{binder::BoundType::VertexRef()};
+    IndexScanValuesPhysicalOp* dynamic_scan = nullptr;
+    uint32_t dynamic_key_col = 0;
+
     if (ij.dynamic_key) {
         int kc = findColumn(lr.output_schema, ij.dynamic_key_variable);
-        if (kc < 0 || size_t(kc) >= lr.output_types.size())
+        if (kc < 0 || static_cast<size_t>(kc) >= lr.output_types.size())
             return "IndexJoin: key missing";
-        auto src = std::make_unique<ReexecutePhysicalOp>(lr.op.get(), lr.output_schema, lr.output_types);
-        std::vector<ProjectPhysicalOp::ProjectItem> items;
-        items.push_back({binder::BoundExpression{
-                             binder::BoundColumnRef{uint32_t(kc), lr.output_types[kc], ij.dynamic_key_variable}},
-                         ij.dynamic_key_variable});
-        auto proj = std::make_unique<ProjectPhysicalOp>(std::move(items), lr.output_schema, std::move(src));
-        proj->compileExpressions(makeSlotLayout(lr.output_schema, ctx));
-        Schema ks{ij.dynamic_key_variable};
-        std::vector<binder::BoundType> kt{lr.output_types[kc]};
-        proj->setOutputSchema(ks, kt);
-        proj->setSlotLayout(makeSlotLayout(ks, ctx));
-        auto key = std::make_unique<DistinctPhysicalOp>(std::move(proj));
-        key->setOutputSchema(ks, kt);
-        key->setSlotLayout(makeSlotLayout(ks, ctx));
+        dynamic_key_col = static_cast<uint32_t>(kc);
+
         auto scan = std::make_unique<IndexScanValuesPhysicalOp>(
             ij.target_variable, ij.index_id, store, std::vector<binder::BoundType>{binder::BoundType::VertexRef()},
             Schema{ij.target_variable});
         scan->setOutputSchema(Schema{ij.target_variable},
                               std::vector<binder::BoundType>{binder::BoundType::VertexRef()});
-        auto* sink = scan.get();
+        dynamic_scan = scan.get();
         std::unique_ptr<PhysicalOperator> ch = std::move(scan);
         Schema cs{ij.target_variable};
         std::vector<binder::BoundType> ct{binder::BoundType::VertexRef()};
@@ -3957,17 +3945,9 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
             cv = std::move(nx);
         }
         ch->setOutputSchema(cs, ct);
-        Schema as = ks;
-        as.insert(as.end(), cs.begin(), cs.end());
-        auto at = kt;
-        at.insert(at.end(), ct.begin(), ct.end());
-        auto ap =
-            std::make_unique<ApplyPhysicalOp>(std::move(key), std::move(ch), nullptr, std::vector<uint32_t>{0}, ct);
-        ap->setValueSink(sink, true);
-        ap->setOutputSchema(as, at);
-        rev = std::move(ap);
-        rs = std::move(as);
-        rt = std::move(at);
+        rev = std::move(ch);
+        rs = std::move(cs);
+        rt = std::move(ct);
     } else {
         auto mode = ij.equality ? IndexScanPhysicalOp::ScanMode::EQUALITY : IndexScanPhysicalOp::ScanMode::RANGE;
         std::vector<PropertyValue> eq;
@@ -3980,7 +3960,8 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
             hi = std::vector<PropertyValue>{*ij.upper};
         auto scan = std::make_unique<IndexScanPhysicalOp>(
             ij.target_variable, ij.index_id, std::vector<uint16_t>{ij.index_prop}, mode, std::move(eq), lo, hi,
-            std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.schema);
+            std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.schema, 0, ij.lower_inclusive,
+            ij.upper_inclusive);
         scan->setOutputSchema(Schema{ij.target_variable},
                               std::vector<binder::BoundType>{binder::BoundType::VertexRef()});
         std::unique_ptr<PhysicalOperator> ch = std::move(scan);
@@ -4011,6 +3992,7 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
         rs = std::move(cs);
         rt = std::move(ct);
     }
+
     int rk = findColumn(rs, alias);
     if (rk < 0)
         return "IndexJoin: reverse key missing";
@@ -4020,9 +4002,22 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
     jt.insert(jt.end(), rt.begin(), rt.end());
     TupleSlotLayout lay = lr.slot_layout;
     lay.merge(makeSlotLayout(rs, ctx));
+
+    if (ij.dynamic_key) {
+        auto op = std::make_unique<DynamicIndexJoinPhysicalOp>(
+            std::move(lr.op), std::move(rev), dynamic_scan, static_cast<uint32_t>(lk), dynamic_key_col,
+            static_cast<uint32_t>(rk), lr.output_schema, rs, std::vector<binder::BoundType>(jt), js,
+            hashJoinMaxBuildRows());
+        op->setEvalContext(ctx.eval_ctx);
+        op->setSlotLayout(lay);
+        auto result = PlanOperatorResult{std::move(op), std::move(js), std::move(jt), std::move(lay)};
+        return dispatchProjectionExtract(std::move(result), store, ctx);
+    }
+
     auto join = std::make_unique<HashJoinPhysicalOp>(
-        std::move(lr.op), std::move(rev), std::vector<uint32_t>{uint32_t(lk)}, std::vector<uint32_t>{uint32_t(rk)},
-        std::vector<binder::BoundType>(jt), js, ij.build_left, hashJoinMaxBuildRows());
+        std::move(lr.op), std::move(rev), std::vector<uint32_t>{static_cast<uint32_t>(lk)},
+        std::vector<uint32_t>{static_cast<uint32_t>(rk)}, std::vector<binder::BoundType>(jt), js, ij.build_left,
+        hashJoinMaxBuildRows());
     join->setEvalContext(ctx.eval_ctx);
     auto result = PlanOperatorResult{std::move(join), std::move(js), std::move(jt), std::move(lay)};
     return dispatchProjectionExtract(std::move(result), store, ctx);

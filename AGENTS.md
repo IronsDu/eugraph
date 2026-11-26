@@ -183,6 +183,22 @@ ASan 构建低并行（如 `-j 2`）；同一服务端重复执行时做好库�
 - 禁止为了“顺手”升级依赖、切换子模块、批量格式化无关文件；禁止删除/弱化/绕过测试；
 - 需求不明确、与文档冲突、涉及兼容性行为变更时：停止并询问，不要猜测。
 
+### 5.1.1 模块职责归属（强制）
+
+新增/修改代码必须放在职责匹配的模块，不得为了省事塞进“最近的文件”或跨层 helper：
+
+- parser：语法/AST；
+- binder：名称/类型/语义身份、WHERE 结构规范化；
+- optimizer/analysis：可复用的计划分析（IndexCondition、selectivity、requirements、slot 语义）；
+- optimizer/rules：候选与计划选择；
+- physical_plan：只做 ChosenPlan/descriptor → 可执行算子的 lowering、布局与表达式编译；
+- storage：KV/index 编码与 cursor 语义；
+- explain：只读展示。
+
+判断标准与反例见 [模块职责与代码归属](docs/query/engine/module-responsibilities.md)。
+
+如果现有模块边界本身不合理、导致不知道新代码该放哪里，**先询问开发者是否调整模块**，不要自行跨层放置或新增“临时 helper”。
+
 ### 5.2 缺陷排查纪律
 
 - **先定判据再动手**：写下“什么结果能证明假设错”，判据必须能区分正确与错误；

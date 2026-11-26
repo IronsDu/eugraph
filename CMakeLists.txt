@@ -327,6 +327,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/distinct_physical_op.cpp
     src/query/physical_plan/operator/expand_physical_op.cpp
     src/query/physical_plan/operator/filter_physical_op.cpp
+    src/query/physical_plan/operator/dynamic_index_join_physical_op.cpp
     src/query/physical_plan/operator/hash_join_physical_op.cpp
     src/query/physical_plan/operator/index_scan_physical_op.cpp
     src/query/physical_plan/operator/label_scan_physical_op.cpp
@@ -366,6 +367,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/framework/physical_expr.cpp
     src/query/optimizer/framework/operator_hash.cpp
     src/query/optimizer/framework/operator_eq.cpp
+    src/query/optimizer/analysis/index_condition.cpp
     src/query/optimizer/analysis/requirement_collector.cpp
     src/query/optimizer/analysis/property_demand.cpp
     src/query/optimizer/analysis/plan_analysis.cpp

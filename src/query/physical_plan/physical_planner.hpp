@@ -181,6 +181,10 @@ public:
                                                                             PlanContext& ctx);
 
 private:
+    /// Lowers a rule-produced IndexJoin descriptor. Dynamic-key candidates become
+    /// DynamicIndexJoinPhysicalOp: the source child is consumed exactly once,
+    /// building the join payload and collecting distinct index keys in the same
+    /// pass. The source is never re-executed and is a normal owned child.
     std::variant<PlanOperatorResult, std::string> planIndexJoin(binder::BoundIndexJoinOp& index_join,
                                                                 IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                                                                 PlanContext& ctx, Schema input_schema,

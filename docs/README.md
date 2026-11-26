@@ -124,7 +124,9 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [Storage 操作成本](benchmark/storage-operation-costs.md) | WT `search`/`search_near` 与 IO dispatch 的单次成本、语句级计数与归因方法 |
 | [Value 拷贝审计](query/engine/value-copy-audit.md) | 查询热路径中不必要的 Value 物化、统一 cell 访问入口、仍必须拥有的拷贝清单与后续候选 |
 | [Aggregate typed execution 设计](query/engine/aggregate-typed-execution-design.md) | 聚合参数 chunk 级 typed 列视图、函数指针回调、null/count(*)/DISTINCT 不变量与 DuckDB 对照 |
+| [模块职责与代码归属](query/engine/module-responsibilities.md) | parser/binder/optimizer/physical/storage/explain 的职责边界、判断问题与近期反例 |
 | [Optimizer 架构与 Columbia 迁移](query/engine/optimizer-architecture.md) | binder/analysis/passes/rules/extraction/framework 分层、规则扩展点、Columbia 已迁移项与剩余缺口 |
+| [Dynamic IndexJoin 单次 Source 消费](query/engine/dynamic-index-join-shared-source.md) | 动态 key 路径从 ReexecuteSource 改为单算子一次消费；含内存预算与后续磁盘 spill 路线 |
 | [EXPLAIN 语义元信息](query/engine/explain-semantic-metadata.md) | SlotSemantics + PEPlan + Catalog 驱动的 EXPLAIN 渲染、LDBC 前后对比、回退与扩展方式 |
 | [Optimizer / Access Path 后续规划](query/engine/optimizer-next-steps.md) | IndexJoin descriptor、slot ownership、PE enforcer、degree/selectivity、c3 与 EXPLAIN 语义化的统一优先级队列 |
 | [PatternComprehensionApply batching](query/engine/pattern-comprehension-batching.md) | 相关子计划按 batch key 分组、一次执行并分发列表；c10 sf0.1 41→20ms，existence-only 回退逐行 |

@@ -257,10 +257,13 @@ public:
                                        std::vector<VertexId>& out) = 0;
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
-                             const std::optional<PropertyValue>& end, std::vector<VertexId>& out) = 0;
-    virtual folly::coro::AsyncGenerator<std::span<const VertexId>> scanVerticesByIndexRangeComposite(
-        LabelId label_id, const std::vector<uint16_t>& prop_ids, const std::optional<std::vector<PropertyValue>>& start,
-        const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out) = 0;
+                             const std::optional<PropertyValue>& end, std::vector<VertexId>& out,
+                             bool start_inclusive = false, bool end_inclusive = false) = 0;
+    virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                      const std::optional<std::vector<PropertyValue>>& start,
+                                      const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out,
+                                      bool start_inclusive = false, bool end_inclusive = false) = 0;
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values, std::vector<VertexId>& out) = 0;
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
@@ -274,7 +277,8 @@ public:
     lookupVertexByPrimaryKey(uint32_t index_id, const std::vector<PropertyValue>& values) = 0;
     virtual folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
-                               const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out) = 0;
+                               const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out,
+                               bool start_inclusive = false, bool end_inclusive = false) = 0;
 
     // Edge Index Scan
     virtual folly::coro::AsyncGenerator<std::span<const EdgeIndexScanEntry>>

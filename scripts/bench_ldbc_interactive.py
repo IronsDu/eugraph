@@ -90,6 +90,10 @@ def main() -> int:
     ap.add_argument("--user", default=None)
     ap.add_argument("--password", default=None)
     ap.add_argument("--person-id", type=int, default=933)
+    ap.add_argument("--person1-id", type=int, default=933,
+                    help="c13/c14 path endpoint 1; fixed alongside personId")
+    ap.add_argument("--person2-id", type=int, default=1129,
+                    help="c13/c14 path endpoint 2; fixed alongside personId")
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--iters", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=60.0, help="per-execution timeout in seconds")
@@ -126,6 +130,10 @@ def main() -> int:
         params = parse_params(text)
         if "personId" in params:
             params["personId"] = args.person_id
+        if "person1Id" in params:
+            params["person1Id"] = args.person1_id
+        if "person2Id" in params:
+            params["person2Id"] = args.person2_id
         for key, value in (overrides or {}).items():
             if key in params:
                 params[key] = value

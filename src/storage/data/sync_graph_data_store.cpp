@@ -2841,18 +2841,21 @@ SyncGraphDataStore::createIndexPrefixCursor(GraphSession& gs, const std::string&
                                                  IndexScanCursorImpl::Spec{prefix, {}, false, /*prefix_mode=*/true});
 }
 
-std::unique_ptr<ISyncGraphDataStore::IIndexScanCursor>
-SyncGraphDataStore::createIndexRangeCursor(GraphSession& gs, const std::string& table,
-                                           const std::optional<PropertyValue>& start,
-                                           const std::optional<PropertyValue>& end) {
+std::unique_ptr<ISyncGraphDataStore::IIndexScanCursor> SyncGraphDataStore::createIndexRangeCursor(
+    GraphSession& gs, const std::string& table, const std::optional<PropertyValue>& start,
+    const std::optional<PropertyValue>& end, bool start_inclusive, bool end_inclusive) {
     std::string start_encoded;
     if (start.has_value()) {
         start_encoded = IndexKeyCodec::encodeSortableValue(*start);
-        start_encoded.append(8, '\xFF');
+        if (!start_inclusive)
+            start_encoded.append(8, '\xFF');
     }
     std::string end_encoded;
-    if (end.has_value())
+    if (end.has_value()) {
         end_encoded = IndexKeyCodec::encodeSortableValue(*end);
+        if (end_inclusive)
+            end_encoded.append(8, '\xFF');
+    }
 
     CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
@@ -2863,21 +2866,24 @@ SyncGraphDataStore::createIndexRangeCursor(GraphSession& gs, const std::string& 
     return std::make_unique<IndexScanCursorImpl>(
         gs, std::move(cursor),
         IndexScanCursorImpl::Spec{std::move(start_encoded), std::move(end_encoded),
-                                  /*exclusive_start=*/true, /*prefix_mode=*/false});
+                                  /*exclusive_start=*/!start_inclusive, /*prefix_mode=*/false});
 }
 
-std::unique_ptr<ISyncGraphDataStore::IIndexScanCursor>
-SyncGraphDataStore::createIndexRangeCursor(GraphSession& gs, const std::string& table,
-                                           const std::optional<std::vector<PropertyValue>>& start,
-                                           const std::optional<std::vector<PropertyValue>>& end) {
+std::unique_ptr<ISyncGraphDataStore::IIndexScanCursor> SyncGraphDataStore::createIndexRangeCursor(
+    GraphSession& gs, const std::string& table, const std::optional<std::vector<PropertyValue>>& start,
+    const std::optional<std::vector<PropertyValue>>& end, bool start_inclusive, bool end_inclusive) {
     std::string start_encoded;
     if (start.has_value()) {
         start_encoded = IndexKeyCodec::encodeSortableValues(*start);
-        start_encoded.append(8, '\xFF');
+        if (!start_inclusive)
+            start_encoded.append(8, '\xFF');
     }
     std::string end_encoded;
-    if (end.has_value())
+    if (end.has_value()) {
         end_encoded = IndexKeyCodec::encodeSortableValues(*end);
+        if (end_inclusive)
+            end_encoded.append(8, '\xFF');
+    }
 
     CursorHandle cursor = gs.acquire_scan_cursor(table);
     if (!cursor) {
@@ -2888,7 +2894,7 @@ SyncGraphDataStore::createIndexRangeCursor(GraphSession& gs, const std::string& 
     return std::make_unique<IndexScanCursorImpl>(
         gs, std::move(cursor),
         IndexScanCursorImpl::Spec{std::move(start_encoded), std::move(end_encoded),
-                                  /*exclusive_start=*/true, /*prefix_mode=*/false});
+                                  /*exclusive_start=*/!start_inclusive, /*prefix_mode=*/false});
 }
 
 } // namespace eugraph

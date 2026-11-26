@@ -47,21 +47,21 @@ Physical planner
 - 删除 `tryPlan*`；
 - c6/c9/c2 结果一致，SF1 不回归。
 
-### P1（立即）— 动态 IndexJoin 的 shared-source 语义
+### P1 — 动态 IndexJoin 的 shared-source 语义（已完成）
 
-**问题**：动态 key 路径当前在 `planIndexJoin` 中复用
-`ReexecutePhysicalOp`（非 owning、`children()` 为空、隐式重复执行 source）。
-这违反了 operator 生命周期与 EXPLAIN 遍历契约，并对有状态/不可重入 source 有正确性风险。
+动态 key 路径已改为 `DynamicIndexJoinPhysicalOp`：
 
-**必须改成显式语义**：
+- source 是 owning child，只执行一次；
+- 同一次扫描同时构建 source hash table 和 distinct index keys；
+- 删除 `ReexecutePhysicalOp`；
+- EXPLAIN 直接显示 `DynamicIndexJoin` 和两个 child；
+- 当前按 `max_build_rows` 限制内存，超限明确报错。
 
-- optimizer descriptor 明确 `dynamic_key_source` 的共享/物化要求；
-- physical 层使用 owning 的 `SharedSource` / `Spool` / 单算子
-  `DynamicIndexJoin(Source, IndexStream, Join)`；
-- 禁止 physical planner 自行决定“重执行 source”；
-- 增加可重入性/生命周期测试与 EXPLAIN 可见性测试。
+详细设计与后续 spill 路线见
+[Dynamic IndexJoin 单次 Source 消费](dynamic-index-join-shared-source.md)。
 
-**触发**：P0 合并后立即处理，优先于 slot ownership 和 PE enforcer。
+**后续 P1.2**：`SpillableRowStore` → 按 join key 分区 → 磁盘 spill；
+预算按字节、成本模型计入 spill；source 仍只执行一次。
 
 ### P1.1 — Slot ownership 收尾
 
@@ -69,6 +69,47 @@ Physical planner
 - 删除 physical planner 的 `allocateAllSlots` backfill；
 - 明确 user slot / internal column 的分配者；
 - 增加“optimizer 后不存在未登记用户 slot”的校验。
+
+### P1.3 — IndexCondition extraction resolver
+
+**问题**：`tryExtractBoundCondition` / `resolveColumnProperty` 仍留在 physical planner，
+因为把 `BoundPropertyRef` / `BoundColumnRef` 还原为 `{label, prop_id, property_name,
+strong}` 需要 `PlanContext.extraction_info`（PEPlan 的 `prop_slot_ids` / `prop_order` /
+coalesce）。
+
+这使 range 合并/inclusive 已进入 `optimizer/analysis/index_condition`，但条件“是谁的
+property”这一步仍依赖 physical 状态。
+
+**目标**：
+
+- 提供不依赖 `PlanContext` 的 `IndexConditionResolver` 接口；
+- `BinderSlotSemanticResolver` 消费 SlotSemanticMap；
+- `PEPlanResolver` 消费 PEPlan（physical 适配器）；
+- extraction + merge + inclusive 统一进 optimizer/analysis；
+- physical planner 只把描述符实例化为 IndexScan。
+
+**验收**：c3、string/int inclusive range、c2/c6/c9 及 689 tests 通过；physical planner
+不再包含 property 反解实现。
+
+### P1.4 — 普通 IndexScan access path 迁入 optimizer
+
+**问题**：`Filter(LabelScan) → IndexScan` 仍在 physical planner 的
+`tryBoundIndexScan` 中完成。CBO 选择的是 `Filter(LabelScan)`，physical planner
+之后读 `PlanContext.extraction_info`、catalog，单方面改成 IndexScan；CBO
+没有比较过 `LabelScan+Filter` vs `IndexScan` 的成本，也没有看到最终 access path。
+
+**目标**：
+
+- 新增 `GenerateIndexScanRule` / `BoundIndexScanOp` descriptor：
+  label、index_id、accessors、eq/lower/upper、inclusive、residual；
+- CBO 规则使用 `IndexCondition` 和统计/选择性，比较 LabelScan 与 IndexScan；
+- `ImplIndexScanRule` 输出 `PhysicalOpTag::IndexScan`；
+- physical planner 只实例化 descriptor；
+- 删除 `tryBoundIndexScan` 及 `PlanContext.extraction_info` 条件反解；
+- RBO fallback 也要走同一个 optimizer access-path pass，而不是 physical 决策。
+
+**验收**：c3、inclusive int/string、c2/c6/c9、689 tests；physical planner 不再查
+catalog 选索引。
 
 ### P2 — PE / LateMaterialize enforcer 化
 

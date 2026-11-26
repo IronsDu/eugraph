@@ -12,9 +12,11 @@ namespace compute {
 IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                                          PropertyValue search_value, std::optional<PropertyValue> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col)
+                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col,
+                                         bool range_start_inclusive, bool range_end_inclusive)
     : variable_(std::move(variable)), label_id_(label_id), prop_ids_({prop_id}), mode_(mode), eq_values_(),
       prefix_col_(prefix_col), range_start_(std::nullopt), range_end_(std::nullopt),
+      range_start_inclusive_(range_start_inclusive), range_end_inclusive_(range_end_inclusive),
       output_types_(std::move(output_types)), store_(store), schema_(std::move(schema)) {
     if (mode == ScanMode::EQUALITY) {
         eq_values_.push_back(std::move(search_value));
@@ -31,10 +33,12 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id,
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col)
+                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col,
+                                         bool range_start_inclusive, bool range_end_inclusive)
     : variable_(std::move(variable)), label_id_(label_id), index_id_(0), prop_ids_(std::move(prop_ids)), mode_(mode),
       eq_values_(std::move(eq_values)), prefix_col_(prefix_col), range_start_(std::move(range_start)),
-      range_end_(std::move(range_end)), output_types_(std::move(output_types)), store_(store),
+      range_end_(std::move(range_end)), range_start_inclusive_(range_start_inclusive),
+      range_end_inclusive_(range_end_inclusive), output_types_(std::move(output_types)), store_(store),
       schema_(std::move(schema)) {}
 
 // Index-id based composite constructor
@@ -43,10 +47,12 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, uint32_t index_id
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col)
+                                         std::shared_ptr<const GraphSchema> schema, size_t prefix_col,
+                                         bool range_start_inclusive, bool range_end_inclusive)
     : variable_(std::move(variable)), label_id_(INVALID_LABEL_ID), index_id_(index_id), prop_ids_(std::move(prop_ids)),
       mode_(mode), eq_values_(std::move(eq_values)), prefix_col_(prefix_col), range_start_(std::move(range_start)),
-      range_end_(std::move(range_end)), output_types_(std::move(output_types)), store_(store),
+      range_end_(std::move(range_end)), range_start_inclusive_(range_start_inclusive),
+      range_end_inclusive_(range_end_inclusive), output_types_(std::move(output_types)), store_(store),
       schema_(std::move(schema)) {}
 
 folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
@@ -66,7 +72,8 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
         } else if (mode_ == ScanMode::PREFIX) {
             gen = cancellable(store_.scanVerticesByIndexIdPrefix(index_id_, eq_values_, prefix_col_, scan_batch));
         } else {
-            gen = cancellable(store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_, scan_batch));
+            gen = cancellable(store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_, scan_batch,
+                                                                range_start_inclusive_, range_end_inclusive_));
         }
     } else if (mode_ == ScanMode::EQUALITY) {
         if (prop_ids_.size() == 1) {
@@ -89,10 +96,12 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
                 start = (*range_start_)[0];
             if (range_end_.has_value())
                 end = (*range_end_)[0];
-            gen = cancellable(store_.scanVerticesByIndexRange(label_id_, prop_ids_[0], start, end, scan_batch));
+            gen = cancellable(store_.scanVerticesByIndexRange(label_id_, prop_ids_[0], start, end, scan_batch,
+                                                              range_start_inclusive_, range_end_inclusive_));
         } else {
-            gen = cancellable(
-                store_.scanVerticesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_, scan_batch));
+            gen = cancellable(store_.scanVerticesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_,
+                                                                       scan_batch, range_start_inclusive_,
+                                                                       range_end_inclusive_));
         }
     }
 

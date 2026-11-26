@@ -332,11 +332,14 @@ public:
     /// range：start 为**排他**下界、end 为排他上界（与既有 scanIndexRange 语义一致）✓
     virtual std::unique_ptr<IIndexScanCursor> createIndexRangeCursor(GraphSession& session, const std::string& table,
                                                                      const std::optional<PropertyValue>& start,
-                                                                     const std::optional<PropertyValue>& end) = 0;
+                                                                     const std::optional<PropertyValue>& end,
+                                                                     bool start_inclusive = false,
+                                                                     bool end_inclusive = false) = 0;
     virtual std::unique_ptr<IIndexScanCursor>
     createIndexRangeCursor(GraphSession& session, const std::string& table,
                            const std::optional<std::vector<PropertyValue>>& start,
-                           const std::optional<std::vector<PropertyValue>>& end) = 0;
+                           const std::optional<std::vector<PropertyValue>>& end, bool start_inclusive = false,
+                           bool end_inclusive = false) = 0;
 
     // Index scan that also returns the stored value (for edge indexes with adjacency info)
     virtual void scanIndexEqualityWithValue(GraphSession& session, const std::string& table, const PropertyValue& value,

@@ -12190,6 +12190,33 @@ TEST_F(QueryExecutorTest, ReverseDestinationChainUsesTargetIndex) {
     EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
 }
 
+TEST_F(QueryExecutorTest, ChainedComparisonKeepsBothRangeBounds) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_chained_age FOR (n:Person) ON (n.age)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'ten', age:10}), (b:Person {name:'twenty', age:20}), "
+                                     "(c:Person {name:'thirty', age:30})")
+                    .error.empty());
+    const std::string query = "MATCH (n:Person) WHERE 25 > n.age >= 10 RETURN n.name AS name";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto plan = getExplainPlanText(*executor_, query);
+    ASSERT_EQ(result.rows.size(), 2u) << plan;
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "ten");
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "twenty");
+    EXPECT_NE(plan.find("mode=range"), std::string::npos) << plan;
+}
+
+TEST_F(QueryExecutorTest, ChainedComparisonStringBoundsAreInclusive) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_name_bounds FOR (n:Person) ON (n.name)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'a'}), (b:Person {name:'b'}), (c:Person {name:'c'})")
+                    .error.empty());
+    const std::string query = "MATCH (n:Person) WHERE 'b' >= n.name >= 'a' RETURN n.name AS name ORDER BY name";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "a");
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "b");
+}
+
 TEST_F(QueryExecutorTest, ReverseDestinationChainRangeUsesTargetIndex) {
     ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_chain_age FOR (n:Person) ON (n.age)").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE (a1:Person {name:'young-src'}), (b1:Person {name:'young', age:10}), "

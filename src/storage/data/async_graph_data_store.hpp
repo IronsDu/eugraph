@@ -650,23 +650,32 @@ public:
 
     folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
-                             const std::optional<PropertyValue>& end, std::vector<VertexId>& out) override {
+                             const std::optional<PropertyValue>& end, std::vector<VertexId>& out,
+                             bool start_inclusive = false, bool end_inclusive = false) override {
         std::string table = vidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
         return scanIndexCursor<VertexId>(
-            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out,
+            [this, table, s, e, start_inclusive, end_inclusive]() {
+                return store_.createIndexRangeCursor(session_, table, s, e, start_inclusive, end_inclusive);
+            },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
-    folly::coro::AsyncGenerator<std::span<const VertexId>> scanVerticesByIndexRangeComposite(
-        LabelId label_id, const std::vector<uint16_t>& prop_ids, const std::optional<std::vector<PropertyValue>>& start,
-        const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out) override {
+    folly::coro::AsyncGenerator<std::span<const VertexId>>
+    scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                      const std::optional<std::vector<PropertyValue>>& start,
+                                      const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out,
+                                      bool start_inclusive = false, bool end_inclusive = false) override {
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
         return scanIndexCursor<VertexId>(
-            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out,
+            [this, table, s, e, start_inclusive, end_inclusive]() {
+                return store_.createIndexRangeCursor(session_, table, s, e, start_inclusive, end_inclusive);
+            },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 
@@ -724,13 +733,16 @@ public:
 
     folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
-                               const std::optional<std::vector<PropertyValue>>& end,
-                               std::vector<VertexId>& out) override {
+                               const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out,
+                               bool start_inclusive, bool end_inclusive) override {
         std::string table = vidxTableById(index_id);
         auto s = start;
         auto e = end;
         return scanIndexCursor<VertexId>(
-            out, [this, table, s, e]() { return store_.createIndexRangeCursor(session_, table, s, e); },
+            out,
+            [this, table, s, e, start_inclusive, end_inclusive]() {
+                return store_.createIndexRangeCursor(session_, table, s, e, start_inclusive, end_inclusive);
+            },
             [](const ISyncGraphDataStore::IIndexScanCursor& c) { return static_cast<VertexId>(c.entityId()); });
     }
 

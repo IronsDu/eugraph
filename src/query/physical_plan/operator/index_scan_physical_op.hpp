@@ -31,21 +31,24 @@ public:
     IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                         PropertyValue search_value, std::optional<PropertyValue> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0);
+                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0,
+                        bool range_start_inclusive = false, bool range_end_inclusive = false);
 
     // Composite constructor
     IndexScanPhysicalOp(std::string variable, LabelId label_id, std::vector<uint16_t> prop_ids, ScanMode mode,
                         std::vector<PropertyValue> eq_values, std::optional<std::vector<PropertyValue>> range_start,
                         std::optional<std::vector<PropertyValue>> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0);
+                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0,
+                        bool range_start_inclusive = false, bool range_end_inclusive = false);
 
     // Index-id based composite constructor (new index table naming)
     IndexScanPhysicalOp(std::string variable, uint32_t index_id, std::vector<uint16_t> prop_ids, ScanMode mode,
                         std::vector<PropertyValue> eq_values, std::optional<std::vector<PropertyValue>> range_start,
                         std::optional<std::vector<PropertyValue>> range_end,
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0);
+                        std::shared_ptr<const GraphSchema> schema, size_t prefix_col = 0,
+                        bool range_start_inclusive = false, bool range_end_inclusive = false);
 
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
@@ -62,6 +65,8 @@ private:
     size_t prefix_col_ = 0;                                 // PREFIX: raw component index
     std::optional<std::vector<PropertyValue>> range_start_; // range start (composite)
     std::optional<std::vector<PropertyValue>> range_end_;   // range end (composite or single)
+    bool range_start_inclusive_ = false;
+    bool range_end_inclusive_ = false;
     std::vector<binder::BoundType> output_types_;
     IAsyncGraphDataStore& store_;
     std::shared_ptr<const GraphSchema> schema_;

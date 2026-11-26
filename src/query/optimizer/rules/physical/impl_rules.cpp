@@ -284,24 +284,20 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexJoinRule::substitute(GroupE
             break;
         case cypher::BinaryOperator::GT:
             out->lower = pv;
+            out->lower_inclusive = false;
             break;
-        case cypher::BinaryOperator::GTE: {
-            auto* i = std::get_if<int64_t>(&pv);
-            if (!i)
-                return {};
-            out->lower = PropertyValue{*i - 1};
+        case cypher::BinaryOperator::GTE:
+            out->lower = pv;
+            out->lower_inclusive = true;
             break;
-        }
         case cypher::BinaryOperator::LT:
             out->upper = pv;
+            out->upper_inclusive = false;
             break;
-        case cypher::BinaryOperator::LTE: {
-            auto* i = std::get_if<int64_t>(&pv);
-            if (!i)
-                return {};
-            out->upper = PropertyValue{*i + 1};
+        case cypher::BinaryOperator::LTE:
+            out->upper = pv;
+            out->upper_inclusive = true;
             break;
-        }
         default:
             return {};
         }
