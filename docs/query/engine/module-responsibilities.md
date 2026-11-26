@@ -1,0 +1,65 @@
+# 模块职责与代码归属
+
+> 状态：2026-11-26。新增/修改代码前先确认归属；边界不清时先问开发者，不要自行跨层放代码。
+
+## 1. 分层职责
+
+| 模块 | 应该做 | 不应该做 |
+|---|---|---|
+| `query/parser` | AST、语法/关键字、chained comparison 等语法展开 | 绑定、索引、执行 |
+| `query/planner/binder` | 名称/类型解析、SlotId 身份、语义绑定、WHERE 结构规范化与 Filter 拆分策略 | 选择索引、比较 access path、实例化物理算子 |
+| `query/optimizer/analysis` | 与优化相关的分析：IndexCondition/range 合并、selectivity、requirements、slot 语义、LogProp | 创建 PhysicalOperator、分配执行 buffer |
+| `query/optimizer/rules` | 逻辑/物理候选规则，输出 `ChosenPlan` / descriptor | 手工 lowering、执行期决策、分配用户 slot |
+| `query/physical_plan` | `ChosenPlan` → PhysicalOperator：schema/layout、column_index、表达式编译、PE/enforcer 实例化、internal PE slot | 选择 forward/reverse、决定 join tag、重新推断 property 语义、重新规划 access path |
+| `storage/data` | KV/index 编码、range cursor 的 start/end 与 inclusive 语义、IO/事务 | Cypher 语义、Filter 拆分、优化决策 |
+| `explain` | 只读展示：SlotSemantics + PEPlan + Catalog → 可读文本 | 改变计划/执行、隐藏实际算子/Filter |
+| `tests` | 分层单元 + QueryExecutor 集成 + LDBC 对照 | 用测试掩盖语义 |
+| `docs/benchmark` | 口径、参数、before/after 证据 | 把不同参数/空结果当性能结论 |
+
+## 2. 判断代码归属的问题
+
+1. 它是在**解析语法**、**确定语义身份**、**选择计划**、**实例化执行**、**存储编码**，还是**展示**？
+2. 这个决策会改变计划/代价吗？会 → optimizer；只是机械实例化 → physical lowering。
+3. 这个值需要跨 module 共享吗？需要 → 放到 `optimizer/analysis` 的只读结构，而不是复制到 physical planner。
+4. 如果现有模块边界本身是错的，先停下来问开发者是否调整模块，不要为了方便把代码塞进最近的文件。
+
+## 3. 近期案例
+
+### c3 范围索引
+
+```text
+parser: chained comparison → AND              正确
+binder: 保留同一 property 的范围 conjunct      正确
+optimizer/analysis: normalize + merge bounds  正确
+storage: start/end inclusive encoding         正确
+physical planner: 实例化 IndexScan            只能消费上面结果
+```
+
+反例：在 physical planner 里对 GTE/LTE 做 `value ± 1`，或在 physical planner
+里重新实现一套 range merge，属于临时补丁。
+
+### Dynamic IndexJoin
+
+```text
+optimizer/rule: 产生 IndexJoin descriptor
+physical: DynamicIndexJoinPhysicalOp 实例化
+```
+
+反例：`ReexecutePhysicalOp` 让 physical 层隐式决定“source 可以再执行一次”，
+既不是 optimizer 候选，也不是显式执行契约。
+
+## 4. 评审清单
+
+- 新 helper 是否在最低层、且没有反向依赖？
+- 是否复制了另一层已有的语义（range、slot、property、cost）？
+- 新增 descriptor 字段是否同时更新 clone/visitor/explain？
+- 是否引入 physical planner 的“策略选择”？如果是，移到 optimizer。
+- 是否在 binder 里做索引选择？如果是，移出。
+- 是否在 storage 里做 Cypher 语义？如果是，移出。
+
+## 5. 相关文档
+
+- [Optimizer 架构与 Columbia 迁移](optimizer-architecture.md)
+- [Optimizer / Access Path 后续规划](optimizer-next-steps.md)
+- [EXPLAIN 语义元信息](explain-semantic-metadata.md)
+- [Dynamic IndexJoin 单次 Source 消费](dynamic-index-join-shared-source.md)

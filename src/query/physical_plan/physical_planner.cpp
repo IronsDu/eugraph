@@ -1,6 +1,7 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
+#include "query/optimizer/analysis/index_condition.hpp"
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/plan_analysis.hpp"
 #include "query/optimizer/analysis/property_demand.hpp"
@@ -1871,19 +1872,21 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         return std::nullopt;
 
     using ScanMode = IndexScanPhysicalOp::ScanMode;
-    auto make_index_scan = [&](const LabelDef::IndexDef& idx, ScanMode mode, std::vector<PropertyValue> eq_values,
-                               std::optional<std::vector<PropertyValue>> range_start,
-                               std::optional<std::vector<PropertyValue>> range_end,
-                               std::vector<binder::BoundType> output_types,
-                               size_t prefix_col = 0) -> std::unique_ptr<IndexScanPhysicalOp> {
+    auto make_index_scan =
+        [&](const LabelDef::IndexDef& idx, ScanMode mode, std::vector<PropertyValue> eq_values,
+            std::optional<std::vector<PropertyValue>> range_start, std::optional<std::vector<PropertyValue>> range_end,
+            std::vector<binder::BoundType> output_types, size_t prefix_col = 0, bool range_start_inclusive = false,
+            bool range_end_inclusive = false) -> std::unique_ptr<IndexScanPhysicalOp> {
         if (idx.index_id != 0) {
             return std::make_unique<IndexScanPhysicalOp>(
                 scan_op.variable, idx.index_id, idx.prop_ids, mode, std::move(eq_values), std::move(range_start),
-                std::move(range_end), std::move(output_types), store, ctx.schema, prefix_col);
+                std::move(range_end), std::move(output_types), store, ctx.schema, prefix_col, range_start_inclusive,
+                range_end_inclusive);
         }
         return std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, mode,
                                                      std::move(eq_values), std::move(range_start), std::move(range_end),
-                                                     std::move(output_types), store, ctx.schema, prefix_col);
+                                                     std::move(output_types), store, ctx.schema, prefix_col,
+                                                     range_start_inclusive, range_end_inclusive);
     };
 
     for (const auto& idx : label_def.indexes) {
@@ -1896,6 +1899,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         std::vector<PropertyValue> eq_values;
         std::optional<PropertyValue> range_start;
         std::optional<PropertyValue> range_end;
+        bool range_start_inclusive = false;
+        bool range_end_inclusive = false;
 
         // Accessor path. Conditions are matched by property name; strong
         // accessors additionally require the source label match.
@@ -1957,29 +1962,7 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 // `x.date >= lo AND x.date < hi`) must be merged. Keeping one
                 // map entry per property silently dropped the other bound and
                 // turned a bounded range into `(-inf, hi)` or `[lo, +inf)`.
-                auto pv_compare = [](const PropertyValue& a, const PropertyValue& b) -> int {
-                    if (auto* ai = std::get_if<int64_t>(&a)) {
-                        if (auto* bi = std::get_if<int64_t>(&b))
-                            return *ai < *bi ? -1 : (*ai > *bi ? 1 : 0);
-                    }
-                    if (auto* ad = std::get_if<double>(&a)) {
-                        if (auto* bd = std::get_if<double>(&b))
-                            return *ad < *bd ? -1 : (*ad > *bd ? 1 : 0);
-                    }
-                    if (auto* as = std::get_if<std::string>(&a)) {
-                        if (auto* bs = std::get_if<std::string>(&b))
-                            return *as < *bs ? -1 : (*as > *bs ? 1 : 0);
-                    }
-                    if (auto* ab = std::get_if<bool>(&a)) {
-                        if (auto* bb = std::get_if<bool>(&b))
-                            return *ab < *bb ? -1 : (*ab > *bb ? 1 : 0);
-                    }
-                    return 0;
-                };
-                std::optional<PropertyValue> lower;
-                std::optional<PropertyValue> upper;
-                bool lower_inclusive = false;
-                bool upper_inclusive = false;
+                optimizer::IndexRange bounds;
                 bool has_eq = false;
                 bool has_prefix = false;
                 for (const auto& c : conds) {
@@ -1991,15 +1974,9 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                         eq_values.push_back(c.value);
                         has_prefix = true;
                     } else if (c.op == cypher::BinaryOperator::GT || c.op == cypher::BinaryOperator::GTE) {
-                        if (!lower || pv_compare(c.value, *lower) > 0) {
-                            lower = c.value;
-                            lower_inclusive = (c.op == cypher::BinaryOperator::GTE);
-                        }
+                        optimizer::mergeIndexLower(bounds, c.value, c.op == cypher::BinaryOperator::GTE);
                     } else if (c.op == cypher::BinaryOperator::LT || c.op == cypher::BinaryOperator::LTE) {
-                        if (!upper || pv_compare(c.value, *upper) < 0) {
-                            upper = c.value;
-                            upper_inclusive = (c.op == cypher::BinaryOperator::LTE);
-                        }
+                        optimizer::mergeIndexUpper(bounds, c.value, c.op == cypher::BinaryOperator::LTE);
                     }
                 }
                 if (has_eq) {
@@ -2007,28 +1984,15 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 } else if (has_prefix) {
                     last_is_prefix = true;
                     match_count++;
-                } else if (lower || upper) {
-                    // Storage range cursors are [start, end): start is
-                    // exclusive and end is exclusive. Shift integer inclusive
-                    // bounds by one so GTE/LTE keep their boundary rows.
-                    auto inclusive_start = [](PropertyValue v) -> PropertyValue {
-                        if (auto* i = std::get_if<int64_t>(&v))
-                            return PropertyValue{*i - 1};
-                        if (auto* d = std::get_if<double>(&v))
-                            return PropertyValue{std::nextafter(*d, -std::numeric_limits<double>::infinity())};
-                        return v;
-                    };
-                    auto inclusive_end = [](PropertyValue v) -> PropertyValue {
-                        if (auto* i = std::get_if<int64_t>(&v))
-                            return PropertyValue{*i + 1};
-                        if (auto* d = std::get_if<double>(&v))
-                            return PropertyValue{std::nextafter(*d, std::numeric_limits<double>::infinity())};
-                        return v;
-                    };
-                    if (lower)
-                        range_start = lower_inclusive ? inclusive_start(std::move(*lower)) : std::move(*lower);
-                    if (upper)
-                        range_end = upper_inclusive ? inclusive_end(std::move(*upper)) : std::move(*upper);
+                } else if (bounds.lower || bounds.upper) {
+                    if (bounds.lower) {
+                        range_start = std::move(bounds.lower->value);
+                        range_start_inclusive = bounds.lower->inclusive;
+                    }
+                    if (bounds.upper) {
+                        range_end = std::move(bounds.upper->value);
+                        range_end_inclusive = bounds.upper->inclusive;
+                    }
                     last_is_range = true;
                     match_count++;
                 } else {
@@ -2089,7 +2053,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 composite_end = std::move(end_vec);
             }
             result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::RANGE, std::vector<PropertyValue>{},
-                                     std::move(composite_start), std::move(composite_end), std::move(output_types));
+                                     std::move(composite_start), std::move(composite_end), std::move(output_types), 0,
+                                     range_start_inclusive, range_end_inclusive);
         }
 
         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
@@ -3995,7 +3960,8 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
             hi = std::vector<PropertyValue>{*ij.upper};
         auto scan = std::make_unique<IndexScanPhysicalOp>(
             ij.target_variable, ij.index_id, std::vector<uint16_t>{ij.index_prop}, mode, std::move(eq), lo, hi,
-            std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.schema);
+            std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.schema, 0, ij.lower_inclusive,
+            ij.upper_inclusive);
         scan->setOutputSchema(Schema{ij.target_variable},
                               std::vector<binder::BoundType>{binder::BoundType::VertexRef()});
         std::unique_ptr<PhysicalOperator> ch = std::move(scan);

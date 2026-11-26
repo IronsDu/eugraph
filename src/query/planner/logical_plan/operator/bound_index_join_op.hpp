@@ -22,6 +22,8 @@ struct BoundIndexJoinOp {
     uint16_t index_prop = 0;
     std::string index_property_name;
     std::optional<PropertyValue> equality, lower, upper;
+    bool lower_inclusive = false;
+    bool upper_inclusive = false;
     bool dynamic_key = false;
     std::string dynamic_key_variable;
     bool build_left = false;

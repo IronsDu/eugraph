@@ -367,6 +367,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/framework/physical_expr.cpp
     src/query/optimizer/framework/operator_hash.cpp
     src/query/optimizer/framework/operator_eq.cpp
+    src/query/optimizer/analysis/index_condition.cpp
     src/query/optimizer/analysis/requirement_collector.cpp
     src/query/optimizer/analysis/property_demand.cpp
     src/query/optimizer/analysis/plan_analysis.cpp

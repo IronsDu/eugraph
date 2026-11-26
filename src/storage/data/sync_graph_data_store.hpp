@@ -241,11 +241,14 @@ public:
                                                               const std::string& prefix) override;
     std::unique_ptr<IIndexScanCursor> createIndexRangeCursor(GraphSession& session, const std::string& table,
                                                              const std::optional<PropertyValue>& start,
-                                                             const std::optional<PropertyValue>& end) override;
-    std::unique_ptr<IIndexScanCursor>
-    createIndexRangeCursor(GraphSession& session, const std::string& table,
-                           const std::optional<std::vector<PropertyValue>>& start,
-                           const std::optional<std::vector<PropertyValue>>& end) override;
+                                                             const std::optional<PropertyValue>& end,
+                                                             bool start_inclusive = false,
+                                                             bool end_inclusive = false) override;
+    std::unique_ptr<IIndexScanCursor> createIndexRangeCursor(GraphSession& session, const std::string& table,
+                                                             const std::optional<std::vector<PropertyValue>>& start,
+                                                             const std::optional<std::vector<PropertyValue>>& end,
+                                                             bool start_inclusive = false,
+                                                             bool end_inclusive = false) override;
 
 private:
     // ==================== vertex_data adjacency helpers ====================

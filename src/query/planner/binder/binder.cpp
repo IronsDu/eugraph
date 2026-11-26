@@ -1109,10 +1109,45 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
             walk(expr);
             return vars;
         };
+        auto referencedProperties = [](const BoundExpression& expr) {
+            std::set<std::string> properties;
+            std::function<void(const BoundExpression&)> walk = [&](const BoundExpression& e) {
+                std::visit(
+                    [&](const auto& value) {
+                        using T = std::decay_t<decltype(value)>;
+                        if constexpr (std::is_same_v<T, std::unique_ptr<BoundPropertyRef>>) {
+                            if (value)
+                                properties.insert(value->property_name);
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryOp>>) {
+                            if (value) {
+                                walk(value->left);
+                                walk(value->right);
+                            }
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnaryOp>>) {
+                            if (value)
+                                walk(value->operand);
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundDynamicPropertyRef>>) {
+                            if (value)
+                                walk(value->object);
+                        } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundLabelCast>>) {
+                            if (value)
+                                walk(value->object);
+                        }
+                    },
+                    e);
+            };
+            walk(expr);
+            return properties;
+        };
         std::vector<BoundExpression> merged;
         for (auto& conjunct : conjuncts) {
             auto vars = referencedVars(conjunct);
-            if (!merged.empty() && !vars.empty() && referencedVars(merged.back()) == vars) {
+            auto props = referencedProperties(conjunct);
+            // Only keep same-variable AND same-property range conjuncts
+            // together. Merging arbitrary same-variable predicates would undo
+            // property-level pushdown.
+            if (!merged.empty() && !vars.empty() && !props.empty() && referencedVars(merged.back()) == vars &&
+                referencedProperties(merged.back()) == props) {
                 auto lhs = std::move(merged.back());
                 auto and_expr = std::make_unique<BoundBinaryOp>();
                 and_expr->op = cypher::BinaryOperator::AND;

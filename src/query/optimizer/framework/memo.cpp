@@ -1115,6 +1115,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->equality = val->equality;
                 c->lower = val->lower;
                 c->upper = val->upper;
+                c->lower_inclusive = val->lower_inclusive;
+                c->upper_inclusive = val->upper_inclusive;
                 c->dynamic_key = val->dynamic_key;
                 c->dynamic_key_variable = val->dynamic_key_variable;
                 c->build_left = val->build_left;
