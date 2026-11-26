@@ -194,12 +194,6 @@ private:
     planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                       PlanContext& ctx, Schema input_schema, const std::vector<binder::BoundType>& input_types);
 
-    // ── Bound-plan index scan optimization ──
-    std::optional<PlanOperatorResult> tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
-                                                        const std::vector<const binder::BoundBinaryOp*>& conditions,
-                                                        LabelId label_id, const LabelDef& label_def,
-                                                        IAsyncGraphDataStore& store, PlanContext& ctx);
-
     std::optional<PlanOperatorResult> tryBoundEdgeIndexScan(const binder::BoundExpandOp& expand_op,
                                                             const std::vector<const binder::BoundBinaryOp*>& conditions,
                                                             EdgeLabelId label_id, const EdgeLabelDef& edge_label_def,

@@ -1,6 +1,7 @@
 #include "query/optimizer/logical_optimizer.hpp"
 #include "common/config/env_vars.hpp"
 
+#include "query/optimizer/analysis/index_access_path.hpp"
 #include "query/optimizer/analysis/index_condition.hpp"
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/requirement_collector.hpp"
@@ -120,6 +121,8 @@ std::optional<IndexScanChoice> chooseIndexScan(const LabelDef& label, const std:
     return std::nullopt;
 }
 
+} // namespace
+
 void applyIndexAccessPaths(binder::BoundLogicalOperator& op, const catalog::Catalog& catalog,
                            const binder::SlotSemanticMap* semantics) {
     auto* filter_ptr = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&op);
@@ -198,8 +201,6 @@ void applyIndexAccessPaths(binder::BoundLogicalOperator& op, const catalog::Cata
     });
 }
 
-} // namespace
-
 void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog,
                                 const binder::SlotSemanticMap* slot_semantics,
                                 const std::unordered_map<LabelId, uint64_t>* label_vertex_counts) {
@@ -272,6 +273,7 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
 void LogicalOptimizer::initRules() {
     // Transformation rules
+    rules_.addRule(std::make_unique<GenerateIndexScanRule>());
     rules_.addRule(std::make_unique<GenerateIndexJoinRule>());
     rules_.addRule(std::make_unique<FilterPushdownRule>());
     rules_.addRule(std::make_unique<JoinCommuteRule>());

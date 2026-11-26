@@ -345,6 +345,17 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     for (auto p : pids)
                         seed = combine(seed, p);
                 }
+                seed = combine(seed, val.index_scan ? 1 : 0);
+                seed = combine(seed, val.index_id);
+                for (auto p : val.index_prop_ids)
+                    seed = combine(seed, p);
+                for (const auto& v : val.index_eq_values)
+                    seed = hashPropertyValue(seed, v);
+                if (val.index_lower)
+                    seed = hashPropertyValue(seed, *val.index_lower);
+                if (val.index_upper)
+                    seed = hashPropertyValue(seed, *val.index_upper);
+                seed = combine(seed, (val.index_lower_inclusive ? 1 : 0) | (val.index_upper_inclusive ? 2 : 0));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!val)
                     return;

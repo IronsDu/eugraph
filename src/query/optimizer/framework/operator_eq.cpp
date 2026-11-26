@@ -301,7 +301,11 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av.label_names != bv.label_names)
                     return false;
-                return av.label_prop_ids == bv.label_prop_ids;
+                return av.label_prop_ids == bv.label_prop_ids && av.index_scan == bv.index_scan &&
+                       av.index_id == bv.index_id && av.index_prop_ids == bv.index_prop_ids &&
+                       av.index_eq_values == bv.index_eq_values && av.index_lower == bv.index_lower &&
+                       av.index_upper == bv.index_upper && av.index_lower_inclusive == bv.index_lower_inclusive &&
+                       av.index_upper_inclusive == bv.index_upper_inclusive;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
