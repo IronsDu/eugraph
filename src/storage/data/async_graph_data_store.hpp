@@ -650,8 +650,8 @@ public:
 
     folly::coro::AsyncGenerator<std::span<const VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
-                             const std::optional<PropertyValue>& end, std::vector<VertexId>& out, bool start_inclusive,
-                             bool end_inclusive) override {
+                             const std::optional<PropertyValue>& end, std::vector<VertexId>& out,
+                             bool start_inclusive = false, bool end_inclusive = false) override {
         std::string table = vidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
@@ -667,7 +667,7 @@ public:
     scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
                                       const std::optional<std::vector<PropertyValue>>& start,
                                       const std::optional<std::vector<PropertyValue>>& end, std::vector<VertexId>& out,
-                                      bool start_inclusive, bool end_inclusive) override {
+                                      bool start_inclusive = false, bool end_inclusive = false) override {
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;

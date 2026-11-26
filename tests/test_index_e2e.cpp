@@ -1780,6 +1780,73 @@ TEST_F(IndexE2ETest, VertexIndexRangeScanStreamsBeyondBatch) {
     EXPECT_TRUE(session.commit().committed());
 }
 
+TEST_F(IndexE2ETest, VertexIndexRangeScanInclusiveBounds) {
+    auto lid = blockingWait(
+        env.async_meta->createLabel("InclusiveRange", {PropertyDef{0, "k", PropertyType::INT64, false, {}}}));
+    ASSERT_NE(lid, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(env.async_data->createLabel(lid)));
+    const std::string table = vidxTable(lid, 0);
+    ASSERT_TRUE(env.data_store->createIndex(table));
+
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    for (int64_t i = 0; i < 10; ++i)
+        ASSERT_TRUE(env.data_store->insertIndexEntry(session, table, PropertyValue{i}, static_cast<uint64_t>(i)));
+    ASSERT_TRUE(session.commit().committed());
+
+    ASSERT_TRUE(session.begin_read());
+    auto bound = env.async_data->for_session(session);
+    std::vector<VertexId> scan_batch;
+    const std::optional<PropertyValue> start = PropertyValue{int64_t{3}};
+    const std::optional<PropertyValue> end = PropertyValue{int64_t{7}};
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndexRange(lid, 0, start, end, scan_batch,
+                                                           /*start_inclusive=*/true, /*end_inclusive=*/true)),
+              5u)
+        << "inclusive [3,7] 必须包含两端";
+    scan_batch.clear();
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndexRange(lid, 0, start, end, scan_batch,
+                                                           /*start_inclusive=*/false, /*end_inclusive=*/false)),
+              3u)
+        << "exclusive (3,7) 必须排除两端";
+    EXPECT_TRUE(session.commit().committed());
+}
+
+TEST_F(IndexE2ETest, VertexIndexRangeScanStringInclusiveBounds) {
+    auto lid = blockingWait(
+        env.async_meta->createLabel("StringInclusiveRange", {PropertyDef{0, "k", PropertyType::STRING, false, {}}}));
+    ASSERT_NE(lid, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(env.async_data->createLabel(lid)));
+    const std::string table = vidxTable(lid, 0);
+    ASSERT_TRUE(env.data_store->createIndex(table));
+
+    auto lease = env.session_pool->acquire();
+    ASSERT_TRUE(lease.has_value());
+    GraphSession& session = **lease;
+    ASSERT_TRUE(session.begin_write());
+    const std::vector<std::string> values{"a", "b", "c", "d", "e"};
+    for (size_t i = 0; i < values.size(); ++i)
+        ASSERT_TRUE(env.data_store->insertIndexEntry(session, table, PropertyValue{values[i]}, i));
+    ASSERT_TRUE(session.commit().committed());
+
+    ASSERT_TRUE(session.begin_read());
+    auto bound = env.async_data->for_session(session);
+    std::vector<VertexId> scan_batch;
+    const std::optional<PropertyValue> start = PropertyValue{std::string("b")};
+    const std::optional<PropertyValue> end = PropertyValue{std::string("d")};
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndexRange(lid, 0, start, end, scan_batch,
+                                                           /*start_inclusive=*/true, /*end_inclusive=*/true)),
+              3u)
+        << "string inclusive [b,d] 必须包含 b,c,d";
+    scan_batch.clear();
+    EXPECT_EQ(drain_batches(bound.scanVerticesByIndexRange(lid, 0, start, end, scan_batch,
+                                                           /*start_inclusive=*/false, /*end_inclusive=*/false)),
+              1u)
+        << "string exclusive (b,d) 必须只包含 c";
+    EXPECT_TRUE(session.commit().committed());
+}
+
 TEST_F(IndexE2ETest, EdgeIndexScanStreamsBeyondBatch) {
     constexpr size_t N = 3000; // > 1024
     auto elid = blockingWait(

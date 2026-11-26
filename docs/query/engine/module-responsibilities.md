@@ -16,14 +16,40 @@
 | `tests` | 分层单元 + QueryExecutor 集成 + LDBC 对照 | 用测试掩盖语义 |
 | `docs/benchmark` | 口径、参数、before/after 证据 | 把不同参数/空结果当性能结论 |
 
-## 2. 判断代码归属的问题
+## 2. Physical planner 明确职责
+
+### 必须做
+
+- 消费 `ChosenPlan` / descriptor；
+- `PhysicalOpTag` → 具体 PhysicalOperator；
+- `Schema`、`BoundType`、`TupleSlotLayout`、`column_index`；
+- 编译 `BoundExpression`（slot → column）；
+- 构建 PE/enforcer 并分配 internal PE slot（由 optimizer 描述边界）；
+- 实例化 internal-only 的执行细节（batch buffer、scan cursor 参数）。
+
+### 绝对不能做
+
+- 选择 label scan / index scan / access path；
+- 选择 forward/reverse、IndexJoin、HashJoin tag；
+- 重新推断 `BoundColumnRef` 对应的 label/property；
+- 查 catalog 选 index 或重新解析 range 谓词；
+- 分配/重写用户 SlotId；
+- 决定 PE / LateMaterialize 边界；
+- 在 CBO 之后改变计划形状来“优化”查询。
+
+判断句：
+
+> 如果这个决定会改变计划或成本，它属于 optimizer；如果只是把已决定的计划
+> 变成可执行对象，它属于 physical lowering。
+
+## 3. 判断代码归属的问题
 
 1. 它是在**解析语法**、**确定语义身份**、**选择计划**、**实例化执行**、**存储编码**，还是**展示**？
 2. 这个决策会改变计划/代价吗？会 → optimizer；只是机械实例化 → physical lowering。
 3. 这个值需要跨 module 共享吗？需要 → 放到 `optimizer/analysis` 的只读结构，而不是复制到 physical planner。
 4. 如果现有模块边界本身是错的，先停下来问开发者是否调整模块，不要为了方便把代码塞进最近的文件。
 
-## 3. 近期案例
+## 4. 近期案例
 
 ### c3 范围索引
 
@@ -48,7 +74,7 @@ physical: DynamicIndexJoinPhysicalOp 实例化
 反例：`ReexecutePhysicalOp` 让 physical 层隐式决定“source 可以再执行一次”，
 既不是 optimizer 候选，也不是显式执行契约。
 
-## 4. 评审清单
+## 5. 评审清单
 
 - 新 helper 是否在最低层、且没有反向依赖？
 - 是否复制了另一层已有的语义（range、slot、property、cost）？
@@ -57,7 +83,7 @@ physical: DynamicIndexJoinPhysicalOp 实例化
 - 是否在 binder 里做索引选择？如果是，移出。
 - 是否在 storage 里做 Cypher 语义？如果是，移出。
 
-## 5. 相关文档
+## 6. 相关文档
 
 - [Optimizer 架构与 Columbia 迁移](optimizer-architecture.md)
 - [Optimizer / Access Path 后续规划](optimizer-next-steps.md)

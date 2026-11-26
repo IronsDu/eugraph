@@ -91,6 +91,26 @@ property”这一步仍依赖 physical 状态。
 **验收**：c3、string/int inclusive range、c2/c6/c9 及 689 tests 通过；physical planner
 不再包含 property 反解实现。
 
+### P1.4 — 普通 IndexScan access path 迁入 optimizer
+
+**问题**：`Filter(LabelScan) → IndexScan` 仍在 physical planner 的
+`tryBoundIndexScan` 中完成。CBO 选择的是 `Filter(LabelScan)`，physical planner
+之后读 `PlanContext.extraction_info`、catalog，单方面改成 IndexScan；CBO
+没有比较过 `LabelScan+Filter` vs `IndexScan` 的成本，也没有看到最终 access path。
+
+**目标**：
+
+- 新增 `GenerateIndexScanRule` / `BoundIndexScanOp` descriptor：
+  label、index_id、accessors、eq/lower/upper、inclusive、residual；
+- CBO 规则使用 `IndexCondition` 和统计/选择性，比较 LabelScan 与 IndexScan；
+- `ImplIndexScanRule` 输出 `PhysicalOpTag::IndexScan`；
+- physical planner 只实例化 descriptor；
+- 删除 `tryBoundIndexScan` 及 `PlanContext.extraction_info` 条件反解；
+- RBO fallback 也要走同一个 optimizer access-path pass，而不是 physical 决策。
+
+**验收**：c3、inclusive int/string、c2/c6/c9、689 tests；physical planner 不再查
+catalog 选索引。
+
 ### P2 — PE / LateMaterialize enforcer 化
 
 - PE 边界由 ChosenPlan/PhysProp 描述；
