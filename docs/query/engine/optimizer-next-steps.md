@@ -1,8 +1,10 @@
 # Optimizer / Access Path 后续规划
 
-> 状态：2026-11-25。当前 PR #331 是 access-path lowering 的过渡阶段，尚未达到
-> “physical planner 只 lowering”的目标。本文把新增的 optimizer 债务与既有执行层
-> 性能待办放在同一优先级队列里。
+> 状态：2026-11-26。
+> - P0 / P1 已完成并合入；
+> - P1.3 正在当前 `refactor/index-access-path-optimizer` 分支实现（extraction
+>   resolver 已抽出，physical planner 接线与 P1.4 尚未完成）；
+> - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
 
 ## 1. 目标边界
 
@@ -30,7 +32,7 @@ Physical planner
 
 ## 2. 优先级队列
 
-### P0 — #331：IndexJoin descriptor + 删除 tryPlan*
+### P0 — #331：IndexJoin descriptor + 删除 tryPlan*（已完成）
 
 当前缺口：
 
@@ -63,14 +65,18 @@ Physical planner
 **后续 P1.2**：`SpillableRowStore` → 按 join key 分区 → 磁盘 spill；
 预算按字节、成本模型计入 spill；source 仍只执行一次。
 
-### P1.1 — Slot ownership 收尾
+### P1.1 — Slot ownership 收尾（待开始）
 
 - optimizer 规则生成 Project/alias 时同步创建/继承 SlotId；
 - 删除 physical planner 的 `allocateAllSlots` backfill；
 - 明确 user slot / internal column 的分配者；
 - 增加“optimizer 后不存在未登记用户 slot”的校验。
 
-### P1.3 — IndexCondition extraction resolver
+### P1.3 — IndexCondition extraction resolver（进行中）
+
+当前已新增 `optimizer/analysis/index_condition` 的 extraction API
+（`IndexableCondition` / `ResolvedProperty` / `extractNormalizedIndexableCondition`），
+physical planner 仍在用旧实现；接线完成前不标记完成。
 
 **问题**：`tryExtractBoundCondition` / `resolveColumnProperty` 仍留在 physical planner，
 因为把 `BoundPropertyRef` / `BoundColumnRef` 还原为 `{label, prop_id, property_name,
@@ -91,7 +97,7 @@ property”这一步仍依赖 physical 状态。
 **验收**：c3、string/int inclusive range、c2/c6/c9 及 689 tests 通过；physical planner
 不再包含 property 反解实现。
 
-### P1.4 — 普通 IndexScan access path 迁入 optimizer
+### P1.4 — 普通 IndexScan access path 迁入 optimizer（待开始）
 
 **问题**：`Filter(LabelScan) → IndexScan` 仍在 physical planner 的
 `tryBoundIndexScan` 中完成。CBO 选择的是 `Filter(LabelScan)`，physical planner
@@ -111,14 +117,14 @@ property”这一步仍依赖 physical 状态。
 **验收**：c3、inclusive int/string、c2/c6/c9、689 tests；physical planner 不再查
 catalog 选索引。
 
-### P2 — PE / LateMaterialize enforcer 化
+### P2 — PE / LateMaterialize enforcer 化（待开始）
 
 - PE 边界由 ChosenPlan/PhysProp 描述；
 - physical planner 只实例化 enforcer；
 - LateMaterialize 同样从计划描述驱动；
 - 解决当前 physical planner 自行决定 PE 边界的问题。
 
-### P3 — degree / selectivity 统计（先设计评审）
+### P3 — degree / selectivity 统计（待开始；先设计评审）
 
 - `(edge_label, src_label, dst_label)` 边数；
 - in/out degree；
@@ -126,7 +132,7 @@ catalog 选索引。
 - StatsDelta / snapshot / journal / Catalog 全链路；
 - 先定粒度、写时维护 vs ANALYZE、兼容和回退，再实现。
 
-### P4 — c3：非 identity Project / 无显式 label
+### P4 — c3：非 identity Project / 无显式 label（待开始）
 
 依赖 P3 的 endpoint label 信息：
 
@@ -135,14 +141,14 @@ catalog 选索引。
 - 保留残差谓词；
 - 不允许靠数据分布猜 label。
 
-### P5 — EXPLAIN 全面使用 SlotSemantics
+### P5 — EXPLAIN 全面使用 SlotSemantics（部分完成）
 
 - `IndexScan properties=[<prop#N>]` → 属性名；
 - `Filter(message < ...)` → `message.creationDate < ...`；
 - Projection load/materialize 显示完整属性；
 - Bolt plan / Web Graph 同步受益。
 
-### P6 — 既有执行层性能待办
+### P6 — 既有执行层性能待办（待开始）
 
 延续 [LDBC 执行层优化计划](../../benchmark/ldbc-storage-unchanged-optimization-plan.md)：
 

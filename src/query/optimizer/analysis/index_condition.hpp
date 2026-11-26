@@ -1,6 +1,10 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "query/parser/ast.hpp"
+#include "query/planner/bound_expression/bound_expression.hpp"
+
+#include <functional>
 
 #include <optional>
 
@@ -28,6 +32,39 @@ int compareIndexValues(const PropertyValue& a, const PropertyValue& b);
 
 void mergeIndexLower(IndexRange& range, const PropertyValue& value, bool inclusive);
 void mergeIndexUpper(IndexRange& range, const PropertyValue& value, bool inclusive);
+
+/// A property/value comparison extracted from a Filter expression. This is the
+/// shared representation used by optimizer access-path rules and the fallback
+/// physical planner during migration.
+struct IndexableCondition {
+    LabelId label_id = INVALID_LABEL_ID;
+    uint16_t prop_id = 0;
+    std::string property_name;
+    cypher::BinaryOperator op = cypher::BinaryOperator::EQ;
+    PropertyValue value;
+    bool is_strong = false;
+    /// Number of labels declaring the property (weak space excluded).
+    int declared_label_count = 0;
+};
+
+/// Property semantics for a BoundColumnRef (already-lowered property column).
+struct ResolvedProperty {
+    std::string name;
+    LabelId label_id = INVALID_LABEL_ID;
+    uint16_t prop_id = 0;
+    bool is_strong = false;
+    int declared_label_count = 0;
+};
+
+using ColumnPropertyResolver = std::function<std::optional<ResolvedProperty>(const binder::BoundColumnRef&)>;
+
+/// Normalize a comparison (`property op literal` or reversed `literal op
+/// property`) into an IndexableCondition.
+std::optional<IndexableCondition> extractIndexableCondition(const binder::BoundBinaryOp& binop, LabelId anon_label_id,
+                                                            const ColumnPropertyResolver& resolve_column);
+std::optional<IndexableCondition> extractNormalizedIndexableCondition(const binder::BoundBinaryOp& binop,
+                                                                      LabelId anon_label_id,
+                                                                      const ColumnPropertyResolver& resolve_column);
 
 } // namespace optimizer
 } // namespace eugraph

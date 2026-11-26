@@ -1582,32 +1582,11 @@ static void collectBoundConditions(const binder::BoundExpression& pred,
     }
 }
 
-struct BoundIndexableCondition {
-    LabelId label_id = INVALID_LABEL_ID;
-    uint16_t prop_id = 0;
-    std::string property_name;
-    cypher::BinaryOperator op;
-    PropertyValue value;
-    /// Written as `n::Label.p`. A strong condition may only use a strong
-    /// index; a weak condition may only use a weak index (see
-    /// docs/features/strong-weak-hybrid.md §7).
-    bool is_strong = false;
-    /// Number of LABELS that declare this property (the weak-space registry is
-    /// not counted). A weak condition may use a strong index only when this is
-    /// exactly 1 and no anon value can exist.
-    int declared_label_count = 0;
-};
+using BoundIndexableCondition = optimizer::IndexableCondition;
+using ResolvedColumnProperty = optimizer::ResolvedProperty;
 
 /// Resolve a BoundColumnRef produced by ProjectionExtract lowering back to
 /// the property name / (label_id, prop_id) and the original access mode.
-struct ResolvedColumnProperty {
-    std::string name;
-    LabelId label_id = INVALID_LABEL_ID;
-    uint16_t prop_id = 0;
-    bool is_strong = false;
-    int declared_label_count = 0;
-};
-
 static std::optional<ResolvedColumnProperty> resolveColumnProperty(const PlanContext& ctx,
                                                                    const binder::BoundColumnRef& ref) {
     for (const auto& [canonical_slot, pe] : ctx.extraction_info) {
@@ -1647,66 +1626,25 @@ static std::optional<ResolvedColumnProperty> resolveColumnProperty(const PlanCon
     return std::nullopt;
 }
 
-/// Try to extract a property=value condition from a BoundBinaryOp.
-/// Accepts both unlowered BoundPropertyRef and the BoundColumnRef form that
-/// column-rewrite produces for flat property columns.
+static LabelId anonLabelId(const PlanContext& ctx) {
+    for (const auto& [lid, ldef] : ctx.label_defs)
+        if (ldef.name == kAnonLabelName)
+            return lid;
+    return INVALID_LABEL_ID;
+}
+
+static optimizer::ColumnPropertyResolver columnPropertyResolver(const PlanContext& ctx) {
+    return [&ctx](const binder::BoundColumnRef& ref) { return resolveColumnProperty(ctx, ref); };
+}
+
 static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const binder::BoundBinaryOp& binop,
                                                                        const PlanContext& ctx) {
-    if (!std::holds_alternative<binder::BoundLiteral>(binop.right))
-        return std::nullopt;
-    auto& lit = std::get<binder::BoundLiteral>(binop.right);
+    return optimizer::extractIndexableCondition(binop, anonLabelId(ctx), columnPropertyResolver(ctx));
+}
 
-    auto pv = valueToPropertyValue(lit.value);
-    if (std::holds_alternative<std::monostate>(pv))
-        return std::nullopt;
-
-    BoundIndexableCondition cond;
-    cond.op = binop.op;
-    cond.value = std::move(pv);
-
-    if (std::holds_alternative<std::unique_ptr<binder::BoundPropertyRef>>(binop.left)) {
-        auto& prop_ref = std::get<std::unique_ptr<binder::BoundPropertyRef>>(binop.left);
-        if (prop_ref->candidates.empty())
-            return std::nullopt;
-        LabelId anon_id = INVALID_LABEL_ID;
-        for (const auto& [lid, ldef] : ctx.label_defs) {
-            if (ldef.name == kAnonLabelName) {
-                anon_id = lid;
-                break;
-            }
-        }
-        LabelId first_label = INVALID_LABEL_ID;
-        int declared = 0;
-        for (const auto& cand : prop_ref->candidates) {
-            if (cand.label_id == anon_id || cand.label_id == INVALID_LABEL_ID)
-                continue;
-            if (declared == 0) {
-                first_label = cand.label_id;
-                cond.prop_id = cand.prop_id;
-            }
-            declared++;
-        }
-        cond.declared_label_count = declared;
-        cond.label_id = declared == 1 ? first_label : prop_ref->candidates[0].label_id;
-        cond.prop_id = declared == 1 ? cond.prop_id : prop_ref->candidates[0].prop_id;
-        cond.property_name = prop_ref->property_name;
-        cond.is_strong = prop_ref->strong_mode;
-        return cond;
-    }
-
-    if (std::holds_alternative<binder::BoundColumnRef>(binop.left)) {
-        auto resolved = resolveColumnProperty(ctx, std::get<binder::BoundColumnRef>(binop.left));
-        if (!resolved)
-            return std::nullopt;
-        cond.property_name = resolved->name;
-        cond.label_id = resolved->label_id;
-        cond.prop_id = resolved->prop_id;
-        cond.is_strong = resolved->is_strong;
-        cond.declared_label_count = resolved->declared_label_count;
-        return cond;
-    }
-
-    return std::nullopt;
+static std::optional<BoundIndexableCondition> tryExtractNormalizedBoundCondition(const binder::BoundBinaryOp& binop,
+                                                                                 const PlanContext& ctx) {
+    return optimizer::extractNormalizedIndexableCondition(binop, anonLabelId(ctx), columnPropertyResolver(ctx));
 }
 
 /// Extract the variable name from a property object expression (`n.prop`).
@@ -1724,43 +1662,6 @@ static std::string expressionVariableName(const binder::BoundExpression& expr) {
             return expressionVariableName((*cast)->object);
     }
     return {};
-}
-
-static std::optional<cypher::BinaryOperator> reverseComparison(cypher::BinaryOperator op) {
-    switch (op) {
-    case cypher::BinaryOperator::GT:
-        return cypher::BinaryOperator::LT;
-    case cypher::BinaryOperator::GTE:
-        return cypher::BinaryOperator::LTE;
-    case cypher::BinaryOperator::LT:
-        return cypher::BinaryOperator::GT;
-    case cypher::BinaryOperator::LTE:
-        return cypher::BinaryOperator::GTE;
-    case cypher::BinaryOperator::EQ:
-        return cypher::BinaryOperator::EQ;
-    default:
-        return std::nullopt;
-    }
-}
-
-/// Like tryExtractBoundCondition, but also accepts the normalized form
-/// `literal <op> variable.prop` (which Cypher produces for `$end > m.date`).
-static std::optional<BoundIndexableCondition> tryExtractNormalizedBoundCondition(const binder::BoundBinaryOp& binop,
-                                                                                 const PlanContext& ctx) {
-    if (auto cond = tryExtractBoundCondition(binop, ctx))
-        return cond;
-
-    if (!std::holds_alternative<binder::BoundLiteral>(binop.left))
-        return std::nullopt;
-    auto reversed = reverseComparison(binop.op);
-    if (!reversed)
-        return std::nullopt;
-
-    binder::BoundBinaryOp swapped;
-    swapped.op = *reversed;
-    swapped.left = optimizer::cloneBoundExpression(binop.right);
-    swapped.right = optimizer::cloneBoundExpression(binop.left);
-    return tryExtractBoundCondition(swapped, ctx);
 }
 
 static void collectAndConjuncts(const binder::BoundExpression& expr, std::vector<const binder::BoundExpression*>& out) {
