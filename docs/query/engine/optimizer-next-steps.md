@@ -2,8 +2,7 @@
 
 > 状态：2026-11-26。
 > - P0 / P1 已完成并合入；
-> - P1.3 正在当前 `refactor/index-access-path-optimizer` 分支实现（extraction
->   resolver 已抽出，physical planner 接线与 P1.4 尚未完成）；
+> - P1.3 已完成；P1.4 仍待开始；
 > - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
 
 ## 1. 目标边界
@@ -72,11 +71,12 @@ Physical planner
 - 明确 user slot / internal column 的分配者；
 - 增加“optimizer 后不存在未登记用户 slot”的校验。
 
-### P1.3 — IndexCondition extraction resolver（进行中）
+### P1.3 — IndexCondition extraction resolver（已完成）
 
-当前已新增 `optimizer/analysis/index_condition` 的 extraction API
-（`IndexableCondition` / `ResolvedProperty` / `extractNormalizedIndexableCondition`），
-physical planner 仍在用旧实现；接线完成前不标记完成。
+`optimizer/analysis/index_condition` 已提供 `IndexableCondition` /
+`ResolvedProperty` / `ColumnPropertyResolver` / normalized extraction；
+physical planner 删除重复实现，只保留 `PlanContext.extraction_info` 到 resolver
+的 adapter。
 
 **问题**：`tryExtractBoundCondition` / `resolveColumnProperty` 仍留在 physical planner，
 因为把 `BoundPropertyRef` / `BoundColumnRef` 还原为 `{label, prop_id, property_name,
