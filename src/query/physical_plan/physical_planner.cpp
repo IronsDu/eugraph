@@ -4103,7 +4103,20 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_types.push_back(binder::BoundType::VertexRef());
                 }
                 std::unique_ptr<PhysicalOperator> result;
-                if (val.index_scan_values && val.index_id != 0) {
+                if (val.index_scan && val.index_id != 0) {
+                    auto mode = val.index_eq_values.empty() ? IndexScanPhysicalOp::ScanMode::RANGE
+                                                            : IndexScanPhysicalOp::ScanMode::EQUALITY;
+                    std::optional<std::vector<PropertyValue>> lower;
+                    std::optional<std::vector<PropertyValue>> upper;
+                    if (val.index_lower)
+                        lower = std::vector<PropertyValue>{*val.index_lower};
+                    if (val.index_upper)
+                        upper = std::vector<PropertyValue>{*val.index_upper};
+                    result = std::make_unique<IndexScanPhysicalOp>(
+                        val.variable, val.index_id, val.index_prop_ids, mode, val.index_eq_values, lower, upper,
+                        std::vector<binder::BoundType>(output_types), store, ctx.schema, 0,
+                        val.index_lower_inclusive, val.index_upper_inclusive);
+                } else if (val.index_scan_values && val.index_id != 0) {
                     result = std::make_unique<IndexScanValuesPhysicalOp>(val.variable, val.index_id, store,
                                                                          output_types, output_schema);
                 } else {
@@ -4377,11 +4390,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             trySetVarlenOrFilters(v, **vle_ptr, ctx);
                     }
 
-                    // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
+                    // Transitional fallback for shapes the logical access-path
+                    // pass does not cover yet (e.g. Filter over a Project or
+                    // Expand). The optimizer pass handles direct Filter(LabelScan).
                     if (std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {
                         auto& scan_op = std::get<binder::BoundLabelScanOp>(v.child);
-                        // Index scan only when single label (multi-label requires runtime intersection)
-                        if (scan_op.label_ids.size() == 1) {
+                        if (!scan_op.index_scan && scan_op.label_ids.size() == 1) {
                             auto def_it = ctx.label_defs.find(scan_op.label_ids[0]);
                             if (def_it != ctx.label_defs.end()) {
                                 std::vector<const binder::BoundBinaryOp*> conditions;
