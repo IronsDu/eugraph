@@ -355,7 +355,10 @@ ApplyRuleTask::~ApplyRuleTask() {
         // (e.g. topology-form "any") than the local context. The final
         // O_INPUTS of the round makes every completed winner visible.
         for (Winner& w : group.winners) {
-            if (!w.done())
+            // A placeholder winner has INVALID_EXPR_ID and must never look
+            // complete; extractChosen would otherwise see a done-but-invalid
+            // winner and hide the real missing implementation/rule.
+            if (!w.done() && w.plan() != INVALID_EXPR_ID)
                 w.setDone(true);
         }
         group.optimized = true;
@@ -602,7 +605,10 @@ OInputsTask::~OInputsTask() {
         // (e.g. topology-form "any") than the local context. The final
         // O_INPUTS of the round makes every completed winner visible.
         for (Winner& w : group.winners) {
-            if (!w.done())
+            // A placeholder winner has INVALID_EXPR_ID and must never look
+            // complete; extractChosen would otherwise see a done-but-invalid
+            // winner and hide the real missing implementation/rule.
+            if (!w.done() && w.plan() != INVALID_EXPR_ID)
                 w.setDone(true);
         }
         group.optimized = true;
