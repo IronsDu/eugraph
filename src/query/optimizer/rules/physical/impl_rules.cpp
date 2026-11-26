@@ -354,6 +354,14 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexJoinRule::substitute(GroupE
         std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(out), std::vector<GroupId>{source}));
     return result;
 }
+PatternNode ImplPatternComprehensionApplyRule::pattern() const {
+    return {OptNodeType::PatternComprehensionApply, {{}, {}}};
+}
+std::vector<std::unique_ptr<GroupExpr>> ImplPatternComprehensionApplyRule::substitute(GroupExpr& expr,
+                                                                                      Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::PatternComprehensionApply);
+}
+
 PatternNode ImplIndexJoinRule::pattern() const {
     return {OptNodeType::IndexJoin, {{}}};
 }

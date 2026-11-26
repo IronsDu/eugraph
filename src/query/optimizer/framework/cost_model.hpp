@@ -65,6 +65,8 @@ enum class PhysicalOpTag {
     PathCount,
     // Destination-index / reverse-chain access path candidate.
     IndexJoin,
+    // Pattern comprehension correlated apply.
+    PatternComprehensionApply,
 };
 
 // ============================================================

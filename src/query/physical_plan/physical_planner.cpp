@@ -3739,6 +3739,13 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
     optimizer::lowerEdgeUniquenessRefs(materialized, ctx.var_slots);
     optimizer::lowerPredicateRefs(materialized, ctx.var_slots);
+    PlanRefIndex endpoint_expr_refs;
+    collectPlanRefsInto(materialized, endpoint_expr_refs);
+    std::unordered_map<std::string, int> endpoint_field_refs;
+    countPlanFieldRefs(materialized, endpoint_field_refs);
+    rewriteDstBoundExpandFilters(materialized, ctx.read_only,
+                                 endpoint_expr_refs.complete ? &endpoint_expr_refs.expr_refs : nullptr,
+                                 &endpoint_field_refs);
     ctx.alias_map = optimizer::collectAliasSlotMap(materialized, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(materialized, SubtreeTrait::PatternComprehension);
     ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver(), nullptr, &ctx.label_defs);
@@ -3751,6 +3758,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     optimizer::lowerAliasPassthrough(materialized, ctx.extraction_info, ctx.var_slots, ctx.alias_map,
                                      ctx.slot_allocator);
     optimizer::lowerColumnIndices(materialized, ctx.extraction_info, ctx.resolver());
+    optimizer::rewritePatternComprehensionAnchorShare(materialized, ctx.slot_allocator, ctx.var_slots);
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);

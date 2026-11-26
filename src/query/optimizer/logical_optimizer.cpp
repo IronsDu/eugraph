@@ -99,12 +99,10 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     if (!plan.chosen)
         spdlog::debug("[optimizer] no CBO winner; using RBO logical plan");
 
-    // Full-object Enricher lowering (VertexEnrich/EdgeEnrich/PathEnrich) is
-    // not yet safe for all alias/bound-variable plans. Until that lowering is
-    // completed, fall back to planBound for plans whose CBO winner contains a
-    // full-object enforcer. Flat PropertyExtract enforcers remain enabled.
+    // Full-object Enricher lowering is not yet safe for alias/bound-variable
+    // plans; stay on RBO until those rewrites run on the CBO path too.
     if (plan.chosen && hasFullObjectEnricher(*plan.chosen)) {
-        spdlog::debug("[optimizer] Chosen plan contains full-object Enricher; falling back to planBound");
+        spdlog::warn("[CBO] chosen plan contains full-object Enricher; falling back to RBO");
         plan.chosen.reset();
     }
 
@@ -133,6 +131,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplCorrelatedSourceRule>());
     rules_.addRule(std::make_unique<ImplScanRule>());
     rules_.addRule(std::make_unique<ImplLabelScanRule>());
+    rules_.addRule(std::make_unique<ImplPatternComprehensionApplyRule>());
     rules_.addRule(std::make_unique<ImplIndexJoinRule>());
     rules_.addRule(std::make_unique<ImplFilterRule>());
     rules_.addRule(std::make_unique<ImplProjectRule>());

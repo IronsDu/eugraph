@@ -47,6 +47,8 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     // + join. Local cost is deliberately lower than the forward filter so the
     // candidate is considered; the physical lowering still validates shape and
     // falls back when no usable index/chain exists.
+    case PhysicalOpTag::PatternComprehensionApply:
+        return Cost(group_lp.cardinality);
     case PhysicalOpTag::IndexJoin:
         // Access-path replacement: its child is the source anchor, not the
         // forward Expand chain. Keep the candidate below Filter(Expand) local
