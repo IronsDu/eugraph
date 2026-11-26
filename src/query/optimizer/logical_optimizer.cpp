@@ -105,11 +105,6 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     if (!plan.chosen)
         spdlog::debug("[optimizer] no CBO winner; using RBO logical plan");
 
-    if (plan.chosen && hasLeftJoin(*plan.chosen)) {
-        spdlog::warn("[CBO] chosen plan contains LeftJoin; falling back to RBO");
-        plan.chosen.reset();
-    }
-
     // Always populate plan.root as RBO fallback. The RBO tree is not inside
     // the Enricher mechanism, so apply the binder's property demand to it
     // explicitly; the CBO chosen path gets this through PhysProp/PropertyExtract.
@@ -118,6 +113,7 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
         spdlog::warn("[CBO] logical plan contains LeftJoin; falling back to RBO");
         plan.chosen.reset();
     }
+
     // TODO experiment: no fallback property pushdown
 }
 
