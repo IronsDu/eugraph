@@ -2571,6 +2571,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         proj_item.expr = std::move(*bound_expr);
         proj_item.alias = std::move(alias);
         proj_item.result_type = getBoundExprType(proj_item.expr);
+        if (auto* ref = std::get_if<BoundColumnRef>(&proj_item.expr))
+            proj_item.output_slot = ref->slot_id;
         proj->items.push_back(std::move(proj_item));
     }
     proj->child = std::move(child);
@@ -3153,6 +3155,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 proj_item.alias = col_info->name;
                 proj_item.result_type = getBoundExprType(proj_item.expr);
                 proj_item.input_slot = col_info->slot_id;
+                proj_item.output_slot = col_info->slot_id;
                 proj->items.push_back(std::move(proj_item));
                 with_outputs.emplace_back(col_info->name, proj_item.result_type);
                 with_output_slots.push_back(col_info->slot_id);
@@ -3175,6 +3178,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                     out_slot = ref->slot_id;
                 else
                     out_slot = allocateNamedSlot(alias);
+                proj_item.output_slot = out_slot;
                 proj->items.push_back(std::move(proj_item));
                 with_outputs.emplace_back(alias, proj_item.result_type);
                 with_output_slots.push_back(out_slot);
@@ -3367,6 +3371,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // Preserve metadata (source_label, source_prop_id, strong_typed) from old
     // symbols so that downstream SET/REMOVE can resolve property IDs.
     auto old_symbols = std::move(ctx_.symbols);
+    ctx_.symbols.clear();
     ctx_.next_column_index = 0;
     for (size_t i = 0; i < with_outputs.size(); ++i) {
         ColumnInfo info;
