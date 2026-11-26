@@ -295,7 +295,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     plan_ctx.var_slots = binder.ctx().var_slots;
     for (const auto& [name, info] : binder.ctx().symbols) {
         if (info.slot_id != binder::INVALID_SLOT_ID)
-            plan_ctx.var_slots.emplace(name, info.slot_id);
+            plan_ctx.var_slots[name] = info.slot_id;
     }
     plan_ctx.scoped_var_slots = binder.ctx().scoped_bindings;
     for (const auto& [name, info] : binder.ctx().symbols) {

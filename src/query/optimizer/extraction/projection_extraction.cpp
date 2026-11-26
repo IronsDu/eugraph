@@ -302,6 +302,8 @@ void ensureSlotsInExpr(const binder::BoundExpression& expr, NameSlotMap& name_to
 
 /// Recursive helper for allocateAllSlots. Walks the bound tree and ensures
 /// every variable-producing op and every alias gets a slot.
+static thread_local bool g_alloc_inside_left_join = false;
+
 void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name_to_slot,
                        binder::SlotAllocator& alloc) {
     std::visit(
@@ -341,8 +343,16 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                         ensureSlotsInExpr(item.expr, name_to_slot, alloc);
                     for (auto& item : v->items) {
                         std::string src_name = forwardRefName(item.expr);
-                        item.input_slot =
-                            src_name.empty() ? binder::INVALID_SLOT_ID : slotForName(name_to_slot, src_name);
+                        if (auto* cref = std::get_if<binder::BoundColumnRef>(&item.expr);
+                            cref && cref->slot_id != binder::INVALID_SLOT_ID) {
+                            // The bind-time slot is scope-stable. Looking up the
+                            // bare name here would resolve a fresh MATCH b to an
+                            // older WITH alias b (TCK With7).
+                            item.input_slot = cref->slot_id;
+                        } else {
+                            item.input_slot =
+                                src_name.empty() ? binder::INVALID_SLOT_ID : slotForName(name_to_slot, src_name);
+                        }
                     }
                     for (auto& item : v->items) {
                         if (item.alias.empty())
@@ -350,6 +360,8 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                         std::string src_name = forwardRefName(item.expr);
                         if (!src_name.empty() && item.alias == src_name && item.input_slot != binder::INVALID_SLOT_ID) {
                             item.alias_slot = item.input_slot;
+                            if (!g_alloc_inside_left_join)
+                                name_to_slot[item.alias] = item.input_slot;
                             continue;
                         }
                         binder::SlotId fresh = alloc.next();
@@ -490,8 +502,15 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                     if (v->child)
                         allocateSlotsInOp(*v->child, name_to_slot, alloc);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
+                if (v) {
+                    bool saved = g_alloc_inside_left_join;
+                    g_alloc_inside_left_join = true;
+                    allocateSlotsInOp(v->left, name_to_slot, alloc);
+                    allocateSlotsInOp(v->right, name_to_slot, alloc);
+                    g_alloc_inside_left_join = saved;
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
@@ -1854,6 +1873,7 @@ NameSlotMap buildFreshExpandMap(const binder::BoundLogicalOperator& root) {
 
 void allocateAllSlots(const binder::BoundLogicalOperator& root, NameSlotMap& name_to_slot,
                       binder::SlotAllocator& alloc) {
+    g_alloc_inside_left_join = false;
     allocateSlotsInOp(root, name_to_slot, alloc);
 }
 
