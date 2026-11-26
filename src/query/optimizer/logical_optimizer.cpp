@@ -1,5 +1,4 @@
 #include "query/optimizer/logical_optimizer.hpp"
-#include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "common/config/env_vars.hpp"
 
 #include "query/optimizer/analysis/requirement_collector.hpp"
@@ -21,27 +20,6 @@ namespace eugraph {
 namespace optimizer {
 
 namespace {
-
-bool hasLeftJoin(const ChosenPlan& plan) {
-    if (plan.tag == PhysicalOpTag::LeftJoin ||
-        std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(plan.op))
-        return true;
-    for (const auto& child : plan.children)
-        if (child && hasLeftJoin(*child))
-            return true;
-    return false;
-}
-
-bool hasLeftJoinLogical(binder::BoundLogicalOperator& op) {
-    if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(op))
-        return true;
-    bool found = false;
-    optimizer::forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) {
-        if (!found)
-            found = hasLeftJoinLogical(child);
-    });
-    return found;
-}
 
 } // namespace
 
@@ -109,11 +87,6 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     // the Enricher mechanism, so apply the binder's property demand to it
     // explicitly; the CBO chosen path gets this through PhysProp/PropertyExtract.
     plan.root = memo_.copyOut(root_gid, PhysProp{});
-    if (plan.chosen && hasLeftJoinLogical(plan.root)) {
-        spdlog::warn("[CBO] logical plan contains LeftJoin; falling back to RBO");
-        plan.chosen.reset();
-    }
-
     // TODO experiment: no fallback property pushdown
 }
 
