@@ -297,10 +297,14 @@ LogProp LogPropDeriver::deriveVarLenExpand(const binder::BoundVarLenExpandOp& op
     if (avgDeg == 0.0)
         avgDeg = kDefaultAvgOutDegree;
 
-    // Cap max_hops to avoid combinatorial explosion in estimate
-    int64_t hops = std::min<int64_t>(op.max_hops, 4);
+    // Cap max_hops to avoid combinatorial explosion in estimate. Unbounded
+    // patterns (`*0..`, `*`) carry max_hops < 0; clamping the cap to -1 used to
+    // produce factor 0 and a zero-cardinality (free) VLE, which made every
+    // parent comparison blind. Estimate them as the capped depth instead.
+    const int64_t hops = op.max_hops < 0 ? 4 : std::min<int64_t>(op.max_hops, 4);
+    const int64_t first_hop = std::max<int64_t>(0, op.min_hops);
     double factor = 0.0;
-    for (int64_t h = op.min_hops; h <= hops; ++h) {
+    for (int64_t h = first_hop; h <= hops; ++h) {
         factor += std::pow(avgDeg, static_cast<double>(h));
     }
     lp.cardinality = input.cardinality * factor;
@@ -658,9 +662,10 @@ double LogPropDeriver::deriveCandidateCardinality(const binder::BoundLogicalOper
                 LogProp pseudo = group_lp;
                 pseudo.cardinality = in0;
                 const double avg_deg = expandDegree(val->edge_label_ids, pseudo, val->src_variable);
-                const int64_t hops = std::min<int64_t>(val->max_hops, 4);
+                const int64_t hops = val->max_hops < 0 ? 4 : std::min<int64_t>(val->max_hops, 4);
+                const int64_t first_hop = std::max<int64_t>(0, val->min_hops);
                 double factor = 0.0;
-                for (int64_t h = val->min_hops; h <= hops; ++h)
+                for (int64_t h = first_hop; h <= hops; ++h)
                     factor += std::pow(avg_deg, static_cast<double>(h));
                 return in0 * factor;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {

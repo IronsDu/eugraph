@@ -462,6 +462,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->dst_variable);
                 seed = combine(seed, val->dst_column_index);
                 seed = combine(seed, val->dst_slot_id);
+                seed = combine(seed, val->planner_dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
                 seed = combine(seed, val->all_edge_labels ? 1u : 0u);
@@ -483,6 +484,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->dst_variable);
                 seed = combine(seed, val->dst_column_index);
                 seed = combine(seed, val->dst_slot_id);
+                seed = combine(seed, val->planner_dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
                 seed = combine(seed, val->all_edge_labels ? 1u : 0u);
@@ -506,10 +508,15 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);
                 seed = combine(seed, val->edge_slot_id);
+                seed = combine(seed, val->planner_edge_slot_id);
                 seed = combine(seed, val->bound_edge_list ? 1u : 0u);
                 seed = combine(seed, val->bound_edge_list_col_index);
                 seed = hashBytes(seed, val->prev_edge_var);
                 seed = combine(seed, val->prev_edge_col_index);
+                seed = combine(seed, val->src_filter_index_id);
+                seed = hashPropertyValue(seed, val->src_filter_value);
+                seed = combine(seed, val->dst_filter_index_id);
+                seed = hashPropertyValue(seed, val->dst_filter_value);
                 for (const auto& [lid, pids] : val->edge_prop_filters) {
                     seed = combine(seed, static_cast<uint64_t>(lid));
                     for (const auto& [pid, pv] : pids) {

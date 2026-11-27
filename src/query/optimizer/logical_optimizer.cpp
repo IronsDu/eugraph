@@ -16,6 +16,7 @@
 #include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
 #include "query/optimizer/rules/logical/prune_expand_edge_labels.hpp"
+#include "query/optimizer/rules/logical/prune_varlen_or_filters.hpp"
 #include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
@@ -294,6 +295,8 @@ void LogicalOptimizer::initRules() {
         // may narrow the Expand's edge labels (vertex pruning would be unsound:
         // weak-space values exist outside the declaring label).
         rules_.addRule(std::make_unique<PruneExpandEdgeLabelsRule>());
+        // VLE OR pruning: src/dst index allow-sets on the VLE descriptor.
+        rules_.addRule(std::make_unique<PruneVarlenOrFiltersRule>());
     }
     rules_.addRule(std::make_unique<FilterPushdownRule>());
     rules_.addRule(std::make_unique<JoinCommuteRule>());

@@ -21,6 +21,7 @@
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/logical/prune_expand_edge_labels.hpp"
+#include "query/optimizer/rules/logical/prune_varlen_or_filters.hpp"
 #include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
@@ -3781,4 +3782,156 @@ TEST(PruneExpandEdgeLabelsTest, LeavesVertexPropertiesAndWidePruningAlone) {
         GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
         EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
     }
+}
+
+// ==================== VLE OR-filter pruning (src/dst index allow-sets) ====================
+
+static std::shared_ptr<GraphSchema> makeVleOrCatalog() {
+    auto schema = std::make_shared<GraphSchema>();
+    LabelDef tc;
+    tc.id = LabelId{1};
+    tc.name = "TagClass";
+    PropertyDef name;
+    name.id = 0;
+    name.name = "name";
+    name.type = PropertyType::STRING;
+    tc.properties.push_back(name);
+    LabelDef::IndexDef tc_index;
+    tc_index.index_id = 11;
+    tc_index.name = "idx_tc_name";
+    IndexAccessorDef tc_acc;
+    tc_acc.property_name = "name";
+    tc_index.accessors.push_back(tc_acc);
+    tc_index.state = IndexState::PUBLIC;
+    tc_index.encoding_version = 2;
+    tc.indexes.push_back(tc_index);
+    schema->labels[LabelId{1}] = tc;
+
+    LabelDef tag;
+    tag.id = LabelId{2};
+    tag.name = "Tag";
+    tag.properties.push_back(name);
+    LabelDef::IndexDef tag_index;
+    tag_index.index_id = 12;
+    tag_index.name = "idx_tag_name";
+    IndexAccessorDef tag_acc;
+    tag_acc.property_name = "name";
+    tag_index.accessors.push_back(tag_acc);
+    tag_index.state = IndexState::PUBLIC;
+    tag_index.encoding_version = 2;
+    tag.indexes.push_back(tag_index);
+    schema->labels[LabelId{2}] = tag;
+    return schema;
+}
+
+static BoundExpression makePropertyEq(const std::string& variable, LabelId label, const std::string& property,
+                                      const std::string& literal) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = property;
+    prop->object = BoundVariableRef(variable, BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty candidate;
+    candidate.label_id = label;
+    prop->candidates.push_back(candidate);
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundExpression(std::move(prop));
+    eq->right = BoundLiteral(literal);
+    return BoundExpression(std::move(eq));
+}
+
+static BoundLogicalOperator makeVleOrFilterPlan(bool include_tag_index) {
+    auto vle = std::make_unique<BoundVarLenExpandOp>();
+    vle->src_variable = "tc";
+    vle->dst_variable = "tag";
+    vle->edge_label_ids = {EdgeLabelId{2}};
+    vle->direction = cypher::RelationshipDirection::UNDIRECTED;
+    vle->min_hops = 1;
+    vle->max_hops = 2;
+    if (include_tag_index)
+        vle->dst_label_ids = {LabelId{2}};
+    vle->child = makeLabelScanWithLabel("tc", 0, LabelId{1});
+
+    auto left = makePropertyEq("tc", LabelId{1}, "name", "x");
+    auto right = makePropertyEq("tag", LabelId{2}, "name", "y");
+    auto or_op = std::make_unique<BoundBinaryOp>();
+    or_op->op = cypher::BinaryOperator::OR;
+    or_op->left = std::move(left);
+    or_op->right = std::move(right);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(or_op));
+    filter->child = BoundLogicalOperator(std::move(vle));
+    return BoundLogicalOperator(std::move(filter));
+}
+
+TEST(PruneVarlenOrFiltersTest, AttachesBothAllowSetsAndConsumesFilter) {
+    auto schema = makeVleOrCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto root = makeVleOrFilterPlan(/*include_tag_index=*/true);
+    Memo memo;
+    memo.setCatalog(&catalog);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+
+    PruneVarlenOrFiltersRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    auto* vle = std::get_if<std::unique_ptr<BoundVarLenExpandOp>>(&produced[0]->op);
+    ASSERT_TRUE(vle && *vle);
+    EXPECT_EQ((*vle)->src_filter_index_id, 11u);
+    EXPECT_EQ((*vle)->dst_filter_index_id, 12u);
+    EXPECT_EQ((*vle)->src_filter_value, PropertyValue{std::string("x")});
+    EXPECT_EQ((*vle)->dst_filter_value, PropertyValue{std::string("y")});
+    EXPECT_EQ(produced[0]->group_id, gid);
+    ASSERT_EQ(produced[0]->child_groups.size(), 1u);
+}
+
+TEST(PruneVarlenOrFiltersTest, RequiresBothEndpointsResolvable) {
+    auto schema = makeVleOrCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    PruneVarlenOrFiltersRule rule;
+
+    {
+        auto root = makeVleOrFilterPlan(/*include_tag_index=*/false);
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
+    {
+        auto root = makeVleOrFilterPlan(/*include_tag_index=*/true);
+        Memo memo;
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
+}
+
+TEST(MemoContentHashTest, VarLenOrAllowSetsArePartOfIdentity) {
+    // Regression: the OR allow-set fields were missing from VLE hash/eq, so a
+    // pruned candidate deduped with the unpruned VLE, merged the Filter group
+    // into its own child group, and copyOut recursed forever.
+    auto make_vle = [](uint32_t src_index, uint32_t dst_index) {
+        auto vle = std::make_unique<BoundVarLenExpandOp>();
+        vle->src_variable = "a";
+        vle->dst_variable = "b";
+        vle->edge_label_ids = {EdgeLabelId{3}};
+        vle->min_hops = 0;
+        vle->max_hops = 2;
+        vle->src_filter_index_id = src_index;
+        vle->src_filter_value = PropertyValue{std::string("x")};
+        vle->dst_filter_index_id = dst_index;
+        vle->dst_filter_value = PropertyValue{std::string("y")};
+        vle->child = makeLabelScan("a", 0);
+        return BoundLogicalOperator(std::move(vle));
+    };
+
+    Memo memo;
+    auto plain = make_vle(0, 0);
+    auto pruned = make_vle(11, 12);
+    EXPECT_NE(memo.copyIn(plain), memo.copyIn(pruned)) << "allow-set fields must not dedup away";
 }

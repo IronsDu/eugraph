@@ -27,7 +27,7 @@
 | A1 | ~~`tryBoundEdgeIndexScan`~~ | `Filter(Expand)` + 边属性谓词 → 选边索引，替换 Expand 为 EdgeIndexScan。**已删除**：它无视 Expand 的源约束，`MATCH (a:Person{id:933})-[r:KNOWS]->(b) WHERE r.creationDate>0` 在边索引 ONLINE 后返回 180623 条（正确 5 条）。若要做，必须是规则产出的 descriptor，并显式处理 endpoint 约束 | 删除（本可做：仅无约束源时用规则生成 descriptor） |
 | A2 | `tryPlanCorrelatedIndexProbe` | `Filter(CrossProduct(Unwind, LabelScan))` → `Apply(IndexScanValues)`，并选索引 | rule + correlated-values descriptor |
 | A3 | `tryPlanListIndexJoin` | `Filter(CrossProduct)` 的 `x.prop IN left.list` → ListIndexJoin，选索引并写 `ctx.expand_allowed_filter` | rule + descriptor |
-| A4 | `trySetVarlenOrFilters` | `OR` 谓词 → VLE 的 `src_filter_index_id` / `dst_filter_index_id` allow-set | `optimizer/analysis` 计算 + VLE descriptor 字段 |
+| A4 | ~~`trySetVarlenOrFilters`~~ | `OR` 谓词 → VLE 的 src/dst 索引 allow-set。**已迁出**：physical planner 不再识别 OR/选索引；单职责规则 `PruneVarlenOrFilters` 消费 Filter 并把两侧 allow-set 写进 VLE descriptor（两侧都必须可解析）。迁移过程发现并修掉框架级缺陷：VLE 的 allow-set 字段缺失于 content hash/eq，导致候选与未剪枝 VLE 去重 → `mergeGroups` 把父 group 并进子 group → 自引用 group → `copyOut` 爆栈 | 规则 + VLE descriptor（已完成） |
 | A5 | ~~`collectStaticPruneHints` / `collectStaticVertexPruneLabels` / `collectStaticEdgePruneLabels`~~ | `IS NOT NULL` 谓词 → 限制扫描 label / 边 label。**已迁出**：顶点侧删除（弱空间下按 schema 裁剪不安全）；边侧改为逻辑规则 `PruneExpandEdgeLabels`（边是纯强模式，语义等价） | ~~optimizer analysis~~ 已解决 |
 
 补充：`GenerateIndexJoinRule`（现属 logical rules）内部仍有 catalog 兜底 `find_idx`
@@ -93,6 +93,19 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
+- **A4 VLE OR 剪枝归位（完成）**：删除 physical planner 的 `trySetVarlenOrFilters`（识别
+  `src.p = a OR dst.q = b`、选索引、写 VLE 字段）。新增单职责逻辑规则
+  `PruneVarlenOrFilters`：消费该 Filter，把 src/dst 两侧 index allow-set 写进 VLE
+  descriptor；**两侧都必须能解析**（只有单侧时算子的 OR 发射退化为恒真，不等价于 OR
+  谓词，故不产生候选）。physical 只把 descriptor 字段交给现有 VLE 算子执行。
+  迁移中发现并修复的框架缺陷：
+  - VLE 的 `src/dst_filter_*` 字段缺失于 `operator_hash` / `operator_eq` → 剪枝候选与
+    未剪枝 VLE 去重 → `Memo::mergeGroups` 把父 group 并进子 group → 自引用 group →
+    `Memo::copyOut` 无限递归爆栈（gdb 确认）。已把字段纳入内容身份，并在 `mergeGroups`
+    加"会形成自引用则拒绝合并 + 警告"的防御；
+  - VLE `*0..` 无界 `max_hops=-1` 时估计为 0 行/0 成本（父比较全盲），改为按深度上限估计；
+  - `cloneBoundLogicalOperator` 补 VLE/Expand 的 `dst_slot_id`/`planner_dst_slot_id` 与
+    VLE 的 `src/dst_filter_*`（此前 clone 丢 slot 身份与 allow-set），加 clone 回归测试。
 - **J8 第一步（PlanProp / 按候选基数）**：`Winner` 记录每个候选自己的输出基数
   （`outputCardinality`），`LogPropDeriver::deriveCandidateCardinality` 用已 costed 的
   子 winner 基数推导父候选基数，O_INPUTS 的 local cost 与父估算都改用它。这样

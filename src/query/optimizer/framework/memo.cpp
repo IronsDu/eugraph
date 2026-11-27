@@ -1,6 +1,7 @@
 #include "query/optimizer/framework/memo.hpp"
 
 #include <algorithm>
+#include <spdlog/spdlog.h>
 #include <unordered_set>
 
 #include "query/optimizer/analysis/requirement_collector.hpp"
@@ -630,6 +631,26 @@ GroupId Memo::mergeGroups(GroupId g1, GroupId g2) {
     Group& to_group = getGroup(g1);
     Group& from_group = getGroup(g2);
 
+    // Merging is only valid when neither side references the other: every
+    // expression that references g2 is rewritten to g1, so a moved expression
+    // referencing g1 (or a kept expression in g1 referencing g2) would become a
+    // self-reference and make copyOut recurse forever. Content equality should
+    // already prevent this; the guard keeps a future hash/eq gap from turning
+    // into a crash.
+    auto references = [this](const Group& group, GroupId gid) {
+        for (ExprId eid : group.logical_exprs) {
+            for (GroupId child : getExpr(eid).child_groups) {
+                if (child == gid)
+                    return true;
+            }
+        }
+        return false;
+    };
+    if (references(to_group, g2) || references(from_group, g1)) {
+        spdlog::warn("[memo] refusing group merge {} <- {}: would create a self-referencing group", g2, g1);
+        return g1;
+    }
+
     // The global hash index depends on child_groups. Unregister every
     // expression whose child reference is about to be rewritten, rewrite it,
     // then register it again under the new hash. Without this step
@@ -923,6 +944,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->edge_column_index = val->edge_column_index;
                 c->dst_variable = val->dst_variable;
                 c->dst_column_index = val->dst_column_index;
+                c->dst_slot_id = val->dst_slot_id;
+                c->planner_dst_slot_id = val->planner_dst_slot_id;
                 c->edge_label_ids = val->edge_label_ids;
                 c->all_edge_labels = val->all_edge_labels;
                 c->direction = val->direction;
@@ -981,6 +1004,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->src_column_index = val->src_column_index;
                 c->dst_variable = val->dst_variable;
                 c->dst_column_index = val->dst_column_index;
+                c->dst_slot_id = val->dst_slot_id;
+                c->planner_dst_slot_id = val->planner_dst_slot_id;
                 c->edge_label_ids = val->edge_label_ids;
                 c->all_edge_labels = val->all_edge_labels;
                 c->direction = val->direction;
@@ -1004,6 +1029,10 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->bound_edge_list_col_index = val->bound_edge_list_col_index;
                 c->prev_edge_var = val->prev_edge_var;
                 c->prev_edge_col_index = val->prev_edge_col_index;
+                c->src_filter_index_id = val->src_filter_index_id;
+                c->src_filter_value = val->src_filter_value;
+                c->dst_filter_index_id = val->dst_filter_index_id;
+                c->dst_filter_value = val->dst_filter_value;
                 c->edge_prop_filters = val->edge_prop_filters;
                 c->edge_prop_filter_exprs = val->edge_prop_filter_exprs;
                 return c;

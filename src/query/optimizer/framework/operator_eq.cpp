@@ -439,6 +439,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->dst_slot_id != bv->dst_slot_id)
                     return false;
+                if (av->planner_dst_slot_id != bv->planner_dst_slot_id)
+                    return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
                     return false;
                 if (av->all_edge_labels != bv->all_edge_labels)
@@ -462,6 +464,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->dst_column_index != bv->dst_column_index)
                     return false;
                 if (av->dst_slot_id != bv->dst_slot_id)
+                    return false;
+                if (av->planner_dst_slot_id != bv->planner_dst_slot_id)
                     return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
                     return false;
@@ -494,6 +498,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->edge_slot_id != bv->edge_slot_id)
                     return false;
+                if (av->planner_edge_slot_id != bv->planner_edge_slot_id)
+                    return false;
                 if (av->bound_edge_list != bv->bound_edge_list)
                     return false;
                 if (av->bound_edge_list_col_index != bv->bound_edge_list_col_index)
@@ -501,6 +507,10 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->prev_edge_var != bv->prev_edge_var)
                     return false;
                 if (av->prev_edge_col_index != bv->prev_edge_col_index)
+                    return false;
+                if (av->src_filter_index_id != bv->src_filter_index_id ||
+                    av->src_filter_value != bv->src_filter_value ||
+                    av->dst_filter_index_id != bv->dst_filter_index_id || av->dst_filter_value != bv->dst_filter_value)
                     return false;
                 if (av->edge_prop_filters != bv->edge_prop_filters)
                     return false;

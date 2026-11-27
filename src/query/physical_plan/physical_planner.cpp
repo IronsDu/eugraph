@@ -1523,90 +1523,6 @@ static void collectAndConjuncts(const binder::BoundExpression& expr, std::vector
     out.push_back(&expr);
 }
 
-// Detect `Filter(src.prop = v OR dst.prop = v)` above a VarLenExpand and
-// attach index-value pruning hints. The VLE then implements the OR by
-// checking source/destination membership without a UNION rewrite.
-static bool trySetVarlenOrFilters(const binder::BoundFilterOp& filter, binder::BoundVarLenExpandOp& vle,
-                                  const PlanContext& ctx) {
-    const auto* or_op_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
-    if (!or_op_ptr || !*or_op_ptr || (*or_op_ptr)->op != cypher::BinaryOperator::OR)
-        return false;
-    auto& or_op = **or_op_ptr;
-
-    auto extract_side = [&](const binder::BoundExpression& expr, std::string& var,
-                            std::optional<BoundIndexableCondition>& cond) {
-        const auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr);
-        if (!bp || !*bp || (*bp)->op != cypher::BinaryOperator::EQ)
-            return false;
-        auto extracted = tryExtractBoundCondition(**bp, ctx);
-        if (!extracted)
-            return false;
-        if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*bp)->left)) {
-            var = cref->name;
-        } else if (const auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&(*bp)->left)) {
-            if (!prop || !*prop)
-                return false;
-            if (auto* obj = std::get_if<binder::BoundColumnRef>(&(*prop)->object))
-                var = obj->name;
-        }
-        if (var.empty())
-            return false;
-        cond = std::move(extracted);
-        return true;
-    };
-
-    std::string side_a_var, side_b_var;
-    std::optional<BoundIndexableCondition> cond_a, cond_b;
-    if (!extract_side(or_op.left, side_a_var, cond_a) || !extract_side(or_op.right, side_b_var, cond_b))
-        return false;
-    if (side_a_var == vle.dst_variable && side_b_var == vle.src_variable) {
-        std::swap(side_a_var, side_b_var);
-        std::swap(cond_a, cond_b);
-    }
-    if (side_a_var != vle.src_variable || side_b_var != vle.dst_variable)
-        return false;
-
-    auto find_index = [&](LabelId label, const std::string& prop_name) -> uint32_t {
-        auto it = ctx.label_defs.find(label);
-        if (it == ctx.label_defs.end())
-            return 0;
-        for (const auto& idx : it->second.indexes) {
-            if (!planUsableIndex(idx, ctx))
-                continue;
-            for (const auto& acc : idx.accessors)
-                if (acc.property_name == prop_name)
-                    return idx.index_id;
-        }
-        return 0;
-    };
-
-    LabelId src_label = INVALID_LABEL_ID;
-    LabelId dst_label = INVALID_LABEL_ID;
-    if (const auto* child_scan = std::get_if<binder::BoundLabelScanOp>(&vle.child)) {
-        if (!child_scan->label_ids.empty())
-            src_label = child_scan->label_ids[0];
-    }
-    if (!vle.dst_label_ids.empty())
-        dst_label = vle.dst_label_ids[0];
-    if (src_label == INVALID_LABEL_ID || dst_label == INVALID_LABEL_ID)
-        return false;
-
-    uint32_t src_idx = find_index(src_label, cond_a->property_name);
-    uint32_t dst_idx = find_index(dst_label, cond_b->property_name);
-    if (src_idx == 0 && dst_idx == 0)
-        return false;
-
-    if (src_idx != 0) {
-        vle.src_filter_index_id = src_idx;
-        vle.src_filter_value = cond_a->value;
-    }
-    if (dst_idx != 0) {
-        vle.dst_filter_index_id = dst_idx;
-        vle.dst_filter_value = cond_b->value;
-    }
-    return true;
-}
-
 // ==================== Bound Plan Pipeline ====================
 
 namespace {
@@ -4098,12 +4014,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
-                    // Attach OR index-value pruning hints to a child VarLenExpand.
-                    if (auto* vle_ptr = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&v.child)) {
-                        if (vle_ptr && *vle_ptr)
-                            trySetVarlenOrFilters(v, **vle_ptr, ctx);
-                    }
-
                     // ── List index join: Filter(CrossProduct) with x.prop IN left.list ──
                     if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
                         if (join_op && *join_op) {
