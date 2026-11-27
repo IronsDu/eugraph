@@ -24,7 +24,7 @@
 
 | # | 函数 | 行为 | 目标归属 |
 |---|---|---|---|
-| A1 | `tryBoundEdgeIndexScan` | `Filter(Expand)` + 边属性谓词 → 选边索引，替换 Expand 为 EdgeIndexScan | `GenerateEdgeIndexScan` + descriptor + `ImplEdgeIndexScan` |
+| A1 | ~~`tryBoundEdgeIndexScan`~~ | `Filter(Expand)` + 边属性谓词 → 选边索引，替换 Expand 为 EdgeIndexScan。**已删除**：它无视 Expand 的源约束，`MATCH (a:Person{id:933})-[r:KNOWS]->(b) WHERE r.creationDate>0` 在边索引 ONLINE 后返回 180623 条（正确 5 条）。若要做，必须是规则产出的 descriptor，并显式处理 endpoint 约束 | 删除（本可做：仅无约束源时用规则生成 descriptor） |
 | A2 | `tryPlanCorrelatedIndexProbe` | `Filter(CrossProduct(Unwind, LabelScan))` → `Apply(IndexScanValues)`，并选索引 | rule + correlated-values descriptor |
 | A3 | `tryPlanListIndexJoin` | `Filter(CrossProduct)` 的 `x.prop IN left.list` → ListIndexJoin，选索引并写 `ctx.expand_allowed_filter` | rule + descriptor |
 | A4 | `trySetVarlenOrFilters` | `OR` 谓词 → VLE 的 `src_filter_index_id` / `dst_filter_index_id` allow-set | `optimizer/analysis` 计算 + VLE descriptor 字段 |
@@ -87,6 +87,12 @@
   - 边侧仍可裁剪且语义等价（边是纯强模式，无弱空间）：新增单职责逻辑规则
     `PruneExpandEdgeLabels`——`Filter(r.p IS NOT NULL)` 覆在 Expand 上时，把 Expand 的
     `edge_label_ids` 收窄到声明 p 的边 label（整条 Filter 被消费；混合谓词留给其他规则）。
+- **A1 边索引捷径删除**：`tryBoundEdgeIndexScan`（physical planner 里唯一选择边索引的地方）
+  在边索引 ONLINE 后返回**错误结果**（`MATCH (a:Person{id:933})-[r:KNOWS]->(b) WHERE
+  r.creationDate>0`：180623 vs 正确 5）——它把 `Filter(Expand)` 整体替换为全局边索引扫描，
+  没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
+  `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
+  通用 Expand+Filter 计划，结果正确。
 - **J8 第一步（PlanProp / 按候选基数）**：`Winner` 记录每个候选自己的输出基数
   （`outputCardinality`），`LogPropDeriver::deriveCandidateCardinality` 用已 costed 的
   子 winner 基数推导父候选基数，O_INPUTS 的 local cost 与父估算都改用它。这样

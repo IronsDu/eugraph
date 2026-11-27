@@ -1431,20 +1431,6 @@ static PropertyType boundExprToPropertyType(const binder::BoundExpression& expr)
 
 // ==================== Bound Plan Index Scan Optimization ====================
 
-/// Extract AND-chain of BoundBinaryOp conditions from a BoundExpression.
-static void collectBoundConditions(const binder::BoundExpression& pred,
-                                   std::vector<const binder::BoundBinaryOp*>& conditions) {
-    if (auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&pred)) {
-        auto& binop = *bp;
-        if (binop->op == cypher::BinaryOperator::AND) {
-            collectBoundConditions(binop->left, conditions);
-            collectBoundConditions(binop->right, conditions);
-        } else {
-            conditions.push_back(binop.get());
-        }
-    }
-}
-
 using BoundIndexableCondition = optimizer::IndexableCondition;
 using ResolvedColumnProperty = optimizer::ResolvedProperty;
 
@@ -1619,114 +1605,6 @@ static bool trySetVarlenOrFilters(const binder::BoundFilterOp& filter, binder::B
         vle.dst_filter_value = cond_b->value;
     }
     return true;
-}
-
-std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
-    const binder::BoundExpandOp& expand_op, const std::vector<const binder::BoundBinaryOp*>& conditions,
-    EdgeLabelId label_id, const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
-    std::unordered_map<uint16_t, BoundIndexableCondition> prop_conditions;
-    for (auto* cond : conditions) {
-        auto extracted = tryExtractNormalizedBoundCondition(*cond, ctx);
-        if (extracted.has_value())
-            prop_conditions[extracted->prop_id] = std::move(*extracted);
-    }
-
-    if (prop_conditions.empty())
-        return std::nullopt;
-
-    for (const auto& idx : edge_label_def.indexes) {
-        if (!planUsableIndex(idx, ctx))
-            continue;
-
-        size_t match_count = 0;
-        bool last_is_range = false;
-        std::vector<PropertyValue> eq_values;
-        std::optional<PropertyValue> range_start;
-        std::optional<PropertyValue> range_end;
-
-        for (size_t i = 0; i < idx.prop_ids.size(); ++i) {
-            uint16_t pid = idx.prop_ids[i];
-            auto it = prop_conditions.find(pid);
-            if (it == prop_conditions.end())
-                break;
-
-            auto& cond = it->second;
-            if (i < idx.prop_ids.size() - 1) {
-                if (cond.op != cypher::BinaryOperator::EQ)
-                    break;
-                eq_values.push_back(std::move(cond.value));
-                match_count++;
-            } else {
-                if (cond.op == cypher::BinaryOperator::EQ) {
-                    eq_values.push_back(std::move(cond.value));
-                    match_count++;
-                } else if (cond.op == cypher::BinaryOperator::GT || cond.op == cypher::BinaryOperator::GTE) {
-                    range_start = std::move(cond.value);
-                    last_is_range = true;
-                    match_count++;
-                } else if (cond.op == cypher::BinaryOperator::LT || cond.op == cypher::BinaryOperator::LTE) {
-                    range_end = std::move(cond.value);
-                    last_is_range = true;
-                    match_count++;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if (match_count == 0)
-            continue;
-
-        using ScanMode = EdgeIndexScanPhysicalOp::ScanMode;
-        std::unique_ptr<EdgeIndexScanPhysicalOp> result;
-
-        Schema output_schema;
-        std::vector<binder::BoundType> output_types;
-        if (!expand_op.src_variable.empty()) {
-            output_schema.push_back(expand_op.src_variable);
-            output_types.push_back(binder::BoundType::VertexRef());
-        }
-        if (!expand_op.dst_variable.empty()) {
-            output_schema.push_back(expand_op.dst_variable);
-            output_types.push_back(binder::BoundType::VertexRef());
-        }
-        if (!expand_op.edge_variable.empty()) {
-            output_schema.push_back(expand_op.edge_variable);
-            output_types.push_back(binder::BoundType::EdgeKey());
-        }
-
-        auto result_output_types = output_types;
-
-        if (!last_is_range) {
-            result = std::make_unique<EdgeIndexScanPhysicalOp>(
-                expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
-                ScanMode::EQUALITY, std::move(eq_values), std::nullopt, std::nullopt, std::move(output_types), store,
-                ctx.schema, idx.index_id);
-        } else {
-            std::optional<std::vector<PropertyValue>> composite_start;
-            std::optional<std::vector<PropertyValue>> composite_end;
-            if (range_start.has_value()) {
-                auto start_vec = eq_values;
-                start_vec.push_back(std::move(*range_start));
-                composite_start = std::move(start_vec);
-            } else if (!eq_values.empty()) {
-                composite_start = eq_values;
-            }
-            if (range_end.has_value()) {
-                auto end_vec = eq_values;
-                end_vec.push_back(std::move(*range_end));
-                composite_end = std::move(end_vec);
-            }
-            result = std::make_unique<EdgeIndexScanPhysicalOp>(
-                expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
-                ScanMode::RANGE, std::vector<PropertyValue>{}, std::move(composite_start), std::move(composite_end),
-                std::move(output_types), store, ctx.schema, idx.index_id);
-        }
-
-        return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types),
-                                  TupleSlotLayout{}};
-    }
-    return std::nullopt;
 }
 
 // ==================== Bound Plan Pipeline ====================
@@ -4244,25 +4122,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                 tryPlanListIndexJoin(v, **join_op, store, meta, ctx, input_schema, input_types);
                             if (list_join.has_value())
                                 return std::move(list_join.value());
-                        }
-                    }
-
-                    // ── Edge index scan optimization: Filter(Expand) → EdgeIndexScan ──
-                    if (std::holds_alternative<std::unique_ptr<binder::BoundExpandOp>>(v.child)) {
-                        auto& expand_ptr = std::get<std::unique_ptr<binder::BoundExpandOp>>(v.child);
-                        if (expand_ptr->edge_label_ids.size() == 1) {
-                            EdgeLabelId edge_label_id = expand_ptr->edge_label_ids[0];
-                            auto def_it = ctx.edge_label_defs.find(edge_label_id);
-                            if (def_it != ctx.edge_label_defs.end()) {
-                                std::vector<const binder::BoundBinaryOp*> conditions;
-                                collectBoundConditions(v.predicate, conditions);
-                                if (!conditions.empty()) {
-                                    auto idx_result = tryBoundEdgeIndexScan(*expand_ptr, conditions, edge_label_id,
-                                                                            def_it->second, store, ctx);
-                                    if (idx_result.has_value())
-                                        return std::move(idx_result.value());
-                                }
-                            }
                         }
                     }
 

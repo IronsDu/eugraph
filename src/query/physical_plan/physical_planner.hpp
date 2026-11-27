@@ -196,11 +196,6 @@ private:
     planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                       PlanContext& ctx, Schema input_schema, const std::vector<binder::BoundType>& input_types);
 
-    std::optional<PlanOperatorResult> tryBoundEdgeIndexScan(const binder::BoundExpandOp& expand_op,
-                                                            const std::vector<const binder::BoundBinaryOp*>& conditions,
-                                                            EdgeLabelId label_id, const EdgeLabelDef& edge_label_def,
-                                                            IAsyncGraphDataStore& store, PlanContext& ctx);
-
     /// Plan Unwind + Filter(CrossProduct) + LabelScan equality as a per-row
     /// index probe: Apply(left=Unwind, right=IndexScanValues).
     std::optional<PlanOperatorResult>

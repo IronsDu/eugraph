@@ -3442,6 +3442,34 @@ TEST_F(QueryExecutorTest, CreateEdgeMaintainsIndex) {
     EXPECT_EQ(ev.label_id, edge_label_id);
 }
 
+TEST_F(QueryExecutorTest, EdgePropertyFilterKeepsBoundSource) {
+    // Regression: the physical planner used to replace Filter(Expand) with a
+    // global EdgeIndexScan without checking the Expand's source constraint,
+    // returning every edge of the type instead of the bound source's edges.
+    PropertyDef weight_prop{0, "w", PropertyType::INT64, false, std::nullopt};
+    auto edge_label_id = blockingWait(async_meta_->createEdgeLabel("EL_R", {weight_prop}));
+    ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(edge_label_id)));
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_el_r_w FOR ()-[r:EL_R]-() ON (r.w)").error.empty());
+
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a1:EL_A {name:'a1'})-[:EL_R {w:1}]->(b1:EL_A {name:'b1'}), "
+                                     "(a2:EL_A {name:'a2'})-[:EL_R {w:2}]->(b2:EL_A {name:'b2'})")
+                    .error.empty());
+
+    // Bound source: only a1's edge may pass.
+    auto bound = execSync(*executor_, "MATCH (a:EL_A {name:'a1'})-[r:EL_R]->(b) WHERE r.w > 0 "
+                                      "RETURN count(r) AS c");
+    ASSERT_TRUE(bound.error.empty()) << bound.error;
+    ASSERT_EQ(bound.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(bound.rows[0][0]), 1);
+
+    // Unconstrained source: both edges match the edge-property predicate.
+    auto all = execSync(*executor_, "MATCH ()-[r:EL_R]->(b) WHERE r.w > 0 RETURN count(r) AS c");
+    ASSERT_TRUE(all.error.empty()) << all.error;
+    ASSERT_EQ(all.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(all.rows[0][0]), 2);
+}
+
 TEST_F(QueryExecutorTest, CreateEdgeViolatesUniqueEdgeIndex) {
     // Create edge label with a property
     PropertyDef since_prop{0, "since", PropertyType::INT64, false, std::nullopt};
