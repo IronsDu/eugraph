@@ -49,6 +49,7 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
             if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                           std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
                           std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 // Leaf operators — no child field
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
@@ -188,6 +189,8 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                     auto c = std::move(val->child.value());
                     val->child = std::nullopt;
                     return c;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                    return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                     auto c = std::move(val->left);
                     val->left = binder::BoundScanOp{};
@@ -1121,6 +1124,23 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->dynamic_key_variable = val->dynamic_key_variable;
                 c->build_left = val->build_left;
                 c->chain = val->chain;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                auto c = std::make_unique<binder::BoundIndexProbeOp>();
+                c->source_variable = val->source_variable;
+                c->target_variable = val->target_variable;
+                c->edge_variable = val->edge_variable;
+                c->edge_label_ids = val->edge_label_ids;
+                c->direction = val->direction;
+                c->target_label_ids = val->target_label_ids;
+                c->index_id = val->index_id;
+                c->index_prop = val->index_prop;
+                c->index_property_name = val->index_property_name;
+                c->equality = val->equality;
+                c->lower = val->lower;
+                c->upper = val->upper;
+                c->lower_inclusive = val->lower_inclusive;
+                c->upper_inclusive = val->upper_inclusive;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 auto c = std::make_unique<binder::BoundForeachOp>();

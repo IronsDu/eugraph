@@ -42,6 +42,7 @@ enum class OptNodeType {
     PathCount,                 // 28
     PatternComprehensionFork,  // 29
     IndexJoin,                 // 30
+    IndexProbe,                // 31
     Unknown                    // out-of-range / future operator
 };
 
