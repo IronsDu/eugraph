@@ -3619,3 +3619,43 @@ TEST(GenerateIndexProbeRuleTest, RequiresBoundedInterval) {
     EXPECT_EQ(run(makeCreationDateUpper(200)), 0u) << "upper-only must not speculate";
     EXPECT_EQ(run(makeCreationDateLower(100)), 0u) << "lower-only must not speculate";
 }
+
+TEST(LogPropTest, CandidateCardinalityUsesDescriptorAndInputRows) {
+    // PlanProp: a physical candidate's output cardinality reflects its own
+    // access path (index selectivity) and the *costed child* row count, not the
+    // plan-independent group LogProp.
+    catalog::Catalog cat;
+    cat.setLabelStats(LabelId{1}, 10000);
+    LogPropDeriver deriver(&cat);
+
+    BoundLabelScanOp eq = std::get<BoundLabelScanOp>(makeLabelScanWithLabel("n", 0, LabelId{1}));
+    eq.index_scan = true;
+    eq.index_id = 7;
+    eq.index_eq_values = {PropertyValue{int64_t{42}}};
+    BoundLogicalOperator eq_op(eq);
+    const LogProp eq_lp = deriver.derive(eq_op, {});
+    EXPECT_DOUBLE_EQ(deriver.deriveCandidateCardinality(eq_op, eq_lp, {}),
+                     10000.0 * LogPropDeriver::kIndexedSelectivity);
+
+    // Filter output = candidate input rows x predicate selectivity, so it must
+    // scale linearly with the chosen child winner's cardinality.
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = makeCreationDateLower(100);
+    filter->child = makeLabelScan("n", 0);
+    BoundLogicalOperator filter_op(std::move(filter));
+    const LogProp filter_lp = deriver.derive(filter_op, {eq_lp});
+    const double c100 = deriver.deriveCandidateCardinality(filter_op, filter_lp, {100.0});
+    const double c1000 = deriver.deriveCandidateCardinality(filter_op, filter_lp, {1000.0});
+    EXPECT_GT(c100, 0.0);
+    EXPECT_LT(c100, 100.0);
+    EXPECT_NEAR(c1000 / c100, 10.0, 1e-9);
+}
+
+TEST(MemoTest, WinnerStoresCandidateOutputCardinality) {
+    Memo memo;
+    Group& group = memo.getGroup(memo.newGroupId());
+    group.newWinner(PhysProp{}, ExprId{0}, Cost(10.0), /*done=*/true, 42.0);
+    const Winner* winner = group.getWinner(PhysProp{});
+    ASSERT_NE(winner, nullptr);
+    EXPECT_DOUBLE_EQ(winner->outputCardinality(), 42.0);
+}

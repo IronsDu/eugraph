@@ -4,6 +4,7 @@
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace eugraph {
@@ -66,11 +67,17 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     // falls back when no usable index/chain exists.
     case PhysicalOpTag::PatternComprehensionApply:
         return Cost(group_lp.cardinality);
-    case PhysicalOpTag::IndexJoin:
-        // Access-path replacement: its child is the source anchor, not the
-        // forward Expand chain. Keep the candidate below Filter(Expand) local
-        // cost so CBO can compare it; degree/selectivity refines this later.
-        return Cost(input0Card() * 0.001);
+    case PhysicalOpTag::IndexJoin: {
+        // Only the dynamic-key reverse path remains a candidate (static reverse
+        // paths need index distribution statistics to be priced; see
+        // physical-planner-residue-audit J8). That path is driven by the source
+        // keys -- one IndexScanValues seek per key plus the reverse chain -- so
+        // its cost scales with the key count, not with the index size.
+        // kDynamicProbeSeekCost approximates a per-key seek against a forward
+        // expansion; it must be replaced by key-count/index-cost statistics (P3).
+        constexpr double kDynamicProbeSeekCost = 0.001;
+        return Cost(input0Card() * kDynamicProbeSeekCost);
+    }
 
     case PhysicalOpTag::IndexProbe:
         // Index range scan + one edge step: proportional to the probe's own

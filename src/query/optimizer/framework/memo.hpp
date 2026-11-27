@@ -39,8 +39,9 @@ class Memo; // forward declaration (Group methods reference Memo)
 // ============================================================
 class Winner {
 public:
-    Winner(ExprId plan, PhysProp prop, Cost cost, bool done = false)
-        : plan_(plan), prop_(std::move(prop)), cost_(std::move(cost)), done_(done) {}
+    Winner(ExprId plan, PhysProp prop, Cost cost, bool done = false, double output_cardinality = -1.0)
+        : plan_(plan), prop_(std::move(prop)), cost_(std::move(cost)), done_(done),
+          output_cardinality_(output_cardinality) {}
 
     ExprId plan() const {
         return plan_;
@@ -65,11 +66,21 @@ public:
         done_ = d;
     }
 
+    /// Estimated output rows of this winning candidate (plan-dependent). -1 =
+    /// unknown; parents then fall back to the group's plan-independent LogProp.
+    double outputCardinality() const {
+        return output_cardinality_;
+    }
+    void setOutputCardinality(double rows) {
+        output_cardinality_ = rows;
+    }
+
 private:
     ExprId plan_ = INVALID_EXPR_ID;
     PhysProp prop_;
     Cost cost_;
     bool done_ = false;
+    double output_cardinality_ = -1.0;
 };
 
 // ============================================================
@@ -111,7 +122,7 @@ public:
     Winner* getSatisfyingWinner(const PhysProp& prop);
 
     // Create or update a winner for the given physical property.
-    void newWinner(PhysProp prop, ExprId plan, Cost cost, bool done);
+    void newWinner(PhysProp prop, ExprId plan, Cost cost, bool done, double output_cardinality = -1.0);
 
     // Columbia: search_circle — check winner status for a context.
     // Returns true if a satisfying winner exists.

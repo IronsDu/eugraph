@@ -424,10 +424,12 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         Cost localCost = findLocalCost(expr.physOp().tag, group_lp, {}, &expr.physOp());
         PhysProp provided;
         provided.setMaterializations(expr.physOp().output_mat);
-        group.newWinner(provided, expr_id_, localCost, /*done=*/last_);
+        LogPropDeriver deriver(memo.getCatalog());
+        const double out_card = deriver.deriveCandidateCardinality(expr.physOp().source, group_lp, {});
+        group.newWinner(provided, expr_id_, localCost, /*done=*/last_, out_card);
         if (cboTrace())
             spdlog::info("[CBO] g={} e={} tag={} leaf out_card={:.0f} local={:.1f}", group.id, expr_id_,
-                         static_cast<int>(expr.physOp().tag), group_lp.cardinality, localCost.value());
+                         static_cast<int>(expr.physOp().tag), out_card, localCost.value());
         if (provided.satisfies(localReqdProp))
             memo.contexts()[context_id_].setUpperBound(localCost);
         return;
@@ -470,10 +472,14 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         return p;
     };
 
-    // Cost pass: check each input for a satisfying done winner.
+    // Cost pass: check each input for a satisfying done winner. The winner's
+    // plan-dependent output cardinality (if known) is what the parent's local
+    // cost and cardinality must use; the group LogProp is plan-independent and
+    // cannot see e.g. a point-lookup's selectivity.
     Cost totalCost(0.0);
     bool allCosted = true;
     bool impossible = false;
+    std::vector<double> input_cards(static_cast<size_t>(arity), -1.0);
 
     for (int i = 0; i < arity; i++) {
         Group& ig = memo.getGroup(expr.child_groups[i]);
@@ -482,6 +488,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         Winner* w = ig.getSatisfyingWinner(inputProp);
         if (w && w->done() && w->plan() != INVALID_EXPR_ID) {
             totalCost = totalCost + w->cost();
+            input_cards[static_cast<size_t>(i)] = w->outputCardinality();
             continue;
         }
 
@@ -507,8 +514,12 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
                     Cost wrapped =
                         (any_w && any_w->done() && any_w->plan() != INVALID_EXPR_ID) ? any_w->cost() : Cost(0.0);
                     Cost enforcer_total = enforcer_local + wrapped;
-                    ig.newWinner(inputProp, enforcer_id, enforcer_total, /*done=*/true);
+                    const double enforcer_card = (any_w && any_w->done() && any_w->plan() != INVALID_EXPR_ID)
+                                                     ? any_w->outputCardinality()
+                                                     : -1.0;
+                    ig.newWinner(inputProp, enforcer_id, enforcer_total, /*done=*/true, enforcer_card);
                     totalCost = totalCost + enforcer_total;
+                    input_cards[static_cast<size_t>(i)] = enforcer_card;
                     continue;
                 }
             }
@@ -549,6 +560,28 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         return;
     }
 
+    // Plan-dependent cost/cardinality: replace each input's plan-independent
+    // LogProp cardinality with the chosen child winner's estimate.
+    std::vector<LogProp> effective_lps = input_lps;
+    for (int i = 0; i < arity; ++i) {
+        if (input_cards[static_cast<size_t>(i)] >= 0.0)
+            effective_lps[static_cast<size_t>(i)].cardinality = input_cards[static_cast<size_t>(i)];
+    }
+    Cost effectiveLocal = findLocalCost(expr.physOp().tag, group_lp, effective_lps, &expr.physOp());
+    double out_card = -1.0;
+    {
+        const PhysicalOpTag tag = expr.physOp().tag;
+        if (tag == PhysicalOpTag::VertexEnrich || tag == PhysicalOpTag::EdgeEnrich ||
+            tag == PhysicalOpTag::PathEnrich || tag == PhysicalOpTag::VertexPropertyExtract ||
+            tag == PhysicalOpTag::EdgePropertyExtract || tag == PhysicalOpTag::PathPropertyExtract) {
+            // Enrichers/extractors wrap the same group's topology winner.
+            out_card = arity > 0 ? input_cards[0] : -1.0;
+        } else {
+            LogPropDeriver deriver(memo.getCatalog());
+            out_card = deriver.deriveCandidateCardinality(expr.physOp().source, group_lp, input_cards);
+        }
+    }
+
     // Phase B: verify this operator's output satisfies what the parent
     // requires. If it cannot, register the plan under what it ACTUALLY
     // provides (usually "any") so the parent can wrap it with an Enricher.
@@ -561,19 +594,19 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         // 该算子不能满足父需求的物化属性：先按“实际提供”的属性注册候选，
         // 父层会插入 Enricher。注册的代价必须包含本算子 local cost；否则
         // 所有 join 算法都只按子输入代价比较，HashJoin/CrossProduct 会打平。
-        totalCost = totalCost + localCost;
+        totalCost = totalCost + effectiveLocal;
         Winner* providedWinner = group.getWinner(provided);
         if (cboTrace())
             spdlog::info("[CBO] g={} e={} tag={} provided out_card={:.0f} local={:.1f} total={:.1f} best={:.1f}",
-                         group.id, expr_id_, static_cast<int>(expr.physOp().tag), group_lp.cardinality,
-                         localCost.value(), totalCost.value(), providedWinner ? providedWinner->cost().value() : -1.0);
+                         group.id, expr_id_, static_cast<int>(expr.physOp().tag), out_card, effectiveLocal.value(),
+                         totalCost.value(), providedWinner ? providedWinner->cost().value() : -1.0);
         if (providedWinner && providedWinner->plan() != INVALID_EXPR_ID && totalCost >= providedWinner->cost())
             return;
-        group.newWinner(provided, expr_id_, totalCost, /*done=*/last_);
+        group.newWinner(provided, expr_id_, totalCost, /*done=*/last_, out_card);
         return;
     }
 
-    totalCost = totalCost + localCost;
+    totalCost = totalCost + effectiveLocal;
 
     // Check upper bound
     const Cost& localUB = localUpperBound;
@@ -585,15 +618,15 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     Winner* existingW = group.getWinner(localReqdProp);
     if (cboTrace())
         spdlog::info("[CBO] g={} e={} tag={} reqd out_card={:.0f} local={:.1f} total={:.1f} best={:.1f}", group.id,
-                     expr_id_, static_cast<int>(expr.physOp().tag), group_lp.cardinality, localCost.value(),
-                     totalCost.value(), existingW ? existingW->cost().value() : -1.0);
+                     expr_id_, static_cast<int>(expr.physOp().tag), out_card, effectiveLocal.value(), totalCost.value(),
+                     existingW ? existingW->cost().value() : -1.0);
     if (existingW && existingW->plan() != INVALID_EXPR_ID) {
         if (totalCost >= existingW->cost()) {
             return;
         }
     }
 
-    group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/last_);
+    group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/last_, out_card);
     memo.contexts()[context_id_].setUpperBound(totalCost);
 }
 

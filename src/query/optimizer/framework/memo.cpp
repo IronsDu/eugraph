@@ -1462,16 +1462,17 @@ Winner* Group::getSatisfyingWinner(const PhysProp& prop) {
     return best;
 }
 
-void Group::newWinner(PhysProp prop, ExprId plan, Cost cost, bool done) {
+void Group::newWinner(PhysProp prop, ExprId plan, Cost cost, bool done, double output_cardinality) {
     for (auto& w : winners) {
         if (w.physProp() == prop) {
             w.setPlan(plan);
             w.setCost(std::move(cost));
             w.setDone(done);
+            w.setOutputCardinality(output_cardinality);
             return;
         }
     }
-    winners.emplace_back(plan, std::move(prop), std::move(cost), done);
+    winners.emplace_back(plan, std::move(prop), std::move(cost), done, output_cardinality);
 }
 
 bool Group::searchCircle(const Context& ctx, bool& moreSearch) const {

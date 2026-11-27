@@ -244,20 +244,25 @@ double LogPropDeriver::estimateAvgOutDegree(const std::vector<EdgeLabelId>& edge
     return edges > 0.0 ? edges / source_vertices : 0.0;
 }
 
-LogProp LogPropDeriver::deriveExpand(const binder::BoundExpandOp& op, const LogProp& input) const {
-    LogProp lp;
+double LogPropDeriver::expandDegree(const std::vector<EdgeLabelId>& edge_labels, const LogProp& input,
+                                    const std::string& src_var) const {
     // avg out-degree: use max across edge_label_ids, or default
     double avgDeg = 0.0;
-    for (const auto& elid : op.edge_label_ids) {
+    for (const auto& elid : edge_labels) {
         double deg = catalog_ ? catalog_->getAvgOutDegree(elid) : 0.0;
         if (deg > 0)
             avgDeg = std::max(avgDeg, deg);
     }
     if (avgDeg == 0.0)
-        avgDeg = estimateAvgOutDegree(op.edge_label_ids, input, op.src_variable);
+        avgDeg = estimateAvgOutDegree(edge_labels, input, src_var);
     if (avgDeg == 0.0)
         avgDeg = kDefaultAvgOutDegree;
+    return avgDeg;
+}
 
+LogProp LogPropDeriver::deriveExpand(const binder::BoundExpandOp& op, const LogProp& input) const {
+    LogProp lp;
+    const double avgDeg = expandDegree(op.edge_label_ids, input, op.src_variable);
     lp.cardinality = input.cardinality * avgDeg;
 
     // Schema: input columns + edge + dst
@@ -601,6 +606,107 @@ LogProp LogPropDeriver::deriveIndexProbeJoin(const LogProp& anchor, const LogPro
     lp.cardinality = probe_input.cardinality;
     lp.valid = true;
     return lp;
+}
+
+double LogPropDeriver::deriveCandidateCardinality(const binder::BoundLogicalOperator& op, const LogProp& group_lp,
+                                                  const std::vector<double>& input_cards) const {
+    auto card = [&](size_t i) -> double {
+        if (i < input_cards.size() && input_cards[i] >= 0.0)
+            return input_cards[i];
+        return -1.0;
+    };
+    const double in0 = card(0);
+    const double in1 = card(1);
+    const double fallback = group_lp.cardinality;
+
+    return std::visit(
+        [&](const auto& val) -> double {
+            using T = std::decay_t<decltype(val)>;
+            if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                double total = 0.0;
+                for (LabelId lid : val.label_ids) {
+                    uint64_t cnt = catalog_ ? catalog_->getVertexCount(lid) : 0;
+                    total += (cnt > 0) ? static_cast<double>(cnt) : kDefaultVertexCount;
+                }
+                if (val.label_ids.empty())
+                    total = kDefaultVertexCount;
+                if (val.index_scan && val.index_id != 0) {
+                    if (!val.index_eq_values.empty())
+                        total *= kIndexedSelectivity;
+                    else if (val.index_lower || val.index_upper)
+                        total *= kIndexRangeSelectivity;
+                }
+                return total;
+            } else if constexpr (std::is_same_v<T, binder::BoundScanOp> ||
+                                 std::is_same_v<T, binder::BoundSingletonOp> ||
+                                 std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                // Leaf access path: the group LogProp already derives from this
+                // descriptor (probe label/range/degree).
+                return fallback;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                return in0 >= 0.0 && val ? in0 * estimateSelectivity(val->predicate) : fallback;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                if (!val || in0 < 0.0)
+                    return fallback;
+                LogProp pseudo = group_lp;
+                pseudo.cardinality = in0;
+                return in0 * expandDegree(val->edge_label_ids, pseudo, val->src_variable);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (!val || in0 < 0.0)
+                    return fallback;
+                LogProp pseudo = group_lp;
+                pseudo.cardinality = in0;
+                const double avg_deg = expandDegree(val->edge_label_ids, pseudo, val->src_variable);
+                const int64_t hops = std::min<int64_t>(val->max_hops, 4);
+                double factor = 0.0;
+                for (int64_t h = val->min_hops; h <= hops; ++h)
+                    factor += std::pow(avg_deg, static_cast<double>(h));
+                return in0 * factor;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
+                if (in0 < 0.0)
+                    return fallback;
+                if (val && val->constant)
+                    return std::min<double>(in0, static_cast<double>(std::max<int64_t>(0, *val->constant)));
+                return in0;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
+                if (in0 < 0.0)
+                    return fallback;
+                if (val && val->constant)
+                    return std::max<double>(0.0, in0 - static_cast<double>(std::max<int64_t>(0, *val->constant)));
+                return in0;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                return in0 >= 0.0 ? in0 : fallback;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                if (!val)
+                    return fallback;
+                if (in0 < 0.0 || in1 < 0.0)
+                    return fallback;
+                if (val->join_type == binder::JoinType::Cross)
+                    return in0 * in1;
+                return in0 * in1 * kDefaultSelectivity;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // Hash join on a vertex key: bounded by the probe side.
+                return in1 >= 0.0 ? in1 : fallback;
+            } else {
+                // Aggregate / semi / left / union / PC apply / PC fork / path
+                // count / call: group-key or multi-input dependent; keep the
+                // plan-independent estimate.
+                return fallback;
+            }
+        },
+        op);
 }
 
 LogProp LogPropDeriver::derivePassthrough(const LogProp& input) const {

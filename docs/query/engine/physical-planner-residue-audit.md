@@ -79,14 +79,23 @@
 - **B1 第一步**：BinaryJoin 分支按 CBO 的 chosen tag 实例化 HashJoin（`planHonoredHashJoin`）；
 - access-path 候选的 RBO 边界：`Memo::copyOut` 跳过 ProbeJoin 候选；R1 与 join commute 共用 `commuteSafe` 边界；
 - **单步静态 destination probe 归一**：`GenerateIndexJoinRule` 只保留 dynamic-key / 多跳链；单步静态 probe 由 IndexProbe 族负责（同时修掉 #335 的 c9 0 行）；
-- **单边界 range 不产生 probe 候选**（无统计不猜）；`EUGRAPH_CBO_TRACE=1` 提供候选级成本可观测性。
+- **单边界 range 不产生 probe 候选**（无统计不猜）；`EUGRAPH_CBO_TRACE=1` 提供候选级成本可观测性；
+- **J8 第一步（PlanProp / 按候选基数）**：`Winner` 记录每个候选自己的输出基数
+  （`outputCardinality`），`LogPropDeriver::deriveCandidateCardinality` 用已 costed 的
+  子 winner 基数推导父候选基数，O_INPUTS 的 local cost 与父估算都改用它。这样
+  `Filter(LabelScan)→IndexScan` 的点查选择性（label × 0.01/0.1）能传给上层，不再把
+  `id = 933` 估成整个 label。
+- **IndexJoin 规则范围收敛为 dynamic-key**：静态反向路径（单步/多步）在没有索引分布
+  统计时无法与 forward 计划做可信比较，不再产生候选（单步静态由 IndexProbe 族负责）；
+  `source_card > 1000` 这个规则内代价门禁随之删除。dynamic 路径按"每 key 一次
+  IndexScanValues seek"计价（`kDynamicProbeSeekCost`，命名并注明需要 P3 统计替换）。
 
 ## 3. 建议顺序
 
-1. **J8 成本模型成组改造**（PlanProp 按候选基数 + IndexJoin 成本去 `input0*0.001`
-   + `source_card` 门禁迁入成本模型）。这是 A 类迁移的前提：否则迁出的访问路径
-   仍会被错误的 group LogProp 估价。已试过单改 LogProp 会回退（c2 38ms → 5.6s）。
-2. **A1–A5 逐个 descriptor 化**，每个都按 R1/R2/R3 拆分并配规则单测。
+1. ~~J8 第一步：PlanProp（按候选基数）+ IndexJoin 规则范围/成本~~（已完成，见 §2）。
+   剩余 J8：索引分布统计（P3）后重新启用静态反向路径、去掉 `kDynamicProbeSeekCost`
+   占位；join 选择性/NDV 统计。
+2. **A1–A5 逐个 descriptor 化**，每个都按 R1/R2/R3 拆分并配规则单测（下一步）。
 3. **B1 第二步**（join_conditions 语义化、删除物理层 Filter-join 融合）—— Cypher
    语义面（T2），需单独评审。
 4. **D1/D2 前移**到 optimizer（normalization / post-CBO 提取前）。
@@ -96,12 +105,12 @@
 
 | 查询 | 结果 | 耗时 | 说明 |
 |---|---|---|---|
-| c2 | 20 行 | 38.4 ms | 旧 IndexJoin 853 ms；单边界 range 不产 probe 后回到 forward |
-| c6 | 10 行 | 14.6 ms | DynamicIndexJoin（多跳 + 动态 key）计划不变 |
-| c12 | 4 行 | 518 ms | |
-| c9 | 20 行 | 29.2 s | 旧 IndexJoin 0 行 / 5.6 s（正确性优先；真实工作量即慢） |
-| c3 原文 | 1 行（4607/x=1/y=1/xy=2） | 1.56 s | 无标签，不猜 label |
-| c3 诊断（`:Message`） | 1 行（内容一致） | 151.5 ms | 双边界 → IndexProbe |
+| c2 | 20 行 | 32.1 ms | 旧 IndexJoin 853 ms；静态反向路径不再产生候选 → forward |
+| c6 | 10 行 | 10.8 ms | DynamicIndexJoin（多跳 + 动态 key）保留 |
+| c12 | 4 行 | 369 ms | |
+| c9 | 20 行 | 25.1 s | 旧 IndexJoin 0 行 / 5.6 s（正确性优先；真实工作量即慢） |
+| c3 原文 | 1 行（4607/x=1/y=1/xy=2） | 1.50 s | 无标签，不猜 label |
+| c3 诊断（`:Message`） | 1 行（内容一致） | 133.6 ms | 双边界 → IndexProbe |
 
 **LogProp 实验（已回退）**：P1.4 把 Filter 折进 `BoundLabelScanOp.index_scan` 后，
 `deriveLabelScan` 仍返回整个 label 的基数，点查选择性不会传给父节点（c2 的锚点被估成

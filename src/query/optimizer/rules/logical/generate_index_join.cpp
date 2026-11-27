@@ -197,14 +197,16 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexJoinRule::substitute(GroupE
         out->dynamic_key_variable = col->name;
     } else
         return {};
-    // Single-step static-key destination probes are owned by the IndexProbe
-    // rule family (GenerateIndexProbe + ResolveIndexProbe + ImplIndexProbeJoin):
-    // they resolve the index in the optimizer and have a dedicated lowering.
-    // Keeping a second candidate here duplicated the access path, and this
-    // rule's catalog label fallback can pick a label that does not cover the
-    // destination variable (see issue #335). Dynamic-key and multi-step chains
-    // are this rule's unique capability and stay.
-    if (out->chain.size() == 1 && !out->dynamic_key)
+    // This rule is the *dynamic-key* reverse-chain candidate only. Static
+    // destination probes (single or multi step) are not priced reliably without
+    // index distribution statistics: the reverse path scans a global index range
+    // once, the forward path expands per anchor row, and the two estimates are
+    // dominated by missing stats. Without a principled comparison the generic
+    // forward plan is the safe choice (and the single-step shape is owned by the
+    // IndexProbe family). Dynamic keys are different: the path is driven by the
+    // source rows themselves (IndexScanValues per key), which is exactly what no
+    // other rule can express. See physical-planner-residue-audit J8.
+    if (!out->dynamic_key)
         return {};
 
     uint32_t idx = 0;
@@ -228,23 +230,6 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexJoinRule::substitute(GroupE
                 break;
         }
     if (!idx)
-        return {};
-    // A filtered source is a point/range probe already: re-executing it per
-    // reverse-index batch is strictly worse than the forward path. Bare
-    // scans remain candidates (tests cover the reverse range path).
-    // A bare label scan with a large source cardinality is not an anchor; the
-    // reverse index would be re-probed once per source row. Keep the candidate
-    // for genuinely small anchors (tests cover that path).
-    bool source_is_scan = false;
-    for (ExprId eid : memo.getGroup(source).logical_exprs) {
-        const auto& o = memo.getExpr(eid).op;
-        if (std::holds_alternative<binder::BoundScanOp>(o) || std::holds_alternative<binder::BoundLabelScanOp>(o)) {
-            source_is_scan = true;
-            break;
-        }
-    }
-    double source_card = memo.getGroup(source).getLogProp(memo, memo.getCatalog()).cardinality;
-    if (!out->dynamic_key && source_is_scan && source_card > 1000.0)
         return {};
     out->index_id = idx;
     // Build the (small) anchor side: the reverse index stream can be large

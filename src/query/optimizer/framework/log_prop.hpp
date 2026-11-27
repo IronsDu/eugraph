@@ -53,6 +53,16 @@ public:
 
     LogProp derive(const binder::BoundLogicalOperator& op, const std::vector<LogProp>& input_lps);
 
+    /// Cardinality of a *physical candidate*: same operator semantics as
+    /// derive(), but the input cardinalities come from the already-costed child
+    /// winners (plan-dependent) instead of the plan-independent group LogProps.
+    /// This is what lets a selective access path (e.g. `id = 933`) propagate a
+    /// realistic row count to its parents. `input_cards[i]` must be the i-th
+    /// child's estimated output rows; empty/unknown entries fall back to the
+    /// corresponding group LogProp cardinality.
+    double deriveCandidateCardinality(const binder::BoundLogicalOperator& op, const LogProp& group_lp,
+                                      const std::vector<double>& input_cards) const;
+
     // Default constants used when catalog stats are unavailable (value 0)
     static constexpr double kDefaultVertexCount = 1000.0;
     static constexpr double kDefaultAvgOutDegree = 10.0;
@@ -76,6 +86,10 @@ private:
     LogProp deriveExpand(const binder::BoundExpandOp& op, const LogProp& input) const;
     double estimateAvgOutDegree(const std::vector<EdgeLabelId>& edge_labels, const LogProp& input,
                                 const std::string& src_var) const;
+    /// Effective one-step expansion degree (catalog average, then estimate, then
+    /// default). Shared by derive() and deriveCandidateCardinality().
+    double expandDegree(const std::vector<EdgeLabelId>& edge_labels, const LogProp& input,
+                        const std::string& src_var) const;
     LogProp deriveVarLenExpand(const binder::BoundVarLenExpandOp& op, const LogProp& input) const;
     LogProp deriveFilter(const binder::BoundFilterOp& op, const LogProp& input) const;
     LogProp deriveProject(const binder::BoundProjectOp& op, const LogProp& input) const;
