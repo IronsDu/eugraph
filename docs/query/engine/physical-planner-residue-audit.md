@@ -28,7 +28,7 @@
 | A2 | `tryPlanCorrelatedIndexProbe` | `Filter(CrossProduct(Unwind, LabelScan))` → `Apply(IndexScanValues)`，并选索引 | rule + correlated-values descriptor |
 | A3 | `tryPlanListIndexJoin` | `Filter(CrossProduct)` 的 `x.prop IN left.list` → ListIndexJoin，选索引并写 `ctx.expand_allowed_filter` | rule + descriptor |
 | A4 | `trySetVarlenOrFilters` | `OR` 谓词 → VLE 的 `src_filter_index_id` / `dst_filter_index_id` allow-set | `optimizer/analysis` 计算 + VLE descriptor 字段 |
-| A5 | `collectStaticPruneHints` / `collectStaticVertexPruneLabels` / `collectStaticEdgePruneLabels` | `IS NOT NULL` 谓词 → 限制扫描 label / 边 label（`prune_labels`、`static_prune_hints`）；用 `ctx.extraction_info` 反解 property→label | optimizer analysis（property demand / label pruning）+ scan descriptor |
+| A5 | ~~`collectStaticPruneHints` / `collectStaticVertexPruneLabels` / `collectStaticEdgePruneLabels`~~ | `IS NOT NULL` 谓词 → 限制扫描 label / 边 label。**已迁出**：顶点侧删除（弱空间下按 schema 裁剪不安全）；边侧改为逻辑规则 `PruneExpandEdgeLabels`（边是纯强模式，语义等价） | ~~optimizer analysis~~ 已解决 |
 
 补充：`GenerateIndexJoinRule`（现属 logical rules）内部仍有 catalog 兜底 `find_idx`
 遍历所有 label 猜索引（J8 的一部分）；单步静态 probe 已迁出，dynamic-key / 多跳链仍用它。
@@ -80,6 +80,13 @@
 - access-path 候选的 RBO 边界：`Memo::copyOut` 跳过 ProbeJoin 候选；R1 与 join commute 共用 `commuteSafe` 边界；
 - **单步静态 destination probe 归一**：`GenerateIndexJoinRule` 只保留 dynamic-key / 多跳链；单步静态 probe 由 IndexProbe 族负责（同时修掉 #335 的 c9 0 行）；
 - **单边界 range 不产生 probe 候选**（无统计不猜）；`EUGRAPH_CBO_TRACE=1` 提供候选级成本可观测性；
+- **A5 静态 label 裁剪归位**：physical planner 的 `static_prune_hints` 机制整体删除
+  （`PlanContext` 字段、4 个 helper、Filter/AllNodeScan 两处应用）：
+  - 顶点侧不再按 "property 声明 label" 裁剪扫描 —— 弱空间允许非声明 label 上存在值，
+    按 schema 裁剪会丢行；
+  - 边侧仍可裁剪且语义等价（边是纯强模式，无弱空间）：新增单职责逻辑规则
+    `PruneExpandEdgeLabels`——`Filter(r.p IS NOT NULL)` 覆在 Expand 上时，把 Expand 的
+    `edge_label_ids` 收窄到声明 p 的边 label（整条 Filter 被消费；混合谓词留给其他规则）。
 - **J8 第一步（PlanProp / 按候选基数）**：`Winner` 记录每个候选自己的输出基数
   （`outputCardinality`），`LogPropDeriver::deriveCandidateCardinality` 用已 costed 的
   子 winner 基数推导父候选基数，O_INPUTS 的 local cost 与父估算都改用它。这样

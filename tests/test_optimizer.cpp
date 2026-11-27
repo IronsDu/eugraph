@@ -20,6 +20,7 @@
 #include "query/optimizer/rules/logical/generate_index_probe.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
+#include "query/optimizer/rules/logical/prune_expand_edge_labels.hpp"
 #include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
@@ -3658,4 +3659,126 @@ TEST(MemoTest, WinnerStoresCandidateOutputCardinality) {
     const Winner* winner = group.getWinner(PhysProp{});
     ASSERT_NE(winner, nullptr);
     EXPECT_DOUBLE_EQ(winner->outputCardinality(), 42.0);
+}
+
+// ==================== Edge-property IS NOT NULL pruning ====================
+//
+// Edges are strong-only, so `r.p IS NOT NULL` over an Expand may narrow the
+// edge labels to those declaring p. Vertex properties must NOT be pruned this
+// way: the weak space allows values outside the declaring label.
+
+static std::shared_ptr<GraphSchema> makeEdgePropertyCatalog() {
+    auto schema = std::make_shared<GraphSchema>();
+    LabelDef person;
+    person.id = LabelId{1};
+    person.name = "Person";
+    PropertyDef name;
+    name.id = 0;
+    name.name = "name";
+    name.type = PropertyType::STRING;
+    person.properties.push_back(name);
+    schema->labels[LabelId{1}] = person;
+
+    EdgeLabelDef knows;
+    knows.id = 2;
+    knows.name = "KNOWS";
+    PropertyDef weight;
+    weight.id = 0;
+    weight.name = "weight";
+    weight.type = PropertyType::INT64;
+    knows.properties.push_back(weight);
+    schema->edge_labels[EdgeLabelId{2}] = knows;
+
+    EdgeLabelDef follows;
+    follows.id = 3;
+    follows.name = "FOLLOWS";
+    schema->edge_labels[EdgeLabelId{3}] = follows;
+    return schema;
+}
+
+static BoundLogicalOperator makeFilterNotnullOverExpand(const std::string& object_variable, BoundType object_type,
+                                                        const std::string& property_name,
+                                                        std::vector<LabelId> candidates) {
+    BoundLabelScanOp scan;
+    scan.variable = "friend";
+    scan.column_index = 0;
+    scan.label_ids = {LabelId{1}};
+
+    auto expand = std::make_unique<BoundExpandOp>();
+    expand->src_variable = "friend";
+    expand->src_column_index = 0;
+    expand->dst_variable = "target";
+    expand->dst_column_index = 2;
+    expand->edge_variable = "r";
+    expand->edge_column_index = 1;
+    expand->all_edge_labels = true;
+    expand->direction = cypher::RelationshipDirection::UNDIRECTED;
+    expand->child = BoundLogicalOperator(scan);
+
+    auto property = std::make_unique<BoundPropertyRef>();
+    property->property_name = property_name;
+    property->object = BoundVariableRef(object_variable, std::move(object_type));
+    for (LabelId label : candidates) {
+        BoundPropertyRef::ResolvedProperty resolved;
+        resolved.label_id = label;
+        property->candidates.push_back(resolved);
+    }
+    auto notnull = std::make_unique<BoundUnaryOp>();
+    notnull->op = cypher::UnaryOperator::IS_NOT_NULL;
+    notnull->operand = BoundExpression(std::move(property));
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(notnull));
+    filter->child = BoundLogicalOperator(std::move(expand));
+    return BoundLogicalOperator(std::move(filter));
+}
+
+TEST(PruneExpandEdgeLabelsTest, NarrowsExpandToDeclaringEdgeLabels) {
+    auto schema = makeEdgePropertyCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto root = makeFilterNotnullOverExpand("r", BoundType::EdgeKey(), "weight", {LabelId{2}});
+    Memo memo;
+    memo.setCatalog(&catalog);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+
+    PruneExpandEdgeLabelsRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    auto* pruned = std::get_if<std::unique_ptr<BoundExpandOp>>(&produced[0]->op);
+    ASSERT_TRUE(pruned && *pruned);
+    EXPECT_EQ((*pruned)->edge_label_ids, (std::vector<EdgeLabelId>{2}));
+    EXPECT_FALSE((*pruned)->all_edge_labels);
+    ASSERT_EQ(produced[0]->child_groups.size(), 1u);
+    EXPECT_EQ(produced[0]->group_id, gid) << "the pruned expand replaces the Filter(Expand) subtree";
+}
+
+TEST(PruneExpandEdgeLabelsTest, LeavesVertexPropertiesAndWidePruningAlone) {
+    auto schema = makeEdgePropertyCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    PruneExpandEdgeLabelsRule rule;
+
+    // Vertex property: weak space allows values outside the declaring label.
+    {
+        auto root = makeFilterNotnullOverExpand("x", BoundType::Vertex(), "name", {LabelId{1}});
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
+
+    // No edge label declares the property: a filter that is statically false is
+    // not this rule's job.
+    {
+        auto root = makeFilterNotnullOverExpand("r", BoundType::EdgeKey(), "missing", {});
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
 }

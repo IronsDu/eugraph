@@ -277,7 +277,6 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .alias_map = {},
         .slot_allocator = {},
         .fresh_expands = {},
-        .static_prune_hints = {},
         .func_registry = ctx->func_registry.get(),
         .expand_allowed_filter = {},
         .filtered_expand = nullptr,

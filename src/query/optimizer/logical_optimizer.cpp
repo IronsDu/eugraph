@@ -15,6 +15,7 @@
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
+#include "query/optimizer/rules/logical/prune_expand_edge_labels.hpp"
 #include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
@@ -289,6 +290,10 @@ void LogicalOptimizer::initRules() {
         // R2: refine the probe group's descriptor to a catalog index (shape-only
         // rules never choose indexes; the probe group is optimized independently).
         rules_.addRule(std::make_unique<ResolveIndexProbeRule>());
+        // Edge-only semantic pruning: edges are strong-only, so `r.p IS NOT NULL`
+        // may narrow the Expand's edge labels (vertex pruning would be unsound:
+        // weak-space values exist outside the declaring label).
+        rules_.addRule(std::make_unique<PruneExpandEdgeLabelsRule>());
     }
     rules_.addRule(std::make_unique<FilterPushdownRule>());
     rules_.addRule(std::make_unique<JoinCommuteRule>());
