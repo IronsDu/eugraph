@@ -9,10 +9,12 @@
 #include "query/optimizer/normalization/plan_normalizations.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/generate_index_probe.hpp"
 #include "query/optimizer/rules/logical/generate_index_scan.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
 #include "query/optimizer/rules/logical/path_count_fusion.hpp"
+#include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
@@ -254,6 +256,10 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
         }
     }
 
+    // Publish winners that the cascade registered without closing their group
+    // (root group expanded by a rule during the optimization pass).
+    memo_.finalizeWinners();
+
     // CBO Phase 4: extract chosen physical plan. Null if any group lacks a winner.
     plan.chosen = memo_.extractChosen(root_gid, PhysProp{});
     if (const char* force_rbo = std::getenv(config::kEnvOptimizerForceRbo); force_rbo != nullptr && *force_rbo == '1') {
@@ -273,6 +279,11 @@ void LogicalOptimizer::initRules() {
     // Transformation rules
     rules_.addRule(std::make_unique<GenerateIndexScanRule>());
     rules_.addRule(std::make_unique<GenerateIndexJoinRule>());
+    // R1: Filter(Expand) shape -> IndexProbe + ProbeJoin candidate.
+    rules_.addRule(std::make_unique<GenerateIndexProbeRule>());
+    // R2: refine the probe group's descriptor to a catalog index (shape-only
+    // rules never choose indexes; the probe group is optimized independently).
+    rules_.addRule(std::make_unique<ResolveIndexProbeRule>());
     rules_.addRule(std::make_unique<FilterPushdownRule>());
     rules_.addRule(std::make_unique<JoinCommuteRule>());
     rules_.addRule(std::make_unique<JoinAssociateRule>());
@@ -291,6 +302,8 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplIndexScanRule>());
     rules_.addRule(std::make_unique<ImplPatternComprehensionApplyRule>());
     rules_.addRule(std::make_unique<ImplIndexJoinRule>());
+    rules_.addRule(std::make_unique<ImplIndexProbeRule>());
+    rules_.addRule(std::make_unique<ImplIndexProbeJoinRule>());
     rules_.addRule(std::make_unique<ImplFilterRule>());
     rules_.addRule(std::make_unique<ImplProjectRule>());
     rules_.addRule(std::make_unique<ImplExpandRule>());

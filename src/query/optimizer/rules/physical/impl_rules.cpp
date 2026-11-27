@@ -4,6 +4,8 @@
 #include "query/optimizer/framework/memo.hpp"
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/planner/logical_plan/operator/bound_index_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include <unordered_set>
 
@@ -372,6 +374,42 @@ PatternNode ImplPatternComprehensionApplyRule::pattern() const {
 std::vector<std::unique_ptr<GroupExpr>> ImplPatternComprehensionApplyRule::substitute(GroupExpr& expr,
                                                                                       Memo& memo) const {
     return makePhysicalExpr(expr, memo, PhysicalOpTag::PatternComprehensionApply);
+}
+
+PatternNode ImplIndexProbeRule::pattern() const {
+    return {OptNodeType::IndexProbe, {}};
+}
+
+bool ImplIndexProbeRule::condition(GroupExpr& expr, Memo& /*memo*/) const {
+    // Unresolved probes have no physical contract yet; R2 must resolve first.
+    const auto* probe = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&expr.op);
+    return probe && *probe && (*probe)->index_id != 0;
+}
+
+std::vector<std::unique_ptr<GroupExpr>> ImplIndexProbeRule::substitute(GroupExpr& expr, Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::IndexProbe);
+}
+
+PatternNode ImplIndexProbeJoinRule::pattern() const {
+    return {OptNodeType::IndexProbeJoin, {{}, {}}};
+}
+
+std::vector<std::unique_ptr<GroupExpr>> ImplIndexProbeJoinRule::substitute(GroupExpr& expr, Memo& memo) const {
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = PhysicalOpTag::IndexProbeJoin;
+    phys->source = cloneBoundLogicalOperator(expr.op);
+
+    // The anchor input must provide whatever this group's expressions need.
+    // The probe input reads its own index range: asking it to materialise the
+    // consumed property would force an Enricher over a descriptor leaf.
+    Group& group = memo.getGroup(expr.group_id);
+    phys->required_input_mat.resize(expr.child_groups.size());
+    if (group.requirementsValid() && !expr.child_groups.empty())
+        phys->required_input_mat[0] = group.requirements();
+
+    std::vector<std::unique_ptr<GroupExpr>> result;
+    result.push_back(std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(phys), expr.child_groups));
+    return result;
 }
 
 PatternNode ImplIndexJoinRule::pattern() const {

@@ -190,6 +190,17 @@ private:
                                                                 PlanContext& ctx, Schema input_schema,
                                                                 const std::vector<binder::BoundType>& input_types);
 
+    /// Lowers an optimizer-chosen IndexProbeJoin: plans the anchor child group
+    /// verbatim, synthesizes the probe subtree from the descriptor
+    /// (index range scan of the destination label + one edge step back to the
+    /// join variable), and hash-joins the two on that variable. All decisions
+    /// (anchor group, index, range, edge) come from the descriptor.
+    std::variant<PlanOperatorResult, std::string> planIndexProbeJoin(binder::BoundIndexProbeJoinOp& probe_join,
+                                                                     IAsyncGraphDataStore& store,
+                                                                     IAsyncGraphMetaStore& meta, PlanContext& ctx,
+                                                                     Schema input_schema,
+                                                                     const std::vector<binder::BoundType>& input_types);
+
     std::variant<PlanOperatorResult, std::string>
     planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                       PlanContext& ctx, Schema input_schema, const std::vector<binder::BoundType>& input_types);

@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "query/parser/ast.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
+#include "query/planner/slot_semantics.hpp"
 
 #include <functional>
 
@@ -37,6 +38,10 @@ void mergeIndexUpper(IndexRange& range, const PropertyValue& value, bool inclusi
 /// shared representation used by optimizer access-path rules and the fallback
 /// physical planner during migration.
 struct IndexableCondition {
+    /// Variable whose property is compared (e.g. "message" in
+    /// `message.creationDate < 5`). Used by access-path rules to check that the
+    /// predicate applies to the operator's target variable.
+    std::string variable;
     LabelId label_id = INVALID_LABEL_ID;
     uint16_t prop_id = 0;
     std::string property_name;
@@ -57,6 +62,11 @@ struct ResolvedProperty {
 };
 
 using ColumnPropertyResolver = std::function<std::optional<ResolvedProperty>(const binder::BoundColumnRef&)>;
+
+/// Resolver backed by binder SlotSemantics (property slot ->
+/// declared label / property id). Shared by access-path rules so they do not
+/// each re-implement the SlotId lookup.
+ColumnPropertyResolver slotSemanticColumnResolver(const binder::SlotSemanticMap* semantics);
 
 /// Normalize a comparison (`property op literal` or reversed `literal op
 /// property`) into an IndexableCondition.

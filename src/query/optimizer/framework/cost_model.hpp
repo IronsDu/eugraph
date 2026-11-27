@@ -67,6 +67,12 @@ enum class PhysicalOpTag {
     IndexJoin,
     // Pattern comprehension correlated apply.
     PatternComprehensionApply,
+    // Destination index probe: index-range scan of the target label followed by
+    // one reverse edge step back to the join key. Its own group; the probe join
+    // consumes this descriptor.
+    IndexProbe,
+    // Anchor subtree joined with an index probe on the anchor's source variable.
+    IndexProbeJoin,
 };
 
 // ============================================================

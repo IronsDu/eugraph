@@ -1,6 +1,7 @@
 #include "query/optimizer/analysis/index_condition.hpp"
 
 #include "query/optimizer/framework/memo.hpp"
+#include "query/planner/slot_semantics.hpp"
 
 #include <cmath>
 #include <limits>
@@ -113,6 +114,10 @@ std::optional<IndexableCondition> extractIndexableCondition(const binder::BoundB
         cond.prop_id = declared == 1 ? cond.prop_id : (*prop)->candidates.front().prop_id;
         cond.property_name = (*prop)->property_name;
         cond.is_strong = (*prop)->strong_mode;
+        if (auto* obj = std::get_if<binder::BoundColumnRef>(&(*prop)->object))
+            cond.variable = obj->name;
+        else if (auto* obj = std::get_if<binder::BoundVariableRef>(&(*prop)->object))
+            cond.variable = obj->name;
         return cond;
     }
 
@@ -145,6 +150,23 @@ std::optional<IndexableCondition> extractNormalizedIndexableCondition(const bind
     swapped.left = cloneBoundExpression(binop.right);
     swapped.right = cloneBoundExpression(binop.left);
     return extractIndexableCondition(swapped, anon_label_id, resolve_column);
+}
+
+ColumnPropertyResolver slotSemanticColumnResolver(const binder::SlotSemanticMap* semantics) {
+    return [semantics](const binder::BoundColumnRef& ref) -> std::optional<ResolvedProperty> {
+        if (semantics == nullptr)
+            return std::nullopt;
+        auto it = semantics->find(ref.slot_id);
+        if (it == semantics->end() || it->second.kind != binder::SlotSemanticKind::Property)
+            return std::nullopt;
+        ResolvedProperty out;
+        out.name = it->second.property_name;
+        out.label_id = it->second.property_labels.empty() ? INVALID_LABEL_ID : it->second.property_labels.front();
+        out.prop_id = it->second.property_ids.empty() ? 0 : it->second.property_ids.front();
+        out.is_strong = it->second.strong;
+        out.declared_label_count = static_cast<int>(it->second.property_labels.size());
+        return out;
+    };
 }
 
 } // namespace optimizer

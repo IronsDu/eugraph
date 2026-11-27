@@ -467,6 +467,23 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
     return copyOut(root_gid);
 }
 
+void Memo::finalizeWinners() {
+    // The task cascade normally publishes a winner when the group closes. A
+    // transformation rule that expands the ROOT group during the optimization
+    // pass sets `changed`, the closing cascade clears it, and then nothing
+    // re-enters O_GROUP for the root: candidates that cannot provide the
+    // context's required property (registered under their "provided" PhysProp,
+    // see O_INPUTS) would stay invisible to extractChosen. Every winner with a
+    // valid plan was registered only after its inputs were costed, so
+    // publishing them once the queue has drained is safe.
+    for (auto& group : groups_) {
+        for (Winner& winner : group->winners) {
+            if (!winner.done() && winner.plan() != INVALID_EXPR_ID)
+                winner.setDone(true);
+        }
+    }
+}
+
 std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp& prop, ExprId preferred_winner) {
     Group& group = getGroup(root_gid);
     Winner* winner = nullptr;

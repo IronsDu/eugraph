@@ -232,6 +232,10 @@ public:
     // if no winner exists (e.g. no physical operators registered yet).
     binder::BoundLogicalOperator copyOut(GroupId root_gid, const PhysProp& prop);
 
+    // Publish every fully-costed winner (see implementation comment). Called
+    // once after the task queue drains, before extractChosen.
+    void finalizeWinners();
+
     // CBO Phase 4: extract the chosen physical plan tree.
     // Returns null if any group in the winner chain lacks a physical winner.
     std::unique_ptr<ChosenPlan> extractChosen(GroupId root_gid, const PhysProp& prop,

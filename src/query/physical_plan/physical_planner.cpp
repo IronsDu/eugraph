@@ -680,6 +680,11 @@ static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordere
                     for (const auto& branch : v->branches)
                         collectOpSlots(branch, out, has_write);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // The probe is a descriptor leaf (no slots); only the anchor is
+                // a logical subtree that must be walked.
+                if (v)
+                    collectOpSlots(v->anchor, out, has_write);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
@@ -3330,6 +3335,14 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
             join->left = materializeChosen(*chosen.children[0], ctx);
             join->right = materializeChosen(*chosen.children[1], ctx);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result)) {
+            // Anchor stays a normal subtree; the probe group materializes to the
+            // IndexProbe leaf whose descriptor the lowering consumes.
+            auto& probe_join = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result);
+            probe_join->anchor = materializeChosen(*chosen.children[0], ctx);
+            auto probe_tree = materializeChosen(*chosen.children[1], ctx);
+            if (auto* probe = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&probe_tree); probe && *probe)
+                probe_join->probe = **probe;
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
             sj->left = materializeChosen(*chosen.children[0], ctx);
@@ -3417,6 +3430,11 @@ void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, cons
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child.has_value())
                     applyEnrichInPlace(*v->child, var, req);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // Enrichment of the anchor's variables lowers into the anchor
+                // subtree; the probe descriptor has no property columns to grow.
+                if (v)
+                    applyEnrichInPlace(v->anchor, var, req);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 // Both inputs: the row source and the body (which reads enriched
                 // values out of the correlated source).
@@ -3724,6 +3742,110 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
     return dispatchProjectionExtract(std::move(result), store, ctx);
 }
 
+/// Traversal direction of the edge step when walking from the probe's scanned
+/// destination vertex back to the join variable. `BoundIndexProbeOp::direction`
+/// is expressed in the original pattern's (source -> target) orientation, so the
+/// reverse traversal flips it.
+static cypher::RelationshipDirection reverseProbeDirection(cypher::RelationshipDirection direction) {
+    switch (direction) {
+    case cypher::RelationshipDirection::LEFT_TO_RIGHT:
+        return cypher::RelationshipDirection::RIGHT_TO_LEFT;
+    case cypher::RelationshipDirection::RIGHT_TO_LEFT:
+        return cypher::RelationshipDirection::LEFT_TO_RIGHT;
+    case cypher::RelationshipDirection::UNDIRECTED:
+        return cypher::RelationshipDirection::UNDIRECTED;
+    }
+    return cypher::RelationshipDirection::UNDIRECTED;
+}
+
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planIndexProbeJoin(binder::BoundIndexProbeJoinOp& probe_join, IAsyncGraphDataStore& store,
+                                    IAsyncGraphMetaStore& meta, PlanContext& ctx, Schema input_schema,
+                                    const std::vector<binder::BoundType>& input_types) {
+    const binder::BoundIndexProbeOp& probe = probe_join.probe;
+    if (probe.index_id == 0 || probe.index_property_name.empty())
+        return std::string("IndexProbeJoin: probe descriptor has no resolved index");
+    if (probe.target_label_ids.size() != 1)
+        return std::string("IndexProbeJoin: probe needs exactly one destination label");
+
+    // 1. Anchor: the complete pre-existing left pipeline, planned verbatim.
+    auto anchor_result = planBoundOperator(probe_join.anchor, store, meta, ctx, input_schema, input_types);
+    if (std::holds_alternative<std::string>(anchor_result))
+        return std::get<std::string>(anchor_result);
+    auto anchor = extractChildResult(std::move(anchor_result));
+    ensureSlotLayout(anchor, ctx);
+
+    const int left_key = findColumn(anchor.output_schema, probe.source_variable);
+    if (left_key < 0)
+        return std::string("IndexProbeJoin: anchor does not produce '") + probe.source_variable + "'";
+
+    // 2. Probe: index range scan of the destination label followed by one edge
+    //    step back to the join variable. Reusing the normal operator tree keeps
+    //    label filtering, direction handling, layout and property-extract
+    //    dispatch in the existing lowering instead of duplicating them here.
+    binder::BoundLabelScanOp index_scan;
+    index_scan.variable = probe.target_variable;
+    index_scan.column_index = 0;
+    index_scan.label_ids = {probe.target_label_ids.front()};
+    index_scan.index_scan = true;
+    index_scan.index_id = probe.index_id;
+    if (probe.index_prop != 0)
+        index_scan.index_prop_ids = {probe.index_prop};
+    if (probe.equality)
+        index_scan.index_eq_values = {*probe.equality};
+    index_scan.index_lower = probe.lower;
+    index_scan.index_upper = probe.upper;
+    index_scan.index_lower_inclusive = probe.lower_inclusive;
+    index_scan.index_upper_inclusive = probe.upper_inclusive;
+
+    // The probe stream re-derives the join variable; give it a private column
+    // name so the join output does not contain two columns for one SlotId.
+    std::string source_alias = "index_probe_source";
+    while (findColumn(anchor.output_schema, source_alias) >= 0)
+        source_alias += "_";
+
+    auto expand = std::make_unique<binder::BoundExpandOp>();
+    expand->src_variable = probe.target_variable;
+    expand->src_column_index = 0;
+    expand->edge_variable = probe.edge_variable;
+    expand->edge_column_index = 0;
+    expand->dst_variable = source_alias;
+    expand->dst_column_index = 0;
+    expand->edge_label_ids = probe.edge_label_ids;
+    expand->direction = reverseProbeDirection(probe.direction);
+    expand->child = std::move(index_scan);
+
+    Schema probe_input_schema;
+    std::vector<binder::BoundType> probe_input_types;
+    binder::BoundLogicalOperator probe_tree = std::move(expand);
+    auto probe_result = planBoundOperator(probe_tree, store, meta, ctx, probe_input_schema, probe_input_types);
+    if (std::holds_alternative<std::string>(probe_result))
+        return std::get<std::string>(probe_result);
+    auto probe_plan = extractChildResult(std::move(probe_result));
+    ensureSlotLayout(probe_plan, ctx);
+
+    const int right_key = findColumn(probe_plan.output_schema, source_alias);
+    if (right_key < 0)
+        return std::string("IndexProbeJoin: probe did not produce its join column");
+
+    // 3. Hash join on the source variable. The anchor is the (small) build side;
+    //    the index stream probes it.
+    Schema output_schema = anchor.output_schema;
+    output_schema.insert(output_schema.end(), probe_plan.output_schema.begin(), probe_plan.output_schema.end());
+    auto output_types = anchor.output_types;
+    output_types.insert(output_types.end(), probe_plan.output_types.begin(), probe_plan.output_types.end());
+    TupleSlotLayout layout = anchor.slot_layout;
+    layout.merge(probe_plan.slot_layout);
+
+    auto join = std::make_unique<HashJoinPhysicalOp>(
+        std::move(anchor.op), std::move(probe_plan.op), std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
+        std::vector<uint32_t>{static_cast<uint32_t>(right_key)}, output_types, output_schema, /*build_left=*/true,
+        hashJoinMaxBuildRows());
+    join->setEvalContext(ctx.eval_ctx);
+    PlanOperatorResult result{std::move(join), std::move(output_schema), std::move(output_types), std::move(layout)};
+    return dispatchProjectionExtract(std::move(result), store, ctx);
+}
+
 static void buildExplainSymbols(PlanContext& ctx) {
     std::unordered_map<binder::SlotId, std::string> owner;
     for (const auto& [name, slot] : ctx.var_slots)
@@ -3929,6 +4051,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                 if constexpr (std::is_same_v<Elem, binder::BoundIndexJoinOp>) {
                     return planIndexJoin(v, store, meta, ctx, input_schema, input_types);
+                } else if constexpr (std::is_same_v<Elem, binder::BoundIndexProbeJoinOp>) {
+                    return planIndexProbeJoin(v, store, meta, ctx, input_schema, input_types);
                 } else if constexpr (std::is_same_v<Elem, binder::BoundExpandOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))

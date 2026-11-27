@@ -103,6 +103,22 @@ public:
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 
+/// Tags an unresolved/resolved IndexProbe leaf as a physical candidate. The
+/// probe descriptor itself is the executable contract (index range + edge step);
+/// lowering instantiates it inside the owning ProbeJoin.
+class ImplIndexProbeRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplIndexProbe";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
 class ImplIndexJoinRule : public OptRule {
 public:
     std::string name() const override {
@@ -113,6 +129,20 @@ public:
     }
     PatternNode pattern() const override;
     bool condition(GroupExpr& expr, Memo& memo) const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
+/// Physical candidate for a ProbeJoin: anchor child group + probe child group.
+/// Emits only the tag; the cascade framework costs and selects it.
+class ImplIndexProbeJoinRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplIndexProbeJoin";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 

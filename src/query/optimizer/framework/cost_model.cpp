@@ -72,6 +72,14 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
         // cost so CBO can compare it; degree/selectivity refines this later.
         return Cost(input0Card() * 0.001);
 
+    case PhysicalOpTag::IndexProbe:
+        // Index range scan + one edge step: proportional to the probe's own
+        // estimated output (label rows x range selectivity x degree).
+        return Cost(group_lp.cardinality);
+    case PhysicalOpTag::IndexProbeJoin:
+        // Build the anchor side, probe with the index stream: build + probe.
+        return Cost(input0Card() + input1Card());
+
     case PhysicalOpTag::NestedLoopJoin:
     case PhysicalOpTag::CrossProduct:
         return Cost(input0Card() * input1Card());

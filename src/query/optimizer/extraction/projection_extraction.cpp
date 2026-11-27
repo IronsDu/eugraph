@@ -246,6 +246,12 @@ template <typename OpRef, typename Visit> void forEachChild(OpRef&& op, Visit&& 
                     for (auto& branch : v->branches)
                         visit(branch);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // Slot allocation / predicate lowering / requirement collection
+                // must see the anchor subtree. The probe is a descriptor leaf
+                // consumed by physical lowering, not a logical sub-plan.
+                if (v)
+                    visit(v->anchor);
             }
             // Leaves: BoundScanOp / BoundLabelScanOp / BoundSingletonOp /
             // BoundCorrelatedSourceOp / BoundCallOp — no children.

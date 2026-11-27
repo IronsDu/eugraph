@@ -17,8 +17,10 @@
 #include "query/optimizer/normalization/plan_normalizations.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/generate_index_probe.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
+#include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -3251,4 +3253,255 @@ TEST(LogPropTest, EdgeCountStatsEstimateAverageOutDegree) {
     BoundLogicalOperator expand_root(std::make_unique<BoundExpandOp>(std::move(expand)));
     LogProp out = deriver.derive(expand_root, {source});
     EXPECT_DOUBLE_EQ(out.cardinality, 500.0);
+}
+
+// ==================== IndexProbe rules (R1 / R2 / R3) ====================
+//
+// R1 is shape-only (no catalog, no cost); R2 resolves an index inside the probe
+// group only for explicitly labelled destinations; R3 only emits the physical
+// tag. These tests pin that split so no rule starts re-selecting the anchor.
+
+static BoundExpression makeCreationDateLower(int64_t value) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "creationDate";
+    prop->object = BoundVariableRef("message", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{10};
+    cand.prop_id = 2;
+    prop->candidates.push_back(cand);
+
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::GTE;
+    bin->left = BoundExpression(std::move(prop));
+    bin->right = BoundLiteral(int64_t{value});
+    return BoundExpression(std::move(bin));
+}
+
+static BoundExpression makeCreationDateUpper(int64_t value) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "creationDate";
+    prop->object = BoundVariableRef("message", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{10};
+    cand.prop_id = 2;
+    prop->candidates.push_back(cand);
+
+    // Reversed form as written in c3: `$end > message.creationDate`.
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::GT;
+    bin->left = BoundLiteral(int64_t{value});
+    bin->right = BoundExpression(std::move(prop));
+    return BoundExpression(std::move(bin));
+}
+
+static BoundLogicalOperator makeFilterOverExpandPlan(bool explicit_destination_label) {
+    BoundLabelScanOp scan;
+    scan.variable = "friend";
+    scan.column_index = 0;
+    scan.label_ids = {LabelId{5}};
+    auto expand = std::make_unique<BoundExpandOp>();
+    expand->src_variable = "friend";
+    expand->src_column_index = 0;
+    expand->dst_variable = "message";
+    expand->dst_column_index = 2;
+    expand->edge_variable = "e2";
+    expand->edge_column_index = 1;
+    expand->edge_label_ids = {EdgeLabelId{2}};
+    expand->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+    if (explicit_destination_label)
+        expand->dst_label_ids = {LabelId{10}};
+    expand->child = BoundLogicalOperator(scan);
+    auto filter = std::make_unique<BoundFilterOp>();
+    auto lower = makeCreationDateLower(100);
+    auto upper = makeCreationDateUpper(200);
+    auto both = std::make_unique<BoundBinaryOp>();
+    both->op = cypher::BinaryOperator::AND;
+    both->left = std::move(lower);
+    both->right = std::move(upper);
+    filter->predicate = BoundExpression(std::move(both));
+    filter->child = BoundLogicalOperator(std::move(expand));
+    return BoundLogicalOperator(std::move(filter));
+}
+
+static std::shared_ptr<GraphSchema> makeProbeCatalogSchema() {
+    auto schema = std::make_shared<GraphSchema>();
+    LabelDef message;
+    message.id = LabelId{10};
+    message.name = "Message";
+    PropertyDef creation_date;
+    creation_date.id = 2;
+    creation_date.name = "creationDate";
+    creation_date.type = PropertyType::INT64;
+    message.properties.push_back(creation_date);
+    LabelDef::IndexDef index;
+    index.index_id = 23;
+    index.name = "idx_Message_creationDate";
+    IndexAccessorDef accessor;
+    accessor.is_strong = false;
+    accessor.property_name = "creationDate";
+    index.accessors.push_back(accessor);
+    index.state = IndexState::PUBLIC;
+    index.encoding_version = 2;
+    message.indexes.push_back(index);
+    schema->labels[LabelId{10}] = message;
+    schema->label_name_to_id["Message"] = LabelId{10};
+
+    LabelDef person;
+    person.id = LabelId{5};
+    person.name = "Person";
+    schema->labels[LabelId{5}] = person;
+    schema->label_name_to_id["Person"] = LabelId{5};
+    return schema;
+}
+
+TEST(GenerateIndexProbeRuleTest, BuildsProbeJoinFromAnchorAndProbeGroups) {
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/false);
+    Memo memo;
+    GroupId root_gid = memo.copyIn(root);
+    memo.setCatalog(nullptr);
+
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(root_gid).logical_exprs.at(0));
+    GenerateIndexProbeRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    ASSERT_EQ(produced[0]->child_groups.size(), 2u);
+    EXPECT_EQ(produced[0]->group_id, root_gid);
+
+    // child 0: the complete existing anchor (LabelScan), never a re-derived scan.
+    Group& anchor = memo.getGroup(produced[0]->child_groups[BoundIndexProbeJoinOp::kAnchorChild]);
+    ASSERT_EQ(anchor.logical_exprs.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<BoundLabelScanOp>(memo.getExpr(anchor.logical_exprs[0]).op));
+
+    // child 1: the probe group with the merged range, still unresolved.
+    Group& probe = memo.getGroup(produced[0]->child_groups[BoundIndexProbeJoinOp::kProbeChild]);
+    ASSERT_EQ(probe.logical_exprs.size(), 1u);
+    auto* probe_op = std::get_if<std::unique_ptr<BoundIndexProbeOp>>(&memo.getExpr(probe.logical_exprs[0]).op);
+    ASSERT_TRUE(probe_op && *probe_op);
+    EXPECT_EQ((*probe_op)->source_variable, "friend");
+    EXPECT_EQ((*probe_op)->target_variable, "message");
+    EXPECT_EQ((*probe_op)->edge_variable, "e2");
+    EXPECT_EQ((*probe_op)->lower, PropertyValue{int64_t{100}});
+    EXPECT_TRUE((*probe_op)->lower_inclusive);
+    EXPECT_EQ((*probe_op)->upper, PropertyValue{int64_t{200}});
+    EXPECT_FALSE((*probe_op)->upper_inclusive);
+    EXPECT_EQ((*probe_op)->index_id, 0u) << "R1 must not choose an index";
+}
+
+TEST(ResolveIndexProbeRuleTest, ResolvesOnlyExplicitlyLabelledDestinations) {
+    auto schema = makeProbeCatalogSchema();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto make_probe_tree = [](std::vector<LabelId> labels) {
+        auto probe = std::make_unique<BoundIndexProbeOp>();
+        probe->source_variable = "friend";
+        probe->target_variable = "message";
+        probe->edge_variable = "e2";
+        probe->edge_label_ids = {EdgeLabelId{2}};
+        probe->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+        probe->target_label_ids = std::move(labels);
+        probe->index_property_name = "creationDate";
+        probe->lower = PropertyValue{int64_t{100}};
+        return BoundLogicalOperator(std::move(probe));
+    };
+
+    ResolveIndexProbeRule rule;
+    for (bool labelled : {true, false}) {
+        auto tree = make_probe_tree(labelled ? std::vector<LabelId>{LabelId{10}} : std::vector<LabelId>{});
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(tree);
+        GroupExpr& probe_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        auto produced = rule.substitute(probe_expr, memo);
+        if (!labelled) {
+            EXPECT_TRUE(produced.empty()) << "unlabelled destination must stay unresolved";
+            continue;
+        }
+        ASSERT_EQ(produced.size(), 1u);
+        auto* resolved = std::get_if<std::unique_ptr<BoundIndexProbeOp>>(&produced[0]->op);
+        ASSERT_TRUE(resolved && *resolved);
+        EXPECT_EQ((*resolved)->index_id, 23u);
+        EXPECT_EQ((*resolved)->index_prop, 2u);
+        EXPECT_EQ((*resolved)->target_label_ids, (std::vector<LabelId>{LabelId{10}}));
+        EXPECT_TRUE(produced[0]->child_groups.empty()) << "R2 refines the probe group, it does not add inputs";
+    }
+}
+
+TEST(ImplIndexProbeRulesTest, EmitPhysicalTagsWithoutChoosingWinners) {
+    auto schema = makeProbeCatalogSchema();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto probe_tree = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+    Memo memo;
+    memo.setCatalog(&catalog);
+    GroupId root_gid = memo.copyIn(probe_tree);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(root_gid).logical_exprs.at(0));
+
+    GenerateIndexProbeRule r1;
+    auto produced = r1.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    GroupExpr* probe_join = memo.insertExpr(std::move(produced[0]), root_gid);
+
+    // Resolve the probe group's expression through R2.
+    GroupExpr& unresolved = memo.getExpr(memo.getGroup(probe_join->child_groups[1]).logical_exprs.at(0));
+    ResolveIndexProbeRule r2;
+    auto resolved = r2.substitute(unresolved, memo);
+    ASSERT_EQ(resolved.size(), 1u);
+    memo.insertExpr(std::move(resolved[0]), probe_join->child_groups[1]);
+
+    // R3 for the probe leaf.
+    ImplIndexProbeRule impl_probe;
+    for (ExprId eid : memo.getGroup(probe_join->child_groups[1]).logical_exprs) {
+        GroupExpr& probe_candidate = memo.getExpr(eid);
+        if (impl_probe.condition(probe_candidate, memo)) {
+            auto phys = impl_probe.substitute(probe_candidate, memo);
+            ASSERT_EQ(phys.size(), 1u);
+            ASSERT_TRUE(phys[0]->isPhysical());
+            EXPECT_EQ(phys[0]->physOp().tag, PhysicalOpTag::IndexProbe);
+            break;
+        }
+    }
+
+    // R3 for the probe join: two inputs, and the probe input must not demand
+    // materialisation of the property the index range consumes.
+    ImplIndexProbeJoinRule impl_join;
+    auto join_phys = impl_join.substitute(*probe_join, memo);
+    ASSERT_EQ(join_phys.size(), 1u);
+    ASSERT_TRUE(join_phys[0]->isPhysical());
+    EXPECT_EQ(join_phys[0]->physOp().tag, PhysicalOpTag::IndexProbeJoin);
+    ASSERT_EQ(join_phys[0]->child_groups.size(), 2u);
+    const auto& reqs = join_phys[0]->physOp().required_input_mat;
+    ASSERT_EQ(reqs.size(), 2u);
+    EXPECT_TRUE(reqs[1].empty()) << "probe input reads the index; it must not be enriched";
+}
+
+TEST(IndexProbeCascadeTest, ChoosesProbeJoinForLabelledDestination) {
+    auto schema = makeProbeCatalogSchema();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    catalog.setLabelStats(LabelId{5}, 1000);
+    catalog.setLabelStats(LabelId{10}, 1000);
+
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+    BoundLogicalPlan plan;
+    plan.root = std::move(root);
+    {
+        // Sanity: the same plan without a catalog must still produce a winner
+        // (forward Filter(Expand) plan), isolating rule/cost failures below.
+        BoundLogicalPlan no_catalog_plan;
+        no_catalog_plan.root = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+        LogicalOptimizer optimizer;
+        optimizer.optimize(no_catalog_plan);
+        ASSERT_TRUE(no_catalog_plan.chosen) << "forward plan must still have a winner";
+        EXPECT_EQ(no_catalog_plan.chosen->tag, PhysicalOpTag::Filter);
+    }
+    binder::SlotSemanticMap semantics;
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan, &catalog, &semantics, nullptr);
+
+    ASSERT_TRUE(plan.chosen) << "CBO should have a winner";
+    EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::IndexProbeJoin);
+    ASSERT_GE(plan.chosen->children.size(), 2u);
+    EXPECT_EQ(plan.chosen->children[1]->tag, PhysicalOpTag::IndexProbe);
 }
