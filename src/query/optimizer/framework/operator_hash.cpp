@@ -1,4 +1,5 @@
 #include "query/optimizer/framework/operator_hash.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/dataset/row.hpp"
@@ -357,6 +358,16 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 if (val.index_upper)
                     seed = hashPropertyValue(seed, *val.index_upper);
                 seed = combine(seed, (val.index_lower_inclusive ? 1 : 0) | (val.index_upper_inclusive ? 2 : 0));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (!val)
+                    return;
+                seed = hashBytes(seed, val->probe.source_variable);
+                seed = hashBytes(seed, val->probe.target_variable);
+                seed = combine(seed, val->probe.index_id);
+                seed = combine(seed, val->probe.index_prop);
+                if (val->probe.equality) seed = hashPropertyValue(seed, *val->probe.equality);
+                if (val->probe.lower) seed = hashPropertyValue(seed, *val->probe.lower);
+                if (val->probe.upper) seed = hashPropertyValue(seed, *val->probe.upper);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                 if (!val)
                     return;

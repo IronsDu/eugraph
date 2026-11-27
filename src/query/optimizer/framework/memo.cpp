@@ -192,7 +192,11 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                     auto c = std::move(val->child.value());
                     val->child = std::nullopt;
                     return c;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                auto c = std::make_unique<binder::BoundIndexProbeJoinOp>();
+                c->probe = val->probe;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
                     auto c = std::move(val->anchor);

@@ -1,4 +1,5 @@
 #include "query/optimizer/framework/operator_eq.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/dataset/row.hpp"
@@ -307,6 +308,14 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                        av.index_eq_values == bv.index_eq_values && av.index_lower == bv.index_lower &&
                        av.index_upper == bv.index_upper && av.index_lower_inclusive == bv.index_lower_inclusive &&
                        av.index_upper_inclusive == bv.index_upper_inclusive;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                return av->probe.source_variable == bv->probe.source_variable &&
+                       av->probe.target_variable == bv->probe.target_variable &&
+                       av->probe.index_id == bv->probe.index_id && av->probe.index_prop == bv->probe.index_prop &&
+                       av->probe.equality == bv->probe.equality && av->probe.lower == bv->probe.lower &&
+                       av->probe.upper == bv->probe.upper;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
