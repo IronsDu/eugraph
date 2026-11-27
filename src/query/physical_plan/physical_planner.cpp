@@ -2558,6 +2558,71 @@ namespace {
 /// binder clone intentionally drops children and cannot be replanned safely).
 } // namespace
 
+/// Instantiates the CBO's chosen HashJoin tag for a bare BinaryJoin. The
+/// optimizer decided the algorithm and exposed equi-join conditions; lowering
+/// only extracts the key columns and places the build side. Shapes it cannot
+/// express (non-equi conditions, keys that do not resolve to output columns)
+/// return nullopt so the caller falls back to the CrossProduct lowering.
+static std::optional<PlanOperatorResult> planHonoredHashJoin(const binder::BoundBinaryJoinOp& join,
+                                                             PlanOperatorResult& lr, PlanOperatorResult& rr,
+                                                             PlanContext& ctx) {
+    ensureSlotLayout(lr, ctx);
+    ensureSlotLayout(rr, ctx);
+
+    std::vector<uint32_t> left_keys;
+    std::vector<uint32_t> right_keys;
+    for (const auto& cond : join.join_conditions) {
+        const auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&cond);
+        if (!binop || !*binop || (*binop)->op != cypher::BinaryOperator::EQ)
+            return std::nullopt;
+        auto ll = joinKeyColumn((*binop)->left, lr.output_schema, lr.slot_layout, ctx);
+        auto lr_col = joinKeyColumn((*binop)->right, lr.output_schema, lr.slot_layout, ctx);
+        auto rl = joinKeyColumn((*binop)->left, rr.output_schema, rr.slot_layout, ctx);
+        auto rr_col = joinKeyColumn((*binop)->right, rr.output_schema, rr.slot_layout, ctx);
+        if (ll && rr_col && !lr_col && !rl) {
+            left_keys.push_back(*ll);
+            right_keys.push_back(*rr_col);
+        } else if (lr_col && rl && !ll && !rr_col) {
+            left_keys.push_back(*lr_col);
+            right_keys.push_back(*rl);
+        } else {
+            return std::nullopt;
+        }
+    }
+    if (left_keys.empty())
+        return std::nullopt;
+
+    // Build-side placement is an instantiation detail (memory), not an
+    // algorithm decision: prefer the smaller estimated side, default to right.
+    bool build_left = false;
+    auto left_est = estimateRowsUpperBound(join.left, ctx);
+    auto right_est = estimateRowsUpperBound(join.right, ctx);
+    if (left_est && right_est)
+        build_left = *left_est < *right_est;
+
+    // Resource-feasibility fallback, not an algorithm choice: the cost model
+    // does not model the join memory budget yet, so a HashJoin whose estimated
+    // build side cannot fit the configured budget degrades to the CrossProduct
+    // lowering (the operator still enforces the budget at runtime). Moving this
+    // bound into the optimizer is tracked in physical-planner-residue-audit J6.
+    const size_t max_build_rows = hashJoinMaxBuildRows();
+    if ((build_left ? left_est : right_est).has_value() && *(build_left ? left_est : right_est) > max_build_rows)
+        return std::nullopt;
+
+    Schema output_schema = lr.output_schema;
+    output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
+    auto output_types = lr.output_types;
+    output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
+    TupleSlotLayout layout = lr.slot_layout;
+    layout.merge(rr.slot_layout);
+
+    auto join_op = std::make_unique<HashJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), std::move(left_keys),
+                                                        std::move(right_keys), output_types, output_schema, build_left,
+                                                        max_build_rows);
+    join_op->setEvalContext(ctx.eval_ctx);
+    return PlanOperatorResult{std::move(join_op), std::move(output_schema), std::move(output_types), std::move(layout)};
+}
+
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
                                         IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
@@ -5033,6 +5098,18 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     std::unique_ptr<PhysicalOperator> result_op;
                     const bool pc_anchor = std::holds_alternative<binder::BoundCorrelatedSourceOp>(v.left) &&
                                            std::holds_alternative<binder::BoundLabelScanOp>(v.right);
+                    // The CBO's join tag is the optimizer's decision; lowering
+                    // only instantiates it. pc_anchor keeps its dedicated
+                    // correlation operator (semantic join shape, not a keyed
+                    // equi-join).
+                    if (!pc_anchor) {
+                        auto tag_it = ctx.chosen_join_tags.find(&v);
+                        if (tag_it != ctx.chosen_join_tags.end() &&
+                            tag_it->second == optimizer::PhysicalOpTag::HashJoin) {
+                            if (auto hash_join = planHonoredHashJoin(v, lr, rr, ctx))
+                                return std::move(*hash_join);
+                        }
+                    }
                     if (pc_anchor) {
                         int edge_col = -1;
                         for (size_t i = 0; i < lr.output_types.size(); ++i) {

@@ -67,6 +67,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加查询算子 | [query/engine/query-engine-design.md] | `src/query/physical_plan/`, `executor/` |
 | 实现 PROFILE / 查询诊断 | [query/engine/profile-design.md] | `src/query/physical_plan/`, `src/query/executor/`, `src/service/bolt/` |
 | 添加优化规则 | [query/optimizer/cascades-optimizer.md] | `src/query/optimizer/` |
+| 清理 physical planner 遗留 access-path/PE 决策、规划 access-path 规则拆分 | [query/engine/physical-planner-residue-audit.md](query/engine/physical-planner-residue-audit.md), [query/engine/module-responsibilities.md](query/engine/module-responsibilities.md), [query/engine/index-probe-operator.md](query/engine/index-probe-operator.md) | `src/query/physical_plan/physical_planner.cpp`, `src/query/optimizer/rules/` |
 | 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md], [query/engine/aggregate-typed-execution-design.md](query/engine/aggregate-typed-execution-design.md) | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
 | 强/弱混合模式（属性归属、多标签差异、弱空间、`::`、索引、`properties`/`keys`） | [features/strong-weak-hybrid.md](features/strong-weak-hybrid.md) | `src/query/physical_plan/operator/create_node_physical_op.cpp`, `set_physical_op.cpp`, `merge_physical_op.cpp`, `remove_physical_op.cpp` |

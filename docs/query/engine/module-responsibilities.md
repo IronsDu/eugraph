@@ -87,5 +87,6 @@ physical: DynamicIndexJoinPhysicalOp 实例化
 
 - [Optimizer 架构与 Columbia 迁移](optimizer-architecture.md)
 - [Optimizer / Access Path 后续规划](optimizer-next-steps.md)
+- [Physical planner 遗留决策清单](physical-planner-residue-audit.md)
 - [EXPLAIN 语义元信息](explain-semantic-metadata.md)
 - [Dynamic IndexJoin 单次 Source 消费](dynamic-index-join-shared-source.md)
