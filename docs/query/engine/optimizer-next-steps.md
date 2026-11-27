@@ -2,7 +2,8 @@
 
 > 状态：2026-11-26。
 > - P0 / P1 已完成并合入；
-> - P1.3 已完成；P1.4 仍待开始；
+> - P1.3 / P1.4 已完成；IndexProbe（R1/R2/R3 + lowering）已落地；
+> - 无标签目标变量的索引覆盖判定仍缺元数据（见 P4）。
 > - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
 
 ## 1. 目标边界
@@ -97,7 +98,7 @@ property”这一步仍依赖 physical 状态。
 **验收**：c3、string/int inclusive range、c2/c6/c9 及 689 tests 通过；physical planner
 不再包含 property 反解实现。
 
-### P1.4 — 普通 IndexScan access path 迁入 optimizer（待开始）
+### P1.4 — 普通 IndexScan access path 迁入 optimizer（已完成）
 
 **问题**：`Filter(LabelScan) → IndexScan` 仍在 physical planner 的
 `tryBoundIndexScan` 中完成。CBO 选择的是 `Filter(LabelScan)`，physical planner
@@ -117,6 +118,9 @@ property”这一步仍依赖 physical 状态。
 **验收**：c3、inclusive int/string、c2/c6/c9、689 tests；physical planner 不再查
 catalog 选索引。
 
+**结果**：`applyIndexAccessPaths` + `GenerateIndexScanRule` + `ImplIndexScanRule` 已落地；
+`tryBoundIndexScan` 已删除；IndexScan cost 读取 descriptor。
+
 ### P2 — PE / LateMaterialize enforcer 化（待开始）
 
 - PE 边界由 ChosenPlan/PhysProp 描述；
@@ -132,14 +136,28 @@ catalog 选索引。
 - StatsDelta / snapshot / journal / Catalog 全链路；
 - 先定粒度、写时维护 vs ANALYZE、兼容和回退，再实现。
 
-### P4 — c3：非 identity Project / 无显式 label（待开始）
+### P4 — c3：无显式 label 的父 label 索引（待开始，IndexProbe 的最后一块）
 
-依赖 P3 的 endpoint label 信息：
+IndexProbe 的 R1/R2/R3 + physical lowering 已落地（见
+[IndexProbe operator and rule split](index-probe-operator.md)）。目标变量带显式 label 时
+已能选中并下推 probe（SF1 c3 加 `:Message` 的诊断：1489.8 → 145.6 ms，1 行不变）。
 
-- 目标变量无显式 label 时安全解析父 label 索引；
-- Filter 穿过 load/PE 边界；
-- 保留残差谓词；
-- 不允许靠数据分布猜 label。
+剩余阻塞：无标签目标变量的索引覆盖判定。实测 catalog 证据：
+
+- c3 的 `message` 变量 `vertex_labels=[]`、`Expand.dst_label_ids=[]`；
+- `creationDate` 的 property candidates = `Comment/Forum/Person/Post`（不含 Message）；
+- `Message#23` 与 `Post#24` 的 creationDate 索引都是 weak accessor；
+- `GraphSchema`/`EdgeLabelDef` 未持久化 loader 的 `derived: ["Message"]`，也没有
+  边端点标签。
+
+因此需要（按顺序）：
+
+1. loader 持久化派生标签（Post/Comment ⊂ Message）；
+2. loader 持久化边端点标签（HAS_CREATOR src = Comment/Post）；
+3. Binder 用边端点收窄无标签端点变量的候选 label；
+4. R2 用派生标签判断单索引覆盖，覆盖成立才产生 probe 候选。
+
+在此之前，无标签 c3 保持 forward 计划（正确、1 行、~1.49 s），不猜 label。
 
 ### P5 — EXPLAIN 全面使用 SlotSemantics（部分完成）
 
