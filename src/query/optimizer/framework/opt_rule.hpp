@@ -43,6 +43,7 @@ enum class OptNodeType {
     PatternComprehensionFork,  // 29
     IndexJoin,                 // 30
     IndexProbe,                // 31
+    IndexProbeJoin,            // 32
     Unknown                    // out-of-range / future operator
 };
 

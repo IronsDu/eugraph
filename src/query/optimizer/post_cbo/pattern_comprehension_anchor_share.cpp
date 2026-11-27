@@ -598,6 +598,9 @@ bool replaceChild(BoundLogicalOperator& parent, const BoundLogicalOperator* old_
                 if (val && val->child)
                     try_slot(*val->child);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (val)
+                    try_slot(val->anchor);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                 if (val)
                     try_slot(val->left);

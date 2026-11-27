@@ -62,6 +62,9 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
                 // Binary/multi-input operators carry their inputs in their own
                 // fields (or several of them); a single `child` cannot be
                 // attached here.
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (val)
+                    val->anchor = std::move(child);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                 if (val)
                     val->left = std::move(child);
@@ -191,6 +194,10 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                     return c;
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                     return binder::BoundScanOp{};
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                    auto c = std::move(val->anchor);
+                    val->anchor = binder::BoundScanOp{};
+                    return c;
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                     auto c = std::move(val->left);
                     val->left = binder::BoundScanOp{};
