@@ -279,11 +279,16 @@ void LogicalOptimizer::initRules() {
     // Transformation rules
     rules_.addRule(std::make_unique<GenerateIndexScanRule>());
     rules_.addRule(std::make_unique<GenerateIndexJoinRule>());
-    // R1: Filter(Expand) shape -> IndexProbe + ProbeJoin candidate.
-    rules_.addRule(std::make_unique<GenerateIndexProbeRule>());
-    // R2: refine the probe group's descriptor to a catalog index (shape-only
-    // rules never choose indexes; the probe group is optimized independently).
-    rules_.addRule(std::make_unique<ResolveIndexProbeRule>());
+    // Access-path candidate group switch. Kept as an explicit fallback: setting
+    // EUGRAPH_DISABLE_PROBE_RULES=1 restores the pre-ProbeJoin search space
+    // (useful for plan A/B and for regressions without a rebuild).
+    if (std::getenv(config::kEnvDisableProbeRules) == nullptr) {
+        // R1: Filter(Expand) shape -> IndexProbe + ProbeJoin candidate.
+        rules_.addRule(std::make_unique<GenerateIndexProbeRule>());
+        // R2: refine the probe group's descriptor to a catalog index (shape-only
+        // rules never choose indexes; the probe group is optimized independently).
+        rules_.addRule(std::make_unique<ResolveIndexProbeRule>());
+    }
     rules_.addRule(std::make_unique<FilterPushdownRule>());
     rules_.addRule(std::make_unique<JoinCommuteRule>());
     rules_.addRule(std::make_unique<JoinAssociateRule>());
@@ -302,8 +307,10 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplIndexScanRule>());
     rules_.addRule(std::make_unique<ImplPatternComprehensionApplyRule>());
     rules_.addRule(std::make_unique<ImplIndexJoinRule>());
-    rules_.addRule(std::make_unique<ImplIndexProbeRule>());
-    rules_.addRule(std::make_unique<ImplIndexProbeJoinRule>());
+    if (std::getenv(config::kEnvDisableProbeRules) == nullptr) {
+        rules_.addRule(std::make_unique<ImplIndexProbeRule>());
+        rules_.addRule(std::make_unique<ImplIndexProbeJoinRule>());
+    }
     rules_.addRule(std::make_unique<ImplFilterRule>());
     rules_.addRule(std::make_unique<ImplProjectRule>());
     rules_.addRule(std::make_unique<ImplExpandRule>());

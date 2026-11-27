@@ -105,7 +105,12 @@ R2 目前只解析「目标变量有显式 label」的 probe（`(message:Message
 
 在此之前，c3 保持 forward `Filter(Expand)` 计划（结果正确，1 行）。
 
-## 7. 实测（SF1，c3 参数 personId=933 / Angola / Colombia）
+## 7. 回退开关
+
+`EUGRAPH_DISABLE_PROBE_RULES=1` 关闭 R1/R2/R3 的注册，把搜索空间恢复到
+ProbeJoin 之前（同一二进制做计划 A/B，或线上回退用）。默认开启。
+
+## 8. 实测（SF1，c3 参数 personId=933 / Angola / Colombia）
 
 同一二进制、同一数据、warm 4 轮：
 
