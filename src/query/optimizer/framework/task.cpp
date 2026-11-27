@@ -411,7 +411,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         // enforcer-insertion path picks up the any-winner and wraps it
         // with an Enricher.
         LogProp group_lp = group.getLogProp(memo, memo.getCatalog());
-        Cost localCost = findLocalCost(expr.physOp().tag, group_lp, {});
+        Cost localCost = findLocalCost(expr.physOp().tag, group_lp, {}, &expr.physOp());
         PhysProp provided;
         provided.setMaterializations(expr.physOp().output_mat);
         group.newWinner(provided, expr_id_, localCost, /*done=*/last_);
@@ -428,7 +428,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     for (int i = 0; i < arity; i++) {
         input_lps.push_back(memo.getGroup(expr.child_groups[i]).getLogProp(memo, memo.getCatalog()));
     }
-    Cost localCost = findLocalCost(expr.physOp().tag, group_lp, input_lps);
+    Cost localCost = findLocalCost(expr.physOp().tag, group_lp, input_lps, &expr.physOp());
 
     // Build per-input required materializations: union of what this operator
     // declares for that input and the subset of the parent demand that this

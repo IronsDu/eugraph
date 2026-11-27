@@ -1,13 +1,16 @@
 #include "query/optimizer/framework/cost_model.hpp"
 
 #include "query/optimizer/framework/log_prop.hpp"
+#include "query/optimizer/framework/physical_expr.hpp"
+#include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 
 #include <cmath>
 
 namespace eugraph {
 namespace optimizer {
 
-Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps) {
+Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps,
+                    const PhysicalExpr* phys) {
     auto input0Card = [&]() -> double { return input_lps.empty() ? 0.0 : input_lps[0].cardinality; };
     auto input1Card = [&]() -> double { return input_lps.size() < 2 ? 0.0 : input_lps[1].cardinality; };
 
@@ -15,9 +18,23 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     // Scans: cost proportional to rows scanned
     case PhysicalOpTag::NodeScan:
     case PhysicalOpTag::LabelScan:
-    case PhysicalOpTag::IndexScan:
     case PhysicalOpTag::EdgeIndexScan:
         return Cost(group_lp.cardinality);
+    case PhysicalOpTag::IndexScan: {
+        // Index access has a descriptor-driven selectivity. Until P3 stats are
+        // available, use conservative constants: equality is highly selective,
+        // a range is only assumed to prune part of the label.
+        double selectivity = 1.0;
+        if (phys != nullptr) {
+            if (const auto* scan = std::get_if<binder::BoundLabelScanOp>(&phys->source); scan && scan->index_scan) {
+                if (!scan->index_eq_values.empty())
+                    selectivity = 0.01;
+                else if (scan->index_lower || scan->index_upper)
+                    selectivity = 0.10;
+            }
+        }
+        return Cost(group_lp.cardinality * selectivity);
+    }
 
     // Leaf sources
     case PhysicalOpTag::Singleton:
