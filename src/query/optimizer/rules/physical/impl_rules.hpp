@@ -82,15 +82,6 @@ public:
 };
 
 // ---- Unary operators ----
-class GenerateIndexJoinRule : public OptRule {
-public:
-    std::string name() const override {
-        return "GenerateIndexJoin";
-    }
-    PatternNode pattern() const override;
-    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
-};
-
 class ImplPatternComprehensionApplyRule : public OptRule {
 public:
     std::string name() const override {
