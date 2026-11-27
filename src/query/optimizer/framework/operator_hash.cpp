@@ -310,6 +310,36 @@ uint64_t hashBoundExpression(const binder::BoundExpression& expr) {
     return seed;
 }
 
+namespace {
+
+// IndexProbe descriptor content. Shared by BoundIndexProbeOp (logical leaf) and
+// BoundIndexProbeJoinOp (its inline probe mirror) so the two hash branches
+// cannot drift apart; a stale mirror would let two different access paths
+// dedup into one memo group.
+uint64_t hashIndexProbe(uint64_t seed, const binder::BoundIndexProbeOp& p) {
+    seed = hashBytes(seed, p.source_variable);
+    seed = hashBytes(seed, p.target_variable);
+    seed = hashBytes(seed, p.edge_variable);
+    seed = hashBytes(seed, p.index_property_name);
+    for (auto l : p.edge_label_ids)
+        seed = combine(seed, static_cast<uint64_t>(l));
+    for (auto l : p.target_label_ids)
+        seed = combine(seed, static_cast<uint64_t>(l));
+    seed = combine(seed, static_cast<uint64_t>(p.direction));
+    seed = combine(seed, p.index_id);
+    seed = combine(seed, p.index_prop);
+    if (p.equality)
+        seed = hashPropertyValue(seed, *p.equality);
+    if (p.lower)
+        seed = hashPropertyValue(seed, *p.lower);
+    if (p.upper)
+        seed = hashPropertyValue(seed, *p.upper);
+    seed = combine(seed, (p.lower_inclusive ? 1u : 0u) | (p.upper_inclusive ? 2u : 0u));
+    return seed;
+}
+
+} // namespace
+
 uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
     uint64_t seed = 14695981039346656037ULL;
     seed = combine(seed, op.index());
@@ -361,30 +391,13 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
                 if (!val)
                     return;
-                seed = hashBytes(seed, val->probe.source_variable);
-                seed = hashBytes(seed, val->probe.target_variable);
-                seed = combine(seed, val->probe.index_id);
-                seed = combine(seed, val->probe.index_prop);
-                if (val->probe.equality) seed = hashPropertyValue(seed, *val->probe.equality);
-                if (val->probe.lower) seed = hashPropertyValue(seed, *val->probe.lower);
-                if (val->probe.upper) seed = hashPropertyValue(seed, *val->probe.upper);
+                // Child groups are hashed by Memo::computeHash; only the probe
+                // descriptor is operator content here.
+                seed = hashIndexProbe(seed, val->probe);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                 if (!val)
                     return;
-                seed = hashBytes(seed, val->source_variable);
-                seed = hashBytes(seed, val->target_variable);
-                seed = hashBytes(seed, val->edge_variable);
-                seed = combine(seed, val->index_id);
-                seed = combine(seed, val->index_prop);
-                seed = hashBytes(seed, val->index_property_name);
-                for (auto l : val->edge_label_ids)
-                    seed = combine(seed, static_cast<uint64_t>(l));
-                for (auto l : val->target_label_ids)
-                    seed = combine(seed, static_cast<uint64_t>(l));
-                if (val->equality) seed = hashPropertyValue(seed, *val->equality);
-                if (val->lower) seed = hashPropertyValue(seed, *val->lower);
-                if (val->upper) seed = hashPropertyValue(seed, *val->upper);
-                seed = combine(seed, (val->lower_inclusive ? 1 : 0) | (val->upper_inclusive ? 2 : 0));
+                seed = hashIndexProbe(seed, *val);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!val)
                     return;

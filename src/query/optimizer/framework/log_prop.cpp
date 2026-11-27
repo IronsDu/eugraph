@@ -59,34 +59,11 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                 if (!val)
                     return LogProp{};
-                LogProp lp;
-                for (const auto& name : {val->source_variable, val->target_variable}) {
-                    if (name.empty())
-                        continue;
-                    ColumnInfo ci;
-                    ci.variable = name;
-                    ci.column_index = 0;
-                    ci.type_kind = binder::BoundTypeKind::VERTEX_REF;
-                    lp.columns.push_back(std::move(ci));
-                }
-                lp.valid = true;
-                return lp;
+                return deriveIndexProbe(*val);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
-                if (!val || input_lps.empty())
+                if (!val || input_lps.size() < 2)
                     return LogProp{};
-                LogProp lp = input_lps[0];
-                bool has_target = false;
-                for (const auto& c : lp.columns)
-                    has_target = has_target || c.variable == val->probe.target_variable;
-                if (!has_target) {
-                    ColumnInfo ci;
-                    ci.variable = val->probe.target_variable;
-                    ci.column_index = 0;
-                    ci.type_kind = binder::BoundTypeKind::VERTEX_REF;
-                    lp.columns.push_back(std::move(ci));
-                }
-                lp.valid = true;
-                return lp;
+                return deriveIndexProbeJoin(input_lps[0], input_lps[1]);
             }
             // Unary operators (held by unique_ptr)
             else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
@@ -549,6 +526,79 @@ LogProp LogPropDeriver::derivePatternComprehensionFork(const binder::BoundPatter
         ci.type_kind = binder::BoundTypeKind::LIST;
         lp.columns.push_back(std::move(ci));
     }
+    lp.valid = true;
+    return lp;
+}
+
+LogProp LogPropDeriver::deriveIndexProbe(const binder::BoundIndexProbeOp& op) const {
+    // Access path shape: index range scan over the target vertex label, then
+    // one edge step from the target to the source variable (the join key).
+    // The scan is over the *target* label; the edge degree multiplies rows.
+    LogProp lp;
+    double target_rows = 0.0;
+    for (LabelId lid : op.target_label_ids) {
+        uint64_t cnt = catalog_ ? catalog_->getVertexCount(lid) : 0;
+        target_rows += (cnt > 0) ? static_cast<double>(cnt) : kDefaultVertexCount;
+    }
+    if (op.target_label_ids.empty())
+        target_rows = kDefaultVertexCount; // label not resolved yet
+
+    double selectivity = kDefaultSelectivity;
+    if (op.equality)
+        selectivity = kIndexedSelectivity;
+    else if (op.lower || op.upper)
+        selectivity = kIndexRangeSelectivity;
+
+    double avg_deg = 1.0; // one edge per probe row is the common case
+    for (EdgeLabelId elid : op.edge_label_ids) {
+        double deg = catalog_ ? catalog_->getAvgOutDegree(elid) : 0.0;
+        if (deg > 0.0) {
+            avg_deg = deg;
+            break;
+        }
+    }
+    lp.cardinality = target_rows * selectivity * avg_deg;
+
+    // Schema: scanned target vertex, traversed edge, source (join key) vertex.
+    auto push_vertex = [&lp](const std::string& name, const std::vector<LabelId>& labels) {
+        if (name.empty())
+            return;
+        ColumnInfo ci;
+        ci.variable = name;
+        ci.column_index = 0;
+        ci.type_kind = binder::BoundTypeKind::VERTEX_REF;
+        ci.label_ids = labels;
+        lp.columns.push_back(std::move(ci));
+    };
+    push_vertex(op.target_variable, op.target_label_ids);
+    if (!op.edge_variable.empty()) {
+        ColumnInfo edge;
+        edge.variable = op.edge_variable;
+        edge.column_index = 0;
+        edge.type_kind = binder::BoundTypeKind::EDGE_KEY;
+        lp.columns.push_back(std::move(edge));
+    }
+    push_vertex(op.source_variable, {});
+    lp.valid = true;
+    return lp;
+}
+
+LogProp LogPropDeriver::deriveIndexProbeJoin(const LogProp& anchor, const LogProp& probe_input) const {
+    LogProp lp;
+    lp.columns = anchor.columns;
+    auto append_missing = [&lp](const ColumnInfo& col) {
+        for (const auto& existing : lp.columns)
+            if (existing.variable == col.variable)
+                return;
+        lp.columns.push_back(col);
+    };
+    for (const auto& col : probe_input.columns)
+        append_missing(col);
+
+    // Hash join on a vertex key: every probe row matches at most one anchor row,
+    // so the output cannot exceed the probe side. Both sides are estimated by
+    // their own access paths; no re-derivation of the anchor happens here.
+    lp.cardinality = probe_input.cardinality;
     lp.valid = true;
     return lp;
 }

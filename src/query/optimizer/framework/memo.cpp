@@ -103,6 +103,10 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
                 return val ? static_cast<int>(
                                  binder::BoundPatternComprehensionForkOp::childCountFor(val->branches.size()))
                            : 0;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // anchor group + probe group (the probe is a logical leaf that
+                // gets its own group so rules can refine it independently).
+                return val ? static_cast<int>(binder::BoundIndexProbeJoinOp::kChildCount) : 0;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 return (val && val->child.has_value()) ? 1 : 0;
             } else {
@@ -186,22 +190,19 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                                      std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>> ||
-                                     std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                    // Two/multi-input operators: handled by the arity-2 branch
+                    // below, never by the single-child extraction.
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                     auto c = std::move(val->child.value());
                     val->child = std::nullopt;
                     return c;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
-                auto c = std::make_unique<binder::BoundIndexProbeJoinOp>();
-                c->probe = val->probe;
-                return c;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                    // Probe is a leaf descriptor: its group is created explicitly
+                    // by the ProbeJoin 2-child path below.
                     return binder::BoundScanOp{};
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
-                    auto c = std::move(val->anchor);
-                    val->anchor = binder::BoundScanOp{};
-                    return c;
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                     auto c = std::move(val->left);
                     val->left = binder::BoundScanOp{};
@@ -268,6 +269,18 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(uo->right));
             uo->right = binder::BoundScanOp{};
             child_groups.push_back(copyIn(*right));
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(op)) {
+            // child 0 = anchor subtree (already containing the complete left
+            // pipeline), child 1 = probe leaf in its own group. Both groups are
+            // real memo children so groups are never re-derived from the
+            // ProbeJoin's inline fields.
+            auto& pj = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(op);
+            auto anchor = std::make_unique<binder::BoundLogicalOperator>(std::move(pj->anchor));
+            pj->anchor = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(*anchor));
+            auto probe =
+                std::make_unique<binder::BoundLogicalOperator>(std::make_unique<binder::BoundIndexProbeOp>(pj->probe));
+            child_groups.push_back(copyIn(*probe));
         }
     } else if (n_children > 2) {
         // Multi-input operators (currently only the shared-anchor pattern
@@ -338,6 +351,12 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
             join->left = copyOut(expr.child_groups[0]);
             join->right = copyOut(expr.child_groups[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result)) {
+            auto& pj = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result);
+            pj->anchor = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kAnchorChild]);
+            auto probe = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kProbeChild]);
+            if (auto* p = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&probe); p && *p)
+                pj->probe = **p;
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
             sj->left = copyOut(expr.child_groups[0]);
@@ -403,6 +422,12 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
                 auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
                 join->left = copyOut(expr.child_groups[0], PhysProp{});
                 join->right = copyOut(expr.child_groups[1], PhysProp{});
+            } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result)) {
+                auto& pj = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result);
+                pj->anchor = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kAnchorChild], PhysProp{});
+                auto probe = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kProbeChild], PhysProp{});
+                if (auto* p = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&probe); p && *p)
+                    pj->probe = **p;
             } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
                 auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
                 sj->left = copyOut(expr.child_groups[0], PhysProp{});
@@ -1135,6 +1160,13 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->dynamic_key_variable = val->dynamic_key_variable;
                 c->build_left = val->build_left;
                 c->chain = val->chain;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                auto c = std::make_unique<binder::BoundIndexProbeJoinOp>();
+                // `probe` is operator data (not a child): copy it so a cloned
+                // tree still describes the access path. `anchor` is restored
+                // from the memo's child groups by copyOut.
+                c->probe = val->probe;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                 auto c = std::make_unique<binder::BoundIndexProbeOp>();

@@ -101,6 +101,137 @@ TEST(MemoTest, CopyInCopyOutThreeLevel) {
     ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(filt->child));
 }
 
+// ==================== IndexProbe / ProbeJoin Tests ====================
+//
+// BoundIndexProbeJoinOp keeps the anchor and the probe in two child groups.
+// These tests pin the memo contract (child count, group creation, copyOut
+// round-trip) and the "clone must not lose the probe descriptor" invariant.
+
+static BoundIndexProbeOp makeIndexProbeOp() {
+    BoundIndexProbeOp p;
+    p.source_variable = "friend";
+    p.target_variable = "message";
+    p.edge_variable = "e2";
+    p.edge_label_ids = {EdgeLabelId{7}};
+    p.direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+    p.target_label_ids = {LabelId{5}};
+    p.index_id = 11;
+    p.index_prop = 1;
+    p.index_property_name = "creationDate";
+    p.lower = PropertyValue{int64_t{100}};
+    p.lower_inclusive = true;
+    p.upper = PropertyValue{int64_t{200}};
+    p.upper_inclusive = false;
+    return p;
+}
+
+static BoundLogicalOperator makeProbeJoinTree() {
+    auto pj = std::make_unique<BoundIndexProbeJoinOp>();
+    pj->anchor = makeLabelScanWithLabel("friend", 0, LabelId{2});
+    pj->probe = makeIndexProbeOp();
+    return BoundLogicalOperator(std::move(pj));
+}
+
+TEST(ProbeJoinMemoTest, ChildCountIsTwo) {
+    auto op = makeProbeJoinTree();
+    EXPECT_EQ(getChildCount(op), 2);
+    // Cloning must preserve the operator kind and the probe descriptor; a
+    // fall-through clone would silently replace it with a scan.
+    auto cloned = cloneBoundLogicalOperator(op);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundIndexProbeJoinOp>>(cloned));
+    auto& c = std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(cloned);
+    ASSERT_TRUE(c);
+    EXPECT_EQ(c->probe.index_id, 11u);
+    EXPECT_EQ(c->probe.upper, PropertyValue{int64_t{200}});
+    EXPECT_EQ(getChildCount(cloned), 2);
+}
+
+TEST(ProbeJoinMemoTest, CopyInCreatesAnchorAndProbeGroups) {
+    auto op = makeProbeJoinTree();
+    Memo memo;
+    GroupId gid = memo.copyIn(op);
+
+    Group& group = memo.getGroup(gid);
+    ASSERT_EQ(group.logical_exprs.size(), 1u);
+    GroupExpr& expr = memo.getExpr(group.logical_exprs[0]);
+    ASSERT_EQ(expr.child_groups.size(), 2u);
+
+    Group& anchor = memo.getGroup(expr.child_groups[BoundIndexProbeJoinOp::kAnchorChild]);
+    ASSERT_EQ(anchor.logical_exprs.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<BoundLabelScanOp>(memo.getExpr(anchor.logical_exprs[0]).op));
+
+    Group& probe = memo.getGroup(expr.child_groups[BoundIndexProbeJoinOp::kProbeChild]);
+    ASSERT_EQ(probe.logical_exprs.size(), 1u);
+    auto* probe_op = std::get_if<std::unique_ptr<BoundIndexProbeOp>>(&memo.getExpr(probe.logical_exprs[0]).op);
+    ASSERT_TRUE(probe_op && *probe_op);
+    EXPECT_EQ((*probe_op)->index_id, 11u);
+    EXPECT_EQ((*probe_op)->target_variable, "message");
+}
+
+TEST(ProbeJoinMemoTest, CopyOutRoundTripsBothChildren) {
+    Memo memo;
+    auto tree = makeProbeJoinTree();
+    GroupId gid = memo.copyIn(tree);
+
+    auto out = memo.copyOut(gid);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundIndexProbeJoinOp>>(out));
+    auto& pj = std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(out);
+    ASSERT_TRUE(pj);
+    ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(pj->anchor));
+    EXPECT_EQ(std::get<BoundLabelScanOp>(pj->anchor).variable, "friend");
+    // The descriptor is read back from the probe group, not from stale transport.
+    EXPECT_EQ(pj->probe.index_id, 11u);
+    EXPECT_EQ(pj->probe.lower, PropertyValue{int64_t{100}});
+    EXPECT_TRUE(pj->probe.lower_inclusive);
+    EXPECT_FALSE(pj->probe.upper_inclusive);
+}
+
+TEST(ProbeJoinMemoTest, DedupUsesProbeContentNotAnchorTransport) {
+    Memo memo;
+    auto a = makeProbeJoinTree();
+    auto b = makeProbeJoinTree();
+    GroupId gid_a = memo.copyIn(a);
+    GroupId gid_b = memo.copyIn(b);
+    EXPECT_EQ(gid_a, gid_b) << "same anchor+probe must share one group";
+
+    auto different = makeProbeJoinTree();
+    std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(different)->probe.upper = PropertyValue{int64_t{300}};
+    EXPECT_NE(memo.copyIn(different), gid_a) << "a different probe bound must not dedup";
+}
+
+TEST(ProbeJoinMemoTest, HashAndEqualityCoverFullProbeDescriptor) {
+    auto a = makeProbeJoinTree();
+    auto b = makeProbeJoinTree();
+    EXPECT_EQ(hashBoundLogicalOperator(a), hashBoundLogicalOperator(b));
+    EXPECT_TRUE(equalBoundLogicalOperator(a, b));
+
+    auto c = makeProbeJoinTree();
+    std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(c)->probe.edge_variable = "other_edge";
+    EXPECT_NE(hashBoundLogicalOperator(a), hashBoundLogicalOperator(c));
+    EXPECT_FALSE(equalBoundLogicalOperator(a, c));
+
+    auto d = makeProbeJoinTree();
+    std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(d)->probe.lower_inclusive = false;
+    EXPECT_FALSE(equalBoundLogicalOperator(a, d));
+}
+
+TEST(ProbeJoinMemoTest, LogPropAddsProbeColumnsToAnchor) {
+    Memo memo;
+    auto tree = makeProbeJoinTree();
+    GroupId gid = memo.copyIn(tree);
+    const LogProp& lp = memo.getGroup(gid).getLogProp(memo, nullptr);
+
+    ASSERT_TRUE(lp.valid);
+    EXPECT_GT(lp.cardinality, 0.0);
+    auto has = [&lp](const std::string& var) {
+        return std::any_of(lp.columns.begin(), lp.columns.end(),
+                           [&](const optimizer::ColumnInfo& c) { return c.variable == var; });
+    };
+    EXPECT_TRUE(has("friend")) << "anchor columns must survive";
+    EXPECT_TRUE(has("message")) << "probe target must be added";
+    EXPECT_TRUE(has("e2")) << "probe edge must be added";
+}
+
 // ==================== FilterPushdown Tests ====================
 
 TEST(FilterPushdownTest, FilterThroughExpand) {

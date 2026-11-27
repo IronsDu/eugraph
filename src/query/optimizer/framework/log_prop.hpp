@@ -58,6 +58,10 @@ public:
     static constexpr double kDefaultAvgOutDegree = 10.0;
     static constexpr double kDefaultSelectivity = 0.1;
     static constexpr double kIndexedSelectivity = 0.01;
+    // Fraction of a label's vertices assumed to fall inside an index range.
+    // Shared with the IndexScan cost formula so a range access path is costed
+    // and estimated with one convention; P3 statistics replace both.
+    static constexpr double kIndexRangeSelectivity = 0.10;
     static constexpr double kRangeSelectivity = 0.3;
     static constexpr double kUnknownSelectivity = 0.5;
 
@@ -95,6 +99,12 @@ private:
     /// output, the anchor/branch inputs are consumed per row.
     LogProp derivePatternComprehensionFork(const binder::BoundPatternComprehensionForkOp& op,
                                            const std::vector<LogProp>& input_lps) const;
+    /// Probe leaf: index scan over the target label, then one edge step back to
+    /// the source (join-key) variable. Expands the probe's own schema.
+    LogProp deriveIndexProbe(const binder::BoundIndexProbeOp& op) const;
+    /// ProbeJoin: anchor schema plus the probe's output columns (target + edge).
+    /// Logical row count is bounded by the probe side (vertex-key join).
+    LogProp deriveIndexProbeJoin(const LogProp& anchor, const LogProp& probe_input) const;
     LogProp derivePassthrough(const LogProp& input) const;
 
     // Selectivity estimation for filter predicates

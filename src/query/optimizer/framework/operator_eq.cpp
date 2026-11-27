@@ -93,6 +93,18 @@ bool eqSetItem(const binder::BoundSetOp::SetItem& a, const binder::BoundSetOp::S
     return a.is_add_assign == b.is_add_assign;
 }
 
+// IndexProbe descriptor equality. Shared by BoundIndexProbeOp and the inline
+// probe mirror of BoundIndexProbeJoinOp so the two branches cannot drift; two
+// different access paths must never compare equal (memo dedup would collapse
+// them into one group).
+bool equalIndexProbe(const binder::BoundIndexProbeOp& a, const binder::BoundIndexProbeOp& b) {
+    return a.source_variable == b.source_variable && a.target_variable == b.target_variable &&
+           a.edge_variable == b.edge_variable && a.edge_label_ids == b.edge_label_ids && a.direction == b.direction &&
+           a.target_label_ids == b.target_label_ids && a.index_id == b.index_id && a.index_prop == b.index_prop &&
+           a.index_property_name == b.index_property_name && a.equality == b.equality && a.lower == b.lower &&
+           a.upper == b.upper && a.lower_inclusive == b.lower_inclusive && a.upper_inclusive == b.upper_inclusive;
+}
+
 } // namespace
 
 bool equalBoundExpression(const binder::BoundExpression& a, const binder::BoundExpression& b) {
@@ -311,21 +323,13 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
-                return av->probe.source_variable == bv->probe.source_variable &&
-                       av->probe.target_variable == bv->probe.target_variable &&
-                       av->probe.index_id == bv->probe.index_id && av->probe.index_prop == bv->probe.index_prop &&
-                       av->probe.equality == bv->probe.equality && av->probe.lower == bv->probe.lower &&
-                       av->probe.upper == bv->probe.upper;
+                // Child groups are compared by the caller; the inline anchor is
+                // only tree transport and must not affect equivalence.
+                return equalIndexProbe(av->probe, bv->probe);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
-                return av->source_variable == bv->source_variable && av->target_variable == bv->target_variable &&
-                       av->edge_variable == bv->edge_variable && av->edge_label_ids == bv->edge_label_ids &&
-                       av->direction == bv->direction && av->target_label_ids == bv->target_label_ids &&
-                       av->index_id == bv->index_id && av->index_prop == bv->index_prop &&
-                       av->index_property_name == bv->index_property_name && av->equality == bv->equality &&
-                       av->lower == bv->lower && av->upper == bv->upper &&
-                       av->lower_inclusive == bv->lower_inclusive && av->upper_inclusive == bv->upper_inclusive;
+                return equalIndexProbe(*av, *bv);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

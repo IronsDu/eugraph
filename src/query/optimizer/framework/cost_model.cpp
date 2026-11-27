@@ -10,7 +10,7 @@ namespace eugraph {
 namespace optimizer {
 
 Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps,
-                    const PhysicalExpr* phys) {
+                   const PhysicalExpr* phys) {
     auto input0Card = [&]() -> double { return input_lps.empty() ? 0.0 : input_lps[0].cardinality; };
     auto input1Card = [&]() -> double { return input_lps.size() < 2 ? 0.0 : input_lps[1].cardinality; };
 
@@ -22,15 +22,15 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
         return Cost(group_lp.cardinality);
     case PhysicalOpTag::IndexScan: {
         // Index access has a descriptor-driven selectivity. Until P3 stats are
-        // available, use conservative constants: equality is highly selective,
-        // a range is only assumed to prune part of the label.
+        // available, use the same conventions as LogProp's index estimates so a
+        // range access path costs the same on both sides of the comparison.
         double selectivity = 1.0;
         if (phys != nullptr) {
             if (const auto* scan = std::get_if<binder::BoundLabelScanOp>(&phys->source); scan && scan->index_scan) {
                 if (!scan->index_eq_values.empty())
-                    selectivity = 0.01;
+                    selectivity = LogPropDeriver::kIndexedSelectivity;
                 else if (scan->index_lower || scan->index_upper)
-                    selectivity = 0.10;
+                    selectivity = LogPropDeriver::kIndexRangeSelectivity;
             }
         }
         return Cost(group_lp.cardinality * selectivity);
