@@ -278,8 +278,6 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .slot_allocator = {},
         .fresh_expands = {},
         .func_registry = ctx->func_registry.get(),
-        .expand_allowed_filter = {},
-        .filtered_expand = nullptr,
         .deferred_slots = std::nullopt,
         .anchor_edge_var = {},
     };

@@ -2064,12 +2064,10 @@ TEST_F(QueryExecutorTest, UnwindMatchPlansCorrelatedIndexProbe) {
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {id: 7}), (b:Person {id: 8})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_probe FOR (n:Person) ON (n.id)").error.empty());
 
+    // The per-key index probe used to be a physical-planner rewrite; that access
+    // path is now owned by the optimizer (list-driven probe descriptor + rule,
+    // pending). Keep the semantic contract: duplicates are preserved.
     const std::string query = "UNWIND [7, 8] AS pid MATCH (p:Person {id: pid}) RETURN p.id AS id ORDER BY id";
-    const std::string plan_text = getExplainPlanText(*executor_, query);
-    ASSERT_FALSE(plan_text.empty());
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
-    EXPECT_NE(plan_text.find("Apply"), std::string::npos) << plan_text;
-
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2u);
@@ -2173,11 +2171,6 @@ TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeSupportsStringKeysAndLe
     const std::string query = "UNWIND ['Alice', 'Bob'] AS nm "
                               "MATCH (p:Person {name: nm}) "
                               "RETURN nm AS key, p.id AS id ORDER BY key";
-    const std::string plan_text = getExplainPlanText(*executor_, query);
-    ASSERT_FALSE(plan_text.empty());
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
-    EXPECT_NE(plan_text.find("Apply"), std::string::npos) << plan_text;
-
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2u);
@@ -2200,15 +2193,6 @@ TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeHandlesParamsNullAndFal
     });
     const std::unordered_map<std::string, Value> params{{"ids", Value(ids)}};
     const std::string param_query = "UNWIND $ids AS pid MATCH (p:Person {id: pid}) RETURN p.id AS id ORDER BY id";
-    auto explained = execSyncParams(*executor_, "EXPLAIN " + param_query, params);
-    ASSERT_TRUE(explained.error.empty()) << explained.error;
-    std::string plan_text;
-    for (const auto& row : explained.rows) {
-        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
-            plan_text += std::get<std::string>(row[0]) + "\n";
-    }
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
-
     auto result = execSyncParams(*executor_, param_query, params);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2u);
@@ -11095,15 +11079,13 @@ TEST_F(QueryExecutorTest, AllNodeScanStreamsInVidOrderAndDedupsLabels) {
     EXPECT_EQ(idsOf("MATCH (n) RETURN id(n) AS v LIMIT 2").size(), 2u); // LIMIT 能提前结束
 }
 
-// ── complex-12 形状必须落到 IndexScanValues 分支 ──
+// ── complex-12 形状（`tag.id IN collect(...)`）必须保持正确结果 ──
 //
-// `tryPlanListIndexJoin`（physical_planner.cpp）识别 "x.prop IN left.list 且该属性有索引" 的
-// 形状，重写成 Apply(collect(list), HashJoin(IndexScanValues(prop IN list) + 反向 Expand, ...))。
-// 这是 IndexScanValuesPhysicalOp 唯一的构造路径（physical_planner.cpp:1491 置 index_scan_values），
-// 所以用例先断言 EXPLAIN 里确实出现该算子 —— 形状一旦不匹配，测试不能"因为没命中而通过"。
-//
-// 查询取自 LDBC interactive complex-12（参数内联，HAS_TYPE/TagClass 分支简化为 Tag.name 等值
-// 过滤，保持 collect(t.id) → "tag.id IN tags" 的骨架与多跳链不变）。
+// 该形状曾由 physical planner 的 `tryPlanListIndexJoin` 硬编码重写成
+// Apply(collect) + HashJoin(IndexScanValues + 反向 Expand)。按「physical planner 只
+// lowering、优化必须用单一职责 rule 组合」的边界，该物理重写已删除；复现该
+// access path 需要先引入 list-driven probe 的逻辑 descriptor + 规则（下一步）。
+// 本用例保留为语义回归：结果必须与重写版本一致。
 TEST_F(QueryExecutorTest, Complex12ShapePlansIndexScanValues) {
     // (:Person{id:1})-[:KNOWS]-(:Person{id:2})<-[:HAS_CREATOR]-(:Comment{id:10})
     //   -[:REPLY_OF]->(:Post{id:20})-[:HAS_TAG]->(:Tag{id:1, name:'Actor'})
@@ -11140,23 +11122,9 @@ TEST_F(QueryExecutorTest, Complex12ShapePlansIndexScanValues) {
                               "WHERE tag.id IN tags "
                               "RETURN friend.id AS personId, count(DISTINCT comment) AS replyCount";
 
-    auto plan_result = execSync(*executor_, "EXPLAIN " + query);
-    ASSERT_TRUE(plan_result.error.empty()) << plan_result.error;
-    std::string plan_text;
-    for (const auto& row : plan_result.rows) {
-        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
-            plan_text += std::get<std::string>(row[0]) + "\n";
-    }
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos)
-        << "complex-12 形状没有落到 IndexScanValues，该算子仍无覆盖：\n"
-        << plan_text;
-    // 反向对照（已实测）：去掉索引 DDL 后计划退化成 Filter → CrossProduct 并让上面这条失败，
-    // 所以断言检验的是"重写是否发生"，不是形状碰巧含某个名字。
-    EXPECT_NE(plan_text.find("HashJoin"), std::string::npos) << plan_text;
-
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
-    ASSERT_EQ(result.rows.size(), 1u) << plan_text;
+    ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2); // friend.id
     EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1); // replyCount
 }

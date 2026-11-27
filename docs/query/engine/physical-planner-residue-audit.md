@@ -25,8 +25,8 @@
 | # | 函数 | 行为 | 目标归属 |
 |---|---|---|---|
 | A1 | ~~`tryBoundEdgeIndexScan`~~ | `Filter(Expand)` + 边属性谓词 → 选边索引，替换 Expand 为 EdgeIndexScan。**已删除**：它无视 Expand 的源约束，`MATCH (a:Person{id:933})-[r:KNOWS]->(b) WHERE r.creationDate>0` 在边索引 ONLINE 后返回 180623 条（正确 5 条）。若要做，必须是规则产出的 descriptor，并显式处理 endpoint 约束 | 删除（本可做：仅无约束源时用规则生成 descriptor） |
-| A2 | `tryPlanCorrelatedIndexProbe` | `Filter(CrossProduct(Unwind, LabelScan))` → `Apply(IndexScanValues)`，并选索引 | rule + correlated-values descriptor |
-| A3 | `tryPlanListIndexJoin` | `Filter(CrossProduct)` 的 `x.prop IN left.list` → ListIndexJoin，选索引并写 `ctx.expand_allowed_filter` | rule + descriptor |
+| A2 | ~~`tryPlanCorrelatedIndexProbe`~~ | `Filter(CrossProduct(Unwind, LabelScan))` → `Apply(IndexScanValues)`。**已删除**（physical planner 不再选该 access path）；per-key 探针的收益等 list/correlated-driven probe 的规则 + descriptor 落地后恢复（测试已改为语义契约） | 待规则化（list/correlated-driven probe descriptor） |
+| A3 | ~~`tryPlanListIndexJoin`~~ | `Filter(CrossProduct)` 的 `x.prop IN left.list` → ListIndexJoin + Q12 形状硬编码重写（选索引、注入 expand allow-set）。**已删除**（约 400 行物理层计划重写，含 `ctx.expand_allowed_filter` 隐式通道与 `ListIndexJoinPhysicalOp`）；收益等 list-driven probe 的规则 + descriptor 落地后恢复 | 待规则化（list-driven probe descriptor） |
 | A4 | ~~`trySetVarlenOrFilters`~~ | `OR` 谓词 → VLE 的 src/dst 索引 allow-set。**已迁出**：physical planner 不再识别 OR/选索引；单职责规则 `PruneVarlenOrFilters` 消费 Filter 并把两侧 allow-set 写进 VLE descriptor（两侧都必须可解析）。迁移过程发现并修掉框架级缺陷：VLE 的 allow-set 字段缺失于 content hash/eq，导致候选与未剪枝 VLE 去重 → `mergeGroups` 把父 group 并进子 group → 自引用 group → `copyOut` 爆栈 | 规则 + VLE descriptor（已完成） |
 | A5 | ~~`collectStaticPruneHints` / `collectStaticVertexPruneLabels` / `collectStaticEdgePruneLabels`~~ | `IS NOT NULL` 谓词 → 限制扫描 label / 边 label。**已迁出**：顶点侧删除（弱空间下按 schema 裁剪不安全）；边侧改为逻辑规则 `PruneExpandEdgeLabels`（边是纯强模式，语义等价） | ~~optimizer analysis~~ 已解决 |
 
@@ -93,6 +93,14 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
+- **A2 / A3 access path 删除（完成）**：physical planner 不再识别
+  `Filter(CrossProduct(Unwind, LabelScan))` 等值探针（A2）与 `x.prop IN list` 的
+  ListIndexJoin / Q12 硬编码重写（A3）；同步删除 `expand_allowed_filter` /
+  `filtered_expand` 隐式通道、`ListIndexJoinPhysicalOp`（文件 + CMake）与 Expand 的
+  allowed-dst 配置入口。相关测试改为**语义契约**（结果、重复 key、NULL、回退），
+  不再断言具体物理算子。LDBC 21 条（complex-1..14 + short-1..7）行数与删除前逐条一致。
+  性能回退（待规则化恢复）：UNWIND 参数列表逐 key 探针、complex-12/Q12 的
+  Apply+IndexScanValues 形状。
 - **A4 VLE OR 剪枝归位（完成）**：删除 physical planner 的 `trySetVarlenOrFilters`（识别
   `src.p = a OR dst.q = b`、选索引、写 VLE 字段）。新增单职责逻辑规则
   `PruneVarlenOrFilters`：消费该 Filter，把 src/dst 两侧 index allow-set 写进 VLE

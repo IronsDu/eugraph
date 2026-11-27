@@ -31,14 +31,6 @@ namespace compute {
 
 class ExpandPhysicalOp;
 
-/// Context passed through physical planning: maps label/edge-label names to IDs,
-/// tracks variable schemas, and provides storage access.
-struct ExpandAllowedFilterContext {
-    uint32_t index_id = 0;
-    EdgeLabelId edge_label = INVALID_EDGE_LABEL_ID;
-    std::string dst_var;
-};
-
 struct PlanContext {
     const std::unordered_map<std::string, LabelId>& label_name_to_id;
     std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id;
@@ -88,12 +80,6 @@ struct PlanContext {
     optimizer::NameSlotMap fresh_expands;
     /// Built-in function catalog, used by dbms.functions() procedure rows.
     const function::FunctionRegistry* func_registry = nullptr;
-
-    /// When set, the next Expand for dst_var is configured as an
-    /// allowed-destination index filter (used by Filter(CrossProduct)
-    /// `x.prop IN left.list` planning).
-    std::optional<ExpandAllowedFilterContext> expand_allowed_filter;
-    ExpandPhysicalOp* filtered_expand = nullptr;
 
     /// Output slots whose materialization is deferred past a LIMIT. Set while
     /// planning the LIMIT's Project child; dispatchProjectionExtract skips
@@ -192,17 +178,6 @@ private:
                                                                      Schema input_schema,
                                                                      const std::vector<binder::BoundType>& input_types);
 
-    std::variant<PlanOperatorResult, std::string>
-    planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
-                      PlanContext& ctx, Schema input_schema, const std::vector<binder::BoundType>& input_types);
-
-    /// Plan Unwind + Filter(CrossProduct) + LabelScan equality as a per-row
-    /// index probe: Apply(left=Unwind, right=IndexScanValues).
-    std::optional<PlanOperatorResult>
-    tryPlanCorrelatedIndexProbe(const binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
-                                IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
-                                Schema input_schema, const std::vector<binder::BoundType>& input_types);
-
     /// Plan Filter(CrossProduct(left,right)) with `right.x.prop IN left.list`
     /// as a ListIndexJoin: the left list is injected into right's final
     /// Expand so it probes the destination index instead of scanning edges.
@@ -211,6 +186,10 @@ private:
                                                            IAsyncGraphMetaStore& meta, PlanContext& ctx,
                                                            Schema input_schema,
                                                            const std::vector<binder::BoundType>& input_types);
+
+    std::variant<PlanOperatorResult, std::string>
+    planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
+                      PlanContext& ctx, Schema input_schema, const std::vector<binder::BoundType>& input_types);
 
     /// 通用等值 join → HashJoin 的物理规划：从 Filter(CrossProduct/InnerJoin)
     /// 提取可解析成列的等值 key，按估算选择构建侧，无法解析或估算不可控时回退。
