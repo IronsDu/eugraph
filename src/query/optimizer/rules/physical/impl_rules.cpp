@@ -77,6 +77,15 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexScanRule::substitute(GroupE
     return result;
 }
 
+PatternNode ImplIndexScanRule::pattern() const { return {OptNodeType::LabelScan, {}}; }
+bool ImplIndexScanRule::condition(GroupExpr& expr, Memo&) const {
+    const auto* scan = std::get_if<binder::BoundLabelScanOp>(&expr.op);
+    return scan && scan->index_scan && scan->index_id != 0;
+}
+std::vector<std::unique_ptr<GroupExpr>> ImplIndexScanRule::substitute(GroupExpr& expr, Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::IndexScan);
+}
+
 PatternNode ImplSingletonRule::pattern() const {
     return {OptNodeType::Singleton, {}};
 }

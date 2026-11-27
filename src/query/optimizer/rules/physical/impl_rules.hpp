@@ -27,6 +27,15 @@ public:
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 
+class ImplIndexScanRule : public OptRule {
+public:
+    std::string name() const override { return "ImplIndexScan"; }
+    bool isImplementation() const override { return true; }
+    PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
 class ImplSingletonRule : public OptRule {
 public:
     std::string name() const override {

@@ -290,6 +290,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplCorrelatedSourceRule>());
     rules_.addRule(std::make_unique<ImplScanRule>());
     rules_.addRule(std::make_unique<ImplLabelScanRule>());
+    rules_.addRule(std::make_unique<ImplIndexScanRule>());
     rules_.addRule(std::make_unique<ImplPatternComprehensionApplyRule>());
     rules_.addRule(std::make_unique<ImplIndexJoinRule>());
     rules_.addRule(std::make_unique<ImplFilterRule>());
