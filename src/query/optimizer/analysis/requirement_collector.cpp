@@ -1,4 +1,6 @@
 #include "query/optimizer/analysis/requirement_collector.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_binary_op.hpp"
@@ -234,9 +236,13 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
             if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                           std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
                           std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 // Leaf sources carry no expression to walk.
                 return;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (val)
+                    mergeVarRequirements(dst, collectOpRequirements(val->anchor, catalog));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!val)
                     return;
