@@ -48,6 +48,12 @@
   不是这次改动引入的。
 - **可观测性**：`EUGRAPH_CBO_TRACE=1` 打印每个候选的 `group/expr/tag/out_card/local/
   total/best`，这次的成本分析就是靠它完成的（此前 CBO 决策不可观测）。
+- **LogProp 的 plan-independent 基数（J8 核心，未做）**：P1.4 把 Filter 折进
+  `BoundLabelScanOp.index_scan` 后，`deriveLabelScan` 仍返回整个 label 的基数，点查
+  选择性不会传给父节点（c2 的锚点被估成 9892 而不是 ~99）。曾尝试在
+  `deriveLabelScan` 里乘索引选择性，结果 c2 从 forward 38 ms 翻到多跳 IndexJoin
+  5.6 s —— 说明必须同时把「按候选的基数（PlanProp）」与 IndexJoin 成本一起改，
+  单独改 LogProp 只会让别的坏候选变便宜。已回退，留作 J8 的成组改造。
 
 ## 3. 建议顺序
 

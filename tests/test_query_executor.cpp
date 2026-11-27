@@ -12223,7 +12223,12 @@ TEST_F(QueryExecutorTest, ReverseDestinationChainRangeUsesTargetIndex) {
                                      "(a2:Person {name:'old-src'}), (b2:Person {name:'old', age:30}), "
                                      "(a1)-[:KNOWS]->(b1), (a2)-[:KNOWS]->(b2)")
                     .error.empty());
-    const std::string query = "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.age >= 20 RETURN a.name AS a, b.name AS b";
+    // Bounded range: the destination-index probe is owned by the IndexProbe rule
+    // family (the legacy IndexJoin rule no longer re-selects single-step static
+    // probes). A one-sided range intentionally keeps the generic plan instead of
+    // speculating without index statistics.
+    const std::string query =
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.age >= 20 AND b.age <= 30 RETURN a.name AS a, b.name AS b";
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
