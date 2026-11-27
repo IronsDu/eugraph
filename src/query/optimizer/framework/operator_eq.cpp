@@ -1,4 +1,5 @@
 #include "query/optimizer/framework/operator_eq.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -306,6 +307,16 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                        av.index_eq_values == bv.index_eq_values && av.index_lower == bv.index_lower &&
                        av.index_upper == bv.index_upper && av.index_lower_inclusive == bv.index_lower_inclusive &&
                        av.index_upper_inclusive == bv.index_upper_inclusive;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                return av->source_variable == bv->source_variable && av->target_variable == bv->target_variable &&
+                       av->edge_variable == bv->edge_variable && av->edge_label_ids == bv->edge_label_ids &&
+                       av->direction == bv->direction && av->target_label_ids == bv->target_label_ids &&
+                       av->index_id == bv->index_id && av->index_prop == bv->index_prop &&
+                       av->index_property_name == bv->index_property_name && av->equality == bv->equality &&
+                       av->lower == bv->lower && av->upper == bv->upper &&
+                       av->lower_inclusive == bv->lower_inclusive && av->upper_inclusive == bv->upper_inclusive;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

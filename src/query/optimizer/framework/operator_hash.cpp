@@ -1,4 +1,5 @@
 #include "query/optimizer/framework/operator_hash.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -356,6 +357,23 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 if (val.index_upper)
                     seed = hashPropertyValue(seed, *val.index_upper);
                 seed = combine(seed, (val.index_lower_inclusive ? 1 : 0) | (val.index_upper_inclusive ? 2 : 0));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                if (!val)
+                    return;
+                seed = hashBytes(seed, val->source_variable);
+                seed = hashBytes(seed, val->target_variable);
+                seed = hashBytes(seed, val->edge_variable);
+                seed = combine(seed, val->index_id);
+                seed = combine(seed, val->index_prop);
+                seed = hashBytes(seed, val->index_property_name);
+                for (auto l : val->edge_label_ids)
+                    seed = combine(seed, static_cast<uint64_t>(l));
+                for (auto l : val->target_label_ids)
+                    seed = combine(seed, static_cast<uint64_t>(l));
+                if (val->equality) seed = hashPropertyValue(seed, *val->equality);
+                if (val->lower) seed = hashPropertyValue(seed, *val->lower);
+                if (val->upper) seed = hashPropertyValue(seed, *val->upper);
+                seed = combine(seed, (val->lower_inclusive ? 1 : 0) | (val->upper_inclusive ? 2 : 0));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!val)
                     return;
