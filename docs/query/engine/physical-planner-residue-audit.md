@@ -40,8 +40,14 @@
   多跳链（它独有的能力）；单步静态 probe 由 IndexProbe 族负责。这同时修掉了旧
   IndexJoin 计划在 `collect(distinct 顶点) + UNWIND` 锚点下返回 0 行的问题（#335）：
   c9 由 0 行 → 20 行。代价：c2 计划从 IndexJoin 变为 ProbeJoin（853→1173 ms），
-  forward 计划其实 114 ms —— 说明 IndexProbe/IndexJoin 的成本模型仍需按扫描量
-  而不是输出基数计费（下一步 J8 的核心）。
+  实测（warm 3 轮 min）：c2 20 行 / 35.8 ms（旧 IndexJoin 853 ms）、c6 10 行 / 12.6 ms、
+  c12 4 行 / 384.9 ms、c9 20 行 / 24.8 s（原 IndexJoin 0 行 5.6 s）。
+- **单边界 range 不产生 probe 候选**：无索引分布统计时单边界 range 可能扫掉几乎整个
+  label；R1 只接受有界区间/等值。c2/c9（`creationDate <= / <`）因此回到通用计划，
+  c3（双边界）保留 probe。c9 仍慢是它本身的真实工作量（旧计划因 bug 只做了 0 行），
+  不是这次改动引入的。
+- **可观测性**：`EUGRAPH_CBO_TRACE=1` 打印每个候选的 `group/expr/tag/out_card/local/
+  total/best`，这次的成本分析就是靠它完成的（此前 CBO 决策不可观测）。
 
 ## 3. 建议顺序
 

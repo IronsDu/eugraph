@@ -3603,3 +3603,19 @@ TEST(MemoTest, RboCopyOutSkipsAccessPathCandidates) {
     ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(rbo));
     EXPECT_FALSE(std::holds_alternative<std::unique_ptr<BoundIndexProbeJoinOp>>(rbo));
 }
+
+TEST(GenerateIndexProbeRuleTest, RequiresBoundedInterval) {
+    // One-sided ranges can scan almost the whole label; without index statistics
+    // the cost model cannot price them, so the shape rule keeps the generic plan.
+    GenerateIndexProbeRule rule;
+    auto run = [&](BoundExpression predicate) {
+        auto root = makeFilterOverExpandPlanWithPredicate(std::move(predicate), /*explicit=*/true);
+        Memo memo;
+        memo.setCommuteSafe(true);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        return rule.substitute(filter_expr, memo).size();
+    };
+    EXPECT_EQ(run(makeCreationDateUpper(200)), 0u) << "upper-only must not speculate";
+    EXPECT_EQ(run(makeCreationDateLower(100)), 0u) << "lower-only must not speculate";
+}

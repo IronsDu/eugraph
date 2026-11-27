@@ -148,6 +148,14 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexProbeRule::substitute(Group
     // is not representable by the descriptor, so reject instead of guessing.
     if (equality && (range.lower || range.upper))
         return {};
+    // Only a bounded interval (or an equality) is a well-understood probe: one
+    // index pass over a range whose selectivity the cost model has a convention
+    // for. A one-sided range can scan almost the whole label and, without index
+    // statistics, the cost model cannot tell it apart from a selective range;
+    // keep the generic plan rather than speculate. Tracked as J8 in
+    // docs/query/engine/physical-planner-residue-audit.md.
+    if (!equality && (!range.lower || !range.upper))
+        return {};
 
     binder::BoundIndexProbeOp probe;
     probe.source_variable = step.source_variable;

@@ -1,5 +1,7 @@
 #include "query/optimizer/framework/task.hpp"
 
+#include "common/config/env_vars.hpp"
+
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -9,6 +11,14 @@ namespace eugraph {
 namespace optimizer {
 
 namespace {
+
+/// CBO cost trace (EUGRAPH_CBO_TRACE): one line per candidate registration /
+/// rejection. The cascade's cost decisions were previously unobservable; this
+/// is the diagnosis path for access-path / join-algorithm regressions.
+bool cboTrace() {
+    static const bool enabled = std::getenv(config::kEnvCboTrace) != nullptr;
+    return enabled;
+}
 
 void mergeOnlyVariablesProducedBy(VarRequirements& dst, const VarRequirements& src, const LogProp& input_lp) {
     std::unordered_set<std::string> produced;
@@ -415,6 +425,9 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         PhysProp provided;
         provided.setMaterializations(expr.physOp().output_mat);
         group.newWinner(provided, expr_id_, localCost, /*done=*/last_);
+        if (cboTrace())
+            spdlog::info("[CBO] g={} e={} tag={} leaf out_card={:.0f} local={:.1f}", group.id, expr_id_,
+                         static_cast<int>(expr.physOp().tag), group_lp.cardinality, localCost.value());
         if (provided.satisfies(localReqdProp))
             memo.contexts()[context_id_].setUpperBound(localCost);
         return;
@@ -550,6 +563,10 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         // 所有 join 算法都只按子输入代价比较，HashJoin/CrossProduct 会打平。
         totalCost = totalCost + localCost;
         Winner* providedWinner = group.getWinner(provided);
+        if (cboTrace())
+            spdlog::info("[CBO] g={} e={} tag={} provided out_card={:.0f} local={:.1f} total={:.1f} best={:.1f}",
+                         group.id, expr_id_, static_cast<int>(expr.physOp().tag), group_lp.cardinality,
+                         localCost.value(), totalCost.value(), providedWinner ? providedWinner->cost().value() : -1.0);
         if (providedWinner && providedWinner->plan() != INVALID_EXPR_ID && totalCost >= providedWinner->cost())
             return;
         group.newWinner(provided, expr_id_, totalCost, /*done=*/last_);
@@ -566,6 +583,10 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
 
     // Compare with existing winner
     Winner* existingW = group.getWinner(localReqdProp);
+    if (cboTrace())
+        spdlog::info("[CBO] g={} e={} tag={} reqd out_card={:.0f} local={:.1f} total={:.1f} best={:.1f}", group.id,
+                     expr_id_, static_cast<int>(expr.physOp().tag), group_lp.cardinality, localCost.value(),
+                     totalCost.value(), existingW ? existingW->cost().value() : -1.0);
     if (existingW && existingW->plan() != INVALID_EXPR_ID) {
         if (totalCost >= existingW->cost()) {
             return;

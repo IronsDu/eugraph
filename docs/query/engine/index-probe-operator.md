@@ -40,7 +40,9 @@ rules/physical/impl_rules            R3: ImplIndexProbe / ImplIndexProbeJoin tag
 
 - **R1 只做形状**：不读 catalog（不选索引）、不算 cost、不选 winner；anchor 直接引用
   Expand 的 child group，不重新推导扫描。谓词的每个顶层 AND conjunct 必须落在同一个
-  目标变量/属性上，否则不产生候选（不允许丢谓词）。
+  目标变量/属性上，否则不产生候选（不允许丢谓词）。范围必须是**有界区间**（或等值）：
+  单边界 range 可能扫掉几乎整个 label，而当前没有索引分布统计，宁可保留通用计划
+  （见 physical-planner-residue-audit J8）。
 - **R2 只细化 probe group**：命中 `IndexProbe` 时按 catalog 解析 `index_id` /
   `index_prop` / label，新的探测描述符仍留在同一个 group。它看不到也不修改 anchor。
 - **R3 只产 tag**：`ImplIndexProbeJoin` 手动构造 `required_input_mat`：anchor 输入继承
