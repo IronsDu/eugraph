@@ -372,6 +372,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/analysis/property_demand.cpp
     src/query/optimizer/analysis/plan_analysis.cpp
     src/query/optimizer/rules/logical/filter_pushdown.cpp
+    src/query/optimizer/rules/logical/generate_index_scan.cpp
     src/query/optimizer/rules/logical/edge_uniqueness_pushdown.cpp
     src/query/optimizer/rules/logical/path_count_fusion.cpp
     src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp

@@ -20,13 +20,6 @@ namespace optimizer {
 // ============================================================
 
 // ---- Leaf sources ----
-class GenerateIndexScanRule : public OptRule {
-public:
-    std::string name() const override { return "GenerateIndexScan"; }
-    PatternNode pattern() const override;
-    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
-};
-
 class ImplIndexScanRule : public OptRule {
 public:
     std::string name() const override { return "ImplIndexScan"; }
