@@ -3173,8 +3173,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 proj_item.alias = alias;
                 proj_item.result_type = getBoundExprType(proj_item.expr);
                 SlotId out_slot = INVALID_SLOT_ID;
-                if (auto* ref = std::get_if<BoundColumnRef>(&proj_item.expr);
-                    ref && ref->slot_id != INVALID_SLOT_ID)
+                if (auto* ref = std::get_if<BoundColumnRef>(&proj_item.expr); ref && ref->slot_id != INVALID_SLOT_ID)
                     out_slot = ref->slot_id;
                 else
                     out_slot = allocateNamedSlot(alias);

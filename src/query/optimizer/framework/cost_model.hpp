@@ -88,7 +88,7 @@ enum class PhysicalOpTag {
 // ============================================================
 struct PhysicalExpr;
 Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps,
-                    const PhysicalExpr* phys = nullptr);
+                   const PhysicalExpr* phys = nullptr);
 
 } // namespace optimizer
 } // namespace eugraph

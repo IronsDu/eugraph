@@ -46,7 +46,9 @@ static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr,
 // Leaf sources
 // ============================================================
 
-PatternNode ImplIndexScanRule::pattern() const { return {OptNodeType::LabelScan, {}}; }
+PatternNode ImplIndexScanRule::pattern() const {
+    return {OptNodeType::LabelScan, {}};
+}
 bool ImplIndexScanRule::condition(GroupExpr& expr, Memo&) const {
     const auto* scan = std::get_if<binder::BoundLabelScanOp>(&expr.op);
     return scan && scan->index_scan && scan->index_id != 0;

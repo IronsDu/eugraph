@@ -8,7 +8,9 @@
 namespace eugraph {
 namespace optimizer {
 
-PatternNode GenerateIndexScanRule::pattern() const { return {OptNodeType::Filter, {{}}}; }
+PatternNode GenerateIndexScanRule::pattern() const {
+    return {OptNodeType::Filter, {{}}};
+}
 
 std::vector<std::unique_ptr<GroupExpr>> GenerateIndexScanRule::substitute(GroupExpr& expr, Memo& memo) const {
     auto* fp = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&expr.op);
@@ -32,8 +34,8 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexScanRule::substitute(GroupE
         return {};
 
     std::vector<std::unique_ptr<GroupExpr>> result;
-    result.push_back(std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(*chosen),
-                                                 std::vector<GroupId>{}));
+    result.push_back(
+        std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(*chosen), std::vector<GroupId>{}));
     return result;
 }
 

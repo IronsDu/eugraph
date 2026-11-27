@@ -25,9 +25,7 @@
 namespace eugraph {
 namespace optimizer {
 
-namespace {
-
-} // namespace
+namespace {} // namespace
 
 namespace {
 
@@ -197,9 +195,8 @@ void applyIndexAccessPaths(binder::BoundLogicalOperator& op, const catalog::Cata
             }
         }
     }
-    optimizer::forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) {
-        applyIndexAccessPaths(child, catalog, semantics);
-    });
+    optimizer::forEachLogicalChild(
+        op, [&](binder::BoundLogicalOperator& child) { applyIndexAccessPaths(child, catalog, semantics); });
 }
 
 void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog,

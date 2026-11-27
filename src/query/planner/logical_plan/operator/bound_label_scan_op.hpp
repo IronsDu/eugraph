@@ -3,8 +3,8 @@
 #include "common/types/graph_types.hpp"
 
 #include <cstdint>
-#include <string>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 

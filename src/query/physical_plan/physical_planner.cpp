@@ -3906,8 +3906,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         upper = std::vector<PropertyValue>{*val.index_upper};
                     result = std::make_unique<IndexScanPhysicalOp>(
                         val.variable, val.index_id, val.index_prop_ids, mode, val.index_eq_values, lower, upper,
-                        std::vector<binder::BoundType>(output_types), store, ctx.schema, 0,
-                        val.index_lower_inclusive, val.index_upper_inclusive);
+                        std::vector<binder::BoundType>(output_types), store, ctx.schema, 0, val.index_lower_inclusive,
+                        val.index_upper_inclusive);
                 } else if (val.index_scan_values && val.index_id != 0) {
                     result = std::make_unique<IndexScanValuesPhysicalOp>(val.variable, val.index_id, store,
                                                                          output_types, output_schema);

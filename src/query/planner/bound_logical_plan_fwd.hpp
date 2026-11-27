@@ -60,7 +60,8 @@ using BoundLogicalOperator =
                  // Shared-anchor pattern-comprehension fork. Created by the
                  // optimizer's anchor-sharing rewrite after the PC applies have
                  // been recognised; see bound_pattern_comprehension_fork_op.hpp.
-                 std::unique_ptr<BoundPatternComprehensionForkOp>, std::unique_ptr<BoundIndexJoinOp>, std::unique_ptr<BoundIndexProbeOp>, std::unique_ptr<BoundIndexProbeJoinOp>>;
+                 std::unique_ptr<BoundPatternComprehensionForkOp>, std::unique_ptr<BoundIndexJoinOp>,
+                 std::unique_ptr<BoundIndexProbeOp>, std::unique_ptr<BoundIndexProbeJoinOp>>;
 
 struct BoundLogicalPlan;
 

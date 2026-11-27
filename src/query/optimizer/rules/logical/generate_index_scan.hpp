@@ -10,7 +10,9 @@ namespace optimizer {
 /// descriptor; ImplLabelScan / ImplIndexScan compete on cost.
 class GenerateIndexScanRule : public OptRule {
 public:
-    std::string name() const override { return "GenerateIndexScan"; }
+    std::string name() const override {
+        return "GenerateIndexScan";
+    }
     PatternNode pattern() const override;
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };

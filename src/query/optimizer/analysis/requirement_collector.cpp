@@ -1,6 +1,6 @@
 #include "query/optimizer/analysis/requirement_collector.hpp"
-#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 #include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_binary_op.hpp"
