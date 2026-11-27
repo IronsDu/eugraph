@@ -197,6 +197,16 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexJoinRule::substitute(GroupE
         out->dynamic_key_variable = col->name;
     } else
         return {};
+    // Single-step static-key destination probes are owned by the IndexProbe
+    // rule family (GenerateIndexProbe + ResolveIndexProbe + ImplIndexProbeJoin):
+    // they resolve the index in the optimizer and have a dedicated lowering.
+    // Keeping a second candidate here duplicated the access path, and this
+    // rule's catalog label fallback can pick a label that does not cover the
+    // destination variable (see issue #335). Dynamic-key and multi-step chains
+    // are this rule's unique capability and stay.
+    if (out->chain.size() == 1 && !out->dynamic_key)
+        return {};
+
     uint32_t idx = 0;
     auto find_idx = [&](LabelId lid) {
         auto it = memo.getCatalog()->allLabels().find(lid);

@@ -25,7 +25,7 @@
 | J5 | VLE OR 过滤的 src/dst 索引 allow-set | `trySetVarlenOrFilters` + Filter 分支 | 物理层选索引 / 裁剪 | `optimizer/analysis` 计算 + VLE descriptor 字段 | 把 allow-set 变成逻辑字段 | 中 |
 | J6 | HashJoin build 侧与预算回退 | `tryPlanGenericHashJoin` / `planHonoredHashJoin` / `planIndexJoin` | build 侧是实例化细节；但“超预算改计划”是物理层决策 | build 侧留在 lowering；超预算由成本模型提前排除，或明确报错 | 随 J1 收口 | 中 |
 | J7 | PE / LateMaterialize 边界（`deferred_slots`、filter boundary） | `planBoundOperator` Filter / Limit 分支 | 物理层决定物化边界 | ChosenPlan/PhysProp enforcer（P2） | 先补 EXPLAIN 标记，再迁 | 高 |
-| J8 | IndexJoin 规则内的 `source_card > 1000` 门禁、`build_left` | `GenerateIndexJoinRule` | 规则里做代价型裁剪 / 物理策略 | cost model + descriptor | 先给 IndexJoin 做 descriptor 化成本 | 中 |
+| J8 | IndexJoin 规则内的 `source_card > 1000` 门禁、`build_left`；单步静态 probe 与 IndexProbe 规则族的职责重叠 | `GenerateIndexJoinRule`、`IndexJoin` tag 的 `input0 * 0.001` 成本 | 规则里做代价型裁剪 / 物理策略；同一个 access path 有两个候选，且 IndexJoin 的 `0.001` 让它在 CBO 里永远最便宜 | cost model + descriptor | 已做：单步静态 probe 交由 IndexProbe 族（IndexJoin 只保留 dynamic-key / 多跳链）。待做：IndexJoin 成本去 hack、`source_card` 门禁迁入成本模型 | 中 |
 
 ## 2. 已完成
 
@@ -35,7 +35,13 @@
 - **J1 第一步**：`planBoundOperator` 的 BinaryJoin 分支按 CBO 的 chosen tag 实例化 HashJoin
   （`planHonoredHashJoin`），不再无条件 CrossProduct；标签无法表达的形状回退 CrossProduct；
 - access-path 候选的 RBO 边界：`Memo::copyOut` 跳过 ProbeJoin 候选（写查询常无 CBO
-  winner，RBO 回退必须是可 lower 的计划）；R1 与 join commute 共用 `commuteSafe` 边界。
+  winner，RBO 回退必须是可 lower 的计划）；R1 与 join commute 共用 `commuteSafe` 边界；
+- **单步静态 destination probe 归一**：`GenerateIndexJoinRule` 只保留 dynamic-key /
+  多跳链（它独有的能力）；单步静态 probe 由 IndexProbe 族负责。这同时修掉了旧
+  IndexJoin 计划在 `collect(distinct 顶点) + UNWIND` 锚点下返回 0 行的问题（#335）：
+  c9 由 0 行 → 20 行。代价：c2 计划从 IndexJoin 变为 ProbeJoin（853→1173 ms），
+  forward 计划其实 114 ms —— 说明 IndexProbe/IndexJoin 的成本模型仍需按扫描量
+  而不是输出基数计费（下一步 J8 的核心）。
 
 ## 3. 建议顺序
 
