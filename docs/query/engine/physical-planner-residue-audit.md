@@ -33,7 +33,9 @@
 - IndexProbe：R1/R2/R3 + `planIndexProbeJoin`（含两 child group memo 契约、hash/eq、LogProp、requirements、copyIn/copyOut/clone）；
 - `GenerateIndexJoin` 从 `rules/physical` 归入 `rules/logical`，删除死 helper；
 - **J1 第一步**：`planBoundOperator` 的 BinaryJoin 分支按 CBO 的 chosen tag 实例化 HashJoin
-  （`planHonoredHashJoin`），不再无条件 CrossProduct；标签无法表达的形状回退 CrossProduct。
+  （`planHonoredHashJoin`），不再无条件 CrossProduct；标签无法表达的形状回退 CrossProduct；
+- access-path 候选的 RBO 边界：`Memo::copyOut` 跳过 ProbeJoin 候选（写查询常无 CBO
+  winner，RBO 回退必须是可 lower 的计划）；R1 与 join commute 共用 `commuteSafe` 边界。
 
 ## 3. 建议顺序
 

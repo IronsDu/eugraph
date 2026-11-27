@@ -3294,7 +3294,8 @@ static BoundExpression makeCreationDateUpper(int64_t value) {
     return BoundExpression(std::move(bin));
 }
 
-static BoundLogicalOperator makeFilterOverExpandPlan(bool explicit_destination_label) {
+static BoundLogicalOperator makeFilterOverExpandPlanWithPredicate(BoundExpression predicate,
+                                                                  bool explicit_destination_label) {
     BoundLabelScanOp scan;
     scan.variable = "friend";
     scan.column_index = 0;
@@ -3312,15 +3313,19 @@ static BoundLogicalOperator makeFilterOverExpandPlan(bool explicit_destination_l
         expand->dst_label_ids = {LabelId{10}};
     expand->child = BoundLogicalOperator(scan);
     auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = std::move(predicate);
+    filter->child = BoundLogicalOperator(std::move(expand));
+    return BoundLogicalOperator(std::move(filter));
+}
+
+static BoundLogicalOperator makeFilterOverExpandPlan(bool explicit_destination_label) {
     auto lower = makeCreationDateLower(100);
     auto upper = makeCreationDateUpper(200);
     auto both = std::make_unique<BoundBinaryOp>();
     both->op = cypher::BinaryOperator::AND;
     both->left = std::move(lower);
     both->right = std::move(upper);
-    filter->predicate = BoundExpression(std::move(both));
-    filter->child = BoundLogicalOperator(std::move(expand));
-    return BoundLogicalOperator(std::move(filter));
+    return makeFilterOverExpandPlanWithPredicate(BoundExpression(std::move(both)), explicit_destination_label);
 }
 
 static std::shared_ptr<GraphSchema> makeProbeCatalogSchema() {
@@ -3357,6 +3362,7 @@ static std::shared_ptr<GraphSchema> makeProbeCatalogSchema() {
 TEST(GenerateIndexProbeRuleTest, BuildsProbeJoinFromAnchorAndProbeGroups) {
     auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/false);
     Memo memo;
+    memo.setCommuteSafe(true);
     GroupId root_gid = memo.copyIn(root);
     memo.setCatalog(nullptr);
 
@@ -3434,6 +3440,7 @@ TEST(ImplIndexProbeRulesTest, EmitPhysicalTagsWithoutChoosingWinners) {
 
     auto probe_tree = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
     Memo memo;
+    memo.setCommuteSafe(true);
     memo.setCatalog(&catalog);
     GroupId root_gid = memo.copyIn(probe_tree);
     GroupExpr& filter_expr = memo.getExpr(memo.getGroup(root_gid).logical_exprs.at(0));
@@ -3504,4 +3511,95 @@ TEST(IndexProbeCascadeTest, ChoosesProbeJoinForLabelledDestination) {
     EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::IndexProbeJoin);
     ASSERT_GE(plan.chosen->children.size(), 2u);
     EXPECT_EQ(plan.chosen->children[1]->tag, PhysicalOpTag::IndexProbe);
+}
+
+TEST(GenerateIndexProbeRuleTest, RejectsPredicatesItCannotConsumeWhole) {
+    // A probe replaces the whole Filter(Expand): every conjunct must be an
+    // indexable comparison on the same destination property. Anything else
+    // would be a dropped predicate, so no candidate may be produced.
+    GenerateIndexProbeRule rule;
+
+    auto run = [&](BoundExpression predicate) {
+        auto root = makeFilterOverExpandPlanWithPredicate(std::move(predicate), /*explicit=*/true);
+        Memo memo;
+        memo.setCommuteSafe(true);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        return rule.substitute(filter_expr, memo).size();
+    };
+
+    // range AND unrelated predicate
+    {
+        auto lower = makeCreationDateLower(100);
+        auto other = std::make_unique<BoundBinaryOp>();
+        other->op = cypher::BinaryOperator::EQ;
+        auto prop = std::make_unique<BoundPropertyRef>();
+        prop->property_name = "name";
+        prop->object = BoundVariableRef("friend", BoundType::Vertex());
+        BoundPropertyRef::ResolvedProperty cand;
+        cand.label_id = LabelId{5};
+        prop->candidates.push_back(cand);
+        other->left = BoundExpression(std::move(prop));
+        other->right = BoundLiteral(std::string("x"));
+        auto both = std::make_unique<BoundBinaryOp>();
+        both->op = cypher::BinaryOperator::AND;
+        both->left = std::move(lower);
+        both->right = BoundExpression(std::move(other));
+        EXPECT_EQ(run(BoundExpression(std::move(both))), 0u) << "residual predicate would be dropped";
+    }
+
+    // two equalities on the same property are not a range probe
+    {
+        auto make_eq = [](int64_t value) {
+            auto prop = std::make_unique<BoundPropertyRef>();
+            prop->property_name = "creationDate";
+            prop->object = BoundVariableRef("message", BoundType::Vertex());
+            BoundPropertyRef::ResolvedProperty cand;
+            cand.label_id = LabelId{10};
+            cand.prop_id = 2;
+            prop->candidates.push_back(cand);
+            auto eq = std::make_unique<BoundBinaryOp>();
+            eq->op = cypher::BinaryOperator::EQ;
+            eq->left = BoundExpression(std::move(prop));
+            eq->right = BoundLiteral(int64_t{value});
+            return BoundExpression(std::move(eq));
+        };
+        auto both = std::make_unique<BoundBinaryOp>();
+        both->op = cypher::BinaryOperator::AND;
+        both->left = make_eq(100);
+        both->right = make_eq(200);
+        EXPECT_EQ(run(BoundExpression(std::move(both))), 0u);
+    }
+}
+
+TEST(GenerateIndexProbeRuleTest, SkippedForConservativeWritePlans) {
+    // Write plans / shared-anchor pattern comprehensions use the same
+    // conservative boundary as join commute: no extra join alternatives.
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+    Memo memo;
+    memo.setCommuteSafe(false);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+    GenerateIndexProbeRule rule;
+    EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+}
+
+TEST(MemoTest, RboCopyOutSkipsAccessPathCandidates) {
+    // A ProbeJoin inserted into a group is a CBO-only alternative. The RBO
+    // extraction must keep returning the original Filter, otherwise a plan
+    // without a CBO winner (e.g. a write query) would try to lower an
+    // unresolved access path.
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/false);
+    Memo memo;
+    memo.setCommuteSafe(true);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+    GenerateIndexProbeRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    memo.insertExpr(std::move(produced[0]), gid);
+
+    auto rbo = memo.copyOut(gid);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(rbo));
+    EXPECT_FALSE(std::holds_alternative<std::unique_ptr<BoundIndexProbeJoinOp>>(rbo));
 }

@@ -84,6 +84,13 @@ std::vector<std::unique_ptr<GroupExpr>> GenerateIndexProbeRule::substitute(Group
     if (!filter || !*filter || expr.child_groups.empty())
         return {};
 
+    // Same conservative boundary as join commute: write plans (and shared-anchor
+    // pattern comprehensions) have not been audited for extra join alternatives
+    // / output-slot layout, and they frequently fall back to RBO (no CBO
+    // winner), so an access-path candidate must not be injected there.
+    if (!memo.commuteSafe())
+        return {};
+
     ExploreStep step;
     if (!findExpandStep(memo, expr.child_groups[0], step) || step.found == false)
         return {};

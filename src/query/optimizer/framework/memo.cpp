@@ -331,8 +331,18 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
 
 binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
     Group& group = getGroup(root_gid);
-    // RBO: take the last (most recently added) logical expression
+    // RBO: take the last (most recently added) logical expression. Access-path
+    // candidates (IndexProbeJoin) are CBO-only alternatives: they are not part
+    // of the RBO plan, and an unresolved probe has no executable lowering. A
+    // write plan often has no CBO winner, so skipping them here is what keeps
+    // the RBO fallback a valid plan.
     ExprId eid = group.logical_exprs.back();
+    for (auto it = group.logical_exprs.rbegin(); it != group.logical_exprs.rend(); ++it) {
+        if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(getExpr(*it).op))
+            continue;
+        eid = *it;
+        break;
+    }
     GroupExpr& expr = getExpr(eid);
 
     // Clone (not move) the operator out — copyOut may be invoked recursively on
