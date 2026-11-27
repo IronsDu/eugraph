@@ -1,4 +1,6 @@
 #include "query/optimizer/framework/log_prop.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
@@ -54,6 +56,37 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
                 return deriveScan(val);
             } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                 return deriveLabelScan(val);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                if (!val)
+                    return LogProp{};
+                LogProp lp;
+                for (const auto& name : {val->source_variable, val->target_variable}) {
+                    if (name.empty())
+                        continue;
+                    ColumnInfo ci;
+                    ci.variable = name;
+                    ci.column_index = 0;
+                    ci.type_kind = binder::BoundTypeKind::VERTEX_REF;
+                    lp.columns.push_back(std::move(ci));
+                }
+                lp.valid = true;
+                return lp;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (!val || input_lps.empty())
+                    return LogProp{};
+                LogProp lp = input_lps[0];
+                bool has_target = false;
+                for (const auto& c : lp.columns)
+                    has_target = has_target || c.variable == val->probe.target_variable;
+                if (!has_target) {
+                    ColumnInfo ci;
+                    ci.variable = val->probe.target_variable;
+                    ci.column_index = 0;
+                    ci.type_kind = binder::BoundTypeKind::VERTEX_REF;
+                    lp.columns.push_back(std::move(ci));
+                }
+                lp.valid = true;
+                return lp;
             }
             // Unary operators (held by unique_ptr)
             else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
