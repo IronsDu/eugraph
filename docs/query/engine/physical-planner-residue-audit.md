@@ -37,7 +37,7 @@
 
 | # | 函数 / 位置 | 行为 | 目标归属 |
 |---|---|---|---|
-| B1 | `tryPlanGenericHashJoin` | 物理层比较 `hash_cost < cross_cost`、选 build 侧、超预算回退 —— 直接推翻 CBO 选择 | 第一步已做（`planHonoredHashJoin` 执行 CBO tag）；第二步删除本函数（需要 join_conditions 语义化，T2） |
+| B1 | ~~`tryPlanGenericHashJoin`~~ | 物理层比较 `hash_cost < cross_cost`、选 build 侧、超预算回退，直接推翻 CBO 选择。**已删除**：CBO 通过 `JoinConditionNormalization` 的 `join_conditions` + chosen tag 决定 join 算法；RBO/无 tag 时回退 CrossProduct+Filter（正确、可能慢）。`collectAndConjuncts`/`estimateRowsUpperBound` 的代价门禁随之删除（`estimateRowsUpperBound` 保留给 B2 的 build 侧实例化） | 已完成（删除） |
 | B2 | `planHonoredHashJoin` | 执行 tag，但 build 侧按估算选、超预算回退 | build 侧可保留（实例化细节）；预算应由 optimizer 成本模型提前排除（J6） |
 | B3 | BinaryJoin 分支的 `pc_anchor` 特判 | 形状匹配 `CrossProduct(CorrelatedSource, LabelScan)` → 替换为 `CorrelatedVertexProbePhysicalOp` | post-CBO rewrite 或专用 descriptor（optimizer） |
 | B4 | `planIndexJoin` | 消费 descriptor，但内部仍有 dynamic-key 分支与 fallback | 保持 descriptor 化；bug 修复见 Issue #335 |
@@ -61,7 +61,7 @@
 
 | # | 函数 | 行为 | 目标归属 |
 |---|---|---|---|
-| E1 | `resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition` | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop（optimizer/analysis 已有实现）。当前唯一调用方是 B1 的 `joinKeyColumn`/`tryPlanGenericHashJoin`；随 B1 删除而消失 | 等 B1（J1 第二步） |
+| E1 | `resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition` | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop（optimizer/analysis 已有实现）。B1 删除后唯一调用方是 `planHonoredHashJoin` 的 `joinKeyColumn`（读 CBO 的 join_conditions 落列）；随 B2 的 descriptor 化（join key 由 optimizer 给出）删除 | 等 B2 |
 | E2 | ~~`collectPlanRefsInto` / `countPlanFieldRefs` / `subtreeProvidesCorrelatedVariable`~~ | 全树引用计数等规划分析。**已迁出**：`optimizer/analysis/plan_refs`（PlanRefIndex / countPlanFieldRefs / subtreeProvidesCorrelatedVariable / vertexRefIdArgument / expressionReferences / forEachPlanNode）；physical 的 topology-only 判断改为消费该 analysis（C2 本身仍待迁） | 已完成（analysis） |
 
 ### F. 正常 lowering（不算越界）
@@ -93,6 +93,13 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
+- **B1 join 形状兜底删除（完成）**：删除 physical 的 `tryPlanGenericHashJoin`（物理层
+  hash/cross 成本比较、build 侧选择、预算回退）与 `collectAndConjuncts`/`estimateRowsUpperBound`
+  代价门禁；join 算法完全由 CBO 的 join_conditions + chosen tag 决定，RBO/无 tag 时
+  CrossProduct+Filter。`GenericHashJoinFallsBackWithResidualPredicate` 改为
+  `GenericHashJoinKeepsResidualPredicate`（结果 + 残差 Filter，不再断言物理层回退）。
+  `estimateRowsUpperBound` 保留给 B2 的 build 侧实例化；B2（build 侧/预算仍由
+  `planHonoredHashJoin` 决定）与 E1（`resolveColumnProperty` 仍被 `joinKeyColumn` 使用）留待下一步。
 - **D1 端点过滤折叠归位（完成）**：删除 physical 的 `rewriteDstBoundExpandFilters` 与
   `collectPlanRefsInto`/`countPlanFieldRefs`/`subtreeProvidesCorrelatedVariable`/
   `vertexRefIdArgument`/`bareRefName`；改为 CBO 前 normalization pass

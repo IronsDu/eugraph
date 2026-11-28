@@ -12079,7 +12079,10 @@ TEST_F(QueryExecutorTest, GenericHashJoinCanBuildSmallerLeftSide) {
     EXPECT_EQ(std::get<std::string>(projected.rows[0][1]), "only");
 }
 
-TEST_F(QueryExecutorTest, GenericHashJoinFallsBackWithResidualPredicate) {
+TEST_F(QueryExecutorTest, GenericHashJoinKeepsResidualPredicate) {
+    // The join condition is normalized into join_conditions by the optimizer; the
+    // residual `a.name = 'same'` stays in the Filter above the join. The join
+    // algorithm is then the CBO's choice (no physical-layer fallback).
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'same'}), (b:Person {name:'same'}), "
                                      "(c:Person {name:'other'})")
                     .error.empty());
@@ -12091,7 +12094,7 @@ TEST_F(QueryExecutorTest, GenericHashJoinFallsBackWithResidualPredicate) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4);
     auto plan = getExplainPlanText(*executor_, query);
-    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << "残差谓词应回退到 CrossProduct+Filter";
+    EXPECT_NE(plan.find("a.name = 'same'"), std::string::npos) << plan;
 }
 
 TEST_F(QueryExecutorTest, GenericHashJoinDoesNotJoinNullKeys) {

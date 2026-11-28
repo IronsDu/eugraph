@@ -1513,16 +1513,6 @@ static std::string expressionVariableName(const binder::BoundExpression& expr) {
     return {};
 }
 
-static void collectAndConjuncts(const binder::BoundExpression& expr, std::vector<const binder::BoundExpression*>& out) {
-    auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr);
-    if (binop && *binop && (*binop)->op == cypher::BinaryOperator::AND) {
-        collectAndConjuncts((*binop)->left, out);
-        collectAndConjuncts((*binop)->right, out);
-        return;
-    }
-    out.push_back(&expr);
-}
-
 // ==================== Bound Plan Pipeline ====================
 
 namespace {
@@ -1776,113 +1766,6 @@ static std::optional<PlanOperatorResult> planHonoredHashJoin(const binder::Bound
     return PlanOperatorResult{std::move(join_op), std::move(output_schema), std::move(output_types), std::move(layout)};
 }
 
-std::optional<PlanOperatorResult>
-PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
-                                        IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
-                                        Schema input_schema, const std::vector<binder::BoundType>& input_types) {
-    if (join.join_type != binder::JoinType::Cross && join.join_type != binder::JoinType::Inner)
-        return std::nullopt;
-
-    std::vector<const binder::BoundExpression*> conjuncts;
-    collectAndConjuncts(filter.predicate, conjuncts);
-    if (conjuncts.empty())
-        return std::nullopt;
-
-    const size_t max_build_rows = hashJoinMaxBuildRows();
-    if (max_build_rows == 0)
-        return std::nullopt;
-
-    auto left_est = estimateRowsUpperBound(join.left, ctx);
-    auto right_est = estimateRowsUpperBound(join.right, ctx);
-    // 没有两侧上界就不猜：既无法做代价比较，也无法保证构建侧内存。
-    if (!left_est || !right_est)
-        return std::nullopt;
-    // HashJoin 代价 ≈ build + probe；CrossProduct+Filter ≈ left × right。
-    // 只在 HashJoin 更便宜时选择，避免小表 join 反而多一次物化。
-    const long double hash_cost = static_cast<long double>(*left_est) + static_cast<long double>(*right_est);
-    const long double cross_cost = static_cast<long double>(*left_est) * static_cast<long double>(*right_est);
-    // 物理层仍做预算/代价兜底；CBO tag 只表示“允许 HashJoin 候选”，
-    // 不能绕过 build 侧内存和代价门禁。
-    if (hash_cost >= cross_cost)
-        return std::nullopt;
-
-    bool build_left = *left_est < *right_est;
-    const uint64_t build_est = build_left ? *left_est : *right_est;
-    if (build_est > max_build_rows)
-        return std::nullopt;
-
-    auto left_result = planBoundOperator(join.left, store, meta, ctx, input_schema, input_types);
-    if (std::holds_alternative<std::string>(left_result))
-        return std::nullopt;
-    auto lr = extractChildResult(std::move(left_result));
-    ensureSlotLayout(lr, ctx);
-
-    const auto right_offset = static_cast<uint32_t>(lr.output_schema.size());
-    remapLogicalOpColumnIndices(join.right, right_offset);
-    Schema right_input_schema;
-    std::vector<binder::BoundType> right_input_types;
-    auto right_result = planBoundOperator(join.right, store, meta, ctx, right_input_schema, right_input_types);
-    if (std::holds_alternative<std::string>(right_result))
-        return std::nullopt;
-    auto rr = extractChildResult(std::move(right_result));
-    ensureSlotLayout(rr, ctx);
-
-    Schema output_schema = lr.output_schema;
-    output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
-    auto output_types = lr.output_types;
-    output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
-    TupleSlotLayout layout = lr.slot_layout;
-    layout.merge(rr.slot_layout);
-
-    auto fallback_cross_filter = [&]() -> PlanOperatorResult {
-        auto cross = std::make_unique<CrossProductPhysicalOp>(std::move(lr.op), std::move(rr.op),
-                                                              Schema(lr.output_schema), Schema(rr.output_schema),
-                                                              std::vector<binder::BoundType>(output_types));
-        auto filter_op = std::make_unique<FilterPhysicalOp>(optimizer::cloneBoundExpression(filter.predicate),
-                                                            Schema(output_schema), std::move(cross));
-        filter_op->setEvalContext(ctx.eval_ctx);
-        auto result = PlanOperatorResult{std::move(filter_op), std::move(output_schema), std::move(output_types),
-                                         std::move(layout)};
-        return dispatchProjectionExtract(std::move(result), store, ctx);
-    };
-
-    std::vector<uint32_t> left_keys;
-    std::vector<uint32_t> right_keys;
-    for (const auto* conjunct : conjuncts) {
-        const auto* binop_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjunct);
-        if (!binop_ptr || !*binop_ptr || (*binop_ptr)->op != cypher::BinaryOperator::EQ)
-            return fallback_cross_filter();
-        const auto& binop = **binop_ptr;
-        auto ll = joinKeyColumn(binop.left, lr.output_schema, lr.slot_layout, ctx);
-        auto lr_col = joinKeyColumn(binop.right, lr.output_schema, lr.slot_layout, ctx);
-        auto rl = joinKeyColumn(binop.left, rr.output_schema, rr.slot_layout, ctx);
-        auto rr_col = joinKeyColumn(binop.right, rr.output_schema, rr.slot_layout, ctx);
-
-        // Exactly one operand on each side; do not guess if both/neither resolve.
-        if (ll && rr_col && !lr_col && !rl) {
-            left_keys.push_back(*ll);
-            right_keys.push_back(*rr_col);
-        } else if (lr_col && rl && !ll && !rr_col) {
-            left_keys.push_back(*lr_col);
-            right_keys.push_back(*rl);
-        } else {
-            return fallback_cross_filter();
-        }
-    }
-    if (left_keys.empty())
-        return fallback_cross_filter();
-    auto hash_join = std::make_unique<HashJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), std::move(left_keys),
-                                                          std::move(right_keys), output_types, output_schema,
-                                                          build_left, max_build_rows);
-    hash_join->setEvalContext(ctx.eval_ctx);
-    auto plan_result =
-        PlanOperatorResult{std::move(hash_join), std::move(output_schema), std::move(output_types), std::move(layout)};
-    return dispatchProjectionExtract(std::move(plan_result), store, ctx);
-}
-
-/// Bottom-up (post-order) compilation: visit children first so each
-/// operator can use its child's output layout to resolve its own
-/// BoundColumnRef slot_ids → column_indices.
 static void compileOperatorTree(PhysicalOperator* op, PlanContext& ctx) {
     if (!op)
         return;
@@ -3170,21 +3053,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
-                    // Filter over a join: keep the (deprecated) physical fusion as a
-                    // fallback until join_conditions carry the predicate (J1 step 2).
-                    if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
-                        if (join_op && *join_op) {
-                            bool cbo_chose_cross = false;
-                            if (auto it = ctx.chosen_join_tags.find(join_op->get()); it != ctx.chosen_join_tags.end())
-                                cbo_chose_cross = it->second == optimizer::PhysicalOpTag::CrossProduct;
-                            if (!cbo_chose_cross) {
-                                if (auto hash_join = tryPlanGenericHashJoin(v, **join_op, store, meta, ctx,
-                                                                            input_schema, input_types))
-                                    return std::move(*hash_join);
-                            }
-                        }
-                    }
-
                     auto saved_anchor_edge = ctx.anchor_edge_var;
                     if (ctx.anchor_edge_var.empty()) {
                         auto var = findEndpointVar(v.predicate);

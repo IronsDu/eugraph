@@ -190,14 +190,6 @@ private:
     std::variant<PlanOperatorResult, std::string>
     planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
                       PlanContext& ctx, Schema input_schema, const std::vector<binder::BoundType>& input_types);
-
-    /// 通用等值 join → HashJoin 的物理规划：从 Filter(CrossProduct/InnerJoin)
-    /// 提取可解析成列的等值 key，按估算选择构建侧，无法解析或估算不可控时回退。
-    std::optional<PlanOperatorResult> tryPlanGenericHashJoin(binder::BoundFilterOp& filter,
-                                                             binder::BoundBinaryJoinOp& join,
-                                                             IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
-                                                             PlanContext& ctx, Schema input_schema,
-                                                             const std::vector<binder::BoundType>& input_types);
 };
 
 } // namespace compute
