@@ -710,6 +710,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return !av && !bv;
                 if (av->join_type != bv->join_type || av->join_conditions.size() != bv->join_conditions.size())
                     return false;
+                if (av->endpoint_probe_edge_var != bv->endpoint_probe_edge_var)
+                    return false;
                 for (size_t i = 0; i < av->join_conditions.size(); ++i) {
                     if (!equalBoundExpression(av->join_conditions[i], bv->join_conditions[i]))
                         return false;

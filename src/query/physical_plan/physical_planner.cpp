@@ -458,39 +458,6 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
 
 // ==================== LIMIT-boundary late materialization ====================
 
-/// Variable named by startNode()/endNode() in an anchor predicate.
-static std::string findEndpointVar(const binder::BoundExpression& expr) {
-    std::string found;
-    std::visit(
-        [&](const auto& val) {
-            using T = std::decay_t<decltype(val)>;
-            if (!found.empty())
-                return;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
-                if (val && val->func_def && (val->func_def->name == "startNode" || val->func_def->name == "endNode") &&
-                    !val->args.empty()) {
-                    if (auto* cr = std::get_if<binder::BoundColumnRef>(&val->args[0]))
-                        found = cr->name;
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
-                if (val) {
-                    found = findEndpointVar(val->left);
-                    if (found.empty())
-                        found = findEndpointVar(val->right);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
-                if (val)
-                    found = findEndpointVar(val->operand);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                if (val)
-                    found = findEndpointVar(val->object);
-            }
-        },
-        expr);
-    return found;
-}
-
 /// Collect every slot referenced by an expression (recursively).
 static void collectExprSlots(const binder::BoundExpression& expr, std::unordered_set<binder::SlotId>& out) {
     std::visit(
@@ -2916,13 +2883,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
-                    auto saved_anchor_edge = ctx.anchor_edge_var;
-                    if (ctx.anchor_edge_var.empty()) {
-                        auto var = findEndpointVar(v.predicate);
-                        if (!var.empty())
-                            ctx.anchor_edge_var = std::move(var);
-                    }
-
                     // Filter boundary: keep output-only PE columns out of the
                     // rows the Filter rejects. The child is planned with them
                     // deferred; they are appended again right after the Filter,
@@ -2938,7 +2898,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     ctx.deferred_slots = std::move(saved_deferred);
-                    ctx.anchor_edge_var = std::move(saved_anchor_edge);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
@@ -3569,63 +3528,48 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     xprod_layout.merge(lr.slot_layout);
                     xprod_layout.merge(rr.slot_layout);
 
-                    // PC anchor: CrossProduct(CorrelatedSource(r), LabelScan(a))
-                    // re-runs the label scan for every outer row. Replace it
-                    // with a probe of the invariant anchor map so only the
-                    // matching endpoint rows flow into the anchor filters.
-                    std::unique_ptr<PhysicalOperator> result_op;
-                    const bool pc_anchor = std::holds_alternative<binder::BoundCorrelatedSourceOp>(v.left) &&
-                                           std::holds_alternative<binder::BoundLabelScanOp>(v.right);
-                    // The CBO's join tag is the optimizer's decision; lowering
-                    // only instantiates it. pc_anchor keeps its dedicated
-                    // correlation operator (semantic join shape, not a keyed
-                    // equi-join).
-                    if (!pc_anchor) {
-                        auto attr_it = ctx.chosen_join_attrs.find(&v);
-                        if (attr_it != ctx.chosen_join_attrs.end() &&
-                            attr_it->second.tag == optimizer::PhysicalOpTag::HashJoin) {
-                            if (auto hash_join = planHonoredHashJoin(v, lr, rr, ctx, attr_it->second.build_left))
-                                return std::move(*hash_join);
-                        }
+                    // The optimizer chooses the join algorithm (Impl candidates +
+                    // cost); lowering only instantiates the chosen tag. The
+                    // correlated-vertex-probe candidate is offered only for
+                    // CrossProduct(CorrelatedSource(edge), LabelScan(v)), so the
+                    // column resolution below is a descriptor invariant.
+                    auto attr_it = ctx.chosen_join_attrs.find(&v);
+                    const auto chosen_tag = attr_it == ctx.chosen_join_attrs.end()
+                                                ? optimizer::PhysicalOpTag::CrossProduct
+                                                : attr_it->second.tag;
+                    if (chosen_tag == optimizer::PhysicalOpTag::HashJoin) {
+                        if (auto hash_join = planHonoredHashJoin(v, lr, rr, ctx, attr_it->second.build_left))
+                            return std::move(*hash_join);
                     }
-                    if (pc_anchor) {
+                    std::unique_ptr<PhysicalOperator> result_op;
+                    if (chosen_tag == optimizer::PhysicalOpTag::CorrelatedVertexProbe) {
+                        const auto* label_scan = std::get_if<binder::BoundLabelScanOp>(&v.right);
+                        if (label_scan == nullptr)
+                            return std::string("CorrelatedVertexProbe: right input is not a label scan");
+                        // The edge variable is part of the optimizer's
+                        // annotation, not re-derived here.
                         int edge_col = -1;
-                        for (size_t i = 0; i < lr.output_types.size(); ++i) {
-                            auto k = lr.output_types[i].kind;
-                            if (k == binder::BoundTypeKind::EDGE || k == binder::BoundTypeKind::EDGE_KEY) {
+                        for (size_t i = 0; i < lr.output_schema.size(); ++i) {
+                            if (lr.output_schema[i] == v.endpoint_probe_edge_var) {
                                 edge_col = static_cast<int>(i);
                                 break;
                             }
                         }
-                        if (edge_col < 0 && !ctx.anchor_edge_var.empty()) {
-                            for (size_t i = 0; i < lr.output_schema.size(); ++i) {
-                                if (lr.output_schema[i] == ctx.anchor_edge_var) {
-                                    edge_col = static_cast<int>(i);
-                                    break;
-                                }
-                            }
-                        }
                         int vertex_col = -1;
-                        const auto& label_scan = std::get<binder::BoundLabelScanOp>(v.right);
                         for (size_t i = 0; i < rr.output_schema.size(); ++i) {
-                            if (rr.output_schema[i] == label_scan.variable) {
+                            if (rr.output_schema[i] == label_scan->variable) {
                                 vertex_col = static_cast<int>(i);
                                 break;
                             }
                         }
-                        if (edge_col >= 0 && vertex_col >= 0) {
-                            result_op = std::make_unique<CorrelatedVertexProbePhysicalOp>(
-                                std::move(lr.op), std::move(rr.op), static_cast<uint32_t>(edge_col),
-                                static_cast<uint32_t>(vertex_col), Schema(lr.output_schema), Schema(rr.output_schema),
-                                std::vector<binder::BoundType>(output_types));
-                        }
+                        if (edge_col < 0 || vertex_col < 0)
+                            return std::string("CorrelatedVertexProbe: cannot resolve edge/vertex columns");
+                        result_op = std::make_unique<CorrelatedVertexProbePhysicalOp>(
+                            std::move(lr.op), std::move(rr.op), static_cast<uint32_t>(edge_col),
+                            static_cast<uint32_t>(vertex_col), Schema(lr.output_schema), Schema(rr.output_schema),
+                            std::vector<binder::BoundType>(output_types));
                     }
                     if (!result_op) {
-                        if (pc_anchor) {
-                            rr.op = std::make_unique<MaterializePhysicalOp>(
-                                std::move(rr.op), Schema(rr.output_schema),
-                                std::vector<binder::BoundType>(rr.output_types));
-                        }
                         result_op = std::make_unique<CrossProductPhysicalOp>(
                             std::move(lr.op), std::move(rr.op), std::move(lr.output_schema),
                             std::move(rr.output_schema), std::vector<binder::BoundType>(output_types));

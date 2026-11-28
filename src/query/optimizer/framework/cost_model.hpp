@@ -35,6 +35,10 @@ enum class PhysicalOpTag {
     NestedLoopJoin,
     CrossProduct,
     HashJoin,
+    // CrossProduct(CorrelatedSource, LabelScan) whose right side is
+    // correlation-invariant: materialise the right side once and probe the
+    // edge's endpoints per left row (linear instead of left x right).
+    CorrelatedVertexProbe,
     SemiJoin,
     LeftJoin,
     Union,

@@ -39,7 +39,7 @@
 |---|---|---|---|
 | B1 | ~~`tryPlanGenericHashJoin`~~ | 物理层比较 `hash_cost < cross_cost`、选 build 侧、超预算回退，直接推翻 CBO 选择。**已删除**：CBO 通过 `JoinConditionNormalization` 的 `join_conditions` + chosen tag 决定 join 算法；RBO/无 tag 时回退 CrossProduct+Filter（正确、可能慢）。`collectAndConjuncts`/`estimateRowsUpperBound` 的代价门禁随之删除（`estimateRowsUpperBound` 保留给 B2 的 build 侧实例化） | 已完成（删除） |
 | B2 | ~~`planHonoredHashJoin` 的 build 侧/预算选择~~ | 执行 tag，但 build 侧按估算选、超预算回退。**已完成**：build 侧进入 `PhysicalExpr`/`ChosenPlan` 候选（`ImplHashJoinRule` 产出 build-left/right 两个候选），`findLocalCost(HashJoin)` 用 build 侧定价（build 行数带内存溢价）并做预算可行性（超 `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS` 或估计为 0 → `Cost::infinity()`）；physical 只转发 build 侧，运行时预算仍由算子强约束 | 已完成（optimizer 候选 + 成本） |
-| B3 | BinaryJoin 分支的 `pc_anchor` 特判 | 形状匹配 `CrossProduct(CorrelatedSource, LabelScan)` → 替换为 `CorrelatedVertexProbePhysicalOp`。**尝试迁入 CBO（tag + Impl 规则）后回退**：该形状只在 post-CBO 的 anchor-share（D2）之后才出现（c14 fork 分支），CBO 的 memo 里匹配不到；c14 会丢失 probe（EXPLAIN 对照：CBO 版本 probe=False，回退后 probe=True）。与 D2 的完整前移绑定；在 D2 前，保留此 lowering 特判并记录 | 待 D2 前移后做 CBO 候选（或 post-CBO descriptor 标注） |
+| B3 | ~~BinaryJoin 分支的 `pc_anchor` 特判~~ | 形状 `CrossProduct(CorrelatedSource(edge), LabelScan(v))` → `CorrelatedVertexProbePhysicalOp`。**已完成（P5/B3）**：normalization 新增 `AnnotateEndpointProbeNormalization`——谓词蕴含 `v.id ∈ {startNode(edge).id, endNode(edge).id}` 时把边变量名写到 join（`endpoint_probe_edge_var`；支持静态/动态属性访问，且向上携带祖先谓词，因为端点过滤会被 CBO 的 FilterPushdown 推到 Apply 之上）；`ImplCorrelatedVertexProbeRule` 据此产出 `PhysicalOpTag::CorrelatedVertexProbe` 候选，成本 `0.5×right + left`（invariant 侧一次 build + 每左行一次 probe，对比 CrossProduct 的 left×right）；lowering 只按 chosen tag 实例化并按 annotation 的变量名取边列。physical planner 的 `pc_anchor` 形状匹配、`findEndpointVar`、`anchor_edge_var` 语义反解与 Materialize 兜底全部删除 | 已完成（optimizer 标注 + 候选/成本） |
 | B4 | `planIndexJoin` | 消费 descriptor，但内部仍有 dynamic-key 分支与 fallback | 保持 descriptor 化；bug 修复见 Issue #335 |
 
 ### C. 物化 / PE 边界（J7）
@@ -93,14 +93,25 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
-- **B3 迁移尝试（已回退；P4 后阻塞解除）**：给 `CorrelatedVertexProbe` 加了 tag + Impl 候选 +
-  cost（left+right）并让 lowering 按 tag 实例化。单测通过，但真实 c14 计划里 probe 消失：
-  trace 显示规则只见到 `CrossProduct`（无 correlated edge）。
-  **P4 复测更正了当年的结论**：`EUGRAPH_ANCHOR_SHARE_OFF=1` 的计划（无 fork、两个独立
-  `PatternComprehensionApply`）里每个分支仍然出现 `CorrelatedVertexProbe`，说明 probe 的
-  lowering 形状并不依赖 anchor-share/fork；当年 CBO 尝试失败的原因是 memo 里该 group 的
-  形状（CBO 选择/重排之后）与 lowering 匹配的形状不同，而不是 fork 依赖。B3 现在可以独立
-  重做（CBO 候选 + Impl tag），当前 lowering 特判保留、行为不受影响。
+- **B3 归位（完成，P5/B3）**：`CorrelatedVertexProbe` 现在是 CBO 候选。语义事实由
+  `AnnotateEndpointProbeNormalization` 标注：当 `Filter` 谓词蕴含
+  `v.id ∈ {startNode(edge).id, endNode(edge).id}` 时，把边变量名写到
+  `BoundBinaryJoinOp::endpoint_probe_edge_var`（进入 hash/eq/clone，作为语义元数据）。
+  两个实现细节是实测得出的：
+  - 端点过滤在 CBO 之前可能在 Apply 之上，被 FilterPushdown 才推进 PC 子计划，因此标注沿
+    单子节点链**向上携带祖先谓词**，而不只看直接父 Filter；
+  - c14 的 `startNode(r).id` 绑定成 `BoundDynamicPropertyRef`（函数结果是 ANY），匹配器同时
+    接受静态 `BoundPropertyRef` 与动态属性访问。
+  `ImplCorrelatedVertexProbeRule` 依据该标注 + 右侧 child group 是 `LabelScan` 产出候选；
+  `findLocalCost` 用 `0.5×right + left` 定价（build 半价是建模约定：`CorrelatedSource` 的
+  LogProp 保守估计为 1 行，纯线性公式会与 CrossProduct 打平）。
+  lowering 只在 chosen tag 是该 tag 时解析 edge/vertex 列并实例化，列解析失败视为 descriptor
+  违约而报错，不再回退。physical planner 侧的 `pc_anchor` 形状匹配、`findEndpointVar` /
+  `anchor_edge_var`（从谓词反解 edge 变量）与 Materialize 兜底一并删除。
+  **当年失败尝试的根因**（本次复核）：`Memo::copyIn` 会把 BinaryJoin 的 `left`/`right` 字段
+  移入 child group 并置为 `BoundScanOp{}`，规则若检查 `expr.op.left/right` 永远看不到形状——
+  这正是 trace 里"只见 CrossProduct、无 correlated edge"的来源；本次规则改查 child group。
+  P4 的 anchor-share 删除也确认了 probe 不依赖 fork（无 fork 的计划里同样出现 probe）。
 - **D2 post-CBO 重写删除（完成，P4）**：删除 `optimizer/post_cbo/`（`applyPostCboRewrites` +
   `rewritePatternComprehensionAnchorShare`）与 physical 的两处调用。删除依据是同二进制 A/B：
   该重写在其唯一生产形状 c14 上 **0 ms**（781.1 vs 784.4 ms，行数 12 不变），因为
@@ -186,7 +197,8 @@
 3. **B1 第二步**（join_conditions 语义化、删除物理层 Filter-join 融合）—— Cypher
    语义面（T2），需单独评审。
 4. ~~D1/D2 前移~~（D1 完成：binder 形状 + optimizer 标注；D2 完成：post_cbo 删除）。
-5. **C1/C2**（P2 PE enforcer 化）与 **E1**（join-key descriptor）；B3 重做（阻塞已解除）。
+5. ~~B3~~（完成：optimizer 候选 + 成本，lowering 只按 tag 实例化）。
+6. **C1/C2**（P2 PE enforcer 化）与 **E1**（join-key descriptor）。
 
 ## 4. 实测与教训（SF1，warm 3–4 轮 min）
 

@@ -51,6 +51,10 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     // Physical lowering reads the flag and never decides it.
     normalization.add(std::make_unique<AnnotateCorrelatedEndpointProbeNormalization>());
     normalization.add(std::make_unique<JoinConditionNormalization>());
+    // Semantic fact for the correlated-vertex-probe candidate: a filter above
+    // CrossProduct(CorrelatedSource, LabelScan) that restricts the scanned
+    // vertex to the edge endpoints. Selection stays in CBO (Impl + cost).
+    normalization.add(std::make_unique<AnnotateEndpointProbeNormalization>());
     NormalizationContext normalization_ctx;
     normalization.run(plan.root, normalization_ctx);
     memo_.setCommuteSafe(normalization_ctx.commute_safe);
@@ -160,6 +164,7 @@ void LogicalOptimizer::initRules() {
     rules_.addRule(std::make_unique<ImplPathBuildRule>());
     rules_.addRule(std::make_unique<ImplPathCountRule>());
     rules_.addRule(std::make_unique<ImplUnwindRule>());
+    rules_.addRule(std::make_unique<ImplCorrelatedVertexProbeRule>());
     rules_.addRule(std::make_unique<ImplHashJoinRule>());
     rules_.addRule(std::make_unique<ImplBinaryJoinRule>());
     rules_.addRule(std::make_unique<ImplLeftJoinRule>());

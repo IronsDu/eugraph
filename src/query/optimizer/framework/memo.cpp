@@ -997,6 +997,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
             else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
                 auto c = std::make_unique<binder::BoundBinaryJoinOp>();
                 c->join_type = val->join_type;
+                c->endpoint_probe_edge_var = val->endpoint_probe_edge_var;
                 c->join_conditions.reserve(val->join_conditions.size());
                 for (const auto& cond : val->join_conditions)
                     c->join_conditions.push_back(cloneBoundExpression(cond));

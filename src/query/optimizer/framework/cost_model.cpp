@@ -109,6 +109,19 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     case PhysicalOpTag::CrossProduct:
         return Cost(input0Card() * input1Card());
 
+    case PhysicalOpTag::CorrelatedVertexProbe:
+        // The right side is correlation-invariant: one linear pass builds the
+        // vertex map, then each left row probes the edge's two endpoints — linear
+        // instead of left x right. The build pass is priced at half a
+        // nested-loop pair: a sequential hash insert is cheaper per row than
+        // pair generation, and `CorrelatedSource`'s LogProp is conservatively
+        // one row, so a literal linear formula would tie with CrossProduct and
+        // silently drop the probe for pattern-comprehension anchors whose left
+        // side really runs once per outer row. The operator caps the cache at
+        // runtime and falls back to per-left-row scans if the right side is
+        // larger than the budget.
+        return Cost(input1Card() * 0.5 + input0Card());
+
     // Semi/left join: dominated by probe
     case PhysicalOpTag::SemiJoin:
     case PhysicalOpTag::LeftJoin:

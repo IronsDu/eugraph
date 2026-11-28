@@ -1,7 +1,10 @@
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/optimizer/framework/memo.hpp"
+
 #include "query/optimizer/framework/physical_expr.hpp"
+#include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_correlated_source_op.hpp"
 #include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
@@ -260,6 +263,40 @@ std::vector<std::unique_ptr<GroupExpr>> ImplBinaryJoinRule::substitute(GroupExpr
 
 PatternNode ImplHashJoinRule::pattern() const {
     return {OptNodeType::BinaryJoin, {{}, {}}};
+}
+
+namespace {
+
+/// Right input of the probe: the correlation-invariant label scan whose rows are
+/// materialised once and probed by vertex id.
+bool groupHasLabelScan(Memo& memo, GroupId gid) {
+    for (ExprId eid : memo.getGroup(gid).logical_exprs) {
+        if (std::holds_alternative<binder::BoundLabelScanOp>(memo.getExpr(eid).op))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+PatternNode ImplCorrelatedVertexProbeRule::pattern() const {
+    return {OptNodeType::BinaryJoin, {{}, {}}};
+}
+
+bool ImplCorrelatedVertexProbeRule::condition(GroupExpr& expr, Memo& memo) const {
+    // The shape and the endpoint restriction are semantic facts recorded by
+    // AnnotateEndpointProbeNormalization on the join; the candidate is offered
+    // when the join carries that annotation and its right input is a label scan.
+    const auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
+    if (join == nullptr || !*join || (*join)->endpoint_probe_edge_var.empty())
+        return false;
+    if (expr.child_groups.size() != 2)
+        return false;
+    return groupHasLabelScan(memo, expr.child_groups[1]);
+}
+
+std::vector<std::unique_ptr<GroupExpr>> ImplCorrelatedVertexProbeRule::substitute(GroupExpr& expr, Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::CorrelatedVertexProbe);
 }
 
 std::vector<std::unique_ptr<GroupExpr>> ImplHashJoinRule::substitute(GroupExpr& expr, Memo& memo) const {

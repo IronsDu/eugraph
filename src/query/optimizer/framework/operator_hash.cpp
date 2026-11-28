@@ -641,6 +641,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 if (!val)
                     return;
                 seed = combine(seed, static_cast<uint64_t>(val->join_type));
+                seed = hashBytes(seed, val->endpoint_probe_edge_var);
                 for (const auto& cond : val->join_conditions)
                     seed = combine(seed, hashBoundExpression(cond));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {

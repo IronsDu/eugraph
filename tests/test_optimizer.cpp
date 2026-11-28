@@ -25,6 +25,7 @@
 #include "query/optimizer/rules/logical/prune_varlen_or_filters.hpp"
 #include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 #include "query/planner/logical_plan/operator/bound_correlated_source_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
@@ -1273,6 +1274,20 @@ TEST(CostModelTest, NestedLoopJoinCost) {
     EXPECT_DOUBLE_EQ(cost.value(), 5000.0);
 }
 
+TEST(CostModelTest, CorrelatedVertexProbeIsLinear) {
+    LogProp out;
+    out.cardinality = 200.0;
+    LogProp left;
+    left.cardinality = 100.0;
+    LogProp right;
+    right.cardinality = 50.0;
+    const auto probe = findLocalCost(PhysicalOpTag::CorrelatedVertexProbe, out, {left, right});
+    const auto cross = findLocalCost(PhysicalOpTag::CrossProduct, out, {left, right});
+    // One half-priced build pass over the invariant side + one probe per left row.
+    EXPECT_DOUBLE_EQ(probe.value(), 125.0);
+    EXPECT_LT(probe.value(), cross.value());
+}
+
 TEST(CostModelTest, SortCost) {
     LogProp in;
     in.cardinality = 1024.0;
@@ -1317,6 +1332,50 @@ TEST(ImplRuleTest, LabelScanImplRuleProducesPhysicalExpr) {
     ASSERT_EQ(new_exprs.size(), 1u);
     ASSERT_TRUE(new_exprs[0]->isPhysical());
     EXPECT_EQ(new_exprs[0]->physOp().tag, PhysicalOpTag::LabelScan);
+}
+
+TEST(ImplRuleTest, CorrelatedVertexProbeCoversCorrelatedAnchorShape) {
+    // CrossProduct(CorrelatedSource(edge), LabelScan(vertex)): the shape a
+    // pattern-comprehension anchor produces. The Impl rule offers the probe tag;
+    // the optimizer's cost model decides whether it wins.
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::EdgeKey()};
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    join->endpoint_probe_edge_var = "r";
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    ImplCorrelatedVertexProbeRule rule;
+    ASSERT_TRUE(rule.topMatch(expr));
+    ASSERT_TRUE(rule.condition(expr, memo));
+    auto candidates = rule.substitute(expr, memo);
+    ASSERT_EQ(candidates.size(), 1u);
+    ASSERT_TRUE(candidates[0]->isPhysical());
+    EXPECT_EQ(candidates[0]->physOp().tag, PhysicalOpTag::CorrelatedVertexProbe);
+    ASSERT_EQ(candidates[0]->child_groups.size(), 2u);
+}
+
+TEST(ImplRuleTest, CorrelatedVertexProbeSkipsUnrelatedJoins) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    join->left = makeLabelScan("x", 0);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    ImplCorrelatedVertexProbeRule rule;
+    EXPECT_FALSE(rule.condition(expr, memo)) << "no correlated edge source on the left";
 }
 
 TEST(ImplRuleTest, FilterImplRuleProducesPhysicalExpr) {
@@ -3054,6 +3113,168 @@ TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
 
     auto reqs = collectPlanRequirements(BoundLogicalOperator(std::move(result)), resolver);
     EXPECT_TRUE(reqs[1].need_whole_vertex);
+}
+
+namespace {
+
+const function::FunctionDef& endpointFunction(const char* name) {
+    static const function::FunctionDef start = [] {
+        function::FunctionDef def;
+        def.name = "startNode";
+        return def;
+    }();
+    static const function::FunctionDef end = [] {
+        function::FunctionDef def;
+        def.name = "endNode";
+        return def;
+    }();
+    return std::string(name) == "startNode" ? start : end;
+}
+
+/// `a.id`
+BoundExpression makeVertexIdExpr(const std::string& variable, SlotId slot) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "id";
+    prop->object = BoundColumnRef(0, BoundType::Vertex(), variable, slot);
+    return BoundExpression(std::move(prop));
+}
+
+/// `startNode(r).id` / `endNode(r).id`
+BoundExpression makeEndpointIdExpr(const char* endpoint, const std::string& edge) {
+    auto call = std::make_unique<BoundFunctionCall>();
+    call->func_def = &endpointFunction(endpoint);
+    call->args.push_back(BoundColumnRef(0, BoundType::EdgeKey(), edge, SlotId{9}));
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "id";
+    prop->object = BoundExpression(std::move(call));
+    return BoundExpression(std::move(prop));
+}
+
+/// `a.id` bound as a runtime property access (the shape the binder produces when
+/// the static property cannot be resolved, e.g. on an ANY-typed object).
+BoundExpression makeDynamicVertexIdExpr(const std::string& variable, SlotId slot) {
+    auto dyn = std::make_unique<BoundDynamicPropertyRef>();
+    dyn->property = "id";
+    dyn->object = BoundColumnRef(0, BoundType::Any(), variable, slot);
+    return BoundExpression(std::move(dyn));
+}
+
+/// `startNode(r).id` bound dynamically (startNode() returns ANY).
+BoundExpression makeDynamicEndpointIdExpr(const char* endpoint, const std::string& edge) {
+    auto call = std::make_unique<BoundFunctionCall>();
+    call->func_def = &endpointFunction(endpoint);
+    call->args.push_back(BoundColumnRef(0, BoundType::Any(), edge, SlotId{9}));
+    auto dyn = std::make_unique<BoundDynamicPropertyRef>();
+    dyn->property = "id";
+    dyn->object = BoundExpression(std::move(call));
+    return BoundExpression(std::move(dyn));
+}
+
+BoundExpression makeEndpointEquality(const char* endpoint, const std::string& vertex) {
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::EQ;
+    bin->left = makeVertexIdExpr(vertex, SlotId{1});
+    bin->right = makeEndpointIdExpr(endpoint, "r");
+    return BoundExpression(std::move(bin));
+}
+
+} // namespace
+
+TEST(NormalizationTest, AnnotatesEndpointProbeJoinFromFilterPredicate) {
+    auto or_expr = std::make_unique<BoundBinaryOp>();
+    or_expr->op = cypher::BinaryOperator::OR;
+    or_expr->left = makeEndpointEquality("startNode", "a");
+    or_expr->right = makeEndpointEquality("endNode", "a");
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::EdgeKey()};
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(or_expr));
+    filter->child = BoundLogicalOperator(std::move(join));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    AnnotateEndpointProbeNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    ASSERT_NE(out_filter, nullptr);
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_EQ(out_join->endpoint_probe_edge_var, "r");
+}
+
+TEST(NormalizationTest, AnnotatesEndpointProbeJoinFromDynamicPropertyPredicate) {
+    // LDBC c14 binds `startNode(r).id` dynamically (ANY-typed function result);
+    // the annotation must still recognise the endpoint restriction.
+    auto or_expr = std::make_unique<BoundBinaryOp>();
+    or_expr->op = cypher::BinaryOperator::OR;
+    auto make_dynamic_equality = [](const char* endpoint) {
+        auto bin = std::make_unique<BoundBinaryOp>();
+        bin->op = cypher::BinaryOperator::EQ;
+        bin->left = makeDynamicVertexIdExpr("a", SlotId{1});
+        bin->right = makeDynamicEndpointIdExpr(endpoint, "r");
+        return BoundExpression(std::move(bin));
+    };
+    or_expr->left = make_dynamic_equality("startNode");
+    or_expr->right = make_dynamic_equality("endNode");
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::Any()};
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(or_expr));
+    filter->child = BoundLogicalOperator(std::move(join));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    AnnotateEndpointProbeNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_EQ(out_join->endpoint_probe_edge_var, "r");
+}
+
+TEST(NormalizationTest, SkipsEndpointProbeWhenPredicateDoesNotRestrictToEndpoints) {
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = makeVertexIdExpr("a", SlotId{1});
+    eq->right = BoundLiteral(int64_t{5});
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::EdgeKey()};
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(eq));
+    filter->child = BoundLogicalOperator(std::move(join));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    AnnotateEndpointProbeNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_TRUE(out_join->endpoint_probe_edge_var.empty());
 }
 
 TEST(NormalizationTest, ExtractsEqualityJoinConditionAndKeepsFilter) {

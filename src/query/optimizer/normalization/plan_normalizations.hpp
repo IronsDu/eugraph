@@ -16,6 +16,18 @@ public:
     void apply(binder::BoundLogicalOperator& root, NormalizationContext& ctx) const override;
 };
 
+/// 语义标注：`Filter(...) -> CrossProduct(CorrelatedSource(edge), LabelScan(v))`，
+/// 若 Filter 谓词蕴含 `v.id ∈ {startNode(edge).id, endNode(edge).id}`，把边变量名
+/// 写到 join 上（`endpoint_probe_edge_var`）。只标注事实，不选算法；`CorrelatedVertexProbe`
+/// 是否作为候选/winner 由 Impl 规则与成本模型决定。
+class AnnotateEndpointProbeNormalization final : public NormalizationPass {
+public:
+    std::string name() const override {
+        return "AnnotateEndpointProbe";
+    }
+    void apply(binder::BoundLogicalOperator& root, NormalizationContext& ctx) const override;
+};
+
 /// 标注 correlated 端点 Expand 的执行策略（只写 probe_bound_dst，不改形状）：
 ///
 ///   Expand(dst=<子树 CorrelatedSource 提供的列>, 有向, 只读语句)
