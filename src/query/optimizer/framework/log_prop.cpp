@@ -20,7 +20,6 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -110,8 +109,6 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
                 return deriveSemiJoin(*val, input_lps.at(0), input_lps.at(1));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 return derivePatternComprehensionApply(*val, input_lps.at(0), input_lps.at(1));
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                return derivePatternComprehensionFork(*val, input_lps);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 return deriveUnion(*val, input_lps.at(0), input_lps.at(1));
             }
@@ -505,29 +502,6 @@ LogProp LogPropDeriver::derivePatternComprehensionApply(const binder::BoundPatte
     LogProp lp;
     lp.cardinality = left.cardinality;
     lp.columns = left.columns;
-    for (const auto& out : op.outputs) {
-        ColumnInfo ci;
-        ci.variable = out.name;
-        ci.column_index = out.slot_id;
-        ci.type_kind = binder::BoundTypeKind::LIST;
-        lp.columns.push_back(std::move(ci));
-    }
-    lp.valid = true;
-    return lp;
-}
-
-LogProp LogPropDeriver::derivePatternComprehensionFork(const binder::BoundPatternComprehensionForkOp& op,
-                                                       const std::vector<LogProp>& input_lps) const {
-    // The fork is lateral: `left` drives the row count, and each branch
-    // contributes exactly one aggregated LIST column. The anchor only feeds the
-    // branches, so it never widens the output schema.
-    LogProp lp;
-    if (input_lps.empty()) {
-        lp.valid = true;
-        return lp;
-    }
-    lp.cardinality = input_lps.front().cardinality;
-    lp.columns = input_lps.front().columns;
     for (const auto& out : op.outputs) {
         ColumnInfo ci;
         ci.variable = out.name;

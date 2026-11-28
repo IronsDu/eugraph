@@ -1,8 +1,9 @@
 # Pattern comprehension anchor sharing（已删除）
 
 Status: **removed 2026-11-28 (P4)**. 本文原记录 LDBC complex-14 的 shared-anchor fork
-设计（`PatternComprehensionFork` + post-CBO 重写）。重写与 `optimizer/post_cbo/` 已删除，
-本文保留为历史记录，供既有 benchmark 文档的链接与结论回溯。
+设计（`PatternComprehensionFork` + post-CBO 重写）。重写、`optimizer/post_cbo/` 与
+`PatternComprehensionFork`（logical + physical）均已删除，本文保留为历史记录，供既有
+benchmark 文档的链接与结论回溯。
 
 ## 为什么删
 

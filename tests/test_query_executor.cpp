@@ -12076,7 +12076,6 @@ TEST_F(QueryExecutorTest, PatternComprehensionTwoWeightsOverOnePathPrefix) {
     const std::string plan = getExplainPlanText(*executor_, kTwoComprehensionWeightsQuery);
     ASSERT_FALSE(plan.empty());
     EXPECT_NE(plan.find("PatternComprehensionApply"), std::string::npos) << plan;
-    EXPECT_EQ(plan.find("PatternComprehensionFork"), std::string::npos) << plan;
 
     auto result = execSync(*executor_, kTwoComprehensionWeightsQuery);
     ASSERT_TRUE(result.error.empty()) << result.error;

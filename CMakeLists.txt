@@ -342,7 +342,6 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/remove_physical_op.cpp
     src/query/physical_plan/operator/semi_join_physical_op.cpp
     src/query/physical_plan/operator/pattern_comprehension_apply_physical_op.cpp
-    src/query/physical_plan/operator/pattern_comprehension_fork_physical_op.cpp
     src/query/physical_plan/operator/set_physical_op.cpp
     src/query/physical_plan/operator/singleton_physical_op.cpp
     src/query/physical_plan/operator/skip_physical_op.cpp

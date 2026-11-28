@@ -105,7 +105,8 @@
   `rewritePatternComprehensionAnchorShare`）与 physical 的两处调用。删除依据是同二进制 A/B：
   该重写在其唯一生产形状 c14 上 **0 ms**（781.1 vs 784.4 ms，行数 12 不变），因为
   `CorrelatedVertexProbe` 已把每个 comprehension 的 anchor 展开变成按行探针，共享 anchor
-  不再节省扫描；同时 `PatternComprehensionFork` 不再被任何生产者创建。
+  不再节省扫描；也不再有生产者需要 `PatternComprehensionFork`，其 logical/physical 操作符
+  与全部管线（variant、memo copyIn/copyOut、LogProp、requirements、PE、lowering）一并删除。
 - **B2 HashJoin build 侧/预算归位（完成）**：`PhysicalExpr`/`ChosenPlan` 增加 `build_left`；
   `ImplHashJoinRule` 产出 build-left/right 两个候选；`findLocalCost(HashJoin)` 按 build 侧
   定价（build 行数 × 1.1 内存溢价 + probe 行数），并把预算作为候选可行性（build 超过

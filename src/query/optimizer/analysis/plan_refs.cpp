@@ -18,7 +18,6 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_set_op.hpp"
@@ -179,13 +178,6 @@ PlanRefIndex collectPlanRefs(const binder::BoundLogicalOperator& root) {
                     return;
                 recurse(v->left);
                 recurse(v->right);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (!v)
-                    return;
-                recurse(v->left);
-                recurse(v->anchor);
-                for (const auto& branch : v->branches)
-                    recurse(branch);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
                 if (v)
                     recurse(v->anchor);

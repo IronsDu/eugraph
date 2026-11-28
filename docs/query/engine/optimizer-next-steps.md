@@ -14,7 +14,7 @@
 > - **B2**（HashJoin build 侧/预算）已归位：build 侧是候选属性，预算由成本模型排除；
 > - **P4**（2026-11-28）：删除 `post_cbo/`（shared-anchor fork 重写实测 0 ms，证据见
 >   residue audit D2）；`planBound`/`planChosen` 不再有 post-CBO 改写。B3 的阻塞结论已更正
->   （probe 不依赖 fork），可独立重做；`PatternComprehensionFork` 操作符已无生产者，待清理；
+>   （probe 不依赖 fork），可独立重做；`PatternComprehensionFork` 操作符与其 physical op 已删除；
 > - 剩余：C1/C2（PE 物化边界）、E1（join-key descriptor）——见 `physical-planner-residue-audit.md`。
 > - 无标签目标变量的索引覆盖判定仍缺元数据（见 P4）。
 > - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
@@ -30,7 +30,7 @@
 | P1 | 删除 pre-memo `applyIndexAccessPaths` 调用；applier 移出 `analysis/`，只由 `GenerateIndexScanRule` 使用 | `rules/logical/generate_index_scan` | **完成** |
 | P2 | D1 端点折叠从 normalization 移到 **binder**（binder 直接生成 bound dst 形态，不再造 Filter 再折叠）；probe 标志作为策略标注/后续规则 | `planner/binder` | **完成**（probe 由 optimizer 标注；Impl 候选待 P3 统计） |
 | P3 | `ShortestPathBatch` 策略标志改为 Impl 候选 + 成本（B2 模式）；`JoinCondition` 提取保留为语义规范化（不选择，只把等值谓词挂到 join_conditions）并写入契约 | `rules/physical` + `normalization` | **完成**（属性已归位；成本比较待统计：batch 收益取决于 source NDV，无统计时不编造第二候选） |
-| P4 | 停止扩充 `post_cbo` 并按计划移除：anchor share 要么成为 logical rule，要么删除；B3 probe 随之重新设计 | `rules/logical`（或删除） | **完成（删除）**：A/B 实测 0 ms，重写与 post_cbo 目录删除；Fork 操作符待清理，B3 待重做 |
+| P4 | 停止扩充 `post_cbo` 并按计划移除：anchor share 要么成为 logical rule，要么删除；B3 probe 随之重新设计 | `rules/logical`（或删除） | **完成（删除）**：A/B 实测 0 ms，重写、post_cbo 目录与 Fork 操作符管线全部删除；B3 待重做 |
 | P5 | C1/C2（PE 物化边界 → PhysProp/enforcer）、E1（join-key descriptor）；B3 可在 P4 后重做（阻塞已解除） | optimizer | 待做 |
 
 ## 1. 目标边界

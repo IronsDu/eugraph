@@ -90,6 +90,9 @@ neo4j 也是 89k 次关系展开，但邻接/属性内联在 node/rel record 里
 可做：语句内共享邻居缓存（跨 Expand 实例，按 (dir, edge labels, dst labels) 分组），
 预计再省 ~10–15 ms；彻底做法是把两个 PC 的公共前缀做 CSE/去相关 join，可到 ~50 ms。
 
+> **2026-11-28 注**：该 fork 重写已在 P4 删除（实测 0 ms；详见
+> [anchor-sharing 删除记录](../query/engine/pattern-comprehension-anchor-sharing.md)）。以下为历史记录。
+>
 > **2026-11-10 已落地（计划层，非缓存）**：`PatternComprehensionFork` 把两个 PC 的
 > 公共前缀提升为 fork 的共享 anchor（anchor 行物化一次、两个 branch 消费）。
 > 随后同一轮里又修掉三处按行 IO：端点 id 提升成列、`b.id` 合并读取去重、

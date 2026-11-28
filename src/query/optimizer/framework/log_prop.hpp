@@ -107,12 +107,6 @@ private:
     LogProp derivePatternComprehensionApply(const binder::BoundPatternComprehensionApplyOp& op, const LogProp& left,
                                             const LogProp& /*right*/) const;
     LogProp deriveUnion(const binder::BoundUnionOp& op, const LogProp& left, const LogProp& right) const;
-    /// Fork: one output row per `left` row (the anchor and the branches are
-    /// lateral), schema = left columns + one LIST column per branch output.
-    /// `input_lps` is [left, anchor, branches...]; only `left` shapes the
-    /// output, the anchor/branch inputs are consumed per row.
-    LogProp derivePatternComprehensionFork(const binder::BoundPatternComprehensionForkOp& op,
-                                           const std::vector<LogProp>& input_lps) const;
     /// Probe leaf: index scan over the target label, then one edge step back to
     /// the source (join-key) variable. Expands the probe's own schema.
     LogProp deriveIndexProbe(const binder::BoundIndexProbeOp& op) const;

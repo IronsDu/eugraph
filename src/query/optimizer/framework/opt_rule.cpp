@@ -36,7 +36,6 @@ OptNodeType nodeTypeFromVariantIndex(size_t index) {
         OptNodeType::Call,                      // 26
         OptNodeType::Foreach,                   // 27
         OptNodeType::PathCount,                 // 28
-        OptNodeType::PatternComprehensionFork,  // 29
         OptNodeType::IndexJoin,                 // 30
         OptNodeType::IndexProbe,                // 31
         OptNodeType::IndexProbeJoin             // 32
