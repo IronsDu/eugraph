@@ -7,8 +7,9 @@
 >   已归位到 optimizer（2026-11-28）；
 > - **B1**（join 形状兜底）已删除：CBO 的 join_conditions + tag 决定算法；
 > - **B2**（HashJoin build 侧/预算）已归位：build 侧是候选属性，预算由成本模型排除；
-> - 剩余：D2（PC anchor share 仍 post-CBO）、C1/C2（PE 物化边界）、E1（join-key descriptor）
->   ——见 `physical-planner-residue-audit.md`。
+> - D2 部分完成：post-CBO 重写策略收口到 `optimizer::applyPostCboRewrites`（触发点仍在
+>   materialization 边界，完整前移与 C1/P2 绑定）；
+> - 剩余：C1/C2（PE 物化边界）、E1（join-key descriptor）——见 `physical-planner-residue-audit.md`。
 > - 无标签目标变量的索引覆盖判定仍缺元数据（见 P4）。
 > - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
 

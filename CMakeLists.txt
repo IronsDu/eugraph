@@ -381,6 +381,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/rules/logical/edge_uniqueness_pushdown.cpp
     src/query/optimizer/rules/logical/path_count_fusion.cpp
     src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp
+    src/query/optimizer/post_cbo/post_cbo_finalize.cpp
     src/query/optimizer/rules/logical/join_commute.cpp
     src/query/optimizer/rules/logical/join_associate.cpp
     src/query/optimizer/normalization/plan_normalizations.cpp

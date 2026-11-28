@@ -11,7 +11,10 @@
 namespace eugraph {
 namespace optimizer {
 
-/// Whole-plan reference index over a bound logical plan.
+/// Plan-wide reference/guard facts over a bound logical plan: whole-tree
+/// reference counts, correlated-variable provenance, endpoint-equality
+/// matchers, and write-operator presence. Consumed by pre-CBO normalization
+/// and by lowering guards; nothing here decides a plan.
 ///
 /// `complete` is false when the walk meets an operator whose expression fields
 /// it does not enumerate (write ops, CALL, ...); callers that must not miss a

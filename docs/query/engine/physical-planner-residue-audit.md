@@ -55,7 +55,7 @@
 | # | 函数 / 位置 | 行为 | 目标归属 |
 |---|---|---|---|
 | D1 | ~~`rewriteDstBoundExpandFilters`~~ | 把 `id(dst)=id(saved)` 折进 Expand / 索引过滤。**已迁出**：CBO 前的 normalization pass `FoldExpandEndpointFilter`（`optimizer/normalization`），CBO 看到最终形状；因 CBO 的 FilterPushdown 可能在端点等式与 Expand 之间插入 edge-uniqueness 过滤，pass 会穿透"不引用 dst"的 Filter 链。physical 只 lowering 已折叠的 Expand | 已完成（normalization） |
-| D2 | `planChosen` 里调用 `optimizer::rewritePatternComprehensionAnchorShare` | post-CBO 计划重写由 physical 路径触发 | optimizer（提取 ChosenPlan 前） |
+| D2 | `planChosen`/`planBound` 调用 `optimizer::rewritePatternComprehensionAnchorShare` | post-CBO 计划重写由 physical 路径触发。**部分完成**：重写策略收口到 `optimizer::applyPostCboRewrites`（`optimizer/post_cbo/finalize`），physical 只调用这一个固定入口、不再选择/排列重写；完整前移到 CBO 前需要 `PatternComprehensionApply` 成为 memo/CBO 算子，或把 chosen plan 物化 + slot 分配迁入 optimizer（与 P2/C1 耦合） | optimizer（materialization 边界之后继续前移） |
 
 ### E. 语义反解重复（P1.3 遗留）
 
@@ -93,6 +93,11 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
+- **D2 post-CBO 重写策略收口（部分完成）**：新增
+  `optimizer/post_cbo/post_cbo_finalize`（`applyPostCboRewrites`），physical 的
+  `planBound`/`planChosen` 只调用这个固定入口，不再直接决定 anchor-share 重写；
+  `PatternComprehensionApply` 目前没有 CBO impl 规则，重写仍发生在 materialization
+  边界（slot 分配在 physical）——完整前移与 P2/C1 绑定，已记录。
 - **B2 HashJoin build 侧/预算归位（完成）**：`PhysicalExpr`/`ChosenPlan` 增加 `build_left`；
   `ImplHashJoinRule` 产出 build-left/right 两个候选；`findLocalCost(HashJoin)` 按 build 侧
   定价（build 行数 × 1.1 内存溢价 + probe 行数），并把预算作为候选可行性（build 超过
