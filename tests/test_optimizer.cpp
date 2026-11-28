@@ -2563,6 +2563,26 @@ TEST(PhysicalExprTest, HashAndEqualityIncludeEnricherFields) {
     EXPECT_FALSE(equalPhysicalExpr(a, d));
 }
 
+TEST(PhysicalExprTest, BatchShortestPathIsPartOfCandidateIdentity) {
+    PhysicalExpr plain;
+    plain.tag = PhysicalOpTag::VarLenExpand;
+    plain.source = makeLabelScan("a", 0);
+
+    PhysicalExpr batched = clonePhysicalExpr(plain);
+    batched.batch_shortest_path = true;
+
+    // Two candidates that differ only in the strategy must stay distinct in the
+    // memo (same lesson as the VLE allow-set fields: a bool missing from
+    // hash/eq silently dedups two different execution strategies).
+    EXPECT_NE(hashPhysicalExpr(plain), hashPhysicalExpr(batched));
+    EXPECT_FALSE(equalPhysicalExpr(plain, batched));
+
+    PhysicalExpr copy = clonePhysicalExpr(batched);
+    EXPECT_EQ(hashPhysicalExpr(batched), hashPhysicalExpr(copy));
+    EXPECT_TRUE(equalPhysicalExpr(batched, copy));
+    EXPECT_TRUE(copy.batch_shortest_path);
+}
+
 TEST(PhysicalExprTest, ClonePreservesEnricherFields) {
     PhysicalExpr src;
     src.tag = PhysicalOpTag::EdgeEnrich;
@@ -3064,24 +3084,35 @@ TEST(NormalizationTest, ExtractsEqualityJoinConditionAndKeepsFilter) {
     EXPECT_FALSE(out_filter->predicate.valueless_by_exception());
 }
 
-TEST(NormalizationTest, MarksBoundedShortestPathBatch) {
-    auto vle = std::make_unique<BoundVarLenExpandOp>();
-    vle->src_variable = "a";
-    vle->dst_variable = "b";
-    vle->edge_label_ids = {EdgeLabelId{7}};
-    vle->shortest_path = true;
-    vle->all_shortest_paths = false;
-    vle->max_hops = 3;
-    vle->child = makeLabelScan("a", 0);
-    BoundLogicalOperator root(std::move(vle));
+// P3: the bounded shortestPath batch strategy is a ChosenPlan attribute emitted
+// by ImplVarLenExpandRule, not a logical flag set by a normalization pass.
+TEST(ImplRuleTest, VarLenExpandMarksOnlyBoundedShortestPathBatch) {
+    auto expect_batch = [](bool shortest, bool all_shortest, int64_t max_hops, bool expected) {
+        auto vle = std::make_unique<BoundVarLenExpandOp>();
+        vle->src_variable = "a";
+        vle->dst_variable = "b";
+        vle->edge_label_ids = {EdgeLabelId{7}};
+        vle->shortest_path = shortest;
+        vle->all_shortest_paths = all_shortest;
+        vle->max_hops = max_hops;
+        vle->child = makeLabelScan("a", 0);
+        BoundLogicalOperator root(std::move(vle));
 
-    NormalizationContext ctx;
-    ShortestPathBatchNormalization pass;
-    pass.apply(root, ctx);
+        Memo memo;
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+        ImplVarLenExpandRule rule;
+        auto subs = rule.substitute(expr, memo);
+        ASSERT_EQ(subs.size(), 1u);
+        EXPECT_EQ(subs[0]->physOp().tag, PhysicalOpTag::VarLenExpand);
+        EXPECT_EQ(subs[0]->physOp().batch_shortest_path, expected);
+    };
 
-    auto& out = std::get<std::unique_ptr<BoundVarLenExpandOp>>(root);
-    ASSERT_NE(out, nullptr);
-    EXPECT_TRUE(out->batch_shortest_path);
+    expect_batch(/*shortest=*/true, /*all_shortest=*/false, 3, true);
+    expect_batch(true, false, -1, false); // unbounded: the forward BFS is not depth-capped
+    expect_batch(true, false, 9, false);  // deeper than the operator's batch contract
+    expect_batch(true, true, 3, false);   // allShortestPaths has its own algorithm
+    expect_batch(false, false, 3, false); // plain variable-length expand
 }
 
 TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {

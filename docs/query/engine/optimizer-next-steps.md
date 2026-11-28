@@ -7,6 +7,9 @@
 >   已归位到 optimizer（2026-11-28）；
 > - **P2**（2026-11-28）：correlated 端点由 binder 直接生成 bound dst 形态（不再造 Filter 再
 >   折叠）；probe 只是 optimizer 的 `AnnotateCorrelatedEndpointProbe` 标注，形状/标注分离；
+> - **P3**（2026-11-28）：`ShortestPathBatch` 策略从 logical 字段改为 `ChosenPlan` 属性
+>   （`ImplVarLenExpandRule` 产出，lowering 只转发）；`JoinCondition` 提取写入「语义规范化、
+>   不做选择」契约；probe/batch 的成本化等度数/NDV 统计；
 > - **B1**（join 形状兜底）已删除：CBO 的 join_conditions + tag 决定算法；
 > - **B2**（HashJoin build 侧/预算）已归位：build 侧是候选属性，预算由成本模型排除；
 > - D2 部分完成：post-CBO 重写策略收口到 `optimizer::applyPostCboRewrites`（触发点仍在
@@ -25,7 +28,7 @@
 |---|---|---|---|
 | P1 | 删除 pre-memo `applyIndexAccessPaths` 调用；applier 移出 `analysis/`，只由 `GenerateIndexScanRule` 使用 | `rules/logical/generate_index_scan` | **完成** |
 | P2 | D1 端点折叠从 normalization 移到 **binder**（binder 直接生成 bound dst 形态，不再造 Filter 再折叠）；probe 标志作为策略标注/后续规则 | `planner/binder` | **完成**（probe 由 optimizer 标注；Impl 候选待 P3 统计） |
-| P3 | `ShortestPathBatch` 策略标志改为 Impl 候选 + 成本（B2 模式）；`JoinCondition` 提取保留为语义规范化（不选择，只把等值谓词挂到 join_conditions）并写入契约 | `rules/physical` + `normalization` | 待做 |
+| P3 | `ShortestPathBatch` 策略标志改为 Impl 候选 + 成本（B2 模式）；`JoinCondition` 提取保留为语义规范化（不选择，只把等值谓词挂到 join_conditions）并写入契约 | `rules/physical` + `normalization` | **完成**（属性已归位；成本比较待统计：batch 收益取决于 source NDV，无统计时不编造第二候选） |
 | P4 | 停止扩充 `post_cbo` 并按计划移除：anchor share 要么成为 logical rule（需 PC Apply/Fork 进 memo：LogProp、Impl、copyIn/copyOut、requirements），要么删除；B3 probe 随之重新设计 | `rules/logical`（或删除） | 待做 |
 | P5 | C1/C2（PE 物化边界 → PhysProp/enforcer）、E1（join-key descriptor）；B3 依赖 P4 | optimizer | 待做 |
 

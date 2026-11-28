@@ -2078,6 +2078,8 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
         if (join && *join)
             ctx.chosen_join_attrs[join->get()] = PlanContext::ChosenJoinAttr{chosen.tag, chosen.build_left};
     }
+    if (auto* vle = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&result); vle && *vle)
+        ctx.chosen_varlen_batch[vle->get()] = chosen.batch_shortest_path;
     return result;
 }
 
@@ -2956,12 +2958,18 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     if (v.shortest_path || v.all_shortest_paths) {
+                        // The batch strategy is a ChosenPlan attribute produced by
+                        // ImplVarLenExpandRule; lowering only forwards it (RBO has
+                        // no chosen plan and therefore keeps the per-row default).
+                        bool batch_shortest_path = false;
+                        if (auto it = ctx.chosen_varlen_batch.find(&v); it != ctx.chosen_varlen_batch.end())
+                            batch_shortest_path = it->second;
                         auto result = std::make_unique<ShortestPathPhysicalOp>(
                             v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops,
                             v.max_hops, store, std::move(child_schema), std::move(child_op), v.path_variable,
                             v.path_slot_id, v.all_shortest_paths, v.dst_label_ids, v.dst_label_missing,
                             v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value,
-                            v.batch_shortest_path);
+                            batch_shortest_path);
                         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                               std::move(output_types), TupleSlotLayout{}};
                         plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);

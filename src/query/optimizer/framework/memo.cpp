@@ -520,6 +520,7 @@ std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp
     auto plan = std::make_unique<ChosenPlan>();
     plan->tag = expr.physOp().tag;
     plan->build_left = expr.physOp().build_left;
+    plan->batch_shortest_path = expr.physOp().batch_shortest_path;
     plan->op = cloneBoundLogicalOperator(expr.physOp().source);
     plan->enrich_variable = expr.physOp().enrich_variable;
     plan->enrich_output = expr.physOp().output_mat;
@@ -1021,7 +1022,6 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
                 c->shortest_path = val->shortest_path;
                 c->all_shortest_paths = val->all_shortest_paths;
-                c->batch_shortest_path = val->batch_shortest_path;
                 c->edge_variable = val->edge_variable;
                 c->edge_column_index = val->edge_column_index;
                 c->edge_slot_id = val->edge_slot_id;

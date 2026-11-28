@@ -46,6 +46,9 @@ struct PlanContext {
         bool build_left = false;
     };
     std::unordered_map<const binder::BoundBinaryJoinOp*, ChosenJoinAttr> chosen_join_attrs;
+    /// CBO-chosen VarLenExpand strategy attributes (bounded shortestPath batch),
+    /// keyed by the materialized logical node address. Lowering only forwards them.
+    std::unordered_map<const binder::BoundVarLenExpandOp*, bool> chosen_varlen_batch;
     /// 写语句的本地可变 schema 副本（DML 隐式更新用）；只读语句为 null。
     std::unordered_map<LabelId, LabelDef>* mutable_label_defs = nullptr;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>* mutable_edge_label_defs = nullptr;

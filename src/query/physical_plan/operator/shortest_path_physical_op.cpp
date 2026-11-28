@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "query/dataset/row.hpp"
+#include "query/physical_plan/explain/explain.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -11,6 +12,16 @@
 
 namespace eugraph {
 namespace compute {
+
+std::atomic<uint64_t> ShortestPathPhysicalOp::batch_group_count_{0};
+
+uint64_t ShortestPathPhysicalOp::batchGroupCount() noexcept {
+    return batch_group_count_.load(std::memory_order_relaxed);
+}
+
+void ShortestPathPhysicalOp::resetBatchGroupCount() noexcept {
+    batch_group_count_.store(0, std::memory_order_relaxed);
+}
 
 namespace {
 
@@ -88,6 +99,25 @@ std::string ShortestPathPhysicalOp::toString() const {
     std::string mode = all_shortest_paths_ ? "allShortestPaths" : "shortestPath";
     return mode + "(src=" + src_var_ + ", dst=" + dst_var_ + ", hops=[" + std::to_string(min_hops_) + ".." +
            std::to_string(max_hops_) + "])";
+}
+
+void ShortestPathPhysicalOp::explain(ExplainNode& node, const ExplainContext& ctx) const {
+    node.operator_name = all_shortest_paths_ ? "allShortestPaths" : "shortestPath";
+    node.details.push_back("src=" + explainVariableName(src_var_));
+    node.details.push_back("dst=" + explainVariableName(dst_var_));
+    if (label_filters_ && !label_filters_->empty())
+        node.details.push_back("labels=[" + explainEdgeLabelList(*label_filters_, ctx) + "]");
+    else
+        node.details.push_back("labels=<any>");
+    node.details.push_back("hops=[" + std::to_string(min_hops_) + ".." + std::to_string(max_hops_) + "]");
+    const char* dir = direction_ == cypher::RelationshipDirection::LEFT_TO_RIGHT
+                          ? "OUT"
+                          : (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT ? "IN" : "ANY");
+    node.details.push_back(std::string("direction=") + dir);
+    if (!dst_label_ids_.empty())
+        node.details.push_back("dstLabels=[" + explainLabelList(dst_label_ids_, ctx) + "]");
+    if (batch_shortest_path_)
+        node.details.push_back("batch=set");
 }
 
 void ShortestPathPhysicalOp::deriveOutputLayout(const TupleSlotLayout& input_layout) {
@@ -572,6 +602,7 @@ folly::coro::AsyncGenerator<DataChunk> ShortestPathPhysicalOp::executeChunk() {
             for (const auto& [start, rows] : groups) {
                 if (rows.size() < 2)
                     continue;
+                batch_group_count_.fetch_add(1, std::memory_order_relaxed);
                 std::vector<VertexId> targets;
                 targets.reserve(rows.size());
                 for (size_t row : rows)

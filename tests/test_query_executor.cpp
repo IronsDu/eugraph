@@ -9,6 +9,7 @@
 #include "query/executor/query_executor.hpp"
 #include "query/physical_plan/operator/expand_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
+#include "query/physical_plan/operator/shortest_path_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "storage/data/async_graph_data_store.hpp"
@@ -1036,6 +1037,48 @@ TEST_F(QueryExecutorTest, AllShortestPathsBoundEndpoints) {
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+}
+
+TEST_F(QueryExecutorTest, ShortestPathBoundedSearchMarksBatchStrategy) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'bp1'})-[:KNOWS]->(b:Person {name: 'bp2'}) "
+                                     "-[:KNOWS]->(c:Person {name: 'bp3'}) RETURN 1")
+                    .error.empty());
+    // Bounded shortestPath carries the batch strategy as a ChosenPlan attribute;
+    // the operator only forwards it (no shape inference).
+    const std::string bounded = "MATCH (a:Person {name: 'bp1'}), (c:Person {name: 'bp3'}) "
+                                "MATCH p = shortestPath((a)-[:KNOWS*1..3]-(c)) RETURN length(p) AS n";
+    const std::string plan = getExplainPlanText(*executor_, bounded);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("batch=set"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, bounded);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+
+    // Several destinations from the same start actually take the shared-BFS
+    // branch; the counter proves the attribute reached execution, not just EXPLAIN.
+    const std::string multi = "MATCH (a:Person {name: 'bp1'}), (c:Person) "
+                              "WHERE c.name IN ['bp2', 'bp3'] "
+                              "MATCH p = shortestPath((a)-[:KNOWS*1..3]-(c)) "
+                              "RETURN c.name AS name, length(p) AS n ORDER BY name";
+    ShortestPathPhysicalOp::resetBatchGroupCount();
+    auto multi_result = execSync(*executor_, multi);
+    ASSERT_TRUE(multi_result.error.empty()) << multi_result.error;
+    ASSERT_EQ(multi_result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(multi_result.rows[0][0]), "bp2");
+    EXPECT_EQ(std::get<int64_t>(multi_result.rows[0][1]), 1);
+    EXPECT_EQ(std::get<std::string>(multi_result.rows[1][0]), "bp3");
+    EXPECT_EQ(std::get<int64_t>(multi_result.rows[1][1]), 2);
+    EXPECT_GT(ShortestPathPhysicalOp::batchGroupCount(), 0u) << "batch BFS branch was not exercised";
+
+    // allShortestPaths has its own algorithm: the batch attribute must stay off.
+    const std::string all = "MATCH (a:Person {name: 'bp1'}), (c:Person {name: 'bp3'}) "
+                            "MATCH p = allShortestPaths((a)-[:KNOWS*1..3]-(c)) RETURN length(p) AS n";
+    const std::string all_plan = getExplainPlanText(*executor_, all);
+    ASSERT_FALSE(all_plan.empty());
+    EXPECT_EQ(all_plan.find("batch=set"), std::string::npos) << all_plan;
 }
 
 TEST_F(QueryExecutorTest, MatchPropertyMapSubscriptExpression) {

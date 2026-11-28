@@ -134,19 +134,6 @@ void extractJoinConditions(binder::BoundLogicalOperator& op) {
     }
 }
 
-void markShortestPathBatch(binder::BoundLogicalOperator& op) {
-    std::visit(
-        [](auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v && v->shortest_path && !v->all_shortest_paths && v->max_hops >= 0 && v->max_hops <= 8)
-                    v->batch_shortest_path = true;
-            }
-        },
-        op);
-    forEachLogicalChild(op, [](binder::BoundLogicalOperator& child) { markShortestPathBatch(child); });
-}
-
 bool subtreeNeedsConservativeJoinOrder(const binder::BoundLogicalOperator& op) {
     bool unsafe = false;
     std::visit(
@@ -217,10 +204,6 @@ void AnnotateCorrelatedEndpointProbeNormalization::apply(binder::BoundLogicalOpe
 
 void JoinConditionNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext&) const {
     extractJoinConditions(root);
-}
-
-void ShortestPathBatchNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext&) const {
-    markShortestPathBatch(root);
 }
 
 void JoinSafetyNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext& ctx) const {

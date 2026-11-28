@@ -42,9 +42,15 @@ See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
 - `framework/` — memo/tasks/rules/CBO.
 - `analysis/` — `requirement_collector` + materialization model.
 - `extraction/` — `projection_extraction` (PEPlan, slot and expression lowering).
-- `normalization/` — `NormalizationPipeline`：`JoinConditionNormalization`
-  （Filter→Join 等值提示）、`ShortestPathBatchNormalization`、`JoinSafetyNormalization`；
+- `normalization/` — `NormalizationPipeline`：`JoinConditionNormalization`、
+  `JoinSafetyNormalization`、`AnnotateCorrelatedEndpointProbeNormalization`；
   这些是 memo 前的不变量/标注，不参与 alternative 搜索。
+  **契约**：`JoinConditionNormalization` 只做语义规范化——把 Filter 下 Cross/Inner join 的
+  等值谓词挂到 `join_conditions` 并保留 Filter 残差，**不选择 join 算法、不比较成本**；
+  `join_conditions` 是 CBO 的事实输入，算法/tag 由 Impl 规则产出、由成本模型选 winner。
+  **策略属性**：会改变执行策略但依赖运行期数据的标志（`build_left`、`batch_shortest_path`）
+  是 `PhysicalExpr`/`ChosenPlan` 属性，由 Impl 规则产出、lowering 只转发；logical operator
+  不再携带策略字段（P3 把 `batch_shortest_path` 从 `BoundVarLenExpandOp` 移出）。
 - `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`,
   `PathCountFusion`, `PatternComprehensionAnchorShare`；不包含按 LDBC
   label/关系名特判的规则。

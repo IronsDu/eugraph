@@ -51,7 +51,6 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     // Physical lowering reads the flag and never decides it.
     normalization.add(std::make_unique<AnnotateCorrelatedEndpointProbeNormalization>());
     normalization.add(std::make_unique<JoinConditionNormalization>());
-    normalization.add(std::make_unique<ShortestPathBatchNormalization>());
     NormalizationContext normalization_ctx;
     normalization.run(plan.root, normalization_ctx);
     memo_.setCommuteSafe(normalization_ctx.commute_safe);

@@ -12,6 +12,7 @@ uint64_t hashPhysicalExpr(const PhysicalExpr& phys) {
     // OP::hash + M_EXPR::hash pattern.
     uint64_t h = static_cast<uint64_t>(phys.tag);
     h ^= phys.build_left ? 1u : 0u;
+    h ^= phys.batch_shortest_path ? 2u : 0u;
     h ^= hashBoundLogicalOperator(phys.source);
     h *= 1099511628211ULL; // FNV prime
     h ^= std::hash<std::string>{}(phys.enrich_variable);
@@ -46,6 +47,8 @@ bool equalPhysicalExpr(const PhysicalExpr& a, const PhysicalExpr& b) {
         return false;
     if (a.build_left != b.build_left)
         return false;
+    if (a.batch_shortest_path != b.batch_shortest_path)
+        return false;
     if (a.enrich_variable != b.enrich_variable)
         return false;
     if (a.output_mat != b.output_mat)
@@ -63,6 +66,7 @@ PhysicalExpr clonePhysicalExpr(const PhysicalExpr& src) {
     PhysicalExpr result;
     result.tag = src.tag;
     result.build_left = src.build_left;
+    result.batch_shortest_path = src.batch_shortest_path;
     result.source = cloneBoundLogicalOperator(src.source);
     result.enrich_variable = src.enrich_variable;
     result.output_mat = src.output_mat; // map/set copy

@@ -34,6 +34,9 @@ struct ChosenPlan {
     PhysicalOpTag tag = PhysicalOpTag::NodeScan;
     /// HashJoin only: build side chosen by the optimizer (cost/memory model).
     bool build_left = false;
+    /// VarLenExpand only: bounded shortestPath batch strategy chosen by the
+    /// Impl rule (see PhysicalExpr::batch_shortest_path). Lowering forwards it.
+    bool batch_shortest_path = false;
     binder::BoundLogicalOperator op;
     std::vector<std::unique_ptr<ChosenPlan>> children;
 

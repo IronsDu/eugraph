@@ -4,6 +4,7 @@
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
+#include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 namespace eugraph {
 namespace optimizer {
@@ -20,10 +21,12 @@ namespace optimizer {
 // provide, O_INPUTS inserts an Enricher to bridge the gap.
 // ============================================================
 static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr, Memo& memo, PhysicalOpTag tag,
-                                                                bool build_left = false) {
+                                                                bool build_left = false,
+                                                                bool batch_shortest_path = false) {
     auto phys = std::make_unique<PhysicalExpr>();
     phys->tag = tag;
     phys->build_left = build_left;
+    phys->batch_shortest_path = batch_shortest_path;
     phys->source = cloneBoundLogicalOperator(expr.op);
 
     // Each input must provide what this operator's own expressions need.
@@ -170,7 +173,22 @@ PatternNode ImplVarLenExpandRule::pattern() const {
     return {OptNodeType::VarLenExpand, {{}}};
 }
 std::vector<std::unique_ptr<GroupExpr>> ImplVarLenExpandRule::substitute(GroupExpr& expr, Memo& memo) const {
-    return makePhysicalExpr(expr, memo, PhysicalOpTag::VarLenExpand);
+    // Bounded shortestPath shares one forward BFS among rows whose start vertex
+    // is the same. The strategy is a physical descriptor (ChosenPlan attribute),
+    // no longer a logical field set by a normalization pass: the rule decides
+    // whether the candidate exists, lowering only forwards it.
+    //
+    // The depth bound is part of the operator contract (shortestPathsFromSource
+    // refuses deeper searches), so a bounded search is the only eligible shape.
+    // Batch vs per-row is a real trade-off that depends on how many rows share a
+    // start (source NDV) and on the frontier growth; without those statistics a
+    // cost comparison would be fabricated, so the rule emits this candidate only
+    // and the second candidate + cost arrive with the P3 statistics.
+    bool batch = false;
+    if (const auto* vle = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&expr.op); vle && *vle) {
+        batch = (*vle)->shortest_path && !(*vle)->all_shortest_paths && (*vle)->max_hops >= 0 && (*vle)->max_hops <= 8;
+    }
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::VarLenExpand, /*build_left=*/false, batch);
 }
 
 PatternNode ImplSortRule::pattern() const {
