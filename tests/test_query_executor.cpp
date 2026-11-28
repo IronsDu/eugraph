@@ -9,6 +9,7 @@
 #include "query/executor/query_executor.hpp"
 #include "query/physical_plan/operator/expand_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
+#include "query/physical_plan/operator/shortest_path_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/physical_plan/query_context.hpp"
 #include "storage/data/async_graph_data_store.hpp"
@@ -1038,6 +1039,48 @@ TEST_F(QueryExecutorTest, AllShortestPathsBoundEndpoints) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
 }
 
+TEST_F(QueryExecutorTest, ShortestPathBoundedSearchMarksBatchStrategy) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name: 'bp1'})-[:KNOWS]->(b:Person {name: 'bp2'}) "
+                                     "-[:KNOWS]->(c:Person {name: 'bp3'}) RETURN 1")
+                    .error.empty());
+    // Bounded shortestPath carries the batch strategy as a ChosenPlan attribute;
+    // the operator only forwards it (no shape inference).
+    const std::string bounded = "MATCH (a:Person {name: 'bp1'}), (c:Person {name: 'bp3'}) "
+                                "MATCH p = shortestPath((a)-[:KNOWS*1..3]-(c)) RETURN length(p) AS n";
+    const std::string plan = getExplainPlanText(*executor_, bounded);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("batch=set"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, bounded);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+
+    // Several destinations from the same start actually take the shared-BFS
+    // branch; the counter proves the attribute reached execution, not just EXPLAIN.
+    const std::string multi = "MATCH (a:Person {name: 'bp1'}), (c:Person) "
+                              "WHERE c.name IN ['bp2', 'bp3'] "
+                              "MATCH p = shortestPath((a)-[:KNOWS*1..3]-(c)) "
+                              "RETURN c.name AS name, length(p) AS n ORDER BY name";
+    ShortestPathPhysicalOp::resetBatchGroupCount();
+    auto multi_result = execSync(*executor_, multi);
+    ASSERT_TRUE(multi_result.error.empty()) << multi_result.error;
+    ASSERT_EQ(multi_result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(multi_result.rows[0][0]), "bp2");
+    EXPECT_EQ(std::get<int64_t>(multi_result.rows[0][1]), 1);
+    EXPECT_EQ(std::get<std::string>(multi_result.rows[1][0]), "bp3");
+    EXPECT_EQ(std::get<int64_t>(multi_result.rows[1][1]), 2);
+    EXPECT_GT(ShortestPathPhysicalOp::batchGroupCount(), 0u) << "batch BFS branch was not exercised";
+
+    // allShortestPaths has its own algorithm: the batch attribute must stay off.
+    const std::string all = "MATCH (a:Person {name: 'bp1'}), (c:Person {name: 'bp3'}) "
+                            "MATCH p = allShortestPaths((a)-[:KNOWS*1..3]-(c)) RETURN length(p) AS n";
+    const std::string all_plan = getExplainPlanText(*executor_, all);
+    ASSERT_FALSE(all_plan.empty());
+    EXPECT_EQ(all_plan.find("batch=set"), std::string::npos) << all_plan;
+}
+
 TEST_F(QueryExecutorTest, MatchPropertyMapSubscriptExpression) {
     // LDBC update-1 shape: a MATCH property map value that is a list subscript
     // (`{id: s[0]}`) must be cloned/bound as an expression, not degraded to an
@@ -2064,12 +2107,10 @@ TEST_F(QueryExecutorTest, UnwindMatchPlansCorrelatedIndexProbe) {
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {id: 7}), (b:Person {id: 8})").error.empty());
     ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_person_id_probe FOR (n:Person) ON (n.id)").error.empty());
 
+    // The per-key index probe used to be a physical-planner rewrite; that access
+    // path is now owned by the optimizer (list-driven probe descriptor + rule,
+    // pending). Keep the semantic contract: duplicates are preserved.
     const std::string query = "UNWIND [7, 8] AS pid MATCH (p:Person {id: pid}) RETURN p.id AS id ORDER BY id";
-    const std::string plan_text = getExplainPlanText(*executor_, query);
-    ASSERT_FALSE(plan_text.empty());
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
-    EXPECT_NE(plan_text.find("Apply"), std::string::npos) << plan_text;
-
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2u);
@@ -2173,11 +2214,6 @@ TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeSupportsStringKeysAndLe
     const std::string query = "UNWIND ['Alice', 'Bob'] AS nm "
                               "MATCH (p:Person {name: nm}) "
                               "RETURN nm AS key, p.id AS id ORDER BY key";
-    const std::string plan_text = getExplainPlanText(*executor_, query);
-    ASSERT_FALSE(plan_text.empty());
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
-    EXPECT_NE(plan_text.find("Apply"), std::string::npos) << plan_text;
-
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2u);
@@ -2200,15 +2236,6 @@ TEST_F(QueryExecutorTest, UnwindMatchCorrelatedIndexProbeHandlesParamsNullAndFal
     });
     const std::unordered_map<std::string, Value> params{{"ids", Value(ids)}};
     const std::string param_query = "UNWIND $ids AS pid MATCH (p:Person {id: pid}) RETURN p.id AS id ORDER BY id";
-    auto explained = execSyncParams(*executor_, "EXPLAIN " + param_query, params);
-    ASSERT_TRUE(explained.error.empty()) << explained.error;
-    std::string plan_text;
-    for (const auto& row : explained.rows) {
-        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
-            plan_text += std::get<std::string>(row[0]) + "\n";
-    }
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos) << plan_text;
-
     auto result = execSyncParams(*executor_, param_query, params);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2u);
@@ -3440,6 +3467,34 @@ TEST_F(QueryExecutorTest, CreateEdgeMaintainsIndex) {
     auto& ev = (*std::get<EdgeValuePtr>(edge_val));
     EXPECT_GT(ev.id, 0u);
     EXPECT_EQ(ev.label_id, edge_label_id);
+}
+
+TEST_F(QueryExecutorTest, EdgePropertyFilterKeepsBoundSource) {
+    // Regression: the physical planner used to replace Filter(Expand) with a
+    // global EdgeIndexScan without checking the Expand's source constraint,
+    // returning every edge of the type instead of the bound source's edges.
+    PropertyDef weight_prop{0, "w", PropertyType::INT64, false, std::nullopt};
+    auto edge_label_id = blockingWait(async_meta_->createEdgeLabel("EL_R", {weight_prop}));
+    ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(edge_label_id)));
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_el_r_w FOR ()-[r:EL_R]-() ON (r.w)").error.empty());
+
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a1:EL_A {name:'a1'})-[:EL_R {w:1}]->(b1:EL_A {name:'b1'}), "
+                                     "(a2:EL_A {name:'a2'})-[:EL_R {w:2}]->(b2:EL_A {name:'b2'})")
+                    .error.empty());
+
+    // Bound source: only a1's edge may pass.
+    auto bound = execSync(*executor_, "MATCH (a:EL_A {name:'a1'})-[r:EL_R]->(b) WHERE r.w > 0 "
+                                      "RETURN count(r) AS c");
+    ASSERT_TRUE(bound.error.empty()) << bound.error;
+    ASSERT_EQ(bound.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(bound.rows[0][0]), 1);
+
+    // Unconstrained source: both edges match the edge-property predicate.
+    auto all = execSync(*executor_, "MATCH ()-[r:EL_R]->(b) WHERE r.w > 0 RETURN count(r) AS c");
+    ASSERT_TRUE(all.error.empty()) << all.error;
+    ASSERT_EQ(all.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(all.rows[0][0]), 2);
 }
 
 TEST_F(QueryExecutorTest, CreateEdgeViolatesUniqueEdgeIndex) {
@@ -5406,6 +5461,75 @@ TEST_F(QueryExecutorTest, ExistsCorrelatedMultiHop) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     // Alice(1) KNOWS Bob(2) KNOWS David(4), Alice(1) KNOWS Charlie(3) KNOWS David(4)
     ASSERT_EQ(result.rows.size(), 1u);
+}
+
+// ── Correlated endpoint binding (P2) ──
+//
+// When the EXISTS chain endpoint is already bound in the outer scope, the binder
+// binds the Expand destination to that correlated column directly (dst=bound):
+// no `Filter(id(__exists_dst_N) == id(__exists_saved_N))` is built and nothing
+// has to fold it afterwards.
+
+TEST_F(QueryExecutorTest, CorrelatedExistsBindsDestination) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    const std::string query = "MATCH (a:Person {name: \"name1\"}), (b:Person) "
+                              "WHERE EXISTS { (a)-[:KNOWS]->(b) } "
+                              "RETURN b.name AS name ORDER BY name";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("probe=set"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("exists_dst"), std::string::npos) << "no fresh destination variable: " << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name2");
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "name3");
+}
+
+TEST_F(QueryExecutorTest, CorrelatedExistsInWriteQueryKeepsBoundDestination) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    const std::string query = "MATCH (a:Person {name: \"name1\"}), (b:Person) "
+                              "WHERE EXISTS { (a)-[:KNOWS]->(b) } "
+                              "SET b.name = \"renamed\"";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    // The shape (dst=bound) is a semantic binding and also holds for writes; the
+    // batch probe assumes a statement-stable snapshot, so the annotation stays off.
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("probe=set"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("exists_dst"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto check = execSync(*executor_, "MATCH (b:Person) WHERE b.name = \"renamed\" RETURN count(b) AS n");
+    ASSERT_TRUE(check.error.empty()) << check.error;
+    ASSERT_EQ(check.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(check.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(check.rows[0][0]), 2);
+}
+
+TEST_F(QueryExecutorTest, CorrelatedExistsIntermediateEndpointIsOneColumn) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    // `m` is both the destination of the first hop and the source of the second.
+    // Binding it to a single column keeps those two roles consistent; the former
+    // fold refused this shape (the destination had two field references, so
+    // renaming it would have left the second hop reading a stale column).
+    const std::string query = "MATCH (a:Person {name: \"name1\"}), (m:Person), (d:Person) "
+                              "WHERE EXISTS { (a)-[:KNOWS]->(m)-[:KNOWS]->(d) } "
+                              "RETURN DISTINCT d.name AS name";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("probe=set"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("exists_dst"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
 }
 
 // ── EXISTS with AND/OR ──
@@ -11067,15 +11191,13 @@ TEST_F(QueryExecutorTest, AllNodeScanStreamsInVidOrderAndDedupsLabels) {
     EXPECT_EQ(idsOf("MATCH (n) RETURN id(n) AS v LIMIT 2").size(), 2u); // LIMIT 能提前结束
 }
 
-// ── complex-12 形状必须落到 IndexScanValues 分支 ──
+// ── complex-12 形状（`tag.id IN collect(...)`）必须保持正确结果 ──
 //
-// `tryPlanListIndexJoin`（physical_planner.cpp）识别 "x.prop IN left.list 且该属性有索引" 的
-// 形状，重写成 Apply(collect(list), HashJoin(IndexScanValues(prop IN list) + 反向 Expand, ...))。
-// 这是 IndexScanValuesPhysicalOp 唯一的构造路径（physical_planner.cpp:1491 置 index_scan_values），
-// 所以用例先断言 EXPLAIN 里确实出现该算子 —— 形状一旦不匹配，测试不能"因为没命中而通过"。
-//
-// 查询取自 LDBC interactive complex-12（参数内联，HAS_TYPE/TagClass 分支简化为 Tag.name 等值
-// 过滤，保持 collect(t.id) → "tag.id IN tags" 的骨架与多跳链不变）。
+// 该形状曾由 physical planner 的 `tryPlanListIndexJoin` 硬编码重写成
+// Apply(collect) + HashJoin(IndexScanValues + 反向 Expand)。按「physical planner 只
+// lowering、优化必须用单一职责 rule 组合」的边界，该物理重写已删除；复现该
+// access path 需要先引入 list-driven probe 的逻辑 descriptor + 规则（下一步）。
+// 本用例保留为语义回归：结果必须与重写版本一致。
 TEST_F(QueryExecutorTest, Complex12ShapePlansIndexScanValues) {
     // (:Person{id:1})-[:KNOWS]-(:Person{id:2})<-[:HAS_CREATOR]-(:Comment{id:10})
     //   -[:REPLY_OF]->(:Post{id:20})-[:HAS_TAG]->(:Tag{id:1, name:'Actor'})
@@ -11112,23 +11234,9 @@ TEST_F(QueryExecutorTest, Complex12ShapePlansIndexScanValues) {
                               "WHERE tag.id IN tags "
                               "RETURN friend.id AS personId, count(DISTINCT comment) AS replyCount";
 
-    auto plan_result = execSync(*executor_, "EXPLAIN " + query);
-    ASSERT_TRUE(plan_result.error.empty()) << plan_result.error;
-    std::string plan_text;
-    for (const auto& row : plan_result.rows) {
-        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
-            plan_text += std::get<std::string>(row[0]) + "\n";
-    }
-    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos)
-        << "complex-12 形状没有落到 IndexScanValues，该算子仍无覆盖：\n"
-        << plan_text;
-    // 反向对照（已实测）：去掉索引 DDL 后计划退化成 Filter → CrossProduct 并让上面这条失败，
-    // 所以断言检验的是"重写是否发生"，不是形状碰巧含某个名字。
-    EXPECT_NE(plan_text.find("HashJoin"), std::string::npos) << plan_text;
-
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
-    ASSERT_EQ(result.rows.size(), 1u) << plan_text;
+    ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2); // friend.id
     EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1); // replyCount
 }
@@ -11900,16 +12008,18 @@ TEST_F(QueryExecutorTest, ProfileCollectsOperatorMetricsAndTree) {
 }
 
 // ============================================================
-// Pattern comprehension / anchor sharing
+// Pattern comprehension: two comprehensions over one path prefix (c14 shape)
 // ============================================================
 
 namespace {
 
 /// LDBC complex-14 shape: two list comprehensions over `rels_in_path`, each
 /// holding a pattern comprehension that differs only in the label of the
-/// `REPLY_OF` destination. The optimizer must collapse both into one
-/// shared-anchor fork.
-constexpr const char* kAnchorShareQuery = R"(
+/// `REPLY_OF` destination. The former shared-anchor fork rewrite was removed
+/// (P4: it measured 0 ms once CorrelatedVertexProbe made each anchor cheap);
+/// this fixture keeps the semantics of the stacked-comprehension plan under
+/// regression.
+constexpr const char* kTwoComprehensionWeightsQuery = R"(
 MATCH path = allShortestPaths((p1:Person {id: 1})-[:KNOWS*0..]-(p2:Person {id: 2}))
 WITH collect(path) AS paths
 UNWIND paths AS path
@@ -11931,7 +12041,7 @@ RETURN reduce(w = 0.0, v IN weight1 | w + v) AS weight1,
 
 } // namespace
 
-TEST_F(QueryExecutorTest, PatternComprehensionAnchorShareIsUsedForSharedPrefix) {
+TEST_F(QueryExecutorTest, PatternComprehensionTwoWeightsOverOnePathPrefix) {
     // Extra labels/edges for the complex-14 pattern.
     auto comment = blockingWait(async_meta_->createLabel("Comment"));
     auto post = blockingWait(async_meta_->createLabel("Post"));
@@ -11963,11 +12073,11 @@ TEST_F(QueryExecutorTest, PatternComprehensionAnchorShareIsUsedForSharedPrefix) 
                                      "(c1)-[:REPLY_OF]->(p1), (c2)-[:REPLY_OF]->(c3)")
                     .error.empty());
 
-    const std::string plan = getExplainPlanText(*executor_, kAnchorShareQuery);
+    const std::string plan = getExplainPlanText(*executor_, kTwoComprehensionWeightsQuery);
     ASSERT_FALSE(plan.empty());
-    EXPECT_NE(plan.find("PatternComprehensionFork"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("PatternComprehensionApply"), std::string::npos) << plan;
 
-    auto result = execSync(*executor_, kAnchorShareQuery);
+    auto result = execSync(*executor_, kTwoComprehensionWeightsQuery);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_EQ(result.rows[0].size(), 2u);
@@ -11977,43 +12087,6 @@ TEST_F(QueryExecutorTest, PatternComprehensionAnchorShareIsUsedForSharedPrefix) 
     ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][1]));
     EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 1.0);
     EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][1]), 0.5);
-}
-
-TEST_F(QueryExecutorTest, PatternComprehensionAnchorShareKeepsPlanWhenPrefixDiffers) {
-    // Same shape, but the two comprehensions disagree on the *first* hop's
-    // destination label, so there is no shared anchor subtree and the rewrite
-    // must leave the plan alone (fail closed).
-    auto comment = blockingWait(async_meta_->createLabel("Comment"));
-    auto post = blockingWait(async_meta_->createLabel("Post"));
-    auto has_creator = blockingWait(async_meta_->createEdgeLabel("HAS_CREATOR"));
-    auto reply_of = blockingWait(async_meta_->createEdgeLabel("REPLY_OF"));
-    ASSERT_NE(comment, INVALID_LABEL_ID);
-    ASSERT_NE(post, INVALID_LABEL_ID);
-    ASSERT_NE(has_creator, INVALID_EDGE_LABEL_ID);
-    ASSERT_NE(reply_of, INVALID_EDGE_LABEL_ID);
-    blockingWait(async_data_->createLabel(comment));
-    blockingWait(async_data_->createLabel(post));
-    blockingWait(async_data_->createEdgeLabel(has_creator));
-    blockingWait(async_data_->createEdgeLabel(reply_of));
-
-    const std::string query = R"(
-MATCH path = allShortestPaths((p1:Person {id: 1})-[:KNOWS*0..]-(p2:Person {id: 2}))
-WITH collect(path) AS paths
-UNWIND paths AS path
-WITH path, relationships(path) AS rels_in_path
-WITH
-  [r IN rels_in_path | reduce(w = 0.0, v IN [
-      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
-      WHERE a.id = startNode(r).id | 1.0] | w + v)] AS weight1,
-  [r IN rels_in_path | reduce(w = 0.0, v IN [
-      (a:Person)<-[:HAS_CREATOR]-(:Post)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person)
-      WHERE a.id = startNode(r).id | 0.5] | w + v)] AS weight2
-RETURN weight1, weight2
-)";
-    const std::string plan = getExplainPlanText(*executor_, query);
-    ASSERT_FALSE(plan.empty());
-    EXPECT_EQ(plan.find("PatternComprehensionFork"), std::string::npos) << plan;
-    EXPECT_NE(plan.find("PatternComprehensionApply"), std::string::npos) << plan;
 }
 
 TEST_F(QueryExecutorTest, GenericHashJoinOnPropertyEquality) {
@@ -12073,6 +12146,9 @@ TEST_F(QueryExecutorTest, GenericHashJoinCanBuildSmallerLeftSide) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 40);
     auto plan = getExplainPlanText(*executor_, query);
     EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
+    // Person (2) is smaller than City (20): the optimizer must pick it as the
+    // build side; lowering only forwards that choice.
+    EXPECT_NE(plan.find("build=left"), std::string::npos) << plan;
 
     // build_left 时输出仍必须是 left columns + right columns。
     auto projected = execSync(*executor_, "MATCH (a:Person), (b:City) WHERE a.name = b.name "
@@ -12083,7 +12159,10 @@ TEST_F(QueryExecutorTest, GenericHashJoinCanBuildSmallerLeftSide) {
     EXPECT_EQ(std::get<std::string>(projected.rows[0][1]), "only");
 }
 
-TEST_F(QueryExecutorTest, GenericHashJoinFallsBackWithResidualPredicate) {
+TEST_F(QueryExecutorTest, GenericHashJoinKeepsResidualPredicate) {
+    // The join condition is normalized into join_conditions by the optimizer; the
+    // residual `a.name = 'same'` stays in the Filter above the join. The join
+    // algorithm is then the CBO's choice (no physical-layer fallback).
     ASSERT_TRUE(execSync(*executor_, "CREATE (a:Person {name:'same'}), (b:Person {name:'same'}), "
                                      "(c:Person {name:'other'})")
                     .error.empty());
@@ -12095,7 +12174,7 @@ TEST_F(QueryExecutorTest, GenericHashJoinFallsBackWithResidualPredicate) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4);
     auto plan = getExplainPlanText(*executor_, query);
-    EXPECT_EQ(plan.find("HashJoin"), std::string::npos) << "残差谓词应回退到 CrossProduct+Filter";
+    EXPECT_NE(plan.find("a.name = 'same'"), std::string::npos) << plan;
 }
 
 TEST_F(QueryExecutorTest, GenericHashJoinDoesNotJoinNullKeys) {
@@ -12223,7 +12302,12 @@ TEST_F(QueryExecutorTest, ReverseDestinationChainRangeUsesTargetIndex) {
                                      "(a2:Person {name:'old-src'}), (b2:Person {name:'old', age:30}), "
                                      "(a1)-[:KNOWS]->(b1), (a2)-[:KNOWS]->(b2)")
                     .error.empty());
-    const std::string query = "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.age >= 20 RETURN a.name AS a, b.name AS b";
+    // Bounded range: the destination-index probe is owned by the IndexProbe rule
+    // family (the legacy IndexJoin rule no longer re-selects single-step static
+    // probes). A one-sided range intentionally keeps the generic plan instead of
+    // speculating without index statistics.
+    const std::string query =
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.age >= 20 AND b.age <= 30 RETURN a.name AS a, b.name AS b";
     auto result = execSync(*executor_, query);
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);

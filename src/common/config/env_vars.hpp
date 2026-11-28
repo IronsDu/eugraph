@@ -14,6 +14,9 @@ inline constexpr const char* kEnvPlanDebug = "EUGRAPH_PLAN_DEBUG";
 inline constexpr const char* kEnvPredDebug = "EUGRAPH_PRED_DEBUG";
 inline constexpr const char* kEnvDplDebug = "EUGRAPH_DPL_DEBUG";
 inline constexpr const char* kEnvOptimizerForceRbo = "EUGRAPH_OPTIMIZER_FORCE_RBO";
+inline constexpr const char* kEnvDisableProbeRules = "EUGRAPH_DISABLE_PROBE_RULES";
+/// Per-candidate CBO cost trace (local cost, input cards, winner registration).
+inline constexpr const char* kEnvCboTrace = "EUGRAPH_CBO_TRACE";
 inline constexpr const char* kEnvLeftJoinBatch = "EUGRAPH_LJ_BATCH";
 inline constexpr const char* kEnvSemiJoinBatch = "EUGRAPH_SJ_BATCH";
 inline constexpr const char* kEnvCacheMaxEdgesPerSource = "EUGRAPH_CACHE_MAX_EDGES_PER_SOURCE";

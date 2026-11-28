@@ -39,6 +39,17 @@ namespace optimizer {
 // ============================================================
 struct PhysicalExpr {
     PhysicalOpTag tag = PhysicalOpTag::NodeScan;
+    /// HashJoin only: which child feeds the hash table (build side). The
+    /// optimizer picks it as part of the candidate (cost/memory), so lowering
+    /// must not choose again.
+    bool build_left = false;
+    /// VarLenExpand only: shortestPath shares one forward BFS among rows that
+    /// start at the same vertex (`batch` strategy). This is a physical
+    /// descriptor, not a logical property: the Impl rule offers it for bounded
+    /// shortest-path searches and lowering only forwards it. Pricing it against
+    /// per-row bidirectional search needs source-NDV / degree statistics, so the
+    /// second candidate and the cost comparison arrive with the P3 statistics.
+    bool batch_shortest_path = false;
     binder::BoundLogicalOperator source;
 
     // Enricher-only: target variable name.

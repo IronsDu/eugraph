@@ -212,7 +212,7 @@ person/target；每条语句执行 3 次取 min，eugraph/neo4j 按 E→N→N→
 | 优先级 | 查询/范围 | 差距（稳态口径） | 已定位原因（2026-11-04 PROFILE） | 下一步思路 |
 |---|---|---|---|---|
 | P1 | 🔴 complex-10 | 40.35 ms vs 5.90 ms（6.8×） | 946 次按帖 `PatternComprehensionApply`（self 3.5 ms/946 次）；`CorrelatedSource` self 1.8 ms/946 行；HAS_TAG Expand 12.2 ms；PC 内 Aggregate 3.5 ms | 去相关为按组聚合/半连接；相关列注入已落地，下一步是 Apply 按 chunk 驱动 |
-| P1 | 🟠 complex-14 | 56.19 ms vs 15.34 ms（3.7×） | **PC 公共前缀已共享**（`PatternComprehensionFork`）；端点 id 已提升成列、分支谓词与 PE 的按行 IO 已消除；剩余是每分支一遍的 `REPLY_OF`/`HAS_CREATOR` Expand | 见 [anchor-sharing 文档的 "Next: branch expansions"](../query/engine/pattern-comprehension-anchor-sharing.md)：把 `REPLY_OF` 也并入共享段（目标标签集合 + 标签判定），或对 `HAS_CREATOR→b` 做顶点集合半连接 |
+| P1 | 🟠 complex-14 | 56.19 ms vs 15.34 ms（3.7×） | ~~PC 公共前缀已共享（`PatternComprehensionFork`）~~（P4 已删除该重写，历史记录）；端点 id 已提升成列、分支谓词与 PE 的按行 IO 已消除；剩余是每分支一遍的 `REPLY_OF`/`HAS_CREATOR` Expand | 见 [anchor-sharing 文档的 "Next: branch expansions"](../query/engine/pattern-comprehension-anchor-sharing.md)：把 `REPLY_OF` 也并入共享段（目标标签集合 + 标签判定），或对 `HAS_CREATOR→b` 做顶点集合半连接 |
 | P2 | 🟠 complex-1 | 15.53 ms vs 3.44 ms（4.5×） | `shortestPath` self 1.75 ms/674 次 `scanNear`；后处理 LeftJoin/Aggregate 各 ~3 ms incl | 绝对值 ~15 ms；profile 后处理 |
 | P2 | 🟠 complex-4 | 8.90 ms vs 2.45 ms（3.6×，0 行） | 扫描/过滤成本；无结果也要全扫 | 低 ROI |
 | P2 | 🟠 complex-7 | 5.86 ms vs 1.80 ms（3.3×） | 大结果集 LIKES/HAS_CREATOR 展开 + `head(collect(...))` 聚合 | 排序/聚合前裁剪；增量 A/B −3.4% |

@@ -53,11 +53,25 @@ public:
 
     LogProp derive(const binder::BoundLogicalOperator& op, const std::vector<LogProp>& input_lps);
 
+    /// Cardinality of a *physical candidate*: same operator semantics as
+    /// derive(), but the input cardinalities come from the already-costed child
+    /// winners (plan-dependent) instead of the plan-independent group LogProps.
+    /// This is what lets a selective access path (e.g. `id = 933`) propagate a
+    /// realistic row count to its parents. `input_cards[i]` must be the i-th
+    /// child's estimated output rows; empty/unknown entries fall back to the
+    /// corresponding group LogProp cardinality.
+    double deriveCandidateCardinality(const binder::BoundLogicalOperator& op, const LogProp& group_lp,
+                                      const std::vector<double>& input_cards) const;
+
     // Default constants used when catalog stats are unavailable (value 0)
     static constexpr double kDefaultVertexCount = 1000.0;
     static constexpr double kDefaultAvgOutDegree = 10.0;
     static constexpr double kDefaultSelectivity = 0.1;
     static constexpr double kIndexedSelectivity = 0.01;
+    // Fraction of a label's vertices assumed to fall inside an index range.
+    // Shared with the IndexScan cost formula so a range access path is costed
+    // and estimated with one convention; P3 statistics replace both.
+    static constexpr double kIndexRangeSelectivity = 0.10;
     static constexpr double kRangeSelectivity = 0.3;
     static constexpr double kUnknownSelectivity = 0.5;
 
@@ -72,6 +86,10 @@ private:
     LogProp deriveExpand(const binder::BoundExpandOp& op, const LogProp& input) const;
     double estimateAvgOutDegree(const std::vector<EdgeLabelId>& edge_labels, const LogProp& input,
                                 const std::string& src_var) const;
+    /// Effective one-step expansion degree (catalog average, then estimate, then
+    /// default). Shared by derive() and deriveCandidateCardinality().
+    double expandDegree(const std::vector<EdgeLabelId>& edge_labels, const LogProp& input,
+                        const std::string& src_var) const;
     LogProp deriveVarLenExpand(const binder::BoundVarLenExpandOp& op, const LogProp& input) const;
     LogProp deriveFilter(const binder::BoundFilterOp& op, const LogProp& input) const;
     LogProp deriveProject(const binder::BoundProjectOp& op, const LogProp& input) const;
@@ -89,12 +107,12 @@ private:
     LogProp derivePatternComprehensionApply(const binder::BoundPatternComprehensionApplyOp& op, const LogProp& left,
                                             const LogProp& /*right*/) const;
     LogProp deriveUnion(const binder::BoundUnionOp& op, const LogProp& left, const LogProp& right) const;
-    /// Fork: one output row per `left` row (the anchor and the branches are
-    /// lateral), schema = left columns + one LIST column per branch output.
-    /// `input_lps` is [left, anchor, branches...]; only `left` shapes the
-    /// output, the anchor/branch inputs are consumed per row.
-    LogProp derivePatternComprehensionFork(const binder::BoundPatternComprehensionForkOp& op,
-                                           const std::vector<LogProp>& input_lps) const;
+    /// Probe leaf: index scan over the target label, then one edge step back to
+    /// the source (join-key) variable. Expands the probe's own schema.
+    LogProp deriveIndexProbe(const binder::BoundIndexProbeOp& op) const;
+    /// ProbeJoin: anchor schema plus the probe's output columns (target + edge).
+    /// Logical row count is bounded by the probe side (vertex-key join).
+    LogProp deriveIndexProbeJoin(const LogProp& anchor, const LogProp& probe_input) const;
     LogProp derivePassthrough(const LogProp& input) const;
 
     // Selectivity estimation for filter predicates

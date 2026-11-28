@@ -1,4 +1,6 @@
 #include "query/optimizer/framework/operator_eq.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -22,7 +24,6 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -89,6 +90,18 @@ bool eqSetItem(const binder::BoundSetOp::SetItem& a, const binder::BoundSetOp::S
     if (a.strong_mode != b.strong_mode)
         return false;
     return a.is_add_assign == b.is_add_assign;
+}
+
+// IndexProbe descriptor equality. Shared by BoundIndexProbeOp and the inline
+// probe mirror of BoundIndexProbeJoinOp so the two branches cannot drift; two
+// different access paths must never compare equal (memo dedup would collapse
+// them into one group).
+bool equalIndexProbe(const binder::BoundIndexProbeOp& a, const binder::BoundIndexProbeOp& b) {
+    return a.source_variable == b.source_variable && a.target_variable == b.target_variable &&
+           a.edge_variable == b.edge_variable && a.edge_label_ids == b.edge_label_ids && a.direction == b.direction &&
+           a.target_label_ids == b.target_label_ids && a.index_id == b.index_id && a.index_prop == b.index_prop &&
+           a.index_property_name == b.index_property_name && a.equality == b.equality && a.lower == b.lower &&
+           a.upper == b.upper && a.lower_inclusive == b.lower_inclusive && a.upper_inclusive == b.upper_inclusive;
 }
 
 } // namespace
@@ -301,7 +314,21 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av.label_names != bv.label_names)
                     return false;
-                return av.label_prop_ids == bv.label_prop_ids;
+                return av.label_prop_ids == bv.label_prop_ids && av.index_scan == bv.index_scan &&
+                       av.index_id == bv.index_id && av.index_prop_ids == bv.index_prop_ids &&
+                       av.index_eq_values == bv.index_eq_values && av.index_lower == bv.index_lower &&
+                       av.index_upper == bv.index_upper && av.index_lower_inclusive == bv.index_lower_inclusive &&
+                       av.index_upper_inclusive == bv.index_upper_inclusive;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                // Child groups are compared by the caller; the inline anchor is
+                // only tree transport and must not affect equivalence.
+                return equalIndexProbe(av->probe, bv->probe);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                return equalIndexProbe(*av, *bv);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
@@ -411,6 +438,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->dst_slot_id != bv->dst_slot_id)
                     return false;
+                if (av->planner_dst_slot_id != bv->planner_dst_slot_id)
+                    return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
                     return false;
                 if (av->all_edge_labels != bv->all_edge_labels)
@@ -435,6 +464,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->dst_slot_id != bv->dst_slot_id)
                     return false;
+                if (av->planner_dst_slot_id != bv->planner_dst_slot_id)
+                    return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
                     return false;
                 if (av->all_edge_labels != bv->all_edge_labels)
@@ -457,14 +488,15 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->path_handled_by_varlen != bv->path_handled_by_varlen)
                     return false;
-                if (av->shortest_path != bv->shortest_path || av->all_shortest_paths != bv->all_shortest_paths ||
-                    av->batch_shortest_path != bv->batch_shortest_path)
+                if (av->shortest_path != bv->shortest_path || av->all_shortest_paths != bv->all_shortest_paths)
                     return false;
                 if (av->edge_variable != bv->edge_variable)
                     return false;
                 if (av->edge_column_index != bv->edge_column_index)
                     return false;
                 if (av->edge_slot_id != bv->edge_slot_id)
+                    return false;
+                if (av->planner_edge_slot_id != bv->planner_edge_slot_id)
                     return false;
                 if (av->bound_edge_list != bv->bound_edge_list)
                     return false;
@@ -473,6 +505,10 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->prev_edge_var != bv->prev_edge_var)
                     return false;
                 if (av->prev_edge_col_index != bv->prev_edge_col_index)
+                    return false;
+                if (av->src_filter_index_id != bv->src_filter_index_id ||
+                    av->src_filter_value != bv->src_filter_value ||
+                    av->dst_filter_index_id != bv->dst_filter_index_id || av->dst_filter_value != bv->dst_filter_value)
                     return false;
                 if (av->edge_prop_filters != bv->edge_prop_filters)
                     return false;
@@ -674,6 +710,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return !av && !bv;
                 if (av->join_type != bv->join_type || av->join_conditions.size() != bv->join_conditions.size())
                     return false;
+                if (av->endpoint_probe_edge_var != bv->endpoint_probe_edge_var)
+                    return false;
                 for (size_t i = 0; i < av->join_conditions.size(); ++i) {
                     if (!equalBoundExpression(av->join_conditions[i], bv->join_conditions[i]))
                         return false;
@@ -705,24 +743,6 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                         return false;
                 }
                 return true;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (!av || !bv)
-                    return !av && !bv;
-                if (av->correlation != bv->correlation)
-                    return false;
-                if (av->outputs.size() != bv->outputs.size())
-                    return false;
-                for (size_t i = 0; i < av->outputs.size(); ++i) {
-                    if (av->outputs[i].slot_id != bv->outputs[i].slot_id)
-                        return false;
-                    if (av->outputs[i].name != bv->outputs[i].name)
-                        return false;
-                    if (!eqBoundType(av->outputs[i].element_type, bv->outputs[i].element_type))
-                        return false;
-                }
-                // Branch count is structural: child_groups already encodes it,
-                // but two forks with different arity must never compare equal.
-                return av->branches.size() == bv->branches.size();
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

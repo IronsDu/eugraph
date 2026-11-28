@@ -35,6 +35,10 @@ enum class PhysicalOpTag {
     NestedLoopJoin,
     CrossProduct,
     HashJoin,
+    // CrossProduct(CorrelatedSource, LabelScan) whose right side is
+    // correlation-invariant: materialise the right side once and probe the
+    // edge's endpoints per left row (linear instead of left x right).
+    CorrelatedVertexProbe,
     SemiJoin,
     LeftJoin,
     Union,
@@ -65,6 +69,14 @@ enum class PhysicalOpTag {
     PathCount,
     // Destination-index / reverse-chain access path candidate.
     IndexJoin,
+    // Pattern comprehension correlated apply.
+    PatternComprehensionApply,
+    // Destination index probe: index-range scan of the target label followed by
+    // one reverse edge step back to the join key. Its own group; the probe join
+    // consumes this descriptor.
+    IndexProbe,
+    // Anchor subtree joined with an index probe on the anchor's source variable.
+    IndexProbeJoin,
 };
 
 // ============================================================
@@ -84,7 +96,13 @@ enum class PhysicalOpTag {
 //   Aggregate:         input cardinality (hash aggregation)
 //   Distinct:          input cardinality
 // ============================================================
-Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps);
+struct PhysicalExpr;
+Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps,
+                   const PhysicalExpr* phys = nullptr);
+
+/// Runtime hash-table row budget (same env as the HashJoin operator). Candidate
+/// feasibility is decided here so lowering never has to reject a chosen join.
+size_t joinBuildRowBudget();
 
 } // namespace optimizer
 } // namespace eugraph

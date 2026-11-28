@@ -2571,6 +2571,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         proj_item.expr = std::move(*bound_expr);
         proj_item.alias = std::move(alias);
         proj_item.result_type = getBoundExprType(proj_item.expr);
+        if (auto* ref = std::get_if<BoundColumnRef>(&proj_item.expr))
+            proj_item.output_slot = ref->slot_id;
         proj->items.push_back(std::move(proj_item));
     }
     proj->child = std::move(child);
@@ -2819,6 +2821,11 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
     // Collect output names and types for scope reset
     std::vector<std::pair<std::string, BoundType>> with_outputs;
+    // Parallel to with_outputs for the non-aggregating projection: the
+    // semantic slot each alias must carry after WITH. A direct variable alias
+    // keeps the source slot; a computed expression gets a fresh slot. Reusing
+    // the old symbol by alias name turns `WITH a AS b` into the old `b` slot.
+    std::vector<SlotId> with_output_slots;
 
     // ── Semantic checks ──
 
@@ -3033,10 +3040,12 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
         if (has_complex_agg) {
             with_outputs.clear();
+            with_output_slots.clear();
             for (const auto& pi : proj_items)
                 with_outputs.emplace_back(pi.alias, getBoundExprType(pi.expr));
         } else {
             with_outputs.clear();
+            with_output_slots.clear();
             for (size_t i = 0; i < agg->output_names.size(); ++i) {
                 BoundType type = i < agg->group_keys.size()
                                      ? getBoundExprType(agg->group_keys[i])
@@ -3073,6 +3082,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             // The internal __agg_* names belong to the AggregateOp below; downstream
             // clauses must NOT see them. Rebuild with_outputs to mirror ProjectOp.
             with_outputs.clear();
+            with_output_slots.clear();
             auto proj = std::make_unique<BoundProjectOp>();
             for (auto& pi : proj_items) {
                 BoundProjectOp::ProjectItem proj_item;
@@ -3145,8 +3155,10 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 proj_item.alias = col_info->name;
                 proj_item.result_type = getBoundExprType(proj_item.expr);
                 proj_item.input_slot = col_info->slot_id;
+                proj_item.output_slot = col_info->slot_id;
                 proj->items.push_back(std::move(proj_item));
                 with_outputs.emplace_back(col_info->name, proj_item.result_type);
+                with_output_slots.push_back(col_info->slot_id);
             }
         } else
             for (const auto& item : items) {
@@ -3160,8 +3172,15 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 proj_item.expr = std::move(*bound_expr);
                 proj_item.alias = alias;
                 proj_item.result_type = getBoundExprType(proj_item.expr);
+                SlotId out_slot = INVALID_SLOT_ID;
+                if (auto* ref = std::get_if<BoundColumnRef>(&proj_item.expr); ref && ref->slot_id != INVALID_SLOT_ID)
+                    out_slot = ref->slot_id;
+                else
+                    out_slot = allocateNamedSlot(alias);
+                proj_item.output_slot = out_slot;
                 proj->items.push_back(std::move(proj_item));
                 with_outputs.emplace_back(alias, proj_item.result_type);
+                with_output_slots.push_back(out_slot);
             }
 
         // ORDER BY for non-aggregating WITH: bind Sort expressions against
@@ -3222,7 +3241,9 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         // it to a column index — the binder's stale column_index then points
         // at the wrong column.
         auto existing = ctx_.symbols.find(with_outputs[i].first);
-        if (existing != ctx_.symbols.end()) {
+        if (i < with_output_slots.size() && with_output_slots[i] != INVALID_SLOT_ID) {
+            info.slot_id = with_output_slots[i];
+        } else if (existing != ctx_.symbols.end()) {
             info.source_labels = existing->second.source_labels;
             info.source_prop_id = existing->second.source_prop_id;
             info.strong_typed = existing->second.strong_typed;
@@ -3349,20 +3370,25 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // Preserve metadata (source_label, source_prop_id, strong_typed) from old
     // symbols so that downstream SET/REMOVE can resolve property IDs.
     auto old_symbols = std::move(ctx_.symbols);
+    ctx_.symbols.clear();
     ctx_.next_column_index = 0;
     for (size_t i = 0; i < with_outputs.size(); ++i) {
         ColumnInfo info;
         info.name = with_outputs[i].first;
         info.type = std::move(with_outputs[i].second);
         info.column_index = static_cast<uint32_t>(i);
-        // Carry forward metadata and slot_id if this variable was known before WITH.
+        // Carry metadata from the old symbol, but take the slot chosen for
+        // this projection (source slot for `a AS b`, fresh for expressions).
         auto it = old_symbols.find(with_outputs[i].first);
         if (it != old_symbols.end()) {
             info.source_labels = it->second.source_labels;
             info.source_prop_id = it->second.source_prop_id;
             info.strong_typed = it->second.strong_typed;
-            info.slot_id = it->second.slot_id;
         }
+        if (i < with_output_slots.size() && with_output_slots[i] != INVALID_SLOT_ID)
+            info.slot_id = with_output_slots[i];
+        else if (it != old_symbols.end())
+            info.slot_id = it->second.slot_id;
         ctx_.symbols[with_outputs[i].first] = std::move(info);
     }
     ctx_.next_column_index = static_cast<uint32_t>(with_outputs.size());

@@ -20,6 +20,19 @@ namespace optimizer {
 // ============================================================
 
 // ---- Leaf sources ----
+class ImplIndexScanRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplIndexScan";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
 class ImplSingletonRule : public OptRule {
 public:
     std::string name() const override {
@@ -69,12 +82,48 @@ public:
 };
 
 // ---- Unary operators ----
-class GenerateIndexJoinRule : public OptRule {
+class ImplPatternComprehensionApplyRule : public OptRule {
 public:
     std::string name() const override {
-        return "GenerateIndexJoin";
+        return "ImplPatternComprehensionApply";
+    }
+    bool isImplementation() const override {
+        return true;
     }
     PatternNode pattern() const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
+/// Correlated vertex probe: `CrossProduct(CorrelatedSource(edge), LabelScan(v))`
+/// where the right side is correlation-invariant and the filters above restrict
+/// `v` to the edge's endpoints. The optimizer chooses it (shape + cost); lowering
+/// only instantiates the probe for the chosen tag.
+class ImplCorrelatedVertexProbeRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplCorrelatedVertexProbe";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
+/// Tags an unresolved/resolved IndexProbe leaf as a physical candidate. The
+/// probe descriptor itself is the executable contract (index range + edge step);
+/// lowering instantiates it inside the owning ProbeJoin.
+class ImplIndexProbeRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplIndexProbe";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 
@@ -88,6 +137,20 @@ public:
     }
     PatternNode pattern() const override;
     bool condition(GroupExpr& expr, Memo& memo) const override;
+    std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
+};
+
+/// Physical candidate for a ProbeJoin: anchor child group + probe child group.
+/// Emits only the tag; the cascade framework costs and selects it.
+class ImplIndexProbeJoinRule : public OptRule {
+public:
+    std::string name() const override {
+        return "ImplIndexProbeJoin";
+    }
+    bool isImplementation() const override {
+        return true;
+    }
+    PatternNode pattern() const override;
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 
@@ -257,6 +320,7 @@ public:
         return true;
     }
     PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 

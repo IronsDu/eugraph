@@ -1,14 +1,13 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/optimizer/analysis/index_condition.hpp"
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/plan_analysis.hpp"
+#include "query/optimizer/analysis/plan_refs.hpp"
 #include "query/optimizer/analysis/property_demand.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
 #include "query/optimizer/framework/memo.hpp"
-#include "query/optimizer/post_cbo/pattern_comprehension_anchor_share.hpp"
 #include "query/physical_plan/operator/apply_physical_op.hpp"
 #include "query/physical_plan/operator/call_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
@@ -23,13 +22,11 @@
 #include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
 #include "query/physical_plan/operator/late_materialize_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
-#include "query/physical_plan/operator/list_index_join_physical_op.hpp"
 #include "query/physical_plan/operator/materialize_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
 #include "query/physical_plan/operator/path_count_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
 #include "query/physical_plan/operator/pattern_comprehension_apply_physical_op.hpp"
-#include "query/physical_plan/operator/pattern_comprehension_fork_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
@@ -45,7 +42,6 @@
 #include <functional>
 #include <set>
 
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -461,39 +457,6 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
 
 // ==================== LIMIT-boundary late materialization ====================
 
-/// Variable named by startNode()/endNode() in an anchor predicate.
-static std::string findEndpointVar(const binder::BoundExpression& expr) {
-    std::string found;
-    std::visit(
-        [&](const auto& val) {
-            using T = std::decay_t<decltype(val)>;
-            if (!found.empty())
-                return;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
-                if (val && val->func_def && (val->func_def->name == "startNode" || val->func_def->name == "endNode") &&
-                    !val->args.empty()) {
-                    if (auto* cr = std::get_if<binder::BoundColumnRef>(&val->args[0]))
-                        found = cr->name;
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
-                if (val) {
-                    found = findEndpointVar(val->left);
-                    if (found.empty())
-                        found = findEndpointVar(val->right);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
-                if (val)
-                    found = findEndpointVar(val->operand);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                if (val)
-                    found = findEndpointVar(val->object);
-            }
-        },
-        expr);
-    return found;
-}
-
 /// Collect every slot referenced by an expression (recursively).
 static void collectExprSlots(const binder::BoundExpression& expr, std::unordered_set<binder::SlotId>& out) {
     std::visit(
@@ -667,19 +630,11 @@ static void collectOpSlots(const binder::BoundLogicalOperator& op, std::unordere
                     collectOpSlots(v->left, out, has_write);
                     collectOpSlots(v->right, out, has_write);
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (v) {
-                    for (const auto& corr : v->correlation) {
-                        if (corr.left_slot != binder::INVALID_SLOT_ID)
-                            out.insert(corr.left_slot);
-                        if (corr.right_slot != binder::INVALID_SLOT_ID)
-                            out.insert(corr.right_slot);
-                    }
-                    collectOpSlots(v->left, out, has_write);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // The probe is a descriptor leaf (no slots); only the anchor is
+                // a logical subtree that must be walked.
+                if (v)
                     collectOpSlots(v->anchor, out, has_write);
-                    for (const auto& branch : v->branches)
-                        collectOpSlots(branch, out, has_write);
-                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
@@ -765,8 +720,7 @@ static bool subtreeHasTrait(const binder::BoundLogicalOperator& op, SubtreeTrait
         std::visit(
             [&](const auto& v) {
                 using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
-                              std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                     if (v && trait == SubtreeTrait::PatternComprehension)
                         found = true;
                 }
@@ -807,13 +761,6 @@ static bool subtreeHasTrait(const binder::BoundLogicalOperator& op, SubtreeTrait
                     if (v) {
                         visit(v->left);
                         visit(v->right);
-                    }
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                    if (v) {
-                        visit(v->left);
-                        visit(v->anchor);
-                        for (const auto& branch : v->branches)
-                            visit(branch);
                     }
                 }
             },
@@ -1354,11 +1301,6 @@ static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 remapLogicalOpColumnIndices(val->left, offset);
                 remapLogicalOpColumnIndices(val->right, offset);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                // `left` shares the outer row numbering; the anchor and the
-                // branches are lateral sub-plans that start their own column
-                // numbering from 0, so they must not receive the outer offset.
-                remapLogicalOpColumnIndices(val->left, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 remapLogicalOpColumnIndices(val->child, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
@@ -1422,293 +1364,6 @@ static PropertyType boundExprToPropertyType(const binder::BoundExpression& expr)
     }
 }
 
-// ==================== Read-Only Property Label Pruning ====================
-
-static void addPruneHint(std::unordered_map<std::string, PlanContext::StaticPruneHint>& hints, const std::string& var,
-                         std::vector<LabelId> vertex_labels, std::vector<EdgeLabelId> edge_labels) {
-    auto& hint = hints[var];
-    for (LabelId lid : vertex_labels) {
-        if (std::find(hint.vertex_labels.begin(), hint.vertex_labels.end(), lid) == hint.vertex_labels.end())
-            hint.vertex_labels.push_back(lid);
-    }
-    for (EdgeLabelId elid : edge_labels) {
-        if (std::find(hint.edge_labels.begin(), hint.edge_labels.end(), elid) == hint.edge_labels.end())
-            hint.edge_labels.push_back(elid);
-    }
-}
-
-static std::vector<LabelId> collectStaticVertexPruneLabels(PlanContext& ctx, const binder::BoundExpression& expr) {
-    std::vector<LabelId> labels;
-    if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
-        if (!*un || (*un)->op != cypher::UnaryOperator::IS_NOT_NULL)
-            return labels;
-        auto* cref = std::get_if<binder::BoundColumnRef>(&(*un)->operand);
-        if (!cref)
-            return labels;
-        for (const auto& [source_slot, plan] : ctx.extraction_info) {
-            for (size_t i = 0; i < plan.prop_slot_ids.size() && i < plan.prop_order.size(); ++i) {
-                if (plan.prop_slot_ids[i] == cref->slot_id) {
-                    LabelId lid = plan.prop_order[i].first;
-                    if (std::find(labels.begin(), labels.end(), lid) == labels.end())
-                        labels.push_back(lid);
-                }
-            }
-            for (const auto& [prop, co] : plan.coalesce_vertices) {
-                if (co.slot_id == cref->slot_id) {
-                    for (const auto& [lid, pid] : co.candidates) {
-                        if (std::find(labels.begin(), labels.end(), lid) == labels.end())
-                            labels.push_back(lid);
-                    }
-                }
-            }
-        }
-    }
-    return labels;
-}
-
-static std::vector<EdgeLabelId> collectStaticEdgePruneLabels(PlanContext& ctx, const binder::BoundExpression& expr) {
-    std::vector<EdgeLabelId> labels;
-    if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
-        if (!*un || (*un)->op != cypher::UnaryOperator::IS_NOT_NULL)
-            return labels;
-        auto* cref = std::get_if<binder::BoundColumnRef>(&(*un)->operand);
-        if (!cref)
-            return labels;
-        for (const auto& [source_slot, plan] : ctx.extraction_info) {
-            for (size_t i = 0; i < plan.edge_prop_slot_ids.size() && i < plan.edge_prop_order.size(); ++i) {
-                if (plan.edge_prop_slot_ids[i] == cref->slot_id) {
-                    EdgeLabelId elid = plan.edge_prop_order[i].first;
-                    if (std::find(labels.begin(), labels.end(), elid) == labels.end())
-                        labels.push_back(elid);
-                }
-            }
-        }
-    }
-    return labels;
-}
-
-static void collectStaticPruneHints(const binder::BoundExpression& expr, PlanContext& ctx,
-                                    std::unordered_map<std::string, PlanContext::StaticPruneHint>& hints) {
-    if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
-        if (!*un || (*un)->op != cypher::UnaryOperator::IS_NOT_NULL)
-            return;
-        if (auto* dr = std::get_if<std::unique_ptr<binder::BoundDynamicPropertyRef>>(&(*un)->operand)) {
-            if (!*dr)
-                return;
-            std::string var;
-            const binder::BoundType* type = nullptr;
-            if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*dr)->object)) {
-                var = cref->name;
-                type = &cref->type;
-            } else if (auto* vref = std::get_if<binder::BoundVariableRef>(&(*dr)->object)) {
-                var = vref->name;
-                type = &vref->type;
-            }
-            if (var.empty() || !type)
-                return;
-            if (type->kind == binder::BoundTypeKind::VERTEX || type->kind == binder::BoundTypeKind::VERTEX_REF) {
-                std::vector<LabelId> labels;
-                for (const auto& [lid, ldef] : ctx.label_defs) {
-                    for (const auto& pd : ldef.properties) {
-                        if (pd.name == (*dr)->property) {
-                            labels.push_back(lid);
-                            break;
-                        }
-                    }
-                }
-                addPruneHint(hints, var, std::move(labels), {});
-            } else if (type->kind == binder::BoundTypeKind::EDGE || type->kind == binder::BoundTypeKind::EDGE_KEY) {
-                std::vector<EdgeLabelId> labels;
-                for (const auto& [elid, eldef] : ctx.edge_label_defs) {
-                    for (const auto& pd : eldef.properties) {
-                        if (pd.name == (*dr)->property) {
-                            labels.push_back(elid);
-                            break;
-                        }
-                    }
-                }
-                addPruneHint(hints, var, {}, std::move(labels));
-            }
-            return;
-        }
-        auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&(*un)->operand);
-        if (!pr || !*pr || (*pr)->candidates.empty())
-            return;
-        std::string var;
-        const binder::BoundType* type = nullptr;
-        if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*pr)->object)) {
-            var = cref->name;
-            type = &cref->type;
-        } else if (auto* vref = std::get_if<binder::BoundVariableRef>(&(*pr)->object)) {
-            var = vref->name;
-            type = &vref->type;
-        }
-        if (var.empty() || !type)
-            return;
-        if (type->kind == binder::BoundTypeKind::VERTEX || type->kind == binder::BoundTypeKind::VERTEX_REF) {
-            std::vector<LabelId> labels;
-            for (const auto& cand : (*pr)->candidates)
-                labels.push_back(cand.label_id);
-            addPruneHint(hints, var, std::move(labels), {});
-        } else if (type->kind == binder::BoundTypeKind::EDGE || type->kind == binder::BoundTypeKind::EDGE_KEY) {
-            std::vector<EdgeLabelId> labels;
-            for (const auto& cand : (*pr)->candidates)
-                labels.push_back(EdgeLabelId{cand.label_id});
-            addPruneHint(hints, var, {}, std::move(labels));
-        }
-        return;
-    }
-    if (auto* bin = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr)) {
-        if (!*bin || (*bin)->op != cypher::BinaryOperator::AND)
-            return;
-        collectStaticPruneHints((*bin)->left, ctx, hints);
-        collectStaticPruneHints((*bin)->right, ctx, hints);
-    }
-}
-
-// ==================== Bound Plan Index Scan Optimization ====================
-
-/// Extract AND-chain of BoundBinaryOp conditions from a BoundExpression.
-static void collectBoundConditions(const binder::BoundExpression& pred,
-                                   std::vector<const binder::BoundBinaryOp*>& conditions) {
-    if (auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&pred)) {
-        auto& binop = *bp;
-        if (binop->op == cypher::BinaryOperator::AND) {
-            collectBoundConditions(binop->left, conditions);
-            collectBoundConditions(binop->right, conditions);
-        } else {
-            conditions.push_back(binop.get());
-        }
-    }
-}
-
-struct BoundIndexableCondition {
-    LabelId label_id = INVALID_LABEL_ID;
-    uint16_t prop_id = 0;
-    std::string property_name;
-    cypher::BinaryOperator op;
-    PropertyValue value;
-    /// Written as `n::Label.p`. A strong condition may only use a strong
-    /// index; a weak condition may only use a weak index (see
-    /// docs/features/strong-weak-hybrid.md §7).
-    bool is_strong = false;
-    /// Number of LABELS that declare this property (the weak-space registry is
-    /// not counted). A weak condition may use a strong index only when this is
-    /// exactly 1 and no anon value can exist.
-    int declared_label_count = 0;
-};
-
-/// Resolve a BoundColumnRef produced by ProjectionExtract lowering back to
-/// the property name / (label_id, prop_id) and the original access mode.
-struct ResolvedColumnProperty {
-    std::string name;
-    LabelId label_id = INVALID_LABEL_ID;
-    uint16_t prop_id = 0;
-    bool is_strong = false;
-    int declared_label_count = 0;
-};
-
-static std::optional<ResolvedColumnProperty> resolveColumnProperty(const PlanContext& ctx,
-                                                                   const binder::BoundColumnRef& ref) {
-    for (const auto& [canonical_slot, pe] : ctx.extraction_info) {
-        (void)canonical_slot;
-        for (size_t i = 0; i < pe.prop_slot_ids.size(); ++i) {
-            if (pe.prop_slot_ids[i] != ref.slot_id)
-                continue;
-            const auto& [lid, pid] = pe.prop_order[i];
-            auto lit = ctx.label_defs.find(lid);
-            if (lit == ctx.label_defs.end())
-                return std::nullopt;
-            for (const auto& pd : lit->second.properties) {
-                if (pd.id != pid)
-                    continue;
-                ResolvedColumnProperty out;
-                out.name = pd.name;
-                out.label_id = lid;
-                out.prop_id = pid;
-                out.is_strong = i < pe.prop_strong.size() && pe.prop_strong[i];
-                out.declared_label_count = i < pe.prop_declared_count.size() ? pe.prop_declared_count[i] : 0;
-                return out;
-            }
-            return std::nullopt;
-        }
-        for (const auto& [prop_name, co] : pe.coalesce_vertices) {
-            if (co.slot_id != ref.slot_id)
-                continue;
-            ResolvedColumnProperty out;
-            out.name = prop_name;
-            out.label_id = co.candidates.empty() ? INVALID_LABEL_ID : co.candidates[0].first;
-            out.prop_id = co.candidates.empty() ? 0 : co.candidates[0].second;
-            out.is_strong = false;
-            out.declared_label_count = static_cast<int>(co.candidates.size());
-            return out;
-        }
-    }
-    return std::nullopt;
-}
-
-/// Try to extract a property=value condition from a BoundBinaryOp.
-/// Accepts both unlowered BoundPropertyRef and the BoundColumnRef form that
-/// column-rewrite produces for flat property columns.
-static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const binder::BoundBinaryOp& binop,
-                                                                       const PlanContext& ctx) {
-    if (!std::holds_alternative<binder::BoundLiteral>(binop.right))
-        return std::nullopt;
-    auto& lit = std::get<binder::BoundLiteral>(binop.right);
-
-    auto pv = valueToPropertyValue(lit.value);
-    if (std::holds_alternative<std::monostate>(pv))
-        return std::nullopt;
-
-    BoundIndexableCondition cond;
-    cond.op = binop.op;
-    cond.value = std::move(pv);
-
-    if (std::holds_alternative<std::unique_ptr<binder::BoundPropertyRef>>(binop.left)) {
-        auto& prop_ref = std::get<std::unique_ptr<binder::BoundPropertyRef>>(binop.left);
-        if (prop_ref->candidates.empty())
-            return std::nullopt;
-        LabelId anon_id = INVALID_LABEL_ID;
-        for (const auto& [lid, ldef] : ctx.label_defs) {
-            if (ldef.name == kAnonLabelName) {
-                anon_id = lid;
-                break;
-            }
-        }
-        LabelId first_label = INVALID_LABEL_ID;
-        int declared = 0;
-        for (const auto& cand : prop_ref->candidates) {
-            if (cand.label_id == anon_id || cand.label_id == INVALID_LABEL_ID)
-                continue;
-            if (declared == 0) {
-                first_label = cand.label_id;
-                cond.prop_id = cand.prop_id;
-            }
-            declared++;
-        }
-        cond.declared_label_count = declared;
-        cond.label_id = declared == 1 ? first_label : prop_ref->candidates[0].label_id;
-        cond.prop_id = declared == 1 ? cond.prop_id : prop_ref->candidates[0].prop_id;
-        cond.property_name = prop_ref->property_name;
-        cond.is_strong = prop_ref->strong_mode;
-        return cond;
-    }
-
-    if (std::holds_alternative<binder::BoundColumnRef>(binop.left)) {
-        auto resolved = resolveColumnProperty(ctx, std::get<binder::BoundColumnRef>(binop.left));
-        if (!resolved)
-            return std::nullopt;
-        cond.property_name = resolved->name;
-        cond.label_id = resolved->label_id;
-        cond.prop_id = resolved->prop_id;
-        cond.is_strong = resolved->is_strong;
-        cond.declared_label_count = resolved->declared_label_count;
-        return cond;
-    }
-
-    return std::nullopt;
-}
-
 /// Extract the variable name from a property object expression (`n.prop`).
 static std::string expressionVariableName(const binder::BoundExpression& expr) {
     if (auto* ref = std::get_if<binder::BoundColumnRef>(&expr))
@@ -1724,453 +1379,6 @@ static std::string expressionVariableName(const binder::BoundExpression& expr) {
             return expressionVariableName((*cast)->object);
     }
     return {};
-}
-
-static std::optional<cypher::BinaryOperator> reverseComparison(cypher::BinaryOperator op) {
-    switch (op) {
-    case cypher::BinaryOperator::GT:
-        return cypher::BinaryOperator::LT;
-    case cypher::BinaryOperator::GTE:
-        return cypher::BinaryOperator::LTE;
-    case cypher::BinaryOperator::LT:
-        return cypher::BinaryOperator::GT;
-    case cypher::BinaryOperator::LTE:
-        return cypher::BinaryOperator::GTE;
-    case cypher::BinaryOperator::EQ:
-        return cypher::BinaryOperator::EQ;
-    default:
-        return std::nullopt;
-    }
-}
-
-/// Like tryExtractBoundCondition, but also accepts the normalized form
-/// `literal <op> variable.prop` (which Cypher produces for `$end > m.date`).
-static std::optional<BoundIndexableCondition> tryExtractNormalizedBoundCondition(const binder::BoundBinaryOp& binop,
-                                                                                 const PlanContext& ctx) {
-    if (auto cond = tryExtractBoundCondition(binop, ctx))
-        return cond;
-
-    if (!std::holds_alternative<binder::BoundLiteral>(binop.left))
-        return std::nullopt;
-    auto reversed = reverseComparison(binop.op);
-    if (!reversed)
-        return std::nullopt;
-
-    binder::BoundBinaryOp swapped;
-    swapped.op = *reversed;
-    swapped.left = optimizer::cloneBoundExpression(binop.right);
-    swapped.right = optimizer::cloneBoundExpression(binop.left);
-    return tryExtractBoundCondition(swapped, ctx);
-}
-
-static void collectAndConjuncts(const binder::BoundExpression& expr, std::vector<const binder::BoundExpression*>& out) {
-    auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr);
-    if (binop && *binop && (*binop)->op == cypher::BinaryOperator::AND) {
-        collectAndConjuncts((*binop)->left, out);
-        collectAndConjuncts((*binop)->right, out);
-        return;
-    }
-    out.push_back(&expr);
-}
-
-// Detect `Filter(src.prop = v OR dst.prop = v)` above a VarLenExpand and
-// attach index-value pruning hints. The VLE then implements the OR by
-// checking source/destination membership without a UNION rewrite.
-static bool trySetVarlenOrFilters(const binder::BoundFilterOp& filter, binder::BoundVarLenExpandOp& vle,
-                                  const PlanContext& ctx) {
-    const auto* or_op_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
-    if (!or_op_ptr || !*or_op_ptr || (*or_op_ptr)->op != cypher::BinaryOperator::OR)
-        return false;
-    auto& or_op = **or_op_ptr;
-
-    auto extract_side = [&](const binder::BoundExpression& expr, std::string& var,
-                            std::optional<BoundIndexableCondition>& cond) {
-        const auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr);
-        if (!bp || !*bp || (*bp)->op != cypher::BinaryOperator::EQ)
-            return false;
-        auto extracted = tryExtractBoundCondition(**bp, ctx);
-        if (!extracted)
-            return false;
-        if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*bp)->left)) {
-            var = cref->name;
-        } else if (const auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&(*bp)->left)) {
-            if (!prop || !*prop)
-                return false;
-            if (auto* obj = std::get_if<binder::BoundColumnRef>(&(*prop)->object))
-                var = obj->name;
-        }
-        if (var.empty())
-            return false;
-        cond = std::move(extracted);
-        return true;
-    };
-
-    std::string side_a_var, side_b_var;
-    std::optional<BoundIndexableCondition> cond_a, cond_b;
-    if (!extract_side(or_op.left, side_a_var, cond_a) || !extract_side(or_op.right, side_b_var, cond_b))
-        return false;
-    if (side_a_var == vle.dst_variable && side_b_var == vle.src_variable) {
-        std::swap(side_a_var, side_b_var);
-        std::swap(cond_a, cond_b);
-    }
-    if (side_a_var != vle.src_variable || side_b_var != vle.dst_variable)
-        return false;
-
-    auto find_index = [&](LabelId label, const std::string& prop_name) -> uint32_t {
-        auto it = ctx.label_defs.find(label);
-        if (it == ctx.label_defs.end())
-            return 0;
-        for (const auto& idx : it->second.indexes) {
-            if (!planUsableIndex(idx, ctx))
-                continue;
-            for (const auto& acc : idx.accessors)
-                if (acc.property_name == prop_name)
-                    return idx.index_id;
-        }
-        return 0;
-    };
-
-    LabelId src_label = INVALID_LABEL_ID;
-    LabelId dst_label = INVALID_LABEL_ID;
-    if (const auto* child_scan = std::get_if<binder::BoundLabelScanOp>(&vle.child)) {
-        if (!child_scan->label_ids.empty())
-            src_label = child_scan->label_ids[0];
-    }
-    if (!vle.dst_label_ids.empty())
-        dst_label = vle.dst_label_ids[0];
-    if (src_label == INVALID_LABEL_ID || dst_label == INVALID_LABEL_ID)
-        return false;
-
-    uint32_t src_idx = find_index(src_label, cond_a->property_name);
-    uint32_t dst_idx = find_index(dst_label, cond_b->property_name);
-    if (src_idx == 0 && dst_idx == 0)
-        return false;
-
-    if (src_idx != 0) {
-        vle.src_filter_index_id = src_idx;
-        vle.src_filter_value = cond_a->value;
-    }
-    if (dst_idx != 0) {
-        vle.dst_filter_index_id = dst_idx;
-        vle.dst_filter_value = cond_b->value;
-    }
-    return true;
-}
-
-std::optional<PlanOperatorResult>
-PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
-                                   const std::vector<const binder::BoundBinaryOp*>& conditions, LabelId label_id,
-                                   const LabelDef& label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
-    std::unordered_map<std::string, std::vector<BoundIndexableCondition>> prop_conditions;
-    for (auto* cond : conditions) {
-        auto extracted = tryExtractNormalizedBoundCondition(*cond, ctx);
-        if (extracted.has_value())
-            prop_conditions[extracted->property_name].push_back(std::move(*extracted));
-    }
-
-    if (prop_conditions.empty())
-        return std::nullopt;
-
-    using ScanMode = IndexScanPhysicalOp::ScanMode;
-    auto make_index_scan =
-        [&](const LabelDef::IndexDef& idx, ScanMode mode, std::vector<PropertyValue> eq_values,
-            std::optional<std::vector<PropertyValue>> range_start, std::optional<std::vector<PropertyValue>> range_end,
-            std::vector<binder::BoundType> output_types, size_t prefix_col = 0, bool range_start_inclusive = false,
-            bool range_end_inclusive = false) -> std::unique_ptr<IndexScanPhysicalOp> {
-        if (idx.index_id != 0) {
-            return std::make_unique<IndexScanPhysicalOp>(
-                scan_op.variable, idx.index_id, idx.prop_ids, mode, std::move(eq_values), std::move(range_start),
-                std::move(range_end), std::move(output_types), store, ctx.schema, prefix_col, range_start_inclusive,
-                range_end_inclusive);
-        }
-        return std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, mode,
-                                                     std::move(eq_values), std::move(range_start), std::move(range_end),
-                                                     std::move(output_types), store, ctx.schema, prefix_col,
-                                                     range_start_inclusive, range_end_inclusive);
-    };
-
-    for (const auto& idx : label_def.indexes) {
-        if (!planUsableIndex(idx, ctx) || idx.encoding_version != 2)
-            continue;
-
-        size_t match_count = 0;
-        bool last_is_range = false;
-        bool last_is_prefix = false;
-        std::vector<PropertyValue> eq_values;
-        std::optional<PropertyValue> range_start;
-        std::optional<PropertyValue> range_end;
-        bool range_start_inclusive = false;
-        bool range_end_inclusive = false;
-
-        // Accessor path. Conditions are matched by property name; strong
-        // accessors additionally require the source label match.
-        for (size_t i = 0; i < idx.accessors.size(); ++i) {
-            const auto& acc = idx.accessors[i];
-            auto it = prop_conditions.find(acc.property_name);
-            if (it == prop_conditions.end())
-                break;
-            const auto& conds = it->second;
-            const auto& cond = conds.front();
-            // Index and access must use the SAME view: a strong index only sees
-            // the source label's column, a weak index sees every source. Mixing
-            // them would return false positives (weak index answering a strong
-            // access) or miss values (strong index answering a weak access).
-            if (acc.is_strong) {
-                if (cond.is_strong) {
-                    if (cond.label_id != acc.source_label_id)
-                        break;
-                } else {
-                    // A weak read may use a strong index only when NO ambiguity
-                    // is possible: exactly one label declares the key, and the
-                    // weak space has never registered it (no anon values).
-                    if (cond.declared_label_count != 1 || cond.label_id != acc.source_label_id)
-                        break;
-                    bool anon_has_key = false;
-                    for (const auto& [lid, ldef] : ctx.label_defs) {
-                        if (ldef.name != kAnonLabelName)
-                            continue;
-                        for (const auto& pd : ldef.properties) {
-                            if (pd.name == acc.property_name) {
-                                anon_has_key = true;
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                    if (anon_has_key)
-                        break;
-                }
-            } else if (cond.is_strong) {
-                break;
-            }
-
-            if (i < idx.accessors.size() - 1) {
-                if (cond.op == cypher::BinaryOperator::EQ) {
-                    eq_values.push_back(std::move(cond.value));
-                    match_count++;
-                } else if (cond.op == cypher::BinaryOperator::STARTS_WITH &&
-                           std::holds_alternative<std::string>(cond.value)) {
-                    eq_values.push_back(std::move(cond.value));
-                    last_is_prefix = true;
-                    match_count++;
-                    break;
-                } else {
-                    break;
-                }
-            } else {
-                // Multiple conjuncts on the same indexed property (e.g.
-                // `x.date >= lo AND x.date < hi`) must be merged. Keeping one
-                // map entry per property silently dropped the other bound and
-                // turned a bounded range into `(-inf, hi)` or `[lo, +inf)`.
-                optimizer::IndexRange bounds;
-                bool has_eq = false;
-                bool has_prefix = false;
-                for (const auto& c : conds) {
-                    if (c.op == cypher::BinaryOperator::EQ) {
-                        eq_values.push_back(c.value);
-                        has_eq = true;
-                    } else if (c.op == cypher::BinaryOperator::STARTS_WITH &&
-                               std::holds_alternative<std::string>(c.value)) {
-                        eq_values.push_back(c.value);
-                        has_prefix = true;
-                    } else if (c.op == cypher::BinaryOperator::GT || c.op == cypher::BinaryOperator::GTE) {
-                        optimizer::mergeIndexLower(bounds, c.value, c.op == cypher::BinaryOperator::GTE);
-                    } else if (c.op == cypher::BinaryOperator::LT || c.op == cypher::BinaryOperator::LTE) {
-                        optimizer::mergeIndexUpper(bounds, c.value, c.op == cypher::BinaryOperator::LTE);
-                    }
-                }
-                if (has_eq) {
-                    match_count++;
-                } else if (has_prefix) {
-                    last_is_prefix = true;
-                    match_count++;
-                } else if (bounds.lower || bounds.upper) {
-                    if (bounds.lower) {
-                        range_start = std::move(bounds.lower->value);
-                        range_start_inclusive = bounds.lower->inclusive;
-                    }
-                    if (bounds.upper) {
-                        range_end = std::move(bounds.upper->value);
-                        range_end_inclusive = bounds.upper->inclusive;
-                    }
-                    last_is_range = true;
-                    match_count++;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if (match_count == 0)
-            continue;
-        if (!last_is_prefix && match_count != idx.accessors.size())
-            continue;
-        if (last_is_prefix) {
-            // A PREFIX scan can stop at the prefixed column. It is only safe to
-            // drop the original Filter when no other predicate exists and no
-            // later accessor is constrained.
-            if (conditions.size() != match_count)
-                continue;
-            bool later_constrained = false;
-            for (size_t j = match_count; j < idx.accessors.size(); ++j) {
-                if (prop_conditions.contains(idx.accessors[j].property_name)) {
-                    later_constrained = true;
-                    break;
-                }
-            }
-            if (later_constrained)
-                continue;
-        }
-
-        Schema output_schema;
-        std::vector<binder::BoundType> output_types;
-        if (!scan_op.variable.empty()) {
-            output_schema.push_back(scan_op.variable);
-            output_types.push_back(binder::BoundType::VertexRef());
-        }
-        auto result_output_types = output_types;
-
-        std::unique_ptr<IndexScanPhysicalOp> result;
-        if (last_is_prefix) {
-            result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::PREFIX, std::move(eq_values), std::nullopt,
-                                     std::nullopt, std::move(output_types), match_count - 1);
-        } else if (!last_is_range) {
-            result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::EQUALITY, std::move(eq_values), std::nullopt,
-                                     std::nullopt, std::move(output_types));
-        } else {
-            std::optional<std::vector<PropertyValue>> composite_start;
-            std::optional<std::vector<PropertyValue>> composite_end;
-            if (range_start.has_value()) {
-                auto start_vec = eq_values;
-                start_vec.push_back(std::move(*range_start));
-                composite_start = std::move(start_vec);
-            } else if (!eq_values.empty()) {
-                composite_start = eq_values;
-            }
-            if (range_end.has_value()) {
-                auto end_vec = eq_values;
-                end_vec.push_back(std::move(*range_end));
-                composite_end = std::move(end_vec);
-            }
-            result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::RANGE, std::vector<PropertyValue>{},
-                                     std::move(composite_start), std::move(composite_end), std::move(output_types), 0,
-                                     range_start_inclusive, range_end_inclusive);
-        }
-
-        auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
-                                              std::move(result_output_types), TupleSlotLayout{}};
-        plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
-        return plan_result;
-    }
-    return std::nullopt;
-}
-
-std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
-    const binder::BoundExpandOp& expand_op, const std::vector<const binder::BoundBinaryOp*>& conditions,
-    EdgeLabelId label_id, const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
-    std::unordered_map<uint16_t, BoundIndexableCondition> prop_conditions;
-    for (auto* cond : conditions) {
-        auto extracted = tryExtractNormalizedBoundCondition(*cond, ctx);
-        if (extracted.has_value())
-            prop_conditions[extracted->prop_id] = std::move(*extracted);
-    }
-
-    if (prop_conditions.empty())
-        return std::nullopt;
-
-    for (const auto& idx : edge_label_def.indexes) {
-        if (!planUsableIndex(idx, ctx))
-            continue;
-
-        size_t match_count = 0;
-        bool last_is_range = false;
-        std::vector<PropertyValue> eq_values;
-        std::optional<PropertyValue> range_start;
-        std::optional<PropertyValue> range_end;
-
-        for (size_t i = 0; i < idx.prop_ids.size(); ++i) {
-            uint16_t pid = idx.prop_ids[i];
-            auto it = prop_conditions.find(pid);
-            if (it == prop_conditions.end())
-                break;
-
-            auto& cond = it->second;
-            if (i < idx.prop_ids.size() - 1) {
-                if (cond.op != cypher::BinaryOperator::EQ)
-                    break;
-                eq_values.push_back(std::move(cond.value));
-                match_count++;
-            } else {
-                if (cond.op == cypher::BinaryOperator::EQ) {
-                    eq_values.push_back(std::move(cond.value));
-                    match_count++;
-                } else if (cond.op == cypher::BinaryOperator::GT || cond.op == cypher::BinaryOperator::GTE) {
-                    range_start = std::move(cond.value);
-                    last_is_range = true;
-                    match_count++;
-                } else if (cond.op == cypher::BinaryOperator::LT || cond.op == cypher::BinaryOperator::LTE) {
-                    range_end = std::move(cond.value);
-                    last_is_range = true;
-                    match_count++;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if (match_count == 0)
-            continue;
-
-        using ScanMode = EdgeIndexScanPhysicalOp::ScanMode;
-        std::unique_ptr<EdgeIndexScanPhysicalOp> result;
-
-        Schema output_schema;
-        std::vector<binder::BoundType> output_types;
-        if (!expand_op.src_variable.empty()) {
-            output_schema.push_back(expand_op.src_variable);
-            output_types.push_back(binder::BoundType::VertexRef());
-        }
-        if (!expand_op.dst_variable.empty()) {
-            output_schema.push_back(expand_op.dst_variable);
-            output_types.push_back(binder::BoundType::VertexRef());
-        }
-        if (!expand_op.edge_variable.empty()) {
-            output_schema.push_back(expand_op.edge_variable);
-            output_types.push_back(binder::BoundType::EdgeKey());
-        }
-
-        auto result_output_types = output_types;
-
-        if (!last_is_range) {
-            result = std::make_unique<EdgeIndexScanPhysicalOp>(
-                expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
-                ScanMode::EQUALITY, std::move(eq_values), std::nullopt, std::nullopt, std::move(output_types), store,
-                ctx.schema, idx.index_id);
-        } else {
-            std::optional<std::vector<PropertyValue>> composite_start;
-            std::optional<std::vector<PropertyValue>> composite_end;
-            if (range_start.has_value()) {
-                auto start_vec = eq_values;
-                start_vec.push_back(std::move(*range_start));
-                composite_start = std::move(start_vec);
-            } else if (!eq_values.empty()) {
-                composite_start = eq_values;
-            }
-            if (range_end.has_value()) {
-                auto end_vec = eq_values;
-                end_vec.push_back(std::move(*range_end));
-                composite_end = std::move(end_vec);
-            }
-            result = std::make_unique<EdgeIndexScanPhysicalOp>(
-                expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
-                ScanMode::RANGE, std::vector<PropertyValue>{}, std::move(composite_start), std::move(composite_end),
-                std::move(output_types), store, ctx.schema, idx.index_id);
-        }
-
-        return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types),
-                                  TupleSlotLayout{}};
-    }
-    return std::nullopt;
 }
 
 // ==================== Bound Plan Pipeline ====================
@@ -2217,517 +1425,7 @@ static void ensureSlotLayout(PlanOperatorResult& result, PlanContext& ctx) {
 
 } // namespace
 
-/// `UNWIND list AS key MATCH (v:Label {prop: key})` currently becomes
-/// CrossProduct(Unwind, LabelScan) + Filter(prop = key), i.e. every unwind row
-/// scans the whole label (Tag has 16k rows in LDBC sf0.1). Turn the equality
-/// into a per-left-row index probe: Apply(left=Unwind, right=IndexScanValues),
-/// feeding one key at a time. Duplicate keys are preserved by IndexScanValues
-/// (it concatenates per-value matches), and rows without a match are dropped
-/// by Apply -- both match CrossProduct+Filter semantics.
-std::optional<PlanOperatorResult>
-PhysicalPlanner::tryPlanCorrelatedIndexProbe(const binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
-                                             IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
-                                             Schema input_schema, const std::vector<binder::BoundType>& input_types) {
-    const auto* unwind_ptr = std::get_if<std::unique_ptr<binder::BoundUnwindOp>>(&join.left);
-    if (!unwind_ptr || !*unwind_ptr)
-        return std::nullopt;
-    const auto* scan_ptr = std::get_if<binder::BoundLabelScanOp>(&join.right);
-    if (!scan_ptr || scan_ptr->variable.empty() || scan_ptr->label_ids.size() != 1 || scan_ptr->index_scan_values)
-        return std::nullopt;
-    const std::string right_var = scan_ptr->variable;
-    const LabelId right_label = scan_ptr->label_ids[0];
-
-    const auto* eq_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
-    if (!eq_ptr || !*eq_ptr || (*eq_ptr)->op != cypher::BinaryOperator::EQ)
-        return std::nullopt;
-    auto& eq = **eq_ptr;
-
-    std::string prop_name;
-    std::string left_var;
-
-    auto property_var = [](const binder::BoundExpression& expr) -> std::string {
-        if (const auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
-            if (pr && *pr) {
-                if (const auto* obj = std::get_if<binder::BoundColumnRef>(&(*pr)->object))
-                    return obj->name;
-            }
-        }
-        return {};
-    };
-    auto extract_prop = [&](const binder::BoundExpression& expr) -> bool {
-        if (const auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
-            if (!pr || !*pr || (*pr)->candidates.empty() || (*pr)->property_name.empty() ||
-                property_var(expr) != right_var)
-                return false;
-            prop_name = (*pr)->property_name;
-            return true;
-        }
-        if (const auto* cr = std::get_if<binder::BoundColumnRef>(&expr)) {
-            if (cr->name != right_var)
-                return false;
-            auto resolved = resolveColumnProperty(ctx, *cr);
-            if (!resolved)
-                return false;
-            prop_name = resolved->name;
-            return true;
-        }
-        return false;
-    };
-    auto extract_left_col = [&](const binder::BoundExpression& expr) -> bool {
-        const auto* cr = std::get_if<binder::BoundColumnRef>(&expr);
-        if (!cr || cr->name == right_var)
-            return false;
-        left_var = cr->name;
-        return true;
-    };
-
-    if (!((extract_prop(eq.left) && extract_left_col(eq.right)) ||
-          (extract_prop(eq.right) && extract_left_col(eq.left))))
-        return std::nullopt;
-    // `t.id` on an unlabeled scan is a coalesce across labels; candidates[0]
-    // need not be the scanned label. The index lookup is keyed by the scanned
-    // label + property name, so only that pair must be valid.
-    if (left_var.empty() || prop_name.empty())
-        return std::nullopt;
-
-    const auto label_it = ctx.label_defs.find(right_label);
-    if (label_it == ctx.label_defs.end())
-        return std::nullopt;
-    uint32_t index_id = 0;
-    for (const auto& idx : label_it->second.indexes) {
-        if (!planUsableIndex(idx, ctx) || idx.accessors.size() != 1)
-            continue;
-        if (idx.accessors[0].property_name == prop_name) {
-            index_id = idx.index_id;
-            break;
-        }
-    }
-    if (index_id == 0)
-        return std::nullopt;
-
-    auto left_result = planBoundOperator(join.left, store, meta, ctx, input_schema, input_types);
-    if (std::holds_alternative<std::string>(left_result))
-        return std::nullopt;
-    auto lr = extractChildResult(std::move(left_result));
-    ensureSlotLayout(lr, ctx);
-
-    int key_col = findColumn(lr.output_schema, left_var);
-    if (key_col < 0) {
-        auto slot_it = ctx.var_slots.find(left_var);
-        if (slot_it != ctx.var_slots.end())
-            key_col = lr.slot_layout.getColumnIndex(slot_it->second);
-    }
-    if (key_col < 0 || static_cast<size_t>(key_col) >= lr.output_types.size())
-        return std::nullopt;
-    const auto key_kind = lr.output_types[static_cast<size_t>(key_col)].kind;
-    // Parameter lists (`UNWIND $tagIds`) bind their element type as ANY; the
-    // runtime scalar path accepts int64/string and yields no rows otherwise.
-    if (key_kind != binder::BoundTypeKind::INT64 && key_kind != binder::BoundTypeKind::STRING &&
-        key_kind != binder::BoundTypeKind::ANY)
-        return std::nullopt;
-
-    Schema right_schema;
-    right_schema.push_back(right_var);
-    std::vector<binder::BoundType> right_types{binder::BoundType::VertexRef()};
-    auto index_scan =
-        std::make_unique<IndexScanValuesPhysicalOp>(right_var, index_id, store, right_types, right_schema);
-    IndexScanValuesPhysicalOp* value_sink = index_scan.get();
-    TupleSlotLayout right_layout = makeSlotLayout(right_schema, ctx);
-
-    Schema output_schema = lr.output_schema;
-    output_schema.insert(output_schema.end(), right_schema.begin(), right_schema.end());
-    auto output_types = lr.output_types;
-    output_types.insert(output_types.end(), right_types.begin(), right_types.end());
-    TupleSlotLayout layout = lr.slot_layout;
-    layout.merge(right_layout);
-
-    auto apply = std::make_unique<ApplyPhysicalOp>(std::move(lr.op), std::move(index_scan), nullptr,
-                                                   std::vector<uint32_t>{static_cast<uint32_t>(key_col)}, right_types);
-    apply->setValueSink(value_sink, /*scalar_correlation=*/true);
-    apply->setEvalContext(ctx.eval_ctx);
-    PlanOperatorResult result{std::move(apply), std::move(output_schema), std::move(output_types), std::move(layout)};
-    return dispatchProjectionExtract(std::move(result), store, ctx);
-}
-
-std::optional<PlanOperatorResult>
-PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
-                                      IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
-                                      Schema input_schema, const std::vector<binder::BoundType>& input_types) {
-    // Recognize `right_var.prop IN left_list_column`.
-    const binder::BoundBinaryOp* in_op = nullptr;
-    if (auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate)) {
-        if (*bp && (*bp)->op == cypher::BinaryOperator::IN)
-            in_op = bp->get();
-    }
-    if (!in_op) {
-        return std::nullopt;
-    }
-    if (!std::holds_alternative<binder::BoundColumnRef>(in_op->right)) {
-        return std::nullopt;
-    }
-    const auto& list_ref = std::get<binder::BoundColumnRef>(in_op->right);
-
-    std::string prop_name;
-    LabelId prop_label = INVALID_LABEL_ID;
-    std::string dst_var;
-    if (std::holds_alternative<std::unique_ptr<binder::BoundPropertyRef>>(in_op->left)) {
-        auto& prop_ref = std::get<std::unique_ptr<binder::BoundPropertyRef>>(in_op->left);
-        if (!prop_ref || prop_ref->candidates.empty() || prop_ref->property_name.empty())
-            return std::nullopt;
-        prop_name = prop_ref->property_name;
-        prop_label = prop_ref->candidates[0].label_id;
-        if (auto* obj = std::get_if<binder::BoundColumnRef>(&prop_ref->object))
-            dst_var = obj->name;
-    } else if (std::holds_alternative<binder::BoundColumnRef>(in_op->left)) {
-        auto resolved = resolveColumnProperty(ctx, std::get<binder::BoundColumnRef>(in_op->left));
-        if (!resolved)
-            return std::nullopt;
-        prop_name = resolved->name;
-        prop_label = resolved->label_id;
-        dst_var = std::get<binder::BoundColumnRef>(in_op->left).name;
-    } else {
-        return std::nullopt;
-    }
-    if (prop_name.empty() || prop_label == INVALID_LABEL_ID || dst_var.empty()) {
-        return std::nullopt;
-    }
-    auto label_it = ctx.label_defs.find(prop_label);
-    if (label_it == ctx.label_defs.end())
-        return std::nullopt;
-
-    uint32_t index_id = 0;
-    for (const auto& idx : label_it->second.indexes) {
-        if (!planUsableIndex(idx, ctx))
-            continue;
-        for (const auto& acc : idx.accessors) {
-            if (acc.property_name == prop_name) {
-                index_id = idx.index_id;
-                break;
-            }
-        }
-        if (index_id != 0)
-            break;
-    }
-    if (index_id == 0)
-        return std::nullopt;
-
-    // Find the final Expand in the right subtree that produces prop_ref's
-    // variable and capture its single edge label.
-    EdgeLabelId edge_label = INVALID_EDGE_LABEL_ID;
-    LabelId expand_dst_label = INVALID_LABEL_ID;
-    bool found_expand = false;
-    std::function<void(const binder::BoundLogicalOperator&)> visit = [&](const binder::BoundLogicalOperator& op) {
-        std::visit(
-            [&](const auto& val) {
-                using T = std::decay_t<decltype(val)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                    if (val) {
-                        if (val->dst_variable == dst_var &&
-                            val->direction == cypher::RelationshipDirection::LEFT_TO_RIGHT &&
-                            val->edge_label_ids.size() == 1) {
-                            edge_label = val->edge_label_ids[0];
-                            if (!val->dst_label_ids.empty())
-                                expand_dst_label = val->dst_label_ids[0];
-                            found_expand = true;
-                        }
-                        visit(val->child);
-                    }
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
-                                     std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
-                    if (val)
-                        visit(val->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                    if (val)
-                        visit(val->child);
-                }
-            },
-            op);
-    };
-    visit(join.right);
-    if (!found_expand || edge_label == INVALID_EDGE_LABEL_ID) {
-        return std::nullopt;
-    }
-    if (expand_dst_label != INVALID_LABEL_ID && ctx.label_defs.count(expand_dst_label)) {
-        prop_label = expand_dst_label;
-        index_id = 0;
-        auto expand_label_it = ctx.label_defs.find(prop_label);
-        for (const auto& idx : expand_label_it->second.indexes) {
-            if (!planUsableIndex(idx, ctx))
-                continue;
-            for (const auto& acc : idx.accessors) {
-                if (acc.property_name == prop_name) {
-                    index_id = idx.index_id;
-                    break;
-                }
-            }
-            if (index_id != 0)
-                break;
-        }
-        if (index_id == 0)
-            return std::nullopt;
-    }
-
-    auto left_result = planBoundOperator(join.left, store, meta, ctx, input_schema, input_types);
-    if (std::holds_alternative<std::string>(left_result))
-        return std::nullopt;
-    auto lr = extractChildResult(std::move(left_result));
-    ensureSlotLayout(lr, ctx);
-
-    // Prefer the name carried by the bound column; fall back to slot layout.
-    int list_col = -1;
-    for (size_t i = 0; i < lr.output_schema.size(); ++i) {
-        if (lr.output_schema[i] == list_ref.name) {
-            list_col = static_cast<int>(i);
-            break;
-        }
-    }
-    if (list_col < 0)
-        list_col = lr.slot_layout.getColumnIndex(list_ref.slot_id);
-    if (list_col < 0) {
-        return std::nullopt;
-    }
-
-    // Logical reorder into a HashJoin(friend), mirroring Neo4j's Q12 plan:
-    //
-    //   Apply(left: collect(tag.id) AS tags,
-    //        HashJoin(left: IndexScanValues(Tag) -> ... -> friend,
-    //                 right: Person(id) -> KNOWS -> friend))
-    {
-        std::vector<const binder::BoundExpandOp*> chain;
-        binder::BoundFilterOp* start_filter_op = nullptr;
-        LabelId leaf_label = INVALID_LABEL_ID;
-        std::optional<binder::BoundLabelScanOp> leaf_scan;
-        std::function<void(binder::BoundLogicalOperator&)> collect = [&](binder::BoundLogicalOperator& op) {
-            std::visit(
-                [&](auto& val) {
-                    using T = std::decay_t<decltype(val)>;
-                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                        if (val) {
-                            chain.push_back(val.get());
-                            collect(val->child);
-                        }
-                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                        if (val) {
-                            start_filter_op = val.get();
-                            collect(val->child);
-                        }
-                    } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
-                        if (val.label_ids.size() == 1)
-                            leaf_label = val.label_ids[0];
-                        leaf_scan = val;
-                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                        if (val)
-                            collect(val->child);
-                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                        if (val)
-                            collect(val->child);
-                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
-                        if (val)
-                            collect(val->child);
-                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
-                        if (val)
-                            collect(val->child);
-                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
-                        if (val)
-                            collect(val->child);
-                    }
-                },
-                op);
-        };
-        collect(join.right);
-
-        bool chain_ok = chain.size() >= 2 && start_filter_op && leaf_scan.has_value();
-        for (const auto* e : chain)
-            if (e->edge_label_ids.empty())
-                chain_ok = false;
-        if (chain_ok && chain.front()->dst_variable == dst_var) {
-            const std::string friend_var = chain[chain.size() - 1]->dst_variable;
-            const std::string person_var = chain[chain.size() - 1]->src_variable;
-
-            // Build Tag side: IndexScanValues(Tag) -> reversed expands up to friend.
-            binder::BoundLogicalOperator tag_side;
-            {
-                binder::BoundLabelScanOp leaf;
-                leaf.variable = chain.front()->dst_variable;
-                leaf.column_index = 0;
-                leaf.label_ids = {expand_dst_label != INVALID_LABEL_ID ? expand_dst_label : prop_label};
-                leaf.label_prop_ids = chain.front()->dst_label_prop_ids;
-                leaf.index_scan_values = true;
-                leaf.index_id = index_id;
-                tag_side = leaf;
-            }
-            for (size_t i = 0; i + 1 < chain.size(); ++i) {
-                const auto* e = chain[i];
-                auto expand = std::make_unique<binder::BoundExpandOp>();
-                expand->src_variable = e->dst_variable;
-                expand->src_column_index = 0;
-                expand->edge_variable = e->edge_variable;
-                expand->dst_variable = e->src_variable;
-                expand->dst_column_index = 0;
-                expand->edge_label_ids = e->edge_label_ids;
-                expand->all_edge_labels = e->all_edge_labels;
-                expand->direction = e->direction;
-                if (expand->direction == cypher::RelationshipDirection::LEFT_TO_RIGHT)
-                    expand->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
-                else if (expand->direction == cypher::RelationshipDirection::RIGHT_TO_LEFT)
-                    expand->direction = cypher::RelationshipDirection::LEFT_TO_RIGHT;
-                if (i + 1 < chain.size() - 1 && chain[i + 1]->dst_variable == e->src_variable)
-                    expand->dst_label_ids = chain[i + 1]->dst_label_ids;
-                else if (i + 1 == chain.size() - 1 && chain[i + 1]->dst_variable == e->src_variable)
-                    expand->dst_label_ids = chain[i + 1]->dst_label_ids;
-                expand->child = std::move(tag_side);
-                tag_side = std::move(expand);
-            }
-
-            // Build Person side from the original bottom-most expand + filter + leaf.
-            binder::BoundLogicalOperator person_side;
-            {
-                auto filter = std::make_unique<binder::BoundFilterOp>();
-                filter->predicate = std::move(start_filter_op->predicate);
-                filter->child = *leaf_scan;
-                person_side = std::move(filter);
-            }
-            {
-                const auto* e = chain.back();
-                auto expand = std::make_unique<binder::BoundExpandOp>();
-                expand->src_variable = e->src_variable;
-                expand->src_column_index = 0;
-                expand->edge_variable = e->edge_variable;
-                expand->dst_variable = e->dst_variable;
-                expand->dst_column_index = 0;
-                expand->edge_label_ids = e->edge_label_ids;
-                expand->all_edge_labels = e->all_edge_labels;
-                expand->direction = e->direction;
-                expand->dst_label_ids = e->dst_label_ids;
-                expand->dst_label_prop_ids = e->dst_label_prop_ids;
-                expand->edge_prop_ids = e->edge_prop_ids;
-                expand->child = std::move(person_side);
-                person_side = std::move(expand);
-            }
-
-            Schema right_input_schema;
-            std::vector<binder::BoundType> right_input_types;
-            auto tag_result = planBoundOperator(tag_side, store, meta, ctx, right_input_schema, right_input_types);
-            if (std::holds_alternative<std::string>(tag_result))
-                return std::nullopt;
-            auto tr = extractChildResult(std::move(tag_result));
-
-            auto person_result =
-                planBoundOperator(person_side, store, meta, ctx, right_input_schema, right_input_types);
-            if (std::holds_alternative<std::string>(person_result))
-                return std::nullopt;
-            auto pr = extractChildResult(std::move(person_result));
-
-            int left_key = findColumn(tr.output_schema, friend_var);
-            int right_key = findColumn(pr.output_schema, friend_var);
-            if (left_key < 0 || right_key < 0)
-                return std::nullopt;
-
-            Schema hj_schema = tr.output_schema;
-            hj_schema.insert(hj_schema.end(), pr.output_schema.begin(), pr.output_schema.end());
-            auto hj_types = tr.output_types;
-            hj_types.insert(hj_types.end(), pr.output_types.begin(), pr.output_types.end());
-            TupleSlotLayout hj_layout = tr.slot_layout;
-            hj_layout.merge(pr.slot_layout);
-
-            auto hj = std::make_unique<HashJoinPhysicalOp>(std::move(tr.op), std::move(pr.op),
-                                                           std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
-                                                           std::vector<uint32_t>{static_cast<uint32_t>(right_key)},
-                                                           std::vector<binder::BoundType>(hj_types), hj_schema);
-            hj->setEvalContext(ctx.eval_ctx);
-
-            std::function<IndexScanValuesPhysicalOp*(PhysicalOperator*)> find_values =
-                [&](PhysicalOperator* node) -> IndexScanValuesPhysicalOp* {
-                if (auto* iv = dynamic_cast<IndexScanValuesPhysicalOp*>(node))
-                    return iv;
-                for (auto* child : node->children())
-                    if (auto* iv = find_values(const_cast<PhysicalOperator*>(child)))
-                        return iv;
-                return nullptr;
-            };
-            IndexScanValuesPhysicalOp* value_sink = find_values(hj.get());
-            if (!value_sink)
-                return std::nullopt;
-
-            Schema output_schema = lr.output_schema;
-            output_schema.insert(output_schema.end(), hj_schema.begin(), hj_schema.end());
-            auto output_types = lr.output_types;
-            output_types.insert(output_types.end(), hj_types.begin(), hj_types.end());
-            TupleSlotLayout layout = lr.slot_layout;
-            layout.merge(hj_layout);
-
-            auto apply = std::make_unique<ApplyPhysicalOp>(std::move(lr.op), std::move(hj), nullptr,
-                                                           std::vector<uint32_t>{static_cast<uint32_t>(list_col)},
-                                                           std::vector<binder::BoundType>(hj_types));
-            apply->setValueSink(value_sink);
-            apply->setEvalContext(ctx.eval_ctx);
-            return PlanOperatorResult{std::move(apply), std::move(output_schema), std::move(output_types),
-                                      std::move(layout)};
-        }
-    }
-
-    auto saved_filter = ctx.expand_allowed_filter;
-    ctx.expand_allowed_filter = ExpandAllowedFilterContext{index_id, edge_label, dst_var};
-    ctx.filtered_expand = nullptr;
-
-    Schema right_input_schema;
-    std::vector<binder::BoundType> right_input_types;
-    auto right_result = planBoundOperator(join.right, store, meta, ctx, right_input_schema, right_input_types);
-    ctx.expand_allowed_filter = saved_filter;
-
-    if (std::holds_alternative<std::string>(right_result) || !ctx.filtered_expand)
-        return std::nullopt;
-
-    auto rr = extractChildResult(std::move(right_result));
-
-    Schema output_schema = lr.output_schema;
-    output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
-    auto output_types = lr.output_types;
-    output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
-
-    TupleSlotLayout layout = lr.slot_layout;
-    layout.merge(rr.slot_layout);
-
-    auto result = std::make_unique<ListIndexJoinPhysicalOp>(
-        std::move(lr.op), std::move(rr.op), ctx.filtered_expand, static_cast<uint32_t>(list_col),
-        std::vector<binder::BoundType>(output_types), output_schema);
-    result->setEvalContext(ctx.eval_ctx);
-    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types), std::move(layout)};
-}
-
 namespace {
-
-size_t hashJoinMaxBuildRows() {
-    const char* env = std::getenv(config::kEnvHashJoinMaxBuildRows);
-    if (env == nullptr || *env == '\0')
-        return 1'000'000;
-    char* end = nullptr;
-    const unsigned long parsed = std::strtoul(env, &end, 10);
-    if (end == env || end == nullptr || *end != '\0')
-        return 1'000'000;
-    return static_cast<size_t>(parsed);
-}
 
 /// 把 join key 表达式解析成某一侧输出列。只支持能直接落到已有列的单列表达式：
 /// ColumnRef、VariableRef、已解析的 PropertyRef/coalesced property。其它表达式
@@ -2791,51 +1489,6 @@ std::optional<uint32_t> joinKeyColumn(const binder::BoundExpression& expr, const
     return std::nullopt;
 }
 
-/// 只用无统计信息也安全的子树做上界估计；无法证明有界就放弃 HashJoin。
-std::optional<uint64_t> estimateRowsUpperBound(const binder::BoundLogicalOperator& op, const PlanContext& ctx,
-                                               uint32_t depth = 0) {
-    if (depth > 32)
-        return std::nullopt;
-    return std::visit(
-        [&](const auto& v) -> std::optional<uint64_t> {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
-                uint64_t sum = 0;
-                for (LabelId lid : v.label_ids) {
-                    auto it = ctx.label_vertex_counts.find(lid);
-                    if (it == ctx.label_vertex_counts.end())
-                        return std::nullopt;
-                    sum += it->second;
-                }
-                return sum;
-            } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
-                uint64_t sum = 0;
-                for (const auto& [lid, count] : ctx.label_vertex_counts) {
-                    (void)lid;
-                    sum += count;
-                }
-                return sum;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
-                auto child = v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-                if (!child || !v)
-                    return child;
-                if (v->constant.has_value() && *v->constant >= 0)
-                    return std::min<uint64_t>(*child, static_cast<uint64_t>(*v->constant));
-                return child;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            }
-            return std::nullopt;
-        },
-        op);
-}
-
 } // namespace
 
 static bool containsCorrelatedSource(const binder::BoundLogicalOperator& op) {
@@ -2843,8 +1496,7 @@ static bool containsCorrelatedSource(const binder::BoundLogicalOperator& op) {
         return true;
     if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(op))
         return true;
-    if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op) ||
-        std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(op))
+    if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op))
         return true;
     bool found = false;
     optimizer::forEachLogicalChild(op, [&](const binder::BoundLogicalOperator& child) {
@@ -2860,56 +1512,53 @@ namespace {
 /// binder clone intentionally drops children and cannot be replanned safely).
 } // namespace
 
-std::optional<PlanOperatorResult>
-PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
-                                        IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
-                                        Schema input_schema, const std::vector<binder::BoundType>& input_types) {
-    if (join.join_type != binder::JoinType::Cross && join.join_type != binder::JoinType::Inner)
-        return std::nullopt;
-
-    std::vector<const binder::BoundExpression*> conjuncts;
-    collectAndConjuncts(filter.predicate, conjuncts);
-    if (conjuncts.empty())
-        return std::nullopt;
-
-    const size_t max_build_rows = hashJoinMaxBuildRows();
-    if (max_build_rows == 0)
-        return std::nullopt;
-
-    auto left_est = estimateRowsUpperBound(join.left, ctx);
-    auto right_est = estimateRowsUpperBound(join.right, ctx);
-    // 没有两侧上界就不猜：既无法做代价比较，也无法保证构建侧内存。
-    if (!left_est || !right_est)
-        return std::nullopt;
-    // HashJoin 代价 ≈ build + probe；CrossProduct+Filter ≈ left × right。
-    // 只在 HashJoin 更便宜时选择，避免小表 join 反而多一次物化。
-    const long double hash_cost = static_cast<long double>(*left_est) + static_cast<long double>(*right_est);
-    const long double cross_cost = static_cast<long double>(*left_est) * static_cast<long double>(*right_est);
-    // 物理层仍做预算/代价兜底；CBO tag 只表示“允许 HashJoin 候选”，
-    // 不能绕过 build 侧内存和代价门禁。
-    if (hash_cost >= cross_cost)
-        return std::nullopt;
-
-    bool build_left = *left_est < *right_est;
-    const uint64_t build_est = build_left ? *left_est : *right_est;
-    if (build_est > max_build_rows)
-        return std::nullopt;
-
-    auto left_result = planBoundOperator(join.left, store, meta, ctx, input_schema, input_types);
-    if (std::holds_alternative<std::string>(left_result))
-        return std::nullopt;
-    auto lr = extractChildResult(std::move(left_result));
+/// Instantiates the CBO's chosen HashJoin tag for a bare BinaryJoin.
+///
+/// The descriptor is the optimizer's `join_conditions` (a list of equality
+/// semantics; ImplHashJoinRule refuses any non-EQ condition, so the shape is
+/// guaranteed before lowering). Lowering only resolves the key *columns* from the
+/// child layouts — a column lookup, never label/property re-inference from a
+/// column — and places the build side. Keys that still do not resolve to an
+/// output column (layout-dependent) are a defensive fallback: they are logged
+/// under EUGRAPH_PLAN_DEBUG and fall back to CrossProduct rather than mis-key.
+static std::optional<PlanOperatorResult> planHonoredHashJoin(const binder::BoundBinaryJoinOp& join,
+                                                             PlanOperatorResult& lr, PlanOperatorResult& rr,
+                                                             PlanContext& ctx, bool build_left) {
     ensureSlotLayout(lr, ctx);
-
-    const auto right_offset = static_cast<uint32_t>(lr.output_schema.size());
-    remapLogicalOpColumnIndices(join.right, right_offset);
-    Schema right_input_schema;
-    std::vector<binder::BoundType> right_input_types;
-    auto right_result = planBoundOperator(join.right, store, meta, ctx, right_input_schema, right_input_types);
-    if (std::holds_alternative<std::string>(right_result))
-        return std::nullopt;
-    auto rr = extractChildResult(std::move(right_result));
     ensureSlotLayout(rr, ctx);
+
+    auto bail = [](const char* why) -> std::optional<PlanOperatorResult> {
+        if (std::getenv(config::kEnvPlanDebug) != nullptr)
+            spdlog::warn("[planner] chosen HashJoin not instantiated ({}); falling back to CrossProduct", why);
+        return std::nullopt;
+    };
+
+    std::vector<uint32_t> left_keys;
+    std::vector<uint32_t> right_keys;
+    for (const auto& cond : join.join_conditions) {
+        const auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&cond);
+        if (!binop || !*binop || (*binop)->op != cypher::BinaryOperator::EQ)
+            return bail("non-equality condition");
+        auto ll = joinKeyColumn((*binop)->left, lr.output_schema, lr.slot_layout, ctx);
+        auto lr_col = joinKeyColumn((*binop)->right, lr.output_schema, lr.slot_layout, ctx);
+        auto rl = joinKeyColumn((*binop)->left, rr.output_schema, rr.slot_layout, ctx);
+        auto rr_col = joinKeyColumn((*binop)->right, rr.output_schema, rr.slot_layout, ctx);
+        if (ll && rr_col && !lr_col && !rl) {
+            left_keys.push_back(*ll);
+            right_keys.push_back(*rr_col);
+        } else if (lr_col && rl && !ll && !rr_col) {
+            left_keys.push_back(*lr_col);
+            right_keys.push_back(*rl);
+        } else {
+            return bail("join key does not resolve to one column per side");
+        }
+    }
+    if (left_keys.empty())
+        return bail("empty key list");
+
+    // Build side and budget feasibility came with the CBO descriptor; lowering
+    // only forwards them (the operator still enforces the row budget at runtime).
+    const size_t max_build_rows = optimizer::joinBuildRowBudget();
 
     Schema output_schema = lr.output_schema;
     output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
@@ -2918,55 +1567,13 @@ PhysicalPlanner::tryPlanGenericHashJoin(binder::BoundFilterOp& filter, binder::B
     TupleSlotLayout layout = lr.slot_layout;
     layout.merge(rr.slot_layout);
 
-    auto fallback_cross_filter = [&]() -> PlanOperatorResult {
-        auto cross = std::make_unique<CrossProductPhysicalOp>(std::move(lr.op), std::move(rr.op),
-                                                              Schema(lr.output_schema), Schema(rr.output_schema),
-                                                              std::vector<binder::BoundType>(output_types));
-        auto filter_op = std::make_unique<FilterPhysicalOp>(optimizer::cloneBoundExpression(filter.predicate),
-                                                            Schema(output_schema), std::move(cross));
-        filter_op->setEvalContext(ctx.eval_ctx);
-        auto result = PlanOperatorResult{std::move(filter_op), std::move(output_schema), std::move(output_types),
-                                         std::move(layout)};
-        return dispatchProjectionExtract(std::move(result), store, ctx);
-    };
-
-    std::vector<uint32_t> left_keys;
-    std::vector<uint32_t> right_keys;
-    for (const auto* conjunct : conjuncts) {
-        const auto* binop_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjunct);
-        if (!binop_ptr || !*binop_ptr || (*binop_ptr)->op != cypher::BinaryOperator::EQ)
-            return fallback_cross_filter();
-        const auto& binop = **binop_ptr;
-        auto ll = joinKeyColumn(binop.left, lr.output_schema, lr.slot_layout, ctx);
-        auto lr_col = joinKeyColumn(binop.right, lr.output_schema, lr.slot_layout, ctx);
-        auto rl = joinKeyColumn(binop.left, rr.output_schema, rr.slot_layout, ctx);
-        auto rr_col = joinKeyColumn(binop.right, rr.output_schema, rr.slot_layout, ctx);
-
-        // Exactly one operand on each side; do not guess if both/neither resolve.
-        if (ll && rr_col && !lr_col && !rl) {
-            left_keys.push_back(*ll);
-            right_keys.push_back(*rr_col);
-        } else if (lr_col && rl && !ll && !rr_col) {
-            left_keys.push_back(*lr_col);
-            right_keys.push_back(*rl);
-        } else {
-            return fallback_cross_filter();
-        }
-    }
-    if (left_keys.empty())
-        return fallback_cross_filter();
-    auto hash_join = std::make_unique<HashJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), std::move(left_keys),
-                                                          std::move(right_keys), output_types, output_schema,
-                                                          build_left, max_build_rows);
-    hash_join->setEvalContext(ctx.eval_ctx);
-    auto plan_result =
-        PlanOperatorResult{std::move(hash_join), std::move(output_schema), std::move(output_types), std::move(layout)};
-    return dispatchProjectionExtract(std::move(plan_result), store, ctx);
+    auto join_op = std::make_unique<HashJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), std::move(left_keys),
+                                                        std::move(right_keys), output_types, output_schema, build_left,
+                                                        max_build_rows);
+    join_op->setEvalContext(ctx.eval_ctx);
+    return PlanOperatorResult{std::move(join_op), std::move(output_schema), std::move(output_types), std::move(layout)};
 }
 
-/// Bottom-up (post-order) compilation: visit children first so each
-/// operator can use its child's output layout to resolve its own
-/// BoundColumnRef slot_ids → column_indices.
 static void compileOperatorTree(PhysicalOperator* op, PlanContext& ctx) {
     if (!op)
         return;
@@ -3010,217 +1617,6 @@ void dumpPhysicalPlan(const PhysicalOperator* op, int depth) {
         dumpPhysicalPlan(child, depth + 1);
 }
 
-/// True when the correlated source below `op` injects `name` as a column. The
-/// binder's saved chain-endpoint value (__exists_saved_N) has this provenance;
-/// an arbitrary Filter(id(a) == id(b)) written by the user does not.
-bool subtreeProvidesCorrelatedVariable(binder::BoundLogicalOperator& op, const std::string& name) {
-    bool found = false;
-    std::visit(
-        [&](auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
-                found = std::find(value.variables.begin(), value.variables.end(), name) != value.variables.end();
-            }
-        },
-        op);
-    if (found)
-        return true;
-    optimizer::forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) {
-        if (!found)
-            found = subtreeProvidesCorrelatedVariable(child, name);
-    });
-    return found;
-}
-
-/// `id(<ref>)` argument matcher for the binder-generated endpoint equality.
-/// Generated predicates use VERTEX_REF columns on purpose (see
-/// bindExistsSubPlan's SavedCorr); a user-written id() comparison compares
-/// VERTEX columns and must not be rewritten here.
-const binder::BoundColumnRef* vertexRefIdArgument(const binder::BoundExpression& expr) {
-    auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&expr);
-    if (!call || !*call || !(*call)->func_def || (*call)->func_def->name != "id" || (*call)->args.size() != 1)
-        return nullptr;
-    auto* ref = std::get_if<binder::BoundColumnRef>(&(*call)->args[0]);
-    if (!ref || ref->type.kind != binder::BoundTypeKind::VERTEX_REF)
-        return nullptr;
-    return ref;
-}
-
-/// Rewrite the binder's post-Expand correlated-endpoint filter
-///
-///   Filter(id(__exists_dst_N) == id(__exists_saved_N))
-///     Expand(dst=__exists_dst_N, ...)
-///
-/// into `Expand(dst=__exists_saved_N)` and drop the filter. The Expand then has
-/// a bound destination and can use one exact `{src}{dir}{label}{neighbor}` seek
-/// per row instead of scanning the source's whole adjacency. This must run
-/// before collectPlanRequirements: the dst binding changes which columns the
-/// requirements/PE analysis has to materialise.
-
-/// Count every variable reference inside a bound expression, keyed by name.
-/// `forEachSubExpr` deliberately does not descend into the property-reference
-/// family, so those objects are walked explicitly -- a property read must count
-/// as an expression consumer for the topology-only guard.
-void countExprRefs(const binder::BoundExpression& expr, std::unordered_map<std::string, int>& refs) {
-    std::visit(
-        [&](const auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, binder::BoundVariableRef> || std::is_same_v<T, binder::BoundColumnRef>) {
-                ++refs[value.name];
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
-                if (value)
-                    countExprRefs(value->object, refs);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                if (value)
-                    countExprRefs(value->object, refs);
-            }
-        },
-        expr);
-    binder::forEachSubExpr(expr, [&](const binder::BoundExpression& child) { countExprRefs(child, refs); });
-}
-
-const binder::BoundColumnRef* exprRef(const binder::BoundExpression& expr) {
-    return std::get_if<binder::BoundColumnRef>(&expr);
-}
-
-const binder::BoundVariableRef* exprVarRef(const binder::BoundExpression& expr) {
-    return std::get_if<binder::BoundVariableRef>(&expr);
-}
-
-/// Reference index over a whole bound plan. `complete` is false when the walk
-/// met an operator whose expression fields it does not enumerate (write ops,
-/// CALL, ...); the topology-only guard then refuses to rewrite.
-struct PlanRefIndex {
-    std::unordered_map<std::string, int> expr_refs;
-    /// References that are a direct `size(<ref>)` argument: they observe only
-    /// the list length, never an element.
-    std::unordered_map<std::string, int> size_arg_refs;
-    std::unordered_set<std::string> path_elements;
-    bool complete = true;
-};
-
-void collectPlanRefsInto(const binder::BoundLogicalOperator& op, PlanRefIndex& index) {
-    auto visit_expr = [&](const binder::BoundExpression& e) {
-        if (const auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&e)) {
-            if (*call && (*call)->func_def && (*call)->func_def->name == "size") {
-                for (const auto& arg : (*call)->args)
-                    if (const auto* ref = exprVarRef(arg))
-                        ++index.size_arg_refs[ref->name];
-                    else if (const auto* ref = exprRef(arg))
-                        ++index.size_arg_refs[ref->name];
-            }
-        }
-        countExprRefs(e, index.expr_refs);
-    };
-    auto recurse = [&](const binder::BoundLogicalOperator& child) { collectPlanRefsInto(child, index); };
-    std::visit(
-        [&](const auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                if (!v)
-                    return;
-                visit_expr(v->predicate);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                if (!v)
-                    return;
-                for (const auto& item : v->items)
-                    visit_expr(item.expr);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                if (!v)
-                    return;
-                for (const auto& item : v->items)
-                    visit_expr(item.expr);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
-                if (!v)
-                    return;
-                for (const auto& key : v->group_keys)
-                    visit_expr(key);
-                for (const auto& agg : v->aggregates)
-                    for (const auto& arg : agg.arguments)
-                        visit_expr(arg);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
-                if (!v)
-                    return;
-                visit_expr(v->list_expr);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
-                if (v)
-                    recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (!v)
-                    return;
-                for (const auto& name : v->element_variables)
-                    index.path_elements.insert(name);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                if (v)
-                    recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (!v)
-                    return;
-                if (!v->path_variable.empty())
-                    index.path_elements.insert(v->path_variable);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
-                if (!v)
-                    return;
-                recurse(v->left);
-                recurse(v->right);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (!v)
-                    return;
-                recurse(v->left);
-                recurse(v->anchor);
-                for (const auto& branch : v->branches)
-                    recurse(branch);
-            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
-                                 std::is_same_v<T, binder::BoundScanOp> ||
-                                 std::is_same_v<T, binder::BoundLabelScanOp> ||
-                                 std::is_same_v<T, binder::BoundSingletonOp>) {
-                // leaves: no expressions
-            } else {
-                // Write operators / CALL / anything with expression fields this
-                // walker does not enumerate. Refuse the rewrite rather than risk
-                // an unobserved object consumer.
-                index.complete = false;
-            }
-        },
-        op);
-}
-
-/// Name of a bare variable reference (BoundVariableRef or an already-lowered
-/// BoundColumnRef), or empty when the expression is not a single reference.
-std::string bareRefName(const binder::BoundExpression& expr) {
-    if (const auto* ref = exprRef(expr))
-        return ref->name;
-    if (const auto* ref = exprVarRef(expr))
-        return ref->name;
-    return {};
-}
-
-template <typename Visit> void forEachPlanNode(const binder::BoundLogicalOperator& op, Visit&& visit) {
-    visit(op);
-    optimizer::forEachLogicalChild(const_cast<binder::BoundLogicalOperator&>(op),
-                                   [&](binder::BoundLogicalOperator& child) { forEachPlanNode(child, visit); });
-}
-
-/// A collected entity whose list is only counted: the collected variable has no
-/// expression consumer except the `collect(x)` argument, the list variable has
-/// no expression consumer except the `UNWIND` that iterates it, and the loop
-/// variable has no expression consumer except the comprehension's own
-/// `collect(loop var)`. Under those conditions the list never exposes an
-/// element, so keeping it at the topology stage is semantically equivalent.
 struct TopologyOnlyCollect {
     binder::SlotId slot = binder::INVALID_SLOT_ID;
     std::string name;
@@ -3228,14 +1624,13 @@ struct TopologyOnlyCollect {
 
 std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder::BoundLogicalOperator& root,
                                                                    const optimizer::SlotResolver& resolver) {
-    PlanRefIndex index;
-    collectPlanRefsInto(root, index);
+    optimizer::PlanRefIndex index = optimizer::collectPlanRefs(root);
     if (!index.complete)
         return {};
 
     const bool dbg = std::getenv(config::kEnvPlanDebug) != nullptr;
     std::vector<TopologyOnlyCollect> result;
-    forEachPlanNode(root, [&](const binder::BoundLogicalOperator& node) {
+    optimizer::forEachPlanNode(root, [&](const binder::BoundLogicalOperator& node) {
         const auto* pc_holder = std::get_if<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(&node);
         if (!pc_holder || !*pc_holder || !(*pc_holder)->size_only_output)
             return;
@@ -3246,11 +1641,11 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
         // must be iterated by exactly one UNWIND inside the right sub-plan.
         const binder::BoundUnwindOp* unwind = nullptr;
         std::string list_name;
-        forEachPlanNode(apply.right, [&](const binder::BoundLogicalOperator& inner) {
+        optimizer::forEachPlanNode(apply.right, [&](const binder::BoundLogicalOperator& inner) {
             const auto* unwind_holder = std::get_if<std::unique_ptr<binder::BoundUnwindOp>>(&inner);
             if (!unwind_holder || !*unwind_holder || unwind)
                 return;
-            const std::string name = bareRefName((*unwind_holder)->list_expr);
+            const std::string name = optimizer::bareRefName((*unwind_holder)->list_expr);
             if (name.empty())
                 return;
             bool correlated = false;
@@ -3268,7 +1663,7 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
         // Find the aggregate in the left sub-plan that produces the list.
         const binder::BoundAggregateOp* producer = nullptr;
         size_t agg_index = 0;
-        forEachPlanNode(apply.left, [&](const binder::BoundLogicalOperator& inner) {
+        optimizer::forEachPlanNode(apply.left, [&](const binder::BoundLogicalOperator& inner) {
             const auto* agg_holder = std::get_if<std::unique_ptr<binder::BoundAggregateOp>>(&inner);
             if (!agg_holder || !*agg_holder || producer)
                 return;
@@ -3286,13 +1681,13 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
         const auto& collect = producer->aggregates[agg_index];
         if (collect.function_name != "collect" || collect.distinct || collect.arguments.size() != 1)
             return;
-        const std::string collected_name = bareRefName(collect.arguments[0]);
+        const std::string collected_name = optimizer::bareRefName(collect.arguments[0]);
         if (collected_name.empty())
             return;
         const binder::BoundType* collected_type = nullptr;
-        if (const auto* ref = exprRef(collect.arguments[0]))
+        if (const auto* ref = optimizer::exprRef(collect.arguments[0]))
             collected_type = &ref->type;
-        else if (const auto* ref = exprVarRef(collect.arguments[0]))
+        else if (const auto* ref = optimizer::exprVarRef(collect.arguments[0]))
             collected_type = &ref->type;
         if (!collected_type || (collected_type->kind != binder::BoundTypeKind::VERTEX &&
                                 collected_type->kind != binder::BoundTypeKind::EDGE))
@@ -3331,115 +1726,6 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
 /// VarLen endpoints, Unwind variable, path elements, correlated columns). These
 /// are not expressions, so countExprRefs cannot see them. The endpoint rewrite
 /// must not rename a destination that a later operator still reads by name.
-void countPlanFieldRefs(const binder::BoundLogicalOperator& op, std::unordered_map<std::string, int>& refs) {
-    auto add = [&](const std::string& name) {
-        if (!name.empty())
-            ++refs[name];
-    };
-    std::visit(
-        [&](const auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                if (v) {
-                    add(v->src_variable);
-                    add(v->dst_variable);
-                    add(v->edge_variable);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v) {
-                    add(v->src_variable);
-                    add(v->dst_variable);
-                    add(v->edge_variable);
-                    add(v->path_variable);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
-                if (v)
-                    add(v->variable);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (v) {
-                    add(v->path_variable);
-                    for (const auto& element : v->element_variables)
-                        add(element);
-                }
-            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
-                for (const auto& name : v.variables)
-                    add(name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
-                if (v)
-                    for (const auto& corr : v->correlation)
-                        add(corr.left_var);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (v)
-                    for (const auto& corr : v->correlation)
-                        add(corr.left_var);
-            }
-        },
-        op);
-    optimizer::forEachLogicalChild(op,
-                                   [&](const binder::BoundLogicalOperator& child) { countPlanFieldRefs(child, refs); });
-}
-
-bool rewriteDstBoundExpandFilters(binder::BoundLogicalOperator& op, bool allow_probe,
-                                  const std::unordered_map<std::string, int>* expr_refs,
-                                  const std::unordered_map<std::string, int>* field_refs) {
-    if (!expr_refs || !field_refs)
-        return false;
-    if (auto* filter_holder = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&op)) {
-        if (!*filter_holder)
-            return false;
-        auto& filter = **filter_holder;
-        auto* bin_holder = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
-        auto* expand_holder = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&filter.child);
-        if (bin_holder && *bin_holder && (*bin_holder)->op == cypher::BinaryOperator::EQ && expand_holder &&
-            *expand_holder) {
-            auto& expand = **expand_holder;
-            const auto* left = vertexRefIdArgument((*bin_holder)->left);
-            const auto* right = vertexRefIdArgument((*bin_holder)->right);
-            const binder::BoundColumnRef* saved = nullptr;
-            if (left && right && !expand.dst_variable.empty() && left->name != right->name) {
-                if (left->name == expand.dst_variable)
-                    saved = right;
-                else if (right->name == expand.dst_variable)
-                    saved = left;
-            }
-            // The destination may be read by another operator by name (the
-            // common case is the next hop of a chained pattern:
-            // Expand(dst=__exists_dst_0) then Expand(src=__exists_dst_0)).
-            // Renaming it to the saved column would leave that reference
-            // dangling. Require the id filter to be the only expression
-            // reference and the Expand itself the only field reference.
-            bool safe_to_fold = true;
-            if (saved) {
-                const std::string& dst_name = expand.dst_variable;
-                auto eit = expr_refs->find(dst_name);
-                auto fit = field_refs->find(dst_name);
-                const int expr_count = eit == expr_refs->end() ? 0 : eit->second;
-                const int field_count = fit == field_refs->end() ? 0 : fit->second;
-                if (expr_count != 1 || field_count != 1)
-                    safe_to_fold = false;
-            }
-            if (saved && safe_to_fold && subtreeProvidesCorrelatedVariable(expand.child, saved->name)) {
-                expand.dst_variable = saved->name;
-                expand.dst_column_index = saved->column_index;
-                expand.dst_slot_id = saved->slot_id;
-                expand.planner_dst_slot_id = saved->slot_id;
-                // A directed correlation can be flipped: the bound destination's
-                // adjacency is materialised once per batch and the source rows
-                // are probed against it. Undirected keeps the exact-seek path.
-                expand.probe_bound_dst = allow_probe && expand.direction != cypher::RelationshipDirection::UNDIRECTED;
-                binder::BoundLogicalOperator rewritten = std::move(filter.child);
-                op = std::move(rewritten);
-                rewriteDstBoundExpandFilters(op, allow_probe, expr_refs, field_refs);
-                return true;
-            }
-        }
-    }
-    bool changed = false;
-    optimizer::forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) {
-        changed = rewriteDstBoundExpandFilters(child, allow_probe, expr_refs, field_refs) || changed;
-    });
-    return changed;
-}
 } // namespace
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
@@ -3469,17 +1755,6 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     optimizer::allocateAllSlots(bound_plan.root, ctx.var_slots, ctx.slot_allocator);
     optimizer::lowerEdgeUniquenessRefs(bound_plan.root, ctx.var_slots);
     optimizer::lowerPredicateRefs(bound_plan.root, ctx.var_slots);
-    // Correlated chain endpoints: fold the binder's post-Expand
-    // `id(dst) == id(saved)` filter into a bound Expand destination, so the
-    // Expand can do one exact seek per row instead of scanning every edge of
-    // its source. Must precede requirements collection (see the helper).
-    PlanRefIndex endpoint_expr_refs;
-    collectPlanRefsInto(bound_plan.root, endpoint_expr_refs);
-    std::unordered_map<std::string, int> endpoint_field_refs;
-    countPlanFieldRefs(bound_plan.root, endpoint_field_refs);
-    rewriteDstBoundExpandFilters(bound_plan.root, ctx.read_only,
-                                 endpoint_expr_refs.complete ? &endpoint_expr_refs.expr_refs : nullptr,
-                                 &endpoint_field_refs);
     ctx.alias_map = optimizer::collectAliasSlotMap(bound_plan.root, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(bound_plan.root, SubtreeTrait::PatternComprehension);
 
@@ -3539,17 +1814,6 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // slot_ids allocated above. No base_col / ProjectResetMap machinery —
     // slot_ids are stable across schema-changing operators.
     optimizer::lowerColumnIndices(bound_plan.root, ctx.extraction_info, ctx.resolver());
-
-    // Post-CBO logical rewrite (not a Cascades OptRule): PatternComprehensionApply
-    // has no implementation rule and cannot own a CBO winner, so this one-way
-    // rewrite runs after slot/PE/lowering and before physical planning.
-    // Shared-anchor rewrite. It runs after the analysis/lowering phases above
-    // (slot allocation, PE plans, column-index lowering) so those passes see the
-    // same plan they always have; the fork only re-parents already-lowered
-    // subtrees, and the physical planner lowers it directly. A plan containing a
-    // PatternComprehensionApply can never have a CBO winner (there is no
-    // implementation rule for it), so this is the plan that executes.
-    optimizer::rewritePatternComprehensionAnchorShare(bound_plan.root, ctx.slot_allocator, ctx.var_slots);
 
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
@@ -3637,6 +1901,14 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
             join->left = materializeChosen(*chosen.children[0], ctx);
             join->right = materializeChosen(*chosen.children[1], ctx);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result)) {
+            // Anchor stays a normal subtree; the probe group materializes to the
+            // IndexProbe leaf whose descriptor the lowering consumes.
+            auto& probe_join = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result);
+            probe_join->anchor = materializeChosen(*chosen.children[0], ctx);
+            auto probe_tree = materializeChosen(*chosen.children[1], ctx);
+            if (auto* probe = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&probe_tree); probe && *probe)
+                probe_join->probe = **probe;
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
             sj->left = materializeChosen(*chosen.children[0], ctx);
@@ -3658,20 +1930,13 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
             uo->left = materializeChosen(*chosen.children[0], ctx);
             uo->right = materializeChosen(*chosen.children[1], ctx);
         }
-    } else if (chosen.children.size() > 2) {
-        if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
-            auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
-            fork->left = materializeChosen(*chosen.children[0], ctx);
-            fork->anchor = materializeChosen(*chosen.children[1], ctx);
-            fork->branches.clear();
-            for (size_t i = 2; i < chosen.children.size(); ++i)
-                fork->branches.push_back(materializeChosen(*chosen.children[i], ctx));
-        }
     }
     if (auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&result)) {
         if (join && *join)
-            ctx.chosen_join_tags[join->get()] = chosen.tag;
+            ctx.chosen_join_attrs[join->get()] = PlanContext::ChosenJoinAttr{chosen.tag, chosen.build_left};
     }
+    if (auto* vle = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&result); vle && *vle)
+        ctx.chosen_varlen_batch[vle->get()] = chosen.batch_shortest_path;
     return result;
 }
 
@@ -3724,6 +1989,11 @@ void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, cons
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child.has_value())
                     applyEnrichInPlace(*v->child, var, req);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // Enrichment of the anchor's variables lowers into the anchor
+                // subtree; the probe descriptor has no property columns to grow.
+                if (v)
+                    applyEnrichInPlace(v->anchor, var, req);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 // Both inputs: the row source and the body (which reads enriched
                 // values out of the correlated source).
@@ -3751,13 +2021,6 @@ void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, cons
                 if (v) {
                     applyEnrichInPlace(v->left, var, req);
                     applyEnrichInPlace(v->right, var, req);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (v) {
-                    applyEnrichInPlace(v->left, var, req);
-                    applyEnrichInPlace(v->anchor, var, req);
-                    for (auto& branch : v->branches)
-                        applyEnrichInPlace(branch, var, req);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
@@ -3860,25 +2123,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     return phys_op;
 }
 
-namespace {
-
-/// Locate the `BoundCorrelatedSourceOp` leaf that a fork branch consumes.
-/// The anchor-sharing rewrite turns every branch tail into a rooted sub-plan
-/// whose bottom is an (initially empty) correlated source; the planner fills in
-/// the anchor's schema before planning the tail so downstream operators resolve
-/// their columns by name against the shared rows.
-binder::BoundCorrelatedSourceOp* findForkBranchSource(binder::BoundLogicalOperator& op) {
-    if (auto* cs = std::get_if<binder::BoundCorrelatedSourceOp>(&op))
-        return cs;
-    binder::BoundCorrelatedSourceOp* found = nullptr;
-    optimizer::forEachLogicalChild(op, [&found](binder::BoundLogicalOperator& child) {
-        if (!found)
-            found = findForkBranchSource(child);
-    });
-    return found;
-}
-
-} // namespace
+namespace {} // namespace
 
 std::variant<PlanOperatorResult, std::string>
 PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
@@ -4007,7 +2252,7 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
         auto op = std::make_unique<DynamicIndexJoinPhysicalOp>(
             std::move(lr.op), std::move(rev), dynamic_scan, static_cast<uint32_t>(lk), dynamic_key_col,
             static_cast<uint32_t>(rk), lr.output_schema, rs, std::vector<binder::BoundType>(jt), js,
-            hashJoinMaxBuildRows());
+            optimizer::joinBuildRowBudget());
         op->setEvalContext(ctx.eval_ctx);
         op->setSlotLayout(lay);
         auto result = PlanOperatorResult{std::move(op), std::move(js), std::move(jt), std::move(lay)};
@@ -4017,9 +2262,113 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
     auto join = std::make_unique<HashJoinPhysicalOp>(
         std::move(lr.op), std::move(rev), std::vector<uint32_t>{static_cast<uint32_t>(lk)},
         std::vector<uint32_t>{static_cast<uint32_t>(rk)}, std::vector<binder::BoundType>(jt), js, ij.build_left,
-        hashJoinMaxBuildRows());
+        optimizer::joinBuildRowBudget());
     join->setEvalContext(ctx.eval_ctx);
     auto result = PlanOperatorResult{std::move(join), std::move(js), std::move(jt), std::move(lay)};
+    return dispatchProjectionExtract(std::move(result), store, ctx);
+}
+
+/// Traversal direction of the edge step when walking from the probe's scanned
+/// destination vertex back to the join variable. `BoundIndexProbeOp::direction`
+/// is expressed in the original pattern's (source -> target) orientation, so the
+/// reverse traversal flips it.
+static cypher::RelationshipDirection reverseProbeDirection(cypher::RelationshipDirection direction) {
+    switch (direction) {
+    case cypher::RelationshipDirection::LEFT_TO_RIGHT:
+        return cypher::RelationshipDirection::RIGHT_TO_LEFT;
+    case cypher::RelationshipDirection::RIGHT_TO_LEFT:
+        return cypher::RelationshipDirection::LEFT_TO_RIGHT;
+    case cypher::RelationshipDirection::UNDIRECTED:
+        return cypher::RelationshipDirection::UNDIRECTED;
+    }
+    return cypher::RelationshipDirection::UNDIRECTED;
+}
+
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planIndexProbeJoin(binder::BoundIndexProbeJoinOp& probe_join, IAsyncGraphDataStore& store,
+                                    IAsyncGraphMetaStore& meta, PlanContext& ctx, Schema input_schema,
+                                    const std::vector<binder::BoundType>& input_types) {
+    const binder::BoundIndexProbeOp& probe = probe_join.probe;
+    if (probe.index_id == 0 || probe.index_property_name.empty())
+        return std::string("IndexProbeJoin: probe descriptor has no resolved index");
+    if (probe.target_label_ids.size() != 1)
+        return std::string("IndexProbeJoin: probe needs exactly one destination label");
+
+    // 1. Anchor: the complete pre-existing left pipeline, planned verbatim.
+    auto anchor_result = planBoundOperator(probe_join.anchor, store, meta, ctx, input_schema, input_types);
+    if (std::holds_alternative<std::string>(anchor_result))
+        return std::get<std::string>(anchor_result);
+    auto anchor = extractChildResult(std::move(anchor_result));
+    ensureSlotLayout(anchor, ctx);
+
+    const int left_key = findColumn(anchor.output_schema, probe.source_variable);
+    if (left_key < 0)
+        return std::string("IndexProbeJoin: anchor does not produce '") + probe.source_variable + "'";
+
+    // 2. Probe: index range scan of the destination label followed by one edge
+    //    step back to the join variable. Reusing the normal operator tree keeps
+    //    label filtering, direction handling, layout and property-extract
+    //    dispatch in the existing lowering instead of duplicating them here.
+    binder::BoundLabelScanOp index_scan;
+    index_scan.variable = probe.target_variable;
+    index_scan.column_index = 0;
+    index_scan.label_ids = {probe.target_label_ids.front()};
+    index_scan.index_scan = true;
+    index_scan.index_id = probe.index_id;
+    if (probe.index_prop != 0)
+        index_scan.index_prop_ids = {probe.index_prop};
+    if (probe.equality)
+        index_scan.index_eq_values = {*probe.equality};
+    index_scan.index_lower = probe.lower;
+    index_scan.index_upper = probe.upper;
+    index_scan.index_lower_inclusive = probe.lower_inclusive;
+    index_scan.index_upper_inclusive = probe.upper_inclusive;
+
+    // The probe stream re-derives the join variable; give it a private column
+    // name so the join output does not contain two columns for one SlotId.
+    std::string source_alias = "index_probe_source";
+    while (findColumn(anchor.output_schema, source_alias) >= 0)
+        source_alias += "_";
+
+    auto expand = std::make_unique<binder::BoundExpandOp>();
+    expand->src_variable = probe.target_variable;
+    expand->src_column_index = 0;
+    expand->edge_variable = probe.edge_variable;
+    expand->edge_column_index = 0;
+    expand->dst_variable = source_alias;
+    expand->dst_column_index = 0;
+    expand->edge_label_ids = probe.edge_label_ids;
+    expand->direction = reverseProbeDirection(probe.direction);
+    expand->child = std::move(index_scan);
+
+    Schema probe_input_schema;
+    std::vector<binder::BoundType> probe_input_types;
+    binder::BoundLogicalOperator probe_tree = std::move(expand);
+    auto probe_result = planBoundOperator(probe_tree, store, meta, ctx, probe_input_schema, probe_input_types);
+    if (std::holds_alternative<std::string>(probe_result))
+        return std::get<std::string>(probe_result);
+    auto probe_plan = extractChildResult(std::move(probe_result));
+    ensureSlotLayout(probe_plan, ctx);
+
+    const int right_key = findColumn(probe_plan.output_schema, source_alias);
+    if (right_key < 0)
+        return std::string("IndexProbeJoin: probe did not produce its join column");
+
+    // 3. Hash join on the source variable. The anchor is the (small) build side;
+    //    the index stream probes it.
+    Schema output_schema = anchor.output_schema;
+    output_schema.insert(output_schema.end(), probe_plan.output_schema.begin(), probe_plan.output_schema.end());
+    auto output_types = anchor.output_types;
+    output_types.insert(output_types.end(), probe_plan.output_types.begin(), probe_plan.output_types.end());
+    TupleSlotLayout layout = anchor.slot_layout;
+    layout.merge(probe_plan.slot_layout);
+
+    auto join = std::make_unique<HashJoinPhysicalOp>(
+        std::move(anchor.op), std::move(probe_plan.op), std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
+        std::vector<uint32_t>{static_cast<uint32_t>(right_key)}, output_types, output_schema, /*build_left=*/true,
+        optimizer::joinBuildRowBudget());
+    join->setEvalContext(ctx.eval_ctx);
+    PlanOperatorResult result{std::move(join), std::move(output_schema), std::move(output_types), std::move(layout)};
     return dispatchProjectionExtract(std::move(result), store, ctx);
 }
 
@@ -4172,15 +2521,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_schema.push_back(val.variable);
                     output_types.push_back(binder::BoundType::VertexRef());
                 }
-                std::vector<LabelId> prune_labels;
-                if (ctx.eval_ctx.allow_static_schema_pruning) {
-                    auto hint = ctx.static_prune_hints.find(val.variable);
-                    if (hint != ctx.static_prune_hints.end())
-                        prune_labels = hint->second.vertex_labels;
-                }
+                // The optimizer owns scan pruning decisions; the lowering only
+                // instantiates the chosen scan (currently always a full scan for
+                // an unlabelled variable).
                 auto result = std::make_unique<AllNodeScanPhysicalOp>(
                     val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id, ctx.schema,
-                    anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::move(prune_labels));
+                    anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
                 TupleSlotLayout scan_layout = makeSlotLayout(output_schema, ctx);
                 auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                       std::move(output_types), std::move(scan_layout)};
@@ -4194,7 +2540,20 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_types.push_back(binder::BoundType::VertexRef());
                 }
                 std::unique_ptr<PhysicalOperator> result;
-                if (val.index_scan_values && val.index_id != 0) {
+                if (val.index_scan && val.index_id != 0) {
+                    auto mode = val.index_eq_values.empty() ? IndexScanPhysicalOp::ScanMode::RANGE
+                                                            : IndexScanPhysicalOp::ScanMode::EQUALITY;
+                    std::optional<std::vector<PropertyValue>> lower;
+                    std::optional<std::vector<PropertyValue>> upper;
+                    if (val.index_lower)
+                        lower = std::vector<PropertyValue>{*val.index_lower};
+                    if (val.index_upper)
+                        upper = std::vector<PropertyValue>{*val.index_upper};
+                    result = std::make_unique<IndexScanPhysicalOp>(
+                        val.variable, val.index_id, val.index_prop_ids, mode, val.index_eq_values, lower, upper,
+                        std::vector<binder::BoundType>(output_types), store, ctx.schema, 0, val.index_lower_inclusive,
+                        val.index_upper_inclusive);
+                } else if (val.index_scan_values && val.index_id != 0) {
                     result = std::make_unique<IndexScanValuesPhysicalOp>(val.variable, val.index_id, store,
                                                                          output_types, output_schema);
                 } else {
@@ -4215,6 +2574,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                 if constexpr (std::is_same_v<Elem, binder::BoundIndexJoinOp>) {
                     return planIndexJoin(v, store, meta, ctx, input_schema, input_types);
+                } else if constexpr (std::is_same_v<Elem, binder::BoundIndexProbeJoinOp>) {
+                    return planIndexProbeJoin(v, store, meta, ctx, input_schema, input_types);
                 } else if constexpr (std::is_same_v<Elem, binder::BoundExpandOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -4291,12 +2652,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids,
                         dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels), full_edge_scan,
                         cache_neighbors, all_edge_labels, v.probe_bound_dst, dst_label_scan_rows);
-                    if (ctx.expand_allowed_filter && ctx.expand_allowed_filter->dst_var == v.dst_variable &&
-                        v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT) {
-                        result->setAllowedDstFilter(ctx.expand_allowed_filter->index_id,
-                                                    ctx.expand_allowed_filter->edge_label);
-                        ctx.filtered_expand = result.get();
-                    }
                     ExpandPhysicalOp* expand_op = result.get();
                     // Input index for a PE directly above this Expand.
                     int expand_dst_col = -1;
@@ -4434,12 +2789,18 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     if (v.shortest_path || v.all_shortest_paths) {
+                        // The batch strategy is a ChosenPlan attribute produced by
+                        // ImplVarLenExpandRule; lowering only forwards it (RBO has
+                        // no chosen plan and therefore keeps the per-row default).
+                        bool batch_shortest_path = false;
+                        if (auto it = ctx.chosen_varlen_batch.find(&v); it != ctx.chosen_varlen_batch.end())
+                            batch_shortest_path = it->second;
                         auto result = std::make_unique<ShortestPathPhysicalOp>(
                             v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops,
                             v.max_hops, store, std::move(child_schema), std::move(child_op), v.path_variable,
                             v.path_slot_id, v.all_shortest_paths, v.dst_label_ids, v.dst_label_missing,
                             v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value,
-                            v.batch_shortest_path);
+                            batch_shortest_path);
                         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                               std::move(output_types), TupleSlotLayout{}};
                         plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
@@ -4462,104 +2823,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
-                    // Attach OR index-value pruning hints to a child VarLenExpand.
-                    if (auto* vle_ptr = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&v.child)) {
-                        if (vle_ptr && *vle_ptr)
-                            trySetVarlenOrFilters(v, **vle_ptr, ctx);
-                    }
-
-                    // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
-                    if (std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {
-                        auto& scan_op = std::get<binder::BoundLabelScanOp>(v.child);
-                        // Index scan only when single label (multi-label requires runtime intersection)
-                        if (scan_op.label_ids.size() == 1) {
-                            auto def_it = ctx.label_defs.find(scan_op.label_ids[0]);
-                            if (def_it != ctx.label_defs.end()) {
-                                std::vector<const binder::BoundBinaryOp*> conditions;
-                                collectBoundConditions(v.predicate, conditions);
-                                if (!conditions.empty()) {
-                                    auto idx_result = tryBoundIndexScan(scan_op, conditions, scan_op.label_ids[0],
-                                                                        def_it->second, store, ctx);
-                                    if (idx_result.has_value())
-                                        return std::move(idx_result.value());
-                                }
-                            }
-                        }
-                    }
-
-                    // ── List index join: Filter(CrossProduct) with x.prop IN left.list ──
-                    if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
-                        if (join_op && *join_op) {
-                            bool cbo_chose_cross = false;
-                            if (auto it = ctx.chosen_join_tags.find(join_op->get()); it != ctx.chosen_join_tags.end())
-                                cbo_chose_cross = it->second == optimizer::PhysicalOpTag::CrossProduct;
-                            if (!cbo_chose_cross) {
-                                if (auto hash_join = tryPlanGenericHashJoin(v, **join_op, store, meta, ctx,
-                                                                            input_schema, input_types))
-                                    return std::move(*hash_join);
-                            }
-                            if (auto probe = tryPlanCorrelatedIndexProbe(v, **join_op, store, meta, ctx, input_schema,
-                                                                         input_types))
-                                return std::move(*probe);
-                            auto list_join =
-                                tryPlanListIndexJoin(v, **join_op, store, meta, ctx, input_schema, input_types);
-                            if (list_join.has_value())
-                                return std::move(list_join.value());
-                        }
-                    }
-
-                    // ── Edge index scan optimization: Filter(Expand) → EdgeIndexScan ──
-                    if (std::holds_alternative<std::unique_ptr<binder::BoundExpandOp>>(v.child)) {
-                        auto& expand_ptr = std::get<std::unique_ptr<binder::BoundExpandOp>>(v.child);
-                        if (expand_ptr->edge_label_ids.size() == 1) {
-                            EdgeLabelId edge_label_id = expand_ptr->edge_label_ids[0];
-                            auto def_it = ctx.edge_label_defs.find(edge_label_id);
-                            if (def_it != ctx.edge_label_defs.end()) {
-                                std::vector<const binder::BoundBinaryOp*> conditions;
-                                collectBoundConditions(v.predicate, conditions);
-                                if (!conditions.empty()) {
-                                    auto idx_result = tryBoundEdgeIndexScan(*expand_ptr, conditions, edge_label_id,
-                                                                            def_it->second, store, ctx);
-                                    if (idx_result.has_value())
-                                        return std::move(idx_result.value());
-                                }
-                            }
-                        }
-                    }
-
-                    // Read-only IS NOT NULL property filters can restrict the
-                    // scans below the filter to labels that define the property.
-                    auto saved_prune_hints = ctx.static_prune_hints;
-                    if (ctx.eval_ctx.allow_static_schema_pruning)
-                        collectStaticPruneHints(v.predicate, ctx, ctx.static_prune_hints);
-                    if (auto* scan_ptr = std::get_if<binder::BoundScanOp>(&v.child)) {
-                        if (!scan_ptr->variable.empty()) {
-                            auto labels = collectStaticVertexPruneLabels(ctx, v.predicate);
-                            if (!labels.empty())
-                                ctx.static_prune_hints[scan_ptr->variable].vertex_labels = std::move(labels);
-                        }
-                    }
-
-                    if (auto* expand_ptr = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&v.child)) {
-                        if (expand_ptr && *expand_ptr && !(*expand_ptr)->edge_variable.empty()) {
-                            auto hint = ctx.static_prune_hints.find((*expand_ptr)->edge_variable);
-                            if (hint != ctx.static_prune_hints.end() && !hint->second.edge_labels.empty()) {
-                                (*expand_ptr)->edge_label_ids = hint->second.edge_labels;
-                            } else {
-                                auto edge_labels = collectStaticEdgePruneLabels(ctx, v.predicate);
-                                if (!edge_labels.empty())
-                                    (*expand_ptr)->edge_label_ids = std::move(edge_labels);
-                            }
-                        }
-                    }
-
-                    auto saved_anchor_edge = ctx.anchor_edge_var;
-                    if (ctx.anchor_edge_var.empty()) {
-                        auto var = findEndpointVar(v.predicate);
-                        if (!var.empty())
-                            ctx.anchor_edge_var = std::move(var);
-                    }
-
                     // Filter boundary: keep output-only PE columns out of the
                     // rows the Filter rejects. The child is planned with them
                     // deferred; they are appended again right after the Filter,
@@ -4575,8 +2838,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     ctx.deferred_slots = std::move(saved_deferred);
-                    ctx.anchor_edge_var = std::move(saved_anchor_edge);
-                    ctx.static_prune_hints = std::move(saved_prune_hints);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
@@ -5207,51 +3468,48 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     xprod_layout.merge(lr.slot_layout);
                     xprod_layout.merge(rr.slot_layout);
 
-                    // PC anchor: CrossProduct(CorrelatedSource(r), LabelScan(a))
-                    // re-runs the label scan for every outer row. Replace it
-                    // with a probe of the invariant anchor map so only the
-                    // matching endpoint rows flow into the anchor filters.
+                    // The optimizer chooses the join algorithm (Impl candidates +
+                    // cost); lowering only instantiates the chosen tag. The
+                    // correlated-vertex-probe candidate is offered only for
+                    // CrossProduct(CorrelatedSource(edge), LabelScan(v)), so the
+                    // column resolution below is a descriptor invariant.
+                    auto attr_it = ctx.chosen_join_attrs.find(&v);
+                    const auto chosen_tag = attr_it == ctx.chosen_join_attrs.end()
+                                                ? optimizer::PhysicalOpTag::CrossProduct
+                                                : attr_it->second.tag;
+                    if (chosen_tag == optimizer::PhysicalOpTag::HashJoin) {
+                        if (auto hash_join = planHonoredHashJoin(v, lr, rr, ctx, attr_it->second.build_left))
+                            return std::move(*hash_join);
+                    }
                     std::unique_ptr<PhysicalOperator> result_op;
-                    const bool pc_anchor = std::holds_alternative<binder::BoundCorrelatedSourceOp>(v.left) &&
-                                           std::holds_alternative<binder::BoundLabelScanOp>(v.right);
-                    if (pc_anchor) {
+                    if (chosen_tag == optimizer::PhysicalOpTag::CorrelatedVertexProbe) {
+                        const auto* label_scan = std::get_if<binder::BoundLabelScanOp>(&v.right);
+                        if (label_scan == nullptr)
+                            return std::string("CorrelatedVertexProbe: right input is not a label scan");
+                        // The edge variable is part of the optimizer's
+                        // annotation, not re-derived here.
                         int edge_col = -1;
-                        for (size_t i = 0; i < lr.output_types.size(); ++i) {
-                            auto k = lr.output_types[i].kind;
-                            if (k == binder::BoundTypeKind::EDGE || k == binder::BoundTypeKind::EDGE_KEY) {
+                        for (size_t i = 0; i < lr.output_schema.size(); ++i) {
+                            if (lr.output_schema[i] == v.endpoint_probe_edge_var) {
                                 edge_col = static_cast<int>(i);
                                 break;
                             }
                         }
-                        if (edge_col < 0 && !ctx.anchor_edge_var.empty()) {
-                            for (size_t i = 0; i < lr.output_schema.size(); ++i) {
-                                if (lr.output_schema[i] == ctx.anchor_edge_var) {
-                                    edge_col = static_cast<int>(i);
-                                    break;
-                                }
-                            }
-                        }
                         int vertex_col = -1;
-                        const auto& label_scan = std::get<binder::BoundLabelScanOp>(v.right);
                         for (size_t i = 0; i < rr.output_schema.size(); ++i) {
-                            if (rr.output_schema[i] == label_scan.variable) {
+                            if (rr.output_schema[i] == label_scan->variable) {
                                 vertex_col = static_cast<int>(i);
                                 break;
                             }
                         }
-                        if (edge_col >= 0 && vertex_col >= 0) {
-                            result_op = std::make_unique<CorrelatedVertexProbePhysicalOp>(
-                                std::move(lr.op), std::move(rr.op), static_cast<uint32_t>(edge_col),
-                                static_cast<uint32_t>(vertex_col), Schema(lr.output_schema), Schema(rr.output_schema),
-                                std::vector<binder::BoundType>(output_types));
-                        }
+                        if (edge_col < 0 || vertex_col < 0)
+                            return std::string("CorrelatedVertexProbe: cannot resolve edge/vertex columns");
+                        result_op = std::make_unique<CorrelatedVertexProbePhysicalOp>(
+                            std::move(lr.op), std::move(rr.op), static_cast<uint32_t>(edge_col),
+                            static_cast<uint32_t>(vertex_col), Schema(lr.output_schema), Schema(rr.output_schema),
+                            std::vector<binder::BoundType>(output_types));
                     }
                     if (!result_op) {
-                        if (pc_anchor) {
-                            rr.op = std::make_unique<MaterializePhysicalOp>(
-                                std::move(rr.op), Schema(rr.output_schema),
-                                std::vector<binder::BoundType>(rr.output_types));
-                        }
                         result_op = std::make_unique<CrossProductPhysicalOp>(
                             std::move(lr.op), std::move(rr.op), std::move(lr.output_schema),
                             std::move(rr.output_schema), std::vector<binder::BoundType>(output_types));
@@ -5547,203 +3805,6 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // `size(list) > 0`, so the operator may stop at the first
                     // correlated match instead of collecting every one of them.
                     result->setExistenceOnly(v.existence_only);
-                    result->setEvalContext(ctx.eval_ctx);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
-                                              std::move(out_layout)};
-                } else if constexpr (std::is_same_v<Elem, binder::BoundPatternComprehensionForkOp>) {
-                    auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
-                    if (std::holds_alternative<std::string>(left_result))
-                        return std::get<std::string>(left_result);
-                    auto lr = extractChildResult(std::move(left_result));
-                    ensureSlotLayout(lr, ctx);
-
-                    // The anchor and the branch tails are lateral correlated
-                    // sub-plans: they carry their own demand model, exactly like
-                    // the right side of a PatternComprehensionApply.
-                    auto saved_deferred = std::move(ctx.deferred_slots);
-                    ctx.deferred_slots.reset();
-                    Schema sub_input_schema;
-                    std::vector<binder::BoundType> sub_input_types;
-                    ++ctx.correlated_subplan_depth;
-                    auto anchor_result =
-                        planBoundOperator(v.anchor, store, meta, ctx, sub_input_schema, sub_input_types);
-                    if (std::holds_alternative<std::string>(anchor_result)) {
-                        --ctx.correlated_subplan_depth;
-                        ctx.deferred_slots = std::move(saved_deferred);
-                        return std::get<std::string>(anchor_result);
-                    }
-                    auto ar = extractChildResult(std::move(anchor_result));
-
-                    if (v.correlation.empty()) {
-                        --ctx.correlated_subplan_depth;
-                        ctx.deferred_slots = std::move(saved_deferred);
-                        return std::string("PatternComprehensionFork: empty correlation is unsupported");
-                    }
-                    if (v.branches.size() != v.outputs.size()) {
-                        --ctx.correlated_subplan_depth;
-                        ctx.deferred_slots = std::move(saved_deferred);
-                        return std::string("PatternComprehensionFork: branch/output count mismatch");
-                    }
-
-                    std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> find_cs =
-                        [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
-                        if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
-                            return cs;
-                        for (auto* child : node->children()) {
-                            if (auto* cs = find_cs(const_cast<PhysicalOperator*>(child)))
-                                return cs;
-                        }
-                        return nullptr;
-                    };
-                    CorrelatedSourcePhysicalOp* anchor_source = find_cs(ar.op.get());
-                    if (!anchor_source) {
-                        --ctx.correlated_subplan_depth;
-                        ctx.deferred_slots = std::move(saved_deferred);
-                        return std::string("PatternComprehensionFork: no CorrelatedSource in anchor sub-plan");
-                    }
-
-                    // Build the anchor's injected-value plan from the anchor
-                    // sub-plan's own source schema: every correlated-source
-                    // column is either fed by a left output column (resolved by
-                    // name/slot) or is the batch key (-1). Deriving it from the
-                    // schema means the column order cannot drift from what the
-                    // anchor pipeline expects.
-                    auto* anchor_leaf = findForkBranchSource(v.anchor);
-                    if (!anchor_leaf) {
-                        --ctx.correlated_subplan_depth;
-                        ctx.deferred_slots = std::move(saved_deferred);
-                        return std::string("PatternComprehensionFork: no correlated source in anchor sub-plan");
-                    }
-                    static const bool fork_debug = std::getenv("EUGRAPH_ANCHOR_SHARE_DEBUG") != nullptr;
-                    if (fork_debug) {
-                        std::string vars;
-                        for (const auto& name : anchor_leaf->variables)
-                            vars += " " + name;
-                        spdlog::info("[anchor-share] fork: batch_var='{}' anchor source vars:{}", v.batch_var, vars);
-                    }
-                    std::vector<int32_t> anchor_value_columns;
-                    anchor_value_columns.reserve(anchor_leaf->variables.size());
-                    for (const auto& var : anchor_leaf->variables) {
-                        if (!v.batch_var.empty() && var == v.batch_var) {
-                            anchor_value_columns.push_back(-1); // batch index
-                            continue;
-                        }
-                        int pos = -1;
-                        for (const auto& corr : v.correlation) {
-                            if (corr.left_var != var)
-                                continue;
-                            pos = static_cast<int>(corr.left_column);
-                            if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size() ||
-                                lr.output_schema[pos] != corr.left_var)
-                                pos = lr.slot_layout.getColumnIndex(corr.left_slot);
-                            if (pos < 0)
-                                pos = findColumn(lr.output_schema, corr.left_var);
-                            break;
-                        }
-                        if (pos < 0) {
-                            // Computed columns (e.g. the hoisted endpoint ids) are
-                            // not correlation entries: they are produced by the
-                            // left pipeline under the same name.
-                            pos = findColumn(lr.output_schema, var);
-                        }
-                        if (pos < 0) {
-                            --ctx.correlated_subplan_depth;
-                            ctx.deferred_slots = std::move(saved_deferred);
-                            return std::string("PatternComprehensionFork: anchor source column '" + var +
-                                               "' is not correlated from the left input");
-                        }
-                        anchor_value_columns.push_back(pos);
-                    }
-                    if (fork_debug) {
-                        std::string cols;
-                        for (int32_t c : anchor_value_columns)
-                            cols += " " + std::to_string(c);
-                        spdlog::info("[anchor-share] fork: injection columns:{}", cols);
-                    }
-
-                    // Plan every branch against the anchor's output schema.
-                    std::vector<std::unique_ptr<PhysicalOperator>> branch_ops;
-                    std::vector<CorrelatedSourcePhysicalOp*> branch_sources;
-                    std::vector<int> branch_batch_cols;
-                    std::vector<size_t> branch_list_cols;
-                    branch_ops.reserve(v.branches.size());
-                    branch_sources.reserve(v.branches.size());
-                    branch_batch_cols.reserve(v.branches.size());
-                    branch_list_cols.reserve(v.branches.size());
-                    for (auto& branch : v.branches) {
-                        auto* leaf = findForkBranchSource(branch);
-                        if (!leaf) {
-                            --ctx.correlated_subplan_depth;
-                            ctx.deferred_slots = std::move(saved_deferred);
-                            return std::string("PatternComprehensionFork: branch has no correlated source leaf");
-                        }
-                        leaf->variables = ar.output_schema;
-                        leaf->types = ar.output_types;
-                        leaf->column_indices.resize(ar.output_schema.size());
-                        for (size_t i = 0; i < leaf->column_indices.size(); ++i)
-                            leaf->column_indices[i] = static_cast<uint32_t>(i);
-                        leaf->slot_ids.clear();
-                        leaf->slot_ids.reserve(ar.output_schema.size());
-                        for (const auto& name : ar.output_schema) {
-                            auto it = ctx.var_slots.find(name);
-                            leaf->slot_ids.push_back(it == ctx.var_slots.end() ? binder::INVALID_SLOT_ID : it->second);
-                        }
-
-                        Schema branch_input_schema;
-                        std::vector<binder::BoundType> branch_input_types;
-                        auto branch_result =
-                            planBoundOperator(branch, store, meta, ctx, branch_input_schema, branch_input_types);
-                        if (std::holds_alternative<std::string>(branch_result)) {
-                            --ctx.correlated_subplan_depth;
-                            ctx.deferred_slots = std::move(saved_deferred);
-                            return std::get<std::string>(branch_result);
-                        }
-                        auto br = extractChildResult(std::move(branch_result));
-                        CorrelatedSourcePhysicalOp* branch_source = find_cs(br.op.get());
-                        if (!branch_source) {
-                            --ctx.correlated_subplan_depth;
-                            ctx.deferred_slots = std::move(saved_deferred);
-                            return std::string("PatternComprehensionFork: branch has no correlated source");
-                        }
-                        int batch_col = v.batch_enabled ? findColumn(br.output_schema, v.batch_var) : -1;
-                        size_t list_col = batch_col >= 0 ? static_cast<size_t>(batch_col) + 1 : 0;
-                        if (list_col >= br.output_schema.size())
-                            list_col = br.output_schema.empty() ? 0 : br.output_schema.size() - 1;
-                        if (fork_debug) {
-                            std::string names;
-                            for (const auto& name : br.output_schema)
-                                names += " " + name;
-                            spdlog::info("[anchor-share] fork branch output:{} -> batch_col={} list_col={}", names,
-                                         batch_col, list_col);
-                        }
-                        branch_sources.push_back(branch_source);
-                        branch_batch_cols.push_back(batch_col);
-                        branch_list_cols.push_back(list_col);
-                        branch_ops.push_back(std::move(br.op));
-                    }
-                    --ctx.correlated_subplan_depth;
-                    ctx.deferred_slots = std::move(saved_deferred);
-
-                    // Output schema: left columns + one LIST column per branch.
-                    std::vector<binder::BoundType> list_elem_types;
-                    list_elem_types.reserve(v.outputs.size());
-                    Schema output_schema = lr.output_schema;
-                    std::vector<binder::BoundType> output_types = lr.output_types;
-                    TupleSlotLayout out_layout = lr.slot_layout;
-                    std::vector<binder::SlotId> output_slots;
-                    for (auto& out : v.outputs) {
-                        output_schema.push_back(out.name);
-                        output_types.push_back(binder::BoundType::List(out.element_type));
-                        list_elem_types.push_back(out.element_type);
-                        out_layout.append(out.slot_id);
-                        output_slots.push_back(out.slot_id);
-                    }
-
-                    auto result = std::make_unique<PatternComprehensionForkPhysicalOp>(
-                        std::move(lr.op), std::move(ar.op), anchor_source, std::move(branch_ops),
-                        std::move(branch_sources), std::move(anchor_value_columns), std::move(list_elem_types),
-                        std::move(branch_batch_cols), std::move(branch_list_cols));
-                    result->setOutputSlots(std::move(output_slots));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(out_layout)};

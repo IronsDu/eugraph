@@ -2,6 +2,12 @@
 
 Status: 2026-11-11. LDBC complex-10 优化（sf1：同会话基线 490–508 ms → 277–300 ms，PC 子树 180 ms → 63 ms）。
 
+> 2026-11-28 更新（P2）：bound-dst 形状已由 **binder 直接生成**——`bindExistsSubPlan` 把外层
+> 已绑定的链端点绑定到目标列（`__exists_saved_N`），Expand 天生 `dst=bound`，不再产生
+> `Filter(id(dst)==id(saved))`，也不再需要 normalization/physical 的折叠重写。`probe_bound_dst`
+> 只是 optimizer 的 `AnnotateCorrelatedEndpointProbe` 标注（有向 + 只读 + dst 由子树
+> `CorrelatedSource` 提供），physical 只读。下文 §2.1 的机制描述与 §3 的测量数据保留为历史记录。
+
 ## 1. 问题
 
 模式推导的子计划里，端点变量来自外层时，binder 会为该端点分配一个子计划内的

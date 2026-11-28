@@ -1,6 +1,7 @@
 #include "query/optimizer/framework/memo.hpp"
 
 #include <algorithm>
+#include <spdlog/spdlog.h>
 #include <unordered_set>
 
 #include "query/optimizer/analysis/requirement_collector.hpp"
@@ -11,7 +12,6 @@
 #include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_index_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_semi_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
@@ -49,6 +49,7 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
             if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                           std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
                           std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 // Leaf operators — no child field
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
@@ -56,11 +57,13 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 // Binary/multi-input operators carry their inputs in their own
                 // fields (or several of them); a single `child` cannot be
                 // attached here.
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (val)
+                    val->anchor = std::move(child);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                 if (val)
                     val->left = std::move(child);
@@ -94,11 +97,10 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
                                  std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 return 2; // two inputs: FOREACH's (input row, body sub-plan)
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                // left + anchor + one child group per branch.
-                return val ? static_cast<int>(
-                                 binder::BoundPatternComprehensionForkOp::childCountFor(val->branches.size()))
-                           : 0;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // anchor group + probe group (the probe is a logical leaf that
+                // gets its own group so rules can refine it independently).
+                return val ? static_cast<int>(binder::BoundIndexProbeJoinOp::kChildCount) : 0;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 return (val && val->child.has_value()) ? 1 : 0;
             } else {
@@ -181,13 +183,19 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                                      std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
-                                     std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>> ||
-                                     std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                    // Two/multi-input operators: handled by the arity-2 branch
+                    // below, never by the single-child extraction.
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                     auto c = std::move(val->child.value());
                     val->child = std::nullopt;
                     return c;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                    // Probe is a leaf descriptor: its group is created explicitly
+                    // by the ProbeJoin 2-child path below.
+                    return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                     auto c = std::move(val->left);
                     val->left = binder::BoundScanOp{};
@@ -254,23 +262,18 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             auto right = std::make_unique<binder::BoundLogicalOperator>(std::move(uo->right));
             uo->right = binder::BoundScanOp{};
             child_groups.push_back(copyIn(*right));
-        }
-    } else if (n_children > 2) {
-        // Multi-input operators (currently only the shared-anchor pattern
-        // comprehension fork: left + anchor + one branch per comprehension).
-        // Children are canonicalised in the same order the physical planner
-        // reads them back in copyOut: left, anchor, branches...
-        if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(op)) {
-            auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(op);
-            auto take = [this, &child_groups](binder::BoundLogicalOperator& slot) {
-                auto owned = std::make_unique<binder::BoundLogicalOperator>(std::move(slot));
-                slot = binder::BoundScanOp{};
-                child_groups.push_back(copyIn(*owned));
-            };
-            take(fork->left);
-            take(fork->anchor);
-            for (auto& branch : fork->branches)
-                take(branch);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(op)) {
+            // child 0 = anchor subtree (already containing the complete left
+            // pipeline), child 1 = probe leaf in its own group. Both groups are
+            // real memo children so groups are never re-derived from the
+            // ProbeJoin's inline fields.
+            auto& pj = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(op);
+            auto anchor = std::make_unique<binder::BoundLogicalOperator>(std::move(pj->anchor));
+            pj->anchor = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(*anchor));
+            auto probe =
+                std::make_unique<binder::BoundLogicalOperator>(std::make_unique<binder::BoundIndexProbeOp>(pj->probe));
+            child_groups.push_back(copyIn(*probe));
         }
     }
 
@@ -304,8 +307,18 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
 
 binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
     Group& group = getGroup(root_gid);
-    // RBO: take the last (most recently added) logical expression
+    // RBO: take the last (most recently added) logical expression. Access-path
+    // candidates (IndexProbeJoin) are CBO-only alternatives: they are not part
+    // of the RBO plan, and an unresolved probe has no executable lowering. A
+    // write plan often has no CBO winner, so skipping them here is what keeps
+    // the RBO fallback a valid plan.
     ExprId eid = group.logical_exprs.back();
+    for (auto it = group.logical_exprs.rbegin(); it != group.logical_exprs.rend(); ++it) {
+        if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(getExpr(*it).op))
+            continue;
+        eid = *it;
+        break;
+    }
     GroupExpr& expr = getExpr(eid);
 
     // Clone (not move) the operator out — copyOut may be invoked recursively on
@@ -324,6 +337,12 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
             auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
             join->left = copyOut(expr.child_groups[0]);
             join->right = copyOut(expr.child_groups[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result)) {
+            auto& pj = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result);
+            pj->anchor = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kAnchorChild]);
+            auto probe = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kProbeChild]);
+            if (auto* p = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&probe); p && *p)
+                pj->probe = **p;
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
             sj->left = copyOut(expr.child_groups[0]);
@@ -344,16 +363,6 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
             auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(result);
             fe->child = copyOut(expr.child_groups[0]);
             fe->body = copyOut(expr.child_groups[1]);
-        }
-    } else if (expr.child_groups.size() > 2) {
-        if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
-            auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
-            fork->left = copyOut(expr.child_groups[0]);
-            fork->anchor = copyOut(expr.child_groups[1]);
-            fork->branches.clear();
-            fork->branches.reserve(expr.child_groups.size() - 2);
-            for (size_t i = 2; i < expr.child_groups.size(); ++i)
-                fork->branches.push_back(copyOut(expr.child_groups[i]));
         }
     }
 
@@ -389,6 +398,12 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
                 auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
                 join->left = copyOut(expr.child_groups[0], PhysProp{});
                 join->right = copyOut(expr.child_groups[1], PhysProp{});
+            } else if (std::holds_alternative<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result)) {
+                auto& pj = std::get<std::unique_ptr<binder::BoundIndexProbeJoinOp>>(result);
+                pj->anchor = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kAnchorChild], PhysProp{});
+                auto probe = copyOut(expr.child_groups[binder::BoundIndexProbeJoinOp::kProbeChild], PhysProp{});
+                if (auto* p = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&probe); p && *p)
+                    pj->probe = **p;
             } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
                 auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
                 sj->left = copyOut(expr.child_groups[0], PhysProp{});
@@ -410,22 +425,29 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
                 fe->child = copyOut(expr.child_groups[0], PhysProp{});
                 fe->body = copyOut(expr.child_groups[1], PhysProp{});
             }
-        } else if (expr.child_groups.size() > 2) {
-            if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result)) {
-                auto& fork = std::get<std::unique_ptr<binder::BoundPatternComprehensionForkOp>>(result);
-                fork->left = copyOut(expr.child_groups[0], PhysProp{});
-                fork->anchor = copyOut(expr.child_groups[1], PhysProp{});
-                fork->branches.clear();
-                fork->branches.reserve(expr.child_groups.size() - 2);
-                for (size_t i = 2; i < expr.child_groups.size(); ++i)
-                    fork->branches.push_back(copyOut(expr.child_groups[i], PhysProp{}));
-            }
         }
         return result;
     }
 
     // Fallback: RBO extraction (last logical expression)
     return copyOut(root_gid);
+}
+
+void Memo::finalizeWinners() {
+    // The task cascade normally publishes a winner when the group closes. A
+    // transformation rule that expands the ROOT group during the optimization
+    // pass sets `changed`, the closing cascade clears it, and then nothing
+    // re-enters O_GROUP for the root: candidates that cannot provide the
+    // context's required property (registered under their "provided" PhysProp,
+    // see O_INPUTS) would stay invisible to extractChosen. Every winner with a
+    // valid plan was registered only after its inputs were costed, so
+    // publishing them once the queue has drained is safe.
+    for (auto& group : groups_) {
+        for (Winner& winner : group->winners) {
+            if (!winner.done() && winner.plan() != INVALID_EXPR_ID)
+                winner.setDone(true);
+        }
+    }
 }
 
 std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp& prop, ExprId preferred_winner) {
@@ -452,6 +474,8 @@ std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp
 
     auto plan = std::make_unique<ChosenPlan>();
     plan->tag = expr.physOp().tag;
+    plan->build_left = expr.physOp().build_left;
+    plan->batch_shortest_path = expr.physOp().batch_shortest_path;
     plan->op = cloneBoundLogicalOperator(expr.physOp().source);
     plan->enrich_variable = expr.physOp().enrich_variable;
     plan->enrich_output = expr.physOp().output_mat;
@@ -563,6 +587,26 @@ GroupId Memo::mergeGroups(GroupId g1, GroupId g2) {
 
     Group& to_group = getGroup(g1);
     Group& from_group = getGroup(g2);
+
+    // Merging is only valid when neither side references the other: every
+    // expression that references g2 is rewritten to g1, so a moved expression
+    // referencing g1 (or a kept expression in g1 referencing g2) would become a
+    // self-reference and make copyOut recurse forever. Content equality should
+    // already prevent this; the guard keeps a future hash/eq gap from turning
+    // into a crash.
+    auto references = [this](const Group& group, GroupId gid) {
+        for (ExprId eid : group.logical_exprs) {
+            for (GroupId child : getExpr(eid).child_groups) {
+                if (child == gid)
+                    return true;
+            }
+        }
+        return false;
+    };
+    if (references(to_group, g2) || references(from_group, g1)) {
+        spdlog::warn("[memo] refusing group merge {} <- {}: would create a self-referencing group", g2, g1);
+        return g1;
+    }
 
     // The global hash index depends on child_groups. Unregister every
     // expression whose child reference is about to be rewritten, rewrite it,
@@ -857,6 +901,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->edge_column_index = val->edge_column_index;
                 c->dst_variable = val->dst_variable;
                 c->dst_column_index = val->dst_column_index;
+                c->dst_slot_id = val->dst_slot_id;
+                c->planner_dst_slot_id = val->planner_dst_slot_id;
                 c->edge_label_ids = val->edge_label_ids;
                 c->all_edge_labels = val->all_edge_labels;
                 c->direction = val->direction;
@@ -915,6 +961,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->src_column_index = val->src_column_index;
                 c->dst_variable = val->dst_variable;
                 c->dst_column_index = val->dst_column_index;
+                c->dst_slot_id = val->dst_slot_id;
+                c->planner_dst_slot_id = val->planner_dst_slot_id;
                 c->edge_label_ids = val->edge_label_ids;
                 c->all_edge_labels = val->all_edge_labels;
                 c->direction = val->direction;
@@ -929,7 +977,6 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
                 c->shortest_path = val->shortest_path;
                 c->all_shortest_paths = val->all_shortest_paths;
-                c->batch_shortest_path = val->batch_shortest_path;
                 c->edge_variable = val->edge_variable;
                 c->edge_column_index = val->edge_column_index;
                 c->edge_slot_id = val->edge_slot_id;
@@ -938,6 +985,10 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->bound_edge_list_col_index = val->bound_edge_list_col_index;
                 c->prev_edge_var = val->prev_edge_var;
                 c->prev_edge_col_index = val->prev_edge_col_index;
+                c->src_filter_index_id = val->src_filter_index_id;
+                c->src_filter_value = val->src_filter_value;
+                c->dst_filter_index_id = val->dst_filter_index_id;
+                c->dst_filter_value = val->dst_filter_value;
                 c->edge_prop_filters = val->edge_prop_filters;
                 c->edge_prop_filter_exprs = val->edge_prop_filter_exprs;
                 return c;
@@ -946,6 +997,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
             else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
                 auto c = std::make_unique<binder::BoundBinaryJoinOp>();
                 c->join_type = val->join_type;
+                c->endpoint_probe_edge_var = val->endpoint_probe_edge_var;
                 c->join_conditions.reserve(val->join_conditions.size());
                 for (const auto& cond : val->join_conditions)
                     c->join_conditions.push_back(cloneBoundExpression(cond));
@@ -962,17 +1014,6 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 auto c = std::make_unique<binder::BoundUnionOp>();
                 c->all = val->all;
-                return c;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                // Children (left/anchor/branches) are restored from child_groups
-                // by copyOut; only the scalar payload is cloned here.
-                auto c = std::make_unique<binder::BoundPatternComprehensionForkOp>();
-                c->correlation = val->correlation;
-                c->batch_enabled = val->batch_enabled;
-                c->batch_slot_id = val->batch_slot_id;
-                c->batch_var = val->batch_var;
-                for (const auto& out : val->outputs)
-                    c->outputs.push_back(out);
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 auto c = std::make_unique<binder::BoundPatternComprehensionApplyOp>();
@@ -1121,6 +1162,30 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->dynamic_key_variable = val->dynamic_key_variable;
                 c->build_left = val->build_left;
                 c->chain = val->chain;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                auto c = std::make_unique<binder::BoundIndexProbeJoinOp>();
+                // `probe` is operator data (not a child): copy it so a cloned
+                // tree still describes the access path. `anchor` is restored
+                // from the memo's child groups by copyOut.
+                c->probe = val->probe;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                auto c = std::make_unique<binder::BoundIndexProbeOp>();
+                c->source_variable = val->source_variable;
+                c->target_variable = val->target_variable;
+                c->edge_variable = val->edge_variable;
+                c->edge_label_ids = val->edge_label_ids;
+                c->direction = val->direction;
+                c->target_label_ids = val->target_label_ids;
+                c->index_id = val->index_id;
+                c->index_prop = val->index_prop;
+                c->index_property_name = val->index_property_name;
+                c->equality = val->equality;
+                c->lower = val->lower;
+                c->upper = val->upper;
+                c->lower_inclusive = val->lower_inclusive;
+                c->upper_inclusive = val->upper_inclusive;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 auto c = std::make_unique<binder::BoundForeachOp>();
@@ -1372,16 +1437,17 @@ Winner* Group::getSatisfyingWinner(const PhysProp& prop) {
     return best;
 }
 
-void Group::newWinner(PhysProp prop, ExprId plan, Cost cost, bool done) {
+void Group::newWinner(PhysProp prop, ExprId plan, Cost cost, bool done, double output_cardinality) {
     for (auto& w : winners) {
         if (w.physProp() == prop) {
             w.setPlan(plan);
             w.setCost(std::move(cost));
             w.setDone(done);
+            w.setOutputCardinality(output_cardinality);
             return;
         }
     }
-    winners.emplace_back(plan, std::move(prop), std::move(cost), done);
+    winners.emplace_back(plan, std::move(prop), std::move(cost), done, output_cardinality);
 }
 
 bool Group::searchCircle(const Context& ctx, bool& moreSearch) const {

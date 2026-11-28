@@ -277,12 +277,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .alias_map = {},
         .slot_allocator = {},
         .fresh_expands = {},
-        .static_prune_hints = {},
         .func_registry = ctx->func_registry.get(),
-        .expand_allowed_filter = {},
-        .filtered_expand = nullptr,
         .deferred_slots = std::nullopt,
-        .anchor_edge_var = {},
     };
 
     plan_ctx.eval_ctx.catalog = ctx->catalog.get();
@@ -295,7 +291,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     plan_ctx.var_slots = binder.ctx().var_slots;
     for (const auto& [name, info] : binder.ctx().symbols) {
         if (info.slot_id != binder::INVALID_SLOT_ID)
-            plan_ctx.var_slots.emplace(name, info.slot_id);
+            plan_ctx.var_slots[name] = info.slot_id;
     }
     plan_ctx.scoped_var_slots = binder.ctx().scoped_bindings;
     for (const auto& [name, info] : binder.ctx().symbols) {

@@ -1,8 +1,39 @@
 # Optimizer / Access Path 后续规划
 
-> 状态：2026-11-25。当前 PR #331 是 access-path lowering 的过渡阶段，尚未达到
-> “physical planner 只 lowering”的目标。本文把新增的 optimizer 债务与既有执行层
-> 性能待办放在同一优先级队列里。
+> 状态：2026-11-28。
+> - P0 / P1 已完成并合入；
+> - P1.3 / P1.4 已完成；IndexProbe（R1/R2/R3 + lowering）已落地；
+> - A1–A5 访问路径物理决策已删除/迁移；**D1**（correlated 端点过滤折叠）与 **E2**（规划分析）
+>   已归位到 optimizer（2026-11-28）；
+> - **P2**（2026-11-28）：correlated 端点由 binder 直接生成 bound dst 形态（不再造 Filter 再
+>   折叠）；probe 只是 optimizer 的 `AnnotateCorrelatedEndpointProbe` 标注，形状/标注分离；
+> - **P3**（2026-11-28）：`ShortestPathBatch` 策略从 logical 字段改为 `ChosenPlan` 属性
+>   （`ImplVarLenExpandRule` 产出，lowering 只转发）；`JoinCondition` 提取写入「语义规范化、
+>   不做选择」契约；probe/batch 的成本化等度数/NDV 统计；
+> - **B1**（join 形状兜底）已删除：CBO 的 join_conditions + tag 决定算法；
+> - **B2**（HashJoin build 侧/预算）已归位：build 侧是候选属性，预算由成本模型排除；
+> - **P4**（2026-11-28）：删除 `post_cbo/`（shared-anchor fork 重写实测 0 ms，证据见
+>   residue audit D2）；`planBound`/`planChosen` 不再有 post-CBO 改写。`PatternComprehensionFork`
+>   操作符与其 physical op 已删除；
+> - **B3**（2026-11-28）：`CorrelatedVertexProbe` 归位为 CBO 候选（Impl rule + 成本，
+>   lowering 只按 tag 实例化）；physical 的 `pc_anchor`/`findEndpointVar`/`anchor_edge_var` 删除；
+> - 剩余：C1/C2（PE 物化边界）、E1（join-key descriptor）——见 `physical-planner-residue-audit.md`。
+> - 无标签目标变量的索引覆盖判定仍缺元数据（见 P4）。
+> - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
+
+## 0. 规则归位计划（2026-11-28）
+
+> 原则：**会改变计划/访问路径/join 形状/物化边界的优化决策 → `optimizer/rules/logical`
+> 候选（CBO 用成本选）；physical 的 Impl 规则只产 `PhysicalOpTag`/属性，lowering 只实例化；
+> normalization 只保留不改变选择的语义规范化/标注（binder 生成物的 canonicalization）。**
+
+| 阶段 | 内容 | 目标模块 | 状态 |
+|---|---|---|---|
+| P1 | 删除 pre-memo `applyIndexAccessPaths` 调用；applier 移出 `analysis/`，只由 `GenerateIndexScanRule` 使用 | `rules/logical/generate_index_scan` | **完成** |
+| P2 | D1 端点折叠从 normalization 移到 **binder**（binder 直接生成 bound dst 形态，不再造 Filter 再折叠）；probe 标志作为策略标注/后续规则 | `planner/binder` | **完成**（probe 由 optimizer 标注；Impl 候选待 P3 统计） |
+| P3 | `ShortestPathBatch` 策略标志改为 Impl 候选 + 成本（B2 模式）；`JoinCondition` 提取保留为语义规范化（不选择，只把等值谓词挂到 join_conditions）并写入契约 | `rules/physical` + `normalization` | **完成**（属性已归位；成本比较待统计：batch 收益取决于 source NDV，无统计时不编造第二候选） |
+| P4 | 停止扩充 `post_cbo` 并按计划移除：anchor share 要么成为 logical rule，要么删除；B3 probe 随之重新设计 | `rules/logical`（或删除） | **完成（删除）**：A/B 实测 0 ms，重写、post_cbo 目录与 Fork 操作符管线全部删除；B3 待重做 |
+| P5 | C1/C2（PE 物化边界 → PhysProp/enforcer）、E1（join-key descriptor）；B3 已完成（CBO 候选 + 成本） | optimizer | B3 完成；C1/C2/E1 待做 |
 
 ## 1. 目标边界
 
@@ -30,7 +61,7 @@ Physical planner
 
 ## 2. 优先级队列
 
-### P0 — #331：IndexJoin descriptor + 删除 tryPlan*
+### P0 — #331：IndexJoin descriptor + 删除 tryPlan*（已完成）
 
 当前缺口：
 
@@ -63,14 +94,19 @@ Physical planner
 **后续 P1.2**：`SpillableRowStore` → 按 join key 分区 → 磁盘 spill；
 预算按字节、成本模型计入 spill；source 仍只执行一次。
 
-### P1.1 — Slot ownership 收尾
+### P1.1 — Slot ownership 收尾（待开始）
 
 - optimizer 规则生成 Project/alias 时同步创建/继承 SlotId；
 - 删除 physical planner 的 `allocateAllSlots` backfill；
 - 明确 user slot / internal column 的分配者；
 - 增加“optimizer 后不存在未登记用户 slot”的校验。
 
-### P1.3 — IndexCondition extraction resolver
+### P1.3 — IndexCondition extraction resolver（已完成）
+
+`optimizer/analysis/index_condition` 已提供 `IndexableCondition` /
+`ResolvedProperty` / `ColumnPropertyResolver` / normalized extraction；
+physical planner 删除重复实现，只保留 `PlanContext.extraction_info` 到 resolver
+的 adapter。
 
 **问题**：`tryExtractBoundCondition` / `resolveColumnProperty` 仍留在 physical planner，
 因为把 `BoundPropertyRef` / `BoundColumnRef` 还原为 `{label, prop_id, property_name,
@@ -91,7 +127,7 @@ property”这一步仍依赖 physical 状态。
 **验收**：c3、string/int inclusive range、c2/c6/c9 及 689 tests 通过；physical planner
 不再包含 property 反解实现。
 
-### P1.4 — 普通 IndexScan access path 迁入 optimizer
+### P1.4 — 普通 IndexScan access path 迁入 optimizer（已完成）
 
 **问题**：`Filter(LabelScan) → IndexScan` 仍在 physical planner 的
 `tryBoundIndexScan` 中完成。CBO 选择的是 `Filter(LabelScan)`，physical planner
@@ -111,14 +147,17 @@ property”这一步仍依赖 physical 状态。
 **验收**：c3、inclusive int/string、c2/c6/c9、689 tests；physical planner 不再查
 catalog 选索引。
 
-### P2 — PE / LateMaterialize enforcer 化
+**结果**：`applyIndexAccessPaths` + `GenerateIndexScanRule` + `ImplIndexScanRule` 已落地；
+`tryBoundIndexScan` 已删除；IndexScan cost 读取 descriptor。
+
+### P2 — PE / LateMaterialize enforcer 化（待开始）
 
 - PE 边界由 ChosenPlan/PhysProp 描述；
 - physical planner 只实例化 enforcer；
 - LateMaterialize 同样从计划描述驱动；
 - 解决当前 physical planner 自行决定 PE 边界的问题。
 
-### P3 — degree / selectivity 统计（先设计评审）
+### P3 — degree / selectivity 统计（待开始；先设计评审）
 
 - `(edge_label, src_label, dst_label)` 边数；
 - in/out degree；
@@ -126,23 +165,37 @@ catalog 选索引。
 - StatsDelta / snapshot / journal / Catalog 全链路；
 - 先定粒度、写时维护 vs ANALYZE、兼容和回退，再实现。
 
-### P4 — c3：非 identity Project / 无显式 label
+### P4 — c3：无显式 label 的父 label 索引（待开始，IndexProbe 的最后一块）
 
-依赖 P3 的 endpoint label 信息：
+IndexProbe 的 R1/R2/R3 + physical lowering 已落地（见
+[IndexProbe operator and rule split](index-probe-operator.md)）。目标变量带显式 label 时
+已能选中并下推 probe（SF1 c3 加 `:Message` 的诊断：1489.8 → 145.6 ms，1 行不变）。
 
-- 目标变量无显式 label 时安全解析父 label 索引；
-- Filter 穿过 load/PE 边界；
-- 保留残差谓词；
-- 不允许靠数据分布猜 label。
+剩余阻塞：无标签目标变量的索引覆盖判定。实测 catalog 证据：
 
-### P5 — EXPLAIN 全面使用 SlotSemantics
+- c3 的 `message` 变量 `vertex_labels=[]`、`Expand.dst_label_ids=[]`；
+- `creationDate` 的 property candidates = `Comment/Forum/Person/Post`（不含 Message）；
+- `Message#23` 与 `Post#24` 的 creationDate 索引都是 weak accessor；
+- `GraphSchema`/`EdgeLabelDef` 未持久化 loader 的 `derived: ["Message"]`，也没有
+  边端点标签。
+
+因此需要（按顺序）：
+
+1. loader 持久化派生标签（Post/Comment ⊂ Message）；
+2. loader 持久化边端点标签（HAS_CREATOR src = Comment/Post）；
+3. Binder 用边端点收窄无标签端点变量的候选 label；
+4. R2 用派生标签判断单索引覆盖，覆盖成立才产生 probe 候选。
+
+在此之前，无标签 c3 保持 forward 计划（正确、1 行、~1.49 s），不猜 label。
+
+### P5 — EXPLAIN 全面使用 SlotSemantics（部分完成）
 
 - `IndexScan properties=[<prop#N>]` → 属性名；
 - `Filter(message < ...)` → `message.creationDate < ...`；
 - Projection load/materialize 显示完整属性；
 - Bolt plan / Web Graph 同步受益。
 
-### P6 — 既有执行层性能待办
+### P6 — 既有执行层性能待办（待开始）
 
 延续 [LDBC 执行层优化计划](../../benchmark/ldbc-storage-unchanged-optimization-plan.md)：
 

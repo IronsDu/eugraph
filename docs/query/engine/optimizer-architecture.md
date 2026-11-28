@@ -9,9 +9,8 @@ layout, and the remaining Columbia gaps.
 |---|---|---|
 | Binder | AST → logical operators; names/scopes/types; collect semantic references | choose filter placement, scan property lists, join order |
 | analysis/ | read-only plan/expression analysis | mutate plans |
-| normalization/ | pre-memo invariants/annotations (join conditions, batch strategy, join safety) | produce Cascades alternatives or use cost |
+| normalization/ | pre-memo invariants/annotations (join conditions, correlated-probe strategy, join safety) | produce Cascades alternatives or use cost |
 | rules/ | equivalent-plan alternatives (Columbia `RULE`) | mutate the source expression |
-| post_cbo/ | one-way logical rewrites after CBO/lowering (no alternatives) | be registered as an OptRule |
 | framework/ | memo, tasks, rule matching, CBO, cost/log properties | know query semantics |
 | extraction/ | PE demand, slot allocation, expression lowering | be a transformation rule |
 | physical planner | physical operators, access paths, PE dispatch | re-run logical optimization |
@@ -42,16 +41,25 @@ See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
 - `framework/` — memo/tasks/rules/CBO.
 - `analysis/` — `requirement_collector` + materialization model.
 - `extraction/` — `projection_extraction` (PEPlan, slot and expression lowering).
-- `normalization/` — `NormalizationPipeline`：`JoinConditionNormalization`
-  （Filter→Join 等值提示）、`ShortestPathBatchNormalization`、`JoinSafetyNormalization`；
+- `normalization/` — `NormalizationPipeline`：`JoinConditionNormalization`、
+  `JoinSafetyNormalization`、`AnnotateCorrelatedEndpointProbeNormalization`；
   这些是 memo 前的不变量/标注，不参与 alternative 搜索。
+  **契约**：`JoinConditionNormalization` 只做语义规范化——把 Filter 下 Cross/Inner join 的
+  等值谓词挂到 `join_conditions` 并保留 Filter 残差，**不选择 join 算法、不比较成本**；
+  `join_conditions` 是 CBO 的事实输入，算法/tag 由 Impl 规则产出、由成本模型选 winner。
+  **策略属性**：会改变执行策略但依赖运行期数据的标志（`build_left`、`batch_shortest_path`）
+  是 `PhysicalExpr`/`ChosenPlan` 属性，由 Impl 规则产出、lowering 只转发；logical operator
+  不再携带策略字段（P3 把 `batch_shortest_path` 从 `BoundVarLenExpandOp` 移出）。
+  **join key**：`join_conditions` 就是 key descriptor（EQ 语义 + 两侧表达式）；Impl 规则先校验
+  形状，lowering 只按 child layout 解析列，不做“列 → label/property”反解（E1）。
 - `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`,
   `PathCountFusion`, `PatternComprehensionAnchorShare`；不包含按 LDBC
   label/关系名特判的规则。
 - `rules/physical/` — implementation rules.
-- `post_cbo/` — one-way logical rewrites after CBO/lowering, currently
-  `pattern_comprehension_anchor_share` (PatternComprehensionApply has no CBO
-  implementation rule).
+- `post_cbo/` — removed (2026-11-28, P4): the shared-anchor fork rewrite it
+  contained measured 0 ms on its only production shape (LDBC c14) once
+  `CorrelatedVertexProbe` made the per-comprehension anchor cheap. Optimizer
+  rewrites now live in `normalization/` (semantics) or `rules/` (alternatives).
 
 ## 3. Columbia mapping and gaps
 

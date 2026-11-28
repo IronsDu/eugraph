@@ -1,10 +1,13 @@
 #include "query/optimizer/rules/physical/impl_rules.hpp"
 
 #include "query/optimizer/framework/memo.hpp"
-#include "query/optimizer/framework/physical_expr.hpp"
-#include "query/planner/logical_plan/operator/bound_index_join_op.hpp"
 
-#include <unordered_set>
+#include "query/optimizer/framework/physical_expr.hpp"
+#include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_correlated_source_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
+#include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
+#include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 namespace eugraph {
 namespace optimizer {
@@ -20,9 +23,13 @@ namespace optimizer {
 // demands materialization that a child's topology-form winner cannot
 // provide, O_INPUTS inserts an Enricher to bridge the gap.
 // ============================================================
-static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr, Memo& memo, PhysicalOpTag tag) {
+static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr, Memo& memo, PhysicalOpTag tag,
+                                                                bool build_left = false,
+                                                                bool batch_shortest_path = false) {
     auto phys = std::make_unique<PhysicalExpr>();
     phys->tag = tag;
+    phys->build_left = build_left;
+    phys->batch_shortest_path = batch_shortest_path;
     phys->source = cloneBoundLogicalOperator(expr.op);
 
     // Each input must provide what this operator's own expressions need.
@@ -44,6 +51,17 @@ static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr,
 // ============================================================
 // Leaf sources
 // ============================================================
+
+PatternNode ImplIndexScanRule::pattern() const {
+    return {OptNodeType::LabelScan, {}};
+}
+bool ImplIndexScanRule::condition(GroupExpr& expr, Memo&) const {
+    const auto* scan = std::get_if<binder::BoundLabelScanOp>(&expr.op);
+    return scan && scan->index_scan && scan->index_id != 0;
+}
+std::vector<std::unique_ptr<GroupExpr>> ImplIndexScanRule::substitute(GroupExpr& expr, Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::IndexScan);
+}
 
 PatternNode ImplSingletonRule::pattern() const {
     return {OptNodeType::Singleton, {}};
@@ -77,283 +95,50 @@ std::vector<std::unique_ptr<GroupExpr>> ImplLabelScanRule::substitute(GroupExpr&
 // Unary operators (pattern: one leaf child)
 // ============================================================
 
-static bool expressionHasIndexedProperty(const binder::BoundExpression& expr, const catalog::Catalog* catalog) {
-    if (catalog == nullptr)
-        return false;
-    if (auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr); prop && *prop) {
-        // The property ref may be unlabeled/coalesced; trust any index on this
-        // property name. The physical lowering still verifies the exact target
-        // label/index and falls back when the chain cannot use it.
-        for (const auto& [lid, label_def] : catalog->allLabels()) {
-            (void)lid;
-            for (const auto& idx : label_def.indexes) {
-                if (idx.index_id == 0)
-                    continue;
-                for (const auto& accessor : idx.accessors) {
-                    if (accessor.property_name == (*prop)->property_name)
-                        return true;
-                }
-            }
-        }
-        return expressionHasIndexedProperty((*prop)->object, catalog);
-    }
-    if (auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr); binop && *binop)
-        return expressionHasIndexedProperty((*binop)->left, catalog) ||
-               expressionHasIndexedProperty((*binop)->right, catalog);
-    return false;
+PatternNode ImplPatternComprehensionApplyRule::pattern() const {
+    return {OptNodeType::PatternComprehensionApply, {{}, {}}};
+}
+std::vector<std::unique_ptr<GroupExpr>> ImplPatternComprehensionApplyRule::substitute(GroupExpr& expr,
+                                                                                      Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::PatternComprehensionApply);
 }
 
-static bool groupContainsExpand(Memo& memo, GroupId gid, std::unordered_set<GroupId>& seen) {
-    if (!seen.insert(gid).second)
-        return false;
-    const auto& group = memo.getGroup(gid);
-    for (ExprId eid : group.logical_exprs) {
-        const auto& ge = memo.getExpr(eid);
-        if (std::holds_alternative<std::unique_ptr<binder::BoundExpandOp>>(ge.op))
-            return true;
-        for (GroupId child : ge.child_groups) {
-            if (groupContainsExpand(memo, child, seen))
-                return true;
-        }
-    }
-    return false;
+PatternNode ImplIndexProbeRule::pattern() const {
+    return {OptNodeType::IndexProbe, {}};
 }
 
-static bool collectAndDbg(const binder::BoundExpression& e, std::vector<const binder::BoundExpression*>& out) {
-    if (auto* b = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&e);
-        b && *b && (*b)->op == cypher::BinaryOperator::AND) {
-        collectAndDbg((*b)->left, out);
-        collectAndDbg((*b)->right, out);
-        return true;
-    }
-    out.push_back(&e);
-    return true;
+bool ImplIndexProbeRule::condition(GroupExpr& expr, Memo& /*memo*/) const {
+    // Unresolved probes have no physical contract yet; R2 must resolve first.
+    const auto* probe = std::get_if<std::unique_ptr<binder::BoundIndexProbeOp>>(&expr.op);
+    return probe && *probe && (*probe)->index_id != 0;
 }
-static bool toPV(const Value& v, PropertyValue& out) {
-    if (auto* i = std::get_if<int64_t>(&v)) {
-        out = *i;
-        return true;
-    }
-    if (auto* s = std::get_if<std::string>(&v)) {
-        out = *s;
-        return true;
-    }
-    if (auto* d = std::get_if<double>(&v)) {
-        out = *d;
-        return true;
-    }
-    return false;
+
+std::vector<std::unique_ptr<GroupExpr>> ImplIndexProbeRule::substitute(GroupExpr& expr, Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::IndexProbe);
 }
-static bool chainDbg(Memo& memo, GroupId gid, std::vector<binder::BoundIndexJoinOp::EdgeStep>& chain, GroupId& source,
-                     std::unordered_set<GroupId>& seen) {
-    if (!seen.insert(gid).second)
-        return false;
-    Group& g = memo.getGroup(gid);
-    for (ExprId eid : g.logical_exprs) {
-        GroupExpr& ge = memo.getExpr(eid);
-        if (auto* e = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&ge.op); e && *e) {
-            binder::BoundIndexJoinOp::EdgeStep st;
-            st.src_variable = (*e)->src_variable;
-            st.dst_variable = (*e)->dst_variable;
-            st.edge_variable = (*e)->edge_variable;
-            st.edge_label_ids = (*e)->edge_label_ids;
-            st.direction = (*e)->direction;
-            st.dst_label_ids = (*e)->dst_label_ids;
-            chain.push_back(std::move(st));
-            if (!ge.child_groups.empty() && chainDbg(memo, ge.child_groups[0], chain, source, seen))
-                return true;
-            chain.pop_back();
-        } else if (std::holds_alternative<std::unique_ptr<binder::BoundProjectOp>>(ge.op) ||
-                   std::holds_alternative<std::unique_ptr<binder::BoundFilterOp>>(ge.op) ||
-                   std::holds_alternative<std::unique_ptr<binder::BoundDistinctOp>>(ge.op)) {
-            if (!ge.child_groups.empty() && chainDbg(memo, ge.child_groups[0], chain, source, seen))
-                return true;
-        }
-    }
-    if (!chain.empty()) {
-        source = gid;
-        return true;
-    }
-    return false;
+
+PatternNode ImplIndexProbeJoinRule::pattern() const {
+    return {OptNodeType::IndexProbeJoin, {{}, {}}};
 }
-PatternNode GenerateIndexJoinRule::pattern() const {
-    return {OptNodeType::Filter, {{}}};
-}
-std::vector<std::unique_ptr<GroupExpr>> GenerateIndexJoinRule::substitute(GroupExpr& expr, Memo& memo) const {
-    auto* fp = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&expr.op);
-    if (!fp || !*fp || expr.child_groups.empty() || memo.getCatalog() == nullptr)
-        return {};
-    std::vector<binder::BoundIndexJoinOp::EdgeStep> chain;
-    GroupId source = INVALID_GROUP_ID;
-    std::unordered_set<GroupId> seen;
-    if (!chainDbg(memo, expr.child_groups[0], chain, source, seen) || chain.empty()) {
-        return {};
-    }
-    const auto& outer = chain.front();
-    std::vector<const binder::BoundExpression*> conjs;
-    collectAndDbg((*fp)->predicate, conjs);
-    if (conjs.size() != 1) {
-        return {};
-    }
-    auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjs[0]);
-    if (!bp || !*bp)
-        return {};
-    auto& b = **bp;
-    std::string prop;
-    LabelId label = INVALID_LABEL_ID;
-    uint16_t pid = 0;
-    bool left = false, right = false;
-    auto inspect = [&](const binder::BoundExpression& e) -> bool {
-        auto* p = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&e);
-        if (!p || !*p)
-            return false;
-        std::string var;
-        if (auto* c = std::get_if<binder::BoundColumnRef>(&(*p)->object))
-            var = c->name;
-        else if (auto* v = std::get_if<binder::BoundVariableRef>(&(*p)->object))
-            var = v->name;
-        if (var != outer.dst_variable)
-            return false;
-        prop = (*p)->property_name;
-        if ((*p)->candidates.empty())
-            return false;
-        label = (*p)->candidates.front().label_id;
-        pid = (*p)->candidates.front().prop_id;
-        for (const auto& c : (*p)->candidates) {
-            if (std::find(outer.dst_label_ids.begin(), outer.dst_label_ids.end(), c.label_id) !=
-                outer.dst_label_ids.end()) {
-                label = c.label_id;
-                pid = c.prop_id;
-                break;
-            }
-        }
-        return true;
-    };
-    auto inspect_col = [&](const binder::BoundExpression& e) -> bool {
-        auto* c = std::get_if<binder::BoundColumnRef>(&e);
-        if (!c || memo.getSlotSemantics() == nullptr)
-            return false;
-        auto it = memo.getSlotSemantics()->find(c->slot_id);
-        if (it == memo.getSlotSemantics()->end() || it->second.kind != binder::SlotSemanticKind::Property)
-            return false;
-        prop = it->second.property_name;
-        label = it->second.property_labels.empty() ? INVALID_LABEL_ID : it->second.property_labels.front();
-        pid = it->second.property_ids.empty() ? 0 : it->second.property_ids.front();
-        return true;
-    };
-    left = inspect(b.left) || inspect_col(b.left);
-    if (!left)
-        right = inspect(b.right) || inspect_col(b.right);
-    if (!left && !right) {
-        return {};
-    }
-    auto op = b.op;
-    const binder::BoundExpression* other = left ? &b.right : &b.left;
-    if (right) {
-        switch (op) {
-        case cypher::BinaryOperator::LT:
-            op = cypher::BinaryOperator::GT;
-            break;
-        case cypher::BinaryOperator::LTE:
-            op = cypher::BinaryOperator::GTE;
-            break;
-        case cypher::BinaryOperator::GT:
-            op = cypher::BinaryOperator::LT;
-            break;
-        case cypher::BinaryOperator::GTE:
-            op = cypher::BinaryOperator::LTE;
-            break;
-        default:
-            break;
-        }
-    }
-    auto out = std::make_unique<binder::BoundIndexJoinOp>();
-    out->source_variable = chain.back().src_variable;
-    out->target_variable = outer.dst_variable;
-    out->target_label = label;
-    out->index_property_name = prop;
-    out->index_prop = pid;
-    out->chain = chain;
-    if (auto* lit = std::get_if<binder::BoundLiteral>(other); lit) {
-        PropertyValue pv;
-        if (!toPV(lit->value, pv))
-            return {};
-        switch (op) {
-        case cypher::BinaryOperator::EQ:
-            out->equality = pv;
-            break;
-        case cypher::BinaryOperator::GT:
-            out->lower = pv;
-            out->lower_inclusive = false;
-            break;
-        case cypher::BinaryOperator::GTE:
-            out->lower = pv;
-            out->lower_inclusive = true;
-            break;
-        case cypher::BinaryOperator::LT:
-            out->upper = pv;
-            out->upper_inclusive = false;
-            break;
-        case cypher::BinaryOperator::LTE:
-            out->upper = pv;
-            out->upper_inclusive = true;
-            break;
-        default:
-            return {};
-        }
-    } else if (auto* col = std::get_if<binder::BoundColumnRef>(other); col && op == cypher::BinaryOperator::EQ) {
-        out->dynamic_key = true;
-        out->dynamic_key_variable = col->name;
-    } else
-        return {};
-    uint32_t idx = 0;
-    auto find_idx = [&](LabelId lid) {
-        auto it = memo.getCatalog()->allLabels().find(lid);
-        if (it == memo.getCatalog()->allLabels().end())
-            return;
-        for (const auto& i : it->second.indexes)
-            for (const auto& a : i.accessors)
-                if (a.property_name == prop && i.index_id) {
-                    idx = i.index_id;
-                    label = lid;
-                    return;
-                }
-    };
-    find_idx(label);
-    if (!idx)
-        for (const auto& [lid, _] : memo.getCatalog()->allLabels()) {
-            find_idx(lid);
-            if (idx)
-                break;
-        }
-    if (!idx)
-        return {};
-    // A filtered source is a point/range probe already: re-executing it per
-    // reverse-index batch is strictly worse than the forward path. Bare
-    // scans remain candidates (tests cover the reverse range path).
-    // A bare label scan with a large source cardinality is not an anchor; the
-    // reverse index would be re-probed once per source row. Keep the candidate
-    // for genuinely small anchors (tests cover that path).
-    bool source_is_scan = false;
-    for (ExprId eid : memo.getGroup(source).logical_exprs) {
-        const auto& o = memo.getExpr(eid).op;
-        if (std::holds_alternative<binder::BoundScanOp>(o) || std::holds_alternative<binder::BoundLabelScanOp>(o)) {
-            source_is_scan = true;
-            break;
-        }
-    }
-    double source_card = memo.getGroup(source).getLogProp(memo, memo.getCatalog()).cardinality;
-    if (!out->dynamic_key && source_is_scan && source_card > 1000.0)
-        return {};
-    out->index_id = idx;
-    // Build the (small) anchor side: the reverse index stream can be large
-    // (e.g. a date range) and must not become the hash-build input.
-    out->build_left = true;
+
+std::vector<std::unique_ptr<GroupExpr>> ImplIndexProbeJoinRule::substitute(GroupExpr& expr, Memo& memo) const {
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = PhysicalOpTag::IndexProbeJoin;
+    phys->source = cloneBoundLogicalOperator(expr.op);
+
+    // The anchor input must provide whatever this group's expressions need.
+    // The probe input reads its own index range: asking it to materialise the
+    // consumed property would force an Enricher over a descriptor leaf.
+    Group& group = memo.getGroup(expr.group_id);
+    phys->required_input_mat.resize(expr.child_groups.size());
+    if (group.requirementsValid() && !expr.child_groups.empty())
+        phys->required_input_mat[0] = group.requirements();
+
     std::vector<std::unique_ptr<GroupExpr>> result;
-    result.push_back(
-        std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(out), std::vector<GroupId>{source}));
+    result.push_back(std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(phys), expr.child_groups));
     return result;
 }
+
 PatternNode ImplIndexJoinRule::pattern() const {
     return {OptNodeType::IndexJoin, {{}}};
 }
@@ -391,7 +176,22 @@ PatternNode ImplVarLenExpandRule::pattern() const {
     return {OptNodeType::VarLenExpand, {{}}};
 }
 std::vector<std::unique_ptr<GroupExpr>> ImplVarLenExpandRule::substitute(GroupExpr& expr, Memo& memo) const {
-    return makePhysicalExpr(expr, memo, PhysicalOpTag::VarLenExpand);
+    // Bounded shortestPath shares one forward BFS among rows whose start vertex
+    // is the same. The strategy is a physical descriptor (ChosenPlan attribute),
+    // no longer a logical field set by a normalization pass: the rule decides
+    // whether the candidate exists, lowering only forwards it.
+    //
+    // The depth bound is part of the operator contract (shortestPathsFromSource
+    // refuses deeper searches), so a bounded search is the only eligible shape.
+    // Batch vs per-row is a real trade-off that depends on how many rows share a
+    // start (source NDV) and on the frontier growth; without those statistics a
+    // cost comparison would be fabricated, so the rule emits this candidate only
+    // and the second candidate + cost arrive with the P3 statistics.
+    bool batch = false;
+    if (const auto* vle = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&expr.op); vle && *vle) {
+        batch = (*vle)->shortest_path && !(*vle)->all_shortest_paths && (*vle)->max_hops >= 0 && (*vle)->max_hops <= 8;
+    }
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::VarLenExpand, /*build_left=*/false, batch);
 }
 
 PatternNode ImplSortRule::pattern() const {
@@ -465,11 +265,66 @@ PatternNode ImplHashJoinRule::pattern() const {
     return {OptNodeType::BinaryJoin, {{}, {}}};
 }
 
+namespace {
+
+/// Right input of the probe: the correlation-invariant label scan whose rows are
+/// materialised once and probed by vertex id.
+bool groupHasLabelScan(Memo& memo, GroupId gid) {
+    for (ExprId eid : memo.getGroup(gid).logical_exprs) {
+        if (std::holds_alternative<binder::BoundLabelScanOp>(memo.getExpr(eid).op))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+PatternNode ImplCorrelatedVertexProbeRule::pattern() const {
+    return {OptNodeType::BinaryJoin, {{}, {}}};
+}
+
+bool ImplCorrelatedVertexProbeRule::condition(GroupExpr& expr, Memo& memo) const {
+    // The shape and the endpoint restriction are semantic facts recorded by
+    // AnnotateEndpointProbeNormalization on the join; the candidate is offered
+    // when the join carries that annotation and its right input is a label scan.
+    const auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
+    if (join == nullptr || !*join || (*join)->endpoint_probe_edge_var.empty())
+        return false;
+    if (expr.child_groups.size() != 2)
+        return false;
+    return groupHasLabelScan(memo, expr.child_groups[1]);
+}
+
+std::vector<std::unique_ptr<GroupExpr>> ImplCorrelatedVertexProbeRule::substitute(GroupExpr& expr, Memo& memo) const {
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::CorrelatedVertexProbe);
+}
+
+bool ImplHashJoinRule::condition(GroupExpr& expr, Memo& memo) const {
+    (void)memo;
+    const auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
+    if (join == nullptr || !*join || (*join)->join_conditions.empty())
+        return false;
+    // The descriptor is a list of equality semantics. Refusing non-EQ conditions
+    // here keeps the decision in CBO: lowering never has to fall back to
+    // CrossProduct to avoid mis-keying a condition it cannot express.
+    for (const auto& cond : (*join)->join_conditions) {
+        const auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&cond);
+        if (binop == nullptr || !*binop || (*binop)->op != cypher::BinaryOperator::EQ)
+            return false;
+    }
+    return true;
+}
+
 std::vector<std::unique_ptr<GroupExpr>> ImplHashJoinRule::substitute(GroupExpr& expr, Memo& memo) const {
     auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
     if (!join || !*join || (*join)->join_conditions.empty())
         return {};
-    return makePhysicalExpr(expr, memo, PhysicalOpTag::HashJoin);
+    // Two candidates: build the left or the right side. Cost/memory decides;
+    // the chosen side is part of the descriptor and lowering must not re-pick.
+    auto out = makePhysicalExpr(expr, memo, PhysicalOpTag::HashJoin, /*build_left=*/false);
+    auto left_build = makePhysicalExpr(expr, memo, PhysicalOpTag::HashJoin, /*build_left=*/true);
+    out.insert(out.end(), std::make_move_iterator(left_build.begin()), std::make_move_iterator(left_build.end()));
+    return out;
 }
 
 PatternNode ImplLeftJoinRule::pattern() const {

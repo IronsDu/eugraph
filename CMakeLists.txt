@@ -333,7 +333,6 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/label_scan_physical_op.cpp
     src/query/physical_plan/operator/limit_physical_op.cpp
     src/query/physical_plan/operator/left_join_physical_op.cpp
-    src/query/physical_plan/operator/list_index_join_physical_op.cpp
     src/query/physical_plan/operator/shortest_path_physical_op.cpp
     src/query/physical_plan/operator/varlen_expand_physical_op.cpp
     src/query/physical_plan/operator/path_build_physical_op.cpp
@@ -343,7 +342,6 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/remove_physical_op.cpp
     src/query/physical_plan/operator/semi_join_physical_op.cpp
     src/query/physical_plan/operator/pattern_comprehension_apply_physical_op.cpp
-    src/query/physical_plan/operator/pattern_comprehension_fork_physical_op.cpp
     src/query/physical_plan/operator/set_physical_op.cpp
     src/query/physical_plan/operator/singleton_physical_op.cpp
     src/query/physical_plan/operator/skip_physical_op.cpp
@@ -371,10 +369,16 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/analysis/requirement_collector.cpp
     src/query/optimizer/analysis/property_demand.cpp
     src/query/optimizer/analysis/plan_analysis.cpp
+    src/query/optimizer/analysis/plan_refs.cpp
     src/query/optimizer/rules/logical/filter_pushdown.cpp
+    src/query/optimizer/rules/logical/generate_index_scan.cpp
+    src/query/optimizer/rules/logical/generate_index_join.cpp
+    src/query/optimizer/rules/logical/generate_index_probe.cpp
+    src/query/optimizer/rules/logical/resolve_index_probe.cpp
+    src/query/optimizer/rules/logical/prune_expand_edge_labels.cpp
+    src/query/optimizer/rules/logical/prune_varlen_or_filters.cpp
     src/query/optimizer/rules/logical/edge_uniqueness_pushdown.cpp
     src/query/optimizer/rules/logical/path_count_fusion.cpp
-    src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp
     src/query/optimizer/rules/logical/join_commute.cpp
     src/query/optimizer/rules/logical/join_associate.cpp
     src/query/optimizer/normalization/plan_normalizations.cpp

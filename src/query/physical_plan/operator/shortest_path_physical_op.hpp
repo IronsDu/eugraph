@@ -9,6 +9,7 @@
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -43,6 +44,13 @@ public:
         return {child_.get()};
     }
     void deriveOutputLayout(const TupleSlotLayout& input_layout) override;
+    void explain(ExplainNode& node, const ExplainContext& ctx) const override;
+
+    /// Diagnostics: source groups answered by one shared forward BFS (rows with
+    /// the same start). Tests use this to prove the batch branch is exercised,
+    /// not just annotated.
+    static uint64_t batchGroupCount() noexcept;
+    static void resetBatchGroupCount() noexcept;
 
 private:
     struct EdgeLink {
@@ -102,9 +110,11 @@ private:
     std::string path_var_;
     binder::SlotId path_slot_ = binder::INVALID_SLOT_ID;
     bool all_shortest_paths_ = false;
-    /// Set by the optimizer (ShortestPathBatchRule); selects the multi-target
-    /// BFS implementation. The physical operator never infers this from shape.
+    /// ChosenPlan attribute (ImplVarLenExpandRule): selects the multi-target
+    /// BFS implementation. Lowering only forwards it; the operator never infers
+    /// the strategy from shape.
     bool batch_shortest_path_ = false;
+    static std::atomic<uint64_t> batch_group_count_;
     std::vector<LabelId> dst_label_ids_;
     bool dst_label_missing_ = false;
     uint32_t src_filter_index_id_ = 0;

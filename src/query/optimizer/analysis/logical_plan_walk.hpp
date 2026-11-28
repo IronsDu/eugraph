@@ -3,7 +3,8 @@
 #include "query/planner/bound_logical_plan.hpp"
 
 #include "query/planner/logical_plan/operator/bound_index_join_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -38,6 +39,13 @@ template <typename OpRef, typename Visit> void forEachLogicalChild(OpRef&& op, V
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexJoinOp>>) {
                 if (v)
                     visit(v->left);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                // Only the anchor is a logical subtree; the probe is a leaf
+                // descriptor carried by its own memo group.
+                if (v)
+                    visit(v->anchor);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                // Probe descriptor: no logical children.
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child)
                     visit(*v->child);
@@ -55,17 +63,16 @@ template <typename OpRef, typename Visit> void forEachLogicalChild(OpRef&& op, V
                     visit(v->left);
                     visit(v->right);
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                // Shared-anchor fork: left, anchor, then one sub-plan per branch.
-                if (v) {
-                    visit(v->left);
-                    visit(v->anchor);
-                    for (auto& branch : v->branches)
-                        visit(branch);
-                }
             }
         },
         op);
+}
+
+/// Visit every node of a bound logical plan (pre-order), including the root.
+template <typename Visit> void forEachPlanNode(const binder::BoundLogicalOperator& op, Visit&& visit) {
+    visit(op);
+    forEachLogicalChild(const_cast<binder::BoundLogicalOperator&>(op),
+                        [&](binder::BoundLogicalOperator& child) { forEachPlanNode(child, visit); });
 }
 
 } // namespace optimizer

@@ -3,6 +3,7 @@
 #include "query/catalog/catalog.hpp"
 #include "query/optimizer/analysis/materialization_req.hpp"
 #include "query/optimizer/analysis/plan_analysis.hpp"
+#include "query/optimizer/analysis/plan_refs.hpp"
 #include "query/optimizer/analysis/property_demand.hpp"
 #include "query/optimizer/analysis/requirement_collector.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
@@ -17,12 +18,20 @@
 #include "query/optimizer/normalization/plan_normalizations.hpp"
 #include "query/optimizer/rules/logical/edge_uniqueness_pushdown.hpp"
 #include "query/optimizer/rules/logical/filter_pushdown.hpp"
+#include "query/optimizer/rules/logical/generate_index_probe.hpp"
 #include "query/optimizer/rules/logical/join_associate.hpp"
 #include "query/optimizer/rules/logical/join_commute.hpp"
+#include "query/optimizer/rules/logical/prune_expand_edge_labels.hpp"
+#include "query/optimizer/rules/logical/prune_varlen_or_filters.hpp"
+#include "query/optimizer/rules/logical/resolve_index_probe.hpp"
 #include "query/optimizer/rules/physical/impl_rules.hpp"
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_logical_plan.hpp"
+#include "query/planner/logical_plan/operator/bound_correlated_source_op.hpp"
+#include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <set>
 
@@ -99,6 +108,137 @@ TEST(MemoTest, CopyInCopyOutThreeLevel) {
     ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(proj->child));
     auto& filt = std::get<std::unique_ptr<BoundFilterOp>>(proj->child);
     ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(filt->child));
+}
+
+// ==================== IndexProbe / ProbeJoin Tests ====================
+//
+// BoundIndexProbeJoinOp keeps the anchor and the probe in two child groups.
+// These tests pin the memo contract (child count, group creation, copyOut
+// round-trip) and the "clone must not lose the probe descriptor" invariant.
+
+static BoundIndexProbeOp makeIndexProbeOp() {
+    BoundIndexProbeOp p;
+    p.source_variable = "friend";
+    p.target_variable = "message";
+    p.edge_variable = "e2";
+    p.edge_label_ids = {EdgeLabelId{7}};
+    p.direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+    p.target_label_ids = {LabelId{5}};
+    p.index_id = 11;
+    p.index_prop = 1;
+    p.index_property_name = "creationDate";
+    p.lower = PropertyValue{int64_t{100}};
+    p.lower_inclusive = true;
+    p.upper = PropertyValue{int64_t{200}};
+    p.upper_inclusive = false;
+    return p;
+}
+
+static BoundLogicalOperator makeProbeJoinTree() {
+    auto pj = std::make_unique<BoundIndexProbeJoinOp>();
+    pj->anchor = makeLabelScanWithLabel("friend", 0, LabelId{2});
+    pj->probe = makeIndexProbeOp();
+    return BoundLogicalOperator(std::move(pj));
+}
+
+TEST(ProbeJoinMemoTest, ChildCountIsTwo) {
+    auto op = makeProbeJoinTree();
+    EXPECT_EQ(getChildCount(op), 2);
+    // Cloning must preserve the operator kind and the probe descriptor; a
+    // fall-through clone would silently replace it with a scan.
+    auto cloned = cloneBoundLogicalOperator(op);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundIndexProbeJoinOp>>(cloned));
+    auto& c = std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(cloned);
+    ASSERT_TRUE(c);
+    EXPECT_EQ(c->probe.index_id, 11u);
+    EXPECT_EQ(c->probe.upper, PropertyValue{int64_t{200}});
+    EXPECT_EQ(getChildCount(cloned), 2);
+}
+
+TEST(ProbeJoinMemoTest, CopyInCreatesAnchorAndProbeGroups) {
+    auto op = makeProbeJoinTree();
+    Memo memo;
+    GroupId gid = memo.copyIn(op);
+
+    Group& group = memo.getGroup(gid);
+    ASSERT_EQ(group.logical_exprs.size(), 1u);
+    GroupExpr& expr = memo.getExpr(group.logical_exprs[0]);
+    ASSERT_EQ(expr.child_groups.size(), 2u);
+
+    Group& anchor = memo.getGroup(expr.child_groups[BoundIndexProbeJoinOp::kAnchorChild]);
+    ASSERT_EQ(anchor.logical_exprs.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<BoundLabelScanOp>(memo.getExpr(anchor.logical_exprs[0]).op));
+
+    Group& probe = memo.getGroup(expr.child_groups[BoundIndexProbeJoinOp::kProbeChild]);
+    ASSERT_EQ(probe.logical_exprs.size(), 1u);
+    auto* probe_op = std::get_if<std::unique_ptr<BoundIndexProbeOp>>(&memo.getExpr(probe.logical_exprs[0]).op);
+    ASSERT_TRUE(probe_op && *probe_op);
+    EXPECT_EQ((*probe_op)->index_id, 11u);
+    EXPECT_EQ((*probe_op)->target_variable, "message");
+}
+
+TEST(ProbeJoinMemoTest, CopyOutRoundTripsBothChildren) {
+    Memo memo;
+    auto tree = makeProbeJoinTree();
+    GroupId gid = memo.copyIn(tree);
+
+    auto out = memo.copyOut(gid);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundIndexProbeJoinOp>>(out));
+    auto& pj = std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(out);
+    ASSERT_TRUE(pj);
+    ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(pj->anchor));
+    EXPECT_EQ(std::get<BoundLabelScanOp>(pj->anchor).variable, "friend");
+    // The descriptor is read back from the probe group, not from stale transport.
+    EXPECT_EQ(pj->probe.index_id, 11u);
+    EXPECT_EQ(pj->probe.lower, PropertyValue{int64_t{100}});
+    EXPECT_TRUE(pj->probe.lower_inclusive);
+    EXPECT_FALSE(pj->probe.upper_inclusive);
+}
+
+TEST(ProbeJoinMemoTest, DedupUsesProbeContentNotAnchorTransport) {
+    Memo memo;
+    auto a = makeProbeJoinTree();
+    auto b = makeProbeJoinTree();
+    GroupId gid_a = memo.copyIn(a);
+    GroupId gid_b = memo.copyIn(b);
+    EXPECT_EQ(gid_a, gid_b) << "same anchor+probe must share one group";
+
+    auto different = makeProbeJoinTree();
+    std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(different)->probe.upper = PropertyValue{int64_t{300}};
+    EXPECT_NE(memo.copyIn(different), gid_a) << "a different probe bound must not dedup";
+}
+
+TEST(ProbeJoinMemoTest, HashAndEqualityCoverFullProbeDescriptor) {
+    auto a = makeProbeJoinTree();
+    auto b = makeProbeJoinTree();
+    EXPECT_EQ(hashBoundLogicalOperator(a), hashBoundLogicalOperator(b));
+    EXPECT_TRUE(equalBoundLogicalOperator(a, b));
+
+    auto c = makeProbeJoinTree();
+    std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(c)->probe.edge_variable = "other_edge";
+    EXPECT_NE(hashBoundLogicalOperator(a), hashBoundLogicalOperator(c));
+    EXPECT_FALSE(equalBoundLogicalOperator(a, c));
+
+    auto d = makeProbeJoinTree();
+    std::get<std::unique_ptr<BoundIndexProbeJoinOp>>(d)->probe.lower_inclusive = false;
+    EXPECT_FALSE(equalBoundLogicalOperator(a, d));
+}
+
+TEST(ProbeJoinMemoTest, LogPropAddsProbeColumnsToAnchor) {
+    Memo memo;
+    auto tree = makeProbeJoinTree();
+    GroupId gid = memo.copyIn(tree);
+    const LogProp& lp = memo.getGroup(gid).getLogProp(memo, nullptr);
+
+    ASSERT_TRUE(lp.valid);
+    EXPECT_GT(lp.cardinality, 0.0);
+    auto has = [&lp](const std::string& var) {
+        return std::any_of(lp.columns.begin(), lp.columns.end(),
+                           [&](const optimizer::ColumnInfo& c) { return c.variable == var; });
+    };
+    EXPECT_TRUE(has("friend")) << "anchor columns must survive";
+    EXPECT_TRUE(has("message")) << "probe target must be added";
+    EXPECT_TRUE(has("e2")) << "probe edge must be added";
 }
 
 // ==================== FilterPushdown Tests ====================
@@ -1134,6 +1274,20 @@ TEST(CostModelTest, NestedLoopJoinCost) {
     EXPECT_DOUBLE_EQ(cost.value(), 5000.0);
 }
 
+TEST(CostModelTest, CorrelatedVertexProbeIsLinear) {
+    LogProp out;
+    out.cardinality = 200.0;
+    LogProp left;
+    left.cardinality = 100.0;
+    LogProp right;
+    right.cardinality = 50.0;
+    const auto probe = findLocalCost(PhysicalOpTag::CorrelatedVertexProbe, out, {left, right});
+    const auto cross = findLocalCost(PhysicalOpTag::CrossProduct, out, {left, right});
+    // One half-priced build pass over the invariant side + one probe per left row.
+    EXPECT_DOUBLE_EQ(probe.value(), 125.0);
+    EXPECT_LT(probe.value(), cross.value());
+}
+
 TEST(CostModelTest, SortCost) {
     LogProp in;
     in.cardinality = 1024.0;
@@ -1178,6 +1332,50 @@ TEST(ImplRuleTest, LabelScanImplRuleProducesPhysicalExpr) {
     ASSERT_EQ(new_exprs.size(), 1u);
     ASSERT_TRUE(new_exprs[0]->isPhysical());
     EXPECT_EQ(new_exprs[0]->physOp().tag, PhysicalOpTag::LabelScan);
+}
+
+TEST(ImplRuleTest, CorrelatedVertexProbeCoversCorrelatedAnchorShape) {
+    // CrossProduct(CorrelatedSource(edge), LabelScan(vertex)): the shape a
+    // pattern-comprehension anchor produces. The Impl rule offers the probe tag;
+    // the optimizer's cost model decides whether it wins.
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::EdgeKey()};
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    join->endpoint_probe_edge_var = "r";
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    ImplCorrelatedVertexProbeRule rule;
+    ASSERT_TRUE(rule.topMatch(expr));
+    ASSERT_TRUE(rule.condition(expr, memo));
+    auto candidates = rule.substitute(expr, memo);
+    ASSERT_EQ(candidates.size(), 1u);
+    ASSERT_TRUE(candidates[0]->isPhysical());
+    EXPECT_EQ(candidates[0]->physOp().tag, PhysicalOpTag::CorrelatedVertexProbe);
+    ASSERT_EQ(candidates[0]->child_groups.size(), 2u);
+}
+
+TEST(ImplRuleTest, CorrelatedVertexProbeSkipsUnrelatedJoins) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    join->left = makeLabelScan("x", 0);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+    BoundLogicalOperator root(std::move(join));
+
+    Memo memo;
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.back());
+
+    ImplCorrelatedVertexProbeRule rule;
+    EXPECT_FALSE(rule.condition(expr, memo)) << "no correlated edge source on the left";
 }
 
 TEST(ImplRuleTest, FilterImplRuleProducesPhysicalExpr) {
@@ -2424,6 +2622,26 @@ TEST(PhysicalExprTest, HashAndEqualityIncludeEnricherFields) {
     EXPECT_FALSE(equalPhysicalExpr(a, d));
 }
 
+TEST(PhysicalExprTest, BatchShortestPathIsPartOfCandidateIdentity) {
+    PhysicalExpr plain;
+    plain.tag = PhysicalOpTag::VarLenExpand;
+    plain.source = makeLabelScan("a", 0);
+
+    PhysicalExpr batched = clonePhysicalExpr(plain);
+    batched.batch_shortest_path = true;
+
+    // Two candidates that differ only in the strategy must stay distinct in the
+    // memo (same lesson as the VLE allow-set fields: a bool missing from
+    // hash/eq silently dedups two different execution strategies).
+    EXPECT_NE(hashPhysicalExpr(plain), hashPhysicalExpr(batched));
+    EXPECT_FALSE(equalPhysicalExpr(plain, batched));
+
+    PhysicalExpr copy = clonePhysicalExpr(batched);
+    EXPECT_EQ(hashPhysicalExpr(batched), hashPhysicalExpr(copy));
+    EXPECT_TRUE(equalPhysicalExpr(batched, copy));
+    EXPECT_TRUE(copy.batch_shortest_path);
+}
+
 TEST(PhysicalExprTest, ClonePreservesEnricherFields) {
     PhysicalExpr src;
     src.tag = PhysicalOpTag::EdgeEnrich;
@@ -2897,6 +3115,168 @@ TEST(DemandClassificationTest, DynamicPropertyStillNeedsWholeVertex) {
     EXPECT_TRUE(reqs[1].need_whole_vertex);
 }
 
+namespace {
+
+const function::FunctionDef& endpointFunction(const char* name) {
+    static const function::FunctionDef start = [] {
+        function::FunctionDef def;
+        def.name = "startNode";
+        return def;
+    }();
+    static const function::FunctionDef end = [] {
+        function::FunctionDef def;
+        def.name = "endNode";
+        return def;
+    }();
+    return std::string(name) == "startNode" ? start : end;
+}
+
+/// `a.id`
+BoundExpression makeVertexIdExpr(const std::string& variable, SlotId slot) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "id";
+    prop->object = BoundColumnRef(0, BoundType::Vertex(), variable, slot);
+    return BoundExpression(std::move(prop));
+}
+
+/// `startNode(r).id` / `endNode(r).id`
+BoundExpression makeEndpointIdExpr(const char* endpoint, const std::string& edge) {
+    auto call = std::make_unique<BoundFunctionCall>();
+    call->func_def = &endpointFunction(endpoint);
+    call->args.push_back(BoundColumnRef(0, BoundType::EdgeKey(), edge, SlotId{9}));
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "id";
+    prop->object = BoundExpression(std::move(call));
+    return BoundExpression(std::move(prop));
+}
+
+/// `a.id` bound as a runtime property access (the shape the binder produces when
+/// the static property cannot be resolved, e.g. on an ANY-typed object).
+BoundExpression makeDynamicVertexIdExpr(const std::string& variable, SlotId slot) {
+    auto dyn = std::make_unique<BoundDynamicPropertyRef>();
+    dyn->property = "id";
+    dyn->object = BoundColumnRef(0, BoundType::Any(), variable, slot);
+    return BoundExpression(std::move(dyn));
+}
+
+/// `startNode(r).id` bound dynamically (startNode() returns ANY).
+BoundExpression makeDynamicEndpointIdExpr(const char* endpoint, const std::string& edge) {
+    auto call = std::make_unique<BoundFunctionCall>();
+    call->func_def = &endpointFunction(endpoint);
+    call->args.push_back(BoundColumnRef(0, BoundType::Any(), edge, SlotId{9}));
+    auto dyn = std::make_unique<BoundDynamicPropertyRef>();
+    dyn->property = "id";
+    dyn->object = BoundExpression(std::move(call));
+    return BoundExpression(std::move(dyn));
+}
+
+BoundExpression makeEndpointEquality(const char* endpoint, const std::string& vertex) {
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::EQ;
+    bin->left = makeVertexIdExpr(vertex, SlotId{1});
+    bin->right = makeEndpointIdExpr(endpoint, "r");
+    return BoundExpression(std::move(bin));
+}
+
+} // namespace
+
+TEST(NormalizationTest, AnnotatesEndpointProbeJoinFromFilterPredicate) {
+    auto or_expr = std::make_unique<BoundBinaryOp>();
+    or_expr->op = cypher::BinaryOperator::OR;
+    or_expr->left = makeEndpointEquality("startNode", "a");
+    or_expr->right = makeEndpointEquality("endNode", "a");
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::EdgeKey()};
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(or_expr));
+    filter->child = BoundLogicalOperator(std::move(join));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    AnnotateEndpointProbeNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    ASSERT_NE(out_filter, nullptr);
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_EQ(out_join->endpoint_probe_edge_var, "r");
+}
+
+TEST(NormalizationTest, AnnotatesEndpointProbeJoinFromDynamicPropertyPredicate) {
+    // LDBC c14 binds `startNode(r).id` dynamically (ANY-typed function result);
+    // the annotation must still recognise the endpoint restriction.
+    auto or_expr = std::make_unique<BoundBinaryOp>();
+    or_expr->op = cypher::BinaryOperator::OR;
+    auto make_dynamic_equality = [](const char* endpoint) {
+        auto bin = std::make_unique<BoundBinaryOp>();
+        bin->op = cypher::BinaryOperator::EQ;
+        bin->left = makeDynamicVertexIdExpr("a", SlotId{1});
+        bin->right = makeDynamicEndpointIdExpr(endpoint, "r");
+        return BoundExpression(std::move(bin));
+    };
+    or_expr->left = make_dynamic_equality("startNode");
+    or_expr->right = make_dynamic_equality("endNode");
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::Any()};
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(or_expr));
+    filter->child = BoundLogicalOperator(std::move(join));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    AnnotateEndpointProbeNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_EQ(out_join->endpoint_probe_edge_var, "r");
+}
+
+TEST(NormalizationTest, SkipsEndpointProbeWhenPredicateDoesNotRestrictToEndpoints) {
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = makeVertexIdExpr("a", SlotId{1});
+    eq->right = BoundLiteral(int64_t{5});
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Cross;
+    BoundCorrelatedSourceOp source;
+    source.variables = {"r"};
+    source.types = {BoundType::EdgeKey()};
+    join->left = BoundLogicalOperator(source);
+    join->right = makeLabelScanWithLabel("a", 1, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(eq));
+    filter->child = BoundLogicalOperator(std::move(join));
+    BoundLogicalOperator root(std::move(filter));
+
+    NormalizationContext ctx;
+    AnnotateEndpointProbeNormalization pass;
+    pass.apply(root, ctx);
+
+    auto& out_filter = std::get<std::unique_ptr<BoundFilterOp>>(root);
+    auto& out_join = std::get<std::unique_ptr<BoundBinaryJoinOp>>(out_filter->child);
+    ASSERT_NE(out_join, nullptr);
+    EXPECT_TRUE(out_join->endpoint_probe_edge_var.empty());
+}
+
 TEST(NormalizationTest, ExtractsEqualityJoinConditionAndKeepsFilter) {
     auto join = std::make_unique<BoundBinaryJoinOp>();
     join->join_type = JoinType::Cross;
@@ -2925,24 +3305,62 @@ TEST(NormalizationTest, ExtractsEqualityJoinConditionAndKeepsFilter) {
     EXPECT_FALSE(out_filter->predicate.valueless_by_exception());
 }
 
-TEST(NormalizationTest, MarksBoundedShortestPathBatch) {
-    auto vle = std::make_unique<BoundVarLenExpandOp>();
-    vle->src_variable = "a";
-    vle->dst_variable = "b";
-    vle->edge_label_ids = {EdgeLabelId{7}};
-    vle->shortest_path = true;
-    vle->all_shortest_paths = false;
-    vle->max_hops = 3;
-    vle->child = makeLabelScan("a", 0);
-    BoundLogicalOperator root(std::move(vle));
+TEST(ImplRuleTest, HashJoinCandidateRequiresEqualityConditions) {
+    auto make_join = [](cypher::BinaryOperator op) {
+        auto join = std::make_unique<BoundBinaryJoinOp>();
+        join->join_type = binder::JoinType::Inner;
+        join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+        join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+        auto cond = std::make_unique<BoundBinaryOp>();
+        cond->op = op;
+        cond->left = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "a", SlotId{1}));
+        cond->right = BoundExpression(BoundColumnRef(1, BoundType::Int64(), "b", SlotId{2}));
+        join->join_conditions.push_back(BoundExpression(std::move(cond)));
+        return BoundLogicalOperator(std::move(join));
+    };
 
-    NormalizationContext ctx;
-    ShortestPathBatchNormalization pass;
-    pass.apply(root, ctx);
+    auto condition_of = [](BoundLogicalOperator root, ImplHashJoinRule& rule, Memo& memo) {
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+        return rule.condition(expr, memo);
+    };
 
-    auto& out = std::get<std::unique_ptr<BoundVarLenExpandOp>>(root);
-    ASSERT_NE(out, nullptr);
-    EXPECT_TRUE(out->batch_shortest_path);
+    Memo memo;
+    ImplHashJoinRule rule;
+    EXPECT_FALSE(condition_of(make_join(cypher::BinaryOperator::GT), rule, memo))
+        << "a non-equality condition must not produce a HashJoin candidate (CBO decides, lowering does not fall back)";
+    EXPECT_TRUE(condition_of(make_join(cypher::BinaryOperator::EQ), rule, memo));
+}
+
+// P3: the bounded shortestPath batch strategy is a ChosenPlan attribute emitted
+// by ImplVarLenExpandRule, not a logical flag set by a normalization pass.
+TEST(ImplRuleTest, VarLenExpandMarksOnlyBoundedShortestPathBatch) {
+    auto expect_batch = [](bool shortest, bool all_shortest, int64_t max_hops, bool expected) {
+        auto vle = std::make_unique<BoundVarLenExpandOp>();
+        vle->src_variable = "a";
+        vle->dst_variable = "b";
+        vle->edge_label_ids = {EdgeLabelId{7}};
+        vle->shortest_path = shortest;
+        vle->all_shortest_paths = all_shortest;
+        vle->max_hops = max_hops;
+        vle->child = makeLabelScan("a", 0);
+        BoundLogicalOperator root(std::move(vle));
+
+        Memo memo;
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+        ImplVarLenExpandRule rule;
+        auto subs = rule.substitute(expr, memo);
+        ASSERT_EQ(subs.size(), 1u);
+        EXPECT_EQ(subs[0]->physOp().tag, PhysicalOpTag::VarLenExpand);
+        EXPECT_EQ(subs[0]->physOp().batch_shortest_path, expected);
+    };
+
+    expect_batch(/*shortest=*/true, /*all_shortest=*/false, 3, true);
+    expect_batch(true, false, -1, false); // unbounded: the forward BFS is not depth-capped
+    expect_batch(true, false, 9, false);  // deeper than the operator's batch contract
+    expect_batch(true, true, 3, false);   // allShortestPaths has its own algorithm
+    expect_batch(false, false, 3, false); // plain variable-length expand
 }
 
 TEST(ChosenPlanTest, EquiJoinProducesHashJoinCandidate) {
@@ -3120,4 +3538,891 @@ TEST(LogPropTest, EdgeCountStatsEstimateAverageOutDegree) {
     BoundLogicalOperator expand_root(std::make_unique<BoundExpandOp>(std::move(expand)));
     LogProp out = deriver.derive(expand_root, {source});
     EXPECT_DOUBLE_EQ(out.cardinality, 500.0);
+}
+
+// ==================== IndexProbe rules (R1 / R2 / R3) ====================
+//
+// R1 is shape-only (no catalog, no cost); R2 resolves an index inside the probe
+// group only for explicitly labelled destinations; R3 only emits the physical
+// tag. These tests pin that split so no rule starts re-selecting the anchor.
+
+static BoundExpression makeCreationDateLower(int64_t value) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "creationDate";
+    prop->object = BoundVariableRef("message", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{10};
+    cand.prop_id = 2;
+    prop->candidates.push_back(cand);
+
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::GTE;
+    bin->left = BoundExpression(std::move(prop));
+    bin->right = BoundLiteral(int64_t{value});
+    return BoundExpression(std::move(bin));
+}
+
+static BoundExpression makeCreationDateUpper(int64_t value) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = "creationDate";
+    prop->object = BoundVariableRef("message", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{10};
+    cand.prop_id = 2;
+    prop->candidates.push_back(cand);
+
+    // Reversed form as written in c3: `$end > message.creationDate`.
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::GT;
+    bin->left = BoundLiteral(int64_t{value});
+    bin->right = BoundExpression(std::move(prop));
+    return BoundExpression(std::move(bin));
+}
+
+static BoundLogicalOperator makeFilterOverExpandPlanWithPredicate(BoundExpression predicate,
+                                                                  bool explicit_destination_label) {
+    BoundLabelScanOp scan;
+    scan.variable = "friend";
+    scan.column_index = 0;
+    scan.label_ids = {LabelId{5}};
+    auto expand = std::make_unique<BoundExpandOp>();
+    expand->src_variable = "friend";
+    expand->src_column_index = 0;
+    expand->dst_variable = "message";
+    expand->dst_column_index = 2;
+    expand->edge_variable = "e2";
+    expand->edge_column_index = 1;
+    expand->edge_label_ids = {EdgeLabelId{2}};
+    expand->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+    if (explicit_destination_label)
+        expand->dst_label_ids = {LabelId{10}};
+    expand->child = BoundLogicalOperator(scan);
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = std::move(predicate);
+    filter->child = BoundLogicalOperator(std::move(expand));
+    return BoundLogicalOperator(std::move(filter));
+}
+
+static BoundLogicalOperator makeFilterOverExpandPlan(bool explicit_destination_label) {
+    auto lower = makeCreationDateLower(100);
+    auto upper = makeCreationDateUpper(200);
+    auto both = std::make_unique<BoundBinaryOp>();
+    both->op = cypher::BinaryOperator::AND;
+    both->left = std::move(lower);
+    both->right = std::move(upper);
+    return makeFilterOverExpandPlanWithPredicate(BoundExpression(std::move(both)), explicit_destination_label);
+}
+
+static std::shared_ptr<GraphSchema> makeProbeCatalogSchema() {
+    auto schema = std::make_shared<GraphSchema>();
+    LabelDef message;
+    message.id = LabelId{10};
+    message.name = "Message";
+    PropertyDef creation_date;
+    creation_date.id = 2;
+    creation_date.name = "creationDate";
+    creation_date.type = PropertyType::INT64;
+    message.properties.push_back(creation_date);
+    LabelDef::IndexDef index;
+    index.index_id = 23;
+    index.name = "idx_Message_creationDate";
+    IndexAccessorDef accessor;
+    accessor.is_strong = false;
+    accessor.property_name = "creationDate";
+    index.accessors.push_back(accessor);
+    index.state = IndexState::PUBLIC;
+    index.encoding_version = 2;
+    message.indexes.push_back(index);
+    schema->labels[LabelId{10}] = message;
+    schema->label_name_to_id["Message"] = LabelId{10};
+
+    LabelDef person;
+    person.id = LabelId{5};
+    person.name = "Person";
+    schema->labels[LabelId{5}] = person;
+    schema->label_name_to_id["Person"] = LabelId{5};
+    return schema;
+}
+
+TEST(GenerateIndexProbeRuleTest, BuildsProbeJoinFromAnchorAndProbeGroups) {
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/false);
+    Memo memo;
+    memo.setCommuteSafe(true);
+    GroupId root_gid = memo.copyIn(root);
+    memo.setCatalog(nullptr);
+
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(root_gid).logical_exprs.at(0));
+    GenerateIndexProbeRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    ASSERT_EQ(produced[0]->child_groups.size(), 2u);
+    EXPECT_EQ(produced[0]->group_id, root_gid);
+
+    // child 0: the complete existing anchor (LabelScan), never a re-derived scan.
+    Group& anchor = memo.getGroup(produced[0]->child_groups[BoundIndexProbeJoinOp::kAnchorChild]);
+    ASSERT_EQ(anchor.logical_exprs.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<BoundLabelScanOp>(memo.getExpr(anchor.logical_exprs[0]).op));
+
+    // child 1: the probe group with the merged range, still unresolved.
+    Group& probe = memo.getGroup(produced[0]->child_groups[BoundIndexProbeJoinOp::kProbeChild]);
+    ASSERT_EQ(probe.logical_exprs.size(), 1u);
+    auto* probe_op = std::get_if<std::unique_ptr<BoundIndexProbeOp>>(&memo.getExpr(probe.logical_exprs[0]).op);
+    ASSERT_TRUE(probe_op && *probe_op);
+    EXPECT_EQ((*probe_op)->source_variable, "friend");
+    EXPECT_EQ((*probe_op)->target_variable, "message");
+    EXPECT_EQ((*probe_op)->edge_variable, "e2");
+    EXPECT_EQ((*probe_op)->lower, PropertyValue{int64_t{100}});
+    EXPECT_TRUE((*probe_op)->lower_inclusive);
+    EXPECT_EQ((*probe_op)->upper, PropertyValue{int64_t{200}});
+    EXPECT_FALSE((*probe_op)->upper_inclusive);
+    EXPECT_EQ((*probe_op)->index_id, 0u) << "R1 must not choose an index";
+}
+
+TEST(ResolveIndexProbeRuleTest, ResolvesOnlyExplicitlyLabelledDestinations) {
+    auto schema = makeProbeCatalogSchema();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto make_probe_tree = [](std::vector<LabelId> labels) {
+        auto probe = std::make_unique<BoundIndexProbeOp>();
+        probe->source_variable = "friend";
+        probe->target_variable = "message";
+        probe->edge_variable = "e2";
+        probe->edge_label_ids = {EdgeLabelId{2}};
+        probe->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+        probe->target_label_ids = std::move(labels);
+        probe->index_property_name = "creationDate";
+        probe->lower = PropertyValue{int64_t{100}};
+        return BoundLogicalOperator(std::move(probe));
+    };
+
+    ResolveIndexProbeRule rule;
+    for (bool labelled : {true, false}) {
+        auto tree = make_probe_tree(labelled ? std::vector<LabelId>{LabelId{10}} : std::vector<LabelId>{});
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(tree);
+        GroupExpr& probe_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        auto produced = rule.substitute(probe_expr, memo);
+        if (!labelled) {
+            EXPECT_TRUE(produced.empty()) << "unlabelled destination must stay unresolved";
+            continue;
+        }
+        ASSERT_EQ(produced.size(), 1u);
+        auto* resolved = std::get_if<std::unique_ptr<BoundIndexProbeOp>>(&produced[0]->op);
+        ASSERT_TRUE(resolved && *resolved);
+        EXPECT_EQ((*resolved)->index_id, 23u);
+        EXPECT_EQ((*resolved)->index_prop, 2u);
+        EXPECT_EQ((*resolved)->target_label_ids, (std::vector<LabelId>{LabelId{10}}));
+        EXPECT_TRUE(produced[0]->child_groups.empty()) << "R2 refines the probe group, it does not add inputs";
+    }
+}
+
+TEST(ImplIndexProbeRulesTest, EmitPhysicalTagsWithoutChoosingWinners) {
+    auto schema = makeProbeCatalogSchema();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto probe_tree = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+    Memo memo;
+    memo.setCommuteSafe(true);
+    memo.setCatalog(&catalog);
+    GroupId root_gid = memo.copyIn(probe_tree);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(root_gid).logical_exprs.at(0));
+
+    GenerateIndexProbeRule r1;
+    auto produced = r1.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    GroupExpr* probe_join = memo.insertExpr(std::move(produced[0]), root_gid);
+
+    // Resolve the probe group's expression through R2.
+    GroupExpr& unresolved = memo.getExpr(memo.getGroup(probe_join->child_groups[1]).logical_exprs.at(0));
+    ResolveIndexProbeRule r2;
+    auto resolved = r2.substitute(unresolved, memo);
+    ASSERT_EQ(resolved.size(), 1u);
+    memo.insertExpr(std::move(resolved[0]), probe_join->child_groups[1]);
+
+    // R3 for the probe leaf.
+    ImplIndexProbeRule impl_probe;
+    for (ExprId eid : memo.getGroup(probe_join->child_groups[1]).logical_exprs) {
+        GroupExpr& probe_candidate = memo.getExpr(eid);
+        if (impl_probe.condition(probe_candidate, memo)) {
+            auto phys = impl_probe.substitute(probe_candidate, memo);
+            ASSERT_EQ(phys.size(), 1u);
+            ASSERT_TRUE(phys[0]->isPhysical());
+            EXPECT_EQ(phys[0]->physOp().tag, PhysicalOpTag::IndexProbe);
+            break;
+        }
+    }
+
+    // R3 for the probe join: two inputs, and the probe input must not demand
+    // materialisation of the property the index range consumes.
+    ImplIndexProbeJoinRule impl_join;
+    auto join_phys = impl_join.substitute(*probe_join, memo);
+    ASSERT_EQ(join_phys.size(), 1u);
+    ASSERT_TRUE(join_phys[0]->isPhysical());
+    EXPECT_EQ(join_phys[0]->physOp().tag, PhysicalOpTag::IndexProbeJoin);
+    ASSERT_EQ(join_phys[0]->child_groups.size(), 2u);
+    const auto& reqs = join_phys[0]->physOp().required_input_mat;
+    ASSERT_EQ(reqs.size(), 2u);
+    EXPECT_TRUE(reqs[1].empty()) << "probe input reads the index; it must not be enriched";
+}
+
+TEST(IndexProbeCascadeTest, ChoosesProbeJoinForLabelledDestination) {
+    auto schema = makeProbeCatalogSchema();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    catalog.setLabelStats(LabelId{5}, 1000);
+    catalog.setLabelStats(LabelId{10}, 1000);
+
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+    BoundLogicalPlan plan;
+    plan.root = std::move(root);
+    {
+        // Sanity: the same plan without a catalog must still produce a winner
+        // (forward Filter(Expand) plan), isolating rule/cost failures below.
+        BoundLogicalPlan no_catalog_plan;
+        no_catalog_plan.root = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+        LogicalOptimizer optimizer;
+        optimizer.optimize(no_catalog_plan);
+        ASSERT_TRUE(no_catalog_plan.chosen) << "forward plan must still have a winner";
+        EXPECT_EQ(no_catalog_plan.chosen->tag, PhysicalOpTag::Filter);
+    }
+    binder::SlotSemanticMap semantics;
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan, &catalog, &semantics, nullptr);
+
+    ASSERT_TRUE(plan.chosen) << "CBO should have a winner";
+    EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::IndexProbeJoin);
+    ASSERT_GE(plan.chosen->children.size(), 2u);
+    EXPECT_EQ(plan.chosen->children[1]->tag, PhysicalOpTag::IndexProbe);
+}
+
+TEST(GenerateIndexProbeRuleTest, RejectsPredicatesItCannotConsumeWhole) {
+    // A probe replaces the whole Filter(Expand): every conjunct must be an
+    // indexable comparison on the same destination property. Anything else
+    // would be a dropped predicate, so no candidate may be produced.
+    GenerateIndexProbeRule rule;
+
+    auto run = [&](BoundExpression predicate) {
+        auto root = makeFilterOverExpandPlanWithPredicate(std::move(predicate), /*explicit=*/true);
+        Memo memo;
+        memo.setCommuteSafe(true);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        return rule.substitute(filter_expr, memo).size();
+    };
+
+    // range AND unrelated predicate
+    {
+        auto lower = makeCreationDateLower(100);
+        auto other = std::make_unique<BoundBinaryOp>();
+        other->op = cypher::BinaryOperator::EQ;
+        auto prop = std::make_unique<BoundPropertyRef>();
+        prop->property_name = "name";
+        prop->object = BoundVariableRef("friend", BoundType::Vertex());
+        BoundPropertyRef::ResolvedProperty cand;
+        cand.label_id = LabelId{5};
+        prop->candidates.push_back(cand);
+        other->left = BoundExpression(std::move(prop));
+        other->right = BoundLiteral(std::string("x"));
+        auto both = std::make_unique<BoundBinaryOp>();
+        both->op = cypher::BinaryOperator::AND;
+        both->left = std::move(lower);
+        both->right = BoundExpression(std::move(other));
+        EXPECT_EQ(run(BoundExpression(std::move(both))), 0u) << "residual predicate would be dropped";
+    }
+
+    // two equalities on the same property are not a range probe
+    {
+        auto make_eq = [](int64_t value) {
+            auto prop = std::make_unique<BoundPropertyRef>();
+            prop->property_name = "creationDate";
+            prop->object = BoundVariableRef("message", BoundType::Vertex());
+            BoundPropertyRef::ResolvedProperty cand;
+            cand.label_id = LabelId{10};
+            cand.prop_id = 2;
+            prop->candidates.push_back(cand);
+            auto eq = std::make_unique<BoundBinaryOp>();
+            eq->op = cypher::BinaryOperator::EQ;
+            eq->left = BoundExpression(std::move(prop));
+            eq->right = BoundLiteral(int64_t{value});
+            return BoundExpression(std::move(eq));
+        };
+        auto both = std::make_unique<BoundBinaryOp>();
+        both->op = cypher::BinaryOperator::AND;
+        both->left = make_eq(100);
+        both->right = make_eq(200);
+        EXPECT_EQ(run(BoundExpression(std::move(both))), 0u);
+    }
+}
+
+TEST(GenerateIndexProbeRuleTest, SkippedForConservativeWritePlans) {
+    // Write plans / shared-anchor pattern comprehensions use the same
+    // conservative boundary as join commute: no extra join alternatives.
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/true);
+    Memo memo;
+    memo.setCommuteSafe(false);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+    GenerateIndexProbeRule rule;
+    EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+}
+
+TEST(MemoTest, RboCopyOutSkipsAccessPathCandidates) {
+    // A ProbeJoin inserted into a group is a CBO-only alternative. The RBO
+    // extraction must keep returning the original Filter, otherwise a plan
+    // without a CBO winner (e.g. a write query) would try to lower an
+    // unresolved access path.
+    auto root = makeFilterOverExpandPlan(/*explicit_destination_label=*/false);
+    Memo memo;
+    memo.setCommuteSafe(true);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+    GenerateIndexProbeRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    memo.insertExpr(std::move(produced[0]), gid);
+
+    auto rbo = memo.copyOut(gid);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(rbo));
+    EXPECT_FALSE(std::holds_alternative<std::unique_ptr<BoundIndexProbeJoinOp>>(rbo));
+}
+
+TEST(GenerateIndexProbeRuleTest, RequiresBoundedInterval) {
+    // One-sided ranges can scan almost the whole label; without index statistics
+    // the cost model cannot price them, so the shape rule keeps the generic plan.
+    GenerateIndexProbeRule rule;
+    auto run = [&](BoundExpression predicate) {
+        auto root = makeFilterOverExpandPlanWithPredicate(std::move(predicate), /*explicit=*/true);
+        Memo memo;
+        memo.setCommuteSafe(true);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        return rule.substitute(filter_expr, memo).size();
+    };
+    EXPECT_EQ(run(makeCreationDateUpper(200)), 0u) << "upper-only must not speculate";
+    EXPECT_EQ(run(makeCreationDateLower(100)), 0u) << "lower-only must not speculate";
+}
+
+TEST(LogPropTest, CandidateCardinalityUsesDescriptorAndInputRows) {
+    // PlanProp: a physical candidate's output cardinality reflects its own
+    // access path (index selectivity) and the *costed child* row count, not the
+    // plan-independent group LogProp.
+    catalog::Catalog cat;
+    cat.setLabelStats(LabelId{1}, 10000);
+    LogPropDeriver deriver(&cat);
+
+    BoundLabelScanOp eq = std::get<BoundLabelScanOp>(makeLabelScanWithLabel("n", 0, LabelId{1}));
+    eq.index_scan = true;
+    eq.index_id = 7;
+    eq.index_eq_values = {PropertyValue{int64_t{42}}};
+    BoundLogicalOperator eq_op(eq);
+    const LogProp eq_lp = deriver.derive(eq_op, {});
+    EXPECT_DOUBLE_EQ(deriver.deriveCandidateCardinality(eq_op, eq_lp, {}),
+                     10000.0 * LogPropDeriver::kIndexedSelectivity);
+
+    // Filter output = candidate input rows x predicate selectivity, so it must
+    // scale linearly with the chosen child winner's cardinality.
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = makeCreationDateLower(100);
+    filter->child = makeLabelScan("n", 0);
+    BoundLogicalOperator filter_op(std::move(filter));
+    const LogProp filter_lp = deriver.derive(filter_op, {eq_lp});
+    const double c100 = deriver.deriveCandidateCardinality(filter_op, filter_lp, {100.0});
+    const double c1000 = deriver.deriveCandidateCardinality(filter_op, filter_lp, {1000.0});
+    EXPECT_GT(c100, 0.0);
+    EXPECT_LT(c100, 100.0);
+    EXPECT_NEAR(c1000 / c100, 10.0, 1e-9);
+}
+
+TEST(MemoTest, WinnerStoresCandidateOutputCardinality) {
+    Memo memo;
+    Group& group = memo.getGroup(memo.newGroupId());
+    group.newWinner(PhysProp{}, ExprId{0}, Cost(10.0), /*done=*/true, 42.0);
+    const Winner* winner = group.getWinner(PhysProp{});
+    ASSERT_NE(winner, nullptr);
+    EXPECT_DOUBLE_EQ(winner->outputCardinality(), 42.0);
+}
+
+// ==================== Edge-property IS NOT NULL pruning ====================
+//
+// Edges are strong-only, so `r.p IS NOT NULL` over an Expand may narrow the
+// edge labels to those declaring p. Vertex properties must NOT be pruned this
+// way: the weak space allows values outside the declaring label.
+
+static std::shared_ptr<GraphSchema> makeEdgePropertyCatalog() {
+    auto schema = std::make_shared<GraphSchema>();
+    LabelDef person;
+    person.id = LabelId{1};
+    person.name = "Person";
+    PropertyDef name;
+    name.id = 0;
+    name.name = "name";
+    name.type = PropertyType::STRING;
+    person.properties.push_back(name);
+    schema->labels[LabelId{1}] = person;
+
+    EdgeLabelDef knows;
+    knows.id = 2;
+    knows.name = "KNOWS";
+    PropertyDef weight;
+    weight.id = 0;
+    weight.name = "weight";
+    weight.type = PropertyType::INT64;
+    knows.properties.push_back(weight);
+    schema->edge_labels[EdgeLabelId{2}] = knows;
+
+    EdgeLabelDef follows;
+    follows.id = 3;
+    follows.name = "FOLLOWS";
+    schema->edge_labels[EdgeLabelId{3}] = follows;
+    return schema;
+}
+
+static BoundLogicalOperator makeFilterNotnullOverExpand(const std::string& object_variable, BoundType object_type,
+                                                        const std::string& property_name,
+                                                        std::vector<LabelId> candidates) {
+    BoundLabelScanOp scan;
+    scan.variable = "friend";
+    scan.column_index = 0;
+    scan.label_ids = {LabelId{1}};
+
+    auto expand = std::make_unique<BoundExpandOp>();
+    expand->src_variable = "friend";
+    expand->src_column_index = 0;
+    expand->dst_variable = "target";
+    expand->dst_column_index = 2;
+    expand->edge_variable = "r";
+    expand->edge_column_index = 1;
+    expand->all_edge_labels = true;
+    expand->direction = cypher::RelationshipDirection::UNDIRECTED;
+    expand->child = BoundLogicalOperator(scan);
+
+    auto property = std::make_unique<BoundPropertyRef>();
+    property->property_name = property_name;
+    property->object = BoundVariableRef(object_variable, std::move(object_type));
+    for (LabelId label : candidates) {
+        BoundPropertyRef::ResolvedProperty resolved;
+        resolved.label_id = label;
+        property->candidates.push_back(resolved);
+    }
+    auto notnull = std::make_unique<BoundUnaryOp>();
+    notnull->op = cypher::UnaryOperator::IS_NOT_NULL;
+    notnull->operand = BoundExpression(std::move(property));
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(notnull));
+    filter->child = BoundLogicalOperator(std::move(expand));
+    return BoundLogicalOperator(std::move(filter));
+}
+
+TEST(PruneExpandEdgeLabelsTest, NarrowsExpandToDeclaringEdgeLabels) {
+    auto schema = makeEdgePropertyCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto root = makeFilterNotnullOverExpand("r", BoundType::EdgeKey(), "weight", {LabelId{2}});
+    Memo memo;
+    memo.setCatalog(&catalog);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+
+    PruneExpandEdgeLabelsRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    auto* pruned = std::get_if<std::unique_ptr<BoundExpandOp>>(&produced[0]->op);
+    ASSERT_TRUE(pruned && *pruned);
+    EXPECT_EQ((*pruned)->edge_label_ids, (std::vector<EdgeLabelId>{2}));
+    EXPECT_FALSE((*pruned)->all_edge_labels);
+    ASSERT_EQ(produced[0]->child_groups.size(), 1u);
+    EXPECT_EQ(produced[0]->group_id, gid) << "the pruned expand replaces the Filter(Expand) subtree";
+}
+
+TEST(PruneExpandEdgeLabelsTest, LeavesVertexPropertiesAndWidePruningAlone) {
+    auto schema = makeEdgePropertyCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    PruneExpandEdgeLabelsRule rule;
+
+    // Vertex property: weak space allows values outside the declaring label.
+    {
+        auto root = makeFilterNotnullOverExpand("x", BoundType::Vertex(), "name", {LabelId{1}});
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
+
+    // No edge label declares the property: a filter that is statically false is
+    // not this rule's job.
+    {
+        auto root = makeFilterNotnullOverExpand("r", BoundType::EdgeKey(), "missing", {});
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
+}
+
+// ==================== VLE OR-filter pruning (src/dst index allow-sets) ====================
+
+static std::shared_ptr<GraphSchema> makeVleOrCatalog() {
+    auto schema = std::make_shared<GraphSchema>();
+    LabelDef tc;
+    tc.id = LabelId{1};
+    tc.name = "TagClass";
+    PropertyDef name;
+    name.id = 0;
+    name.name = "name";
+    name.type = PropertyType::STRING;
+    tc.properties.push_back(name);
+    LabelDef::IndexDef tc_index;
+    tc_index.index_id = 11;
+    tc_index.name = "idx_tc_name";
+    IndexAccessorDef tc_acc;
+    tc_acc.property_name = "name";
+    tc_index.accessors.push_back(tc_acc);
+    tc_index.state = IndexState::PUBLIC;
+    tc_index.encoding_version = 2;
+    tc.indexes.push_back(tc_index);
+    schema->labels[LabelId{1}] = tc;
+
+    LabelDef tag;
+    tag.id = LabelId{2};
+    tag.name = "Tag";
+    tag.properties.push_back(name);
+    LabelDef::IndexDef tag_index;
+    tag_index.index_id = 12;
+    tag_index.name = "idx_tag_name";
+    IndexAccessorDef tag_acc;
+    tag_acc.property_name = "name";
+    tag_index.accessors.push_back(tag_acc);
+    tag_index.state = IndexState::PUBLIC;
+    tag_index.encoding_version = 2;
+    tag.indexes.push_back(tag_index);
+    schema->labels[LabelId{2}] = tag;
+    return schema;
+}
+
+static BoundExpression makePropertyEq(const std::string& variable, LabelId label, const std::string& property,
+                                      const std::string& literal) {
+    auto prop = std::make_unique<BoundPropertyRef>();
+    prop->property_name = property;
+    prop->object = BoundVariableRef(variable, BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty candidate;
+    candidate.label_id = label;
+    prop->candidates.push_back(candidate);
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundExpression(std::move(prop));
+    eq->right = BoundLiteral(literal);
+    return BoundExpression(std::move(eq));
+}
+
+static BoundLogicalOperator makeVleOrFilterPlan(bool include_tag_index) {
+    auto vle = std::make_unique<BoundVarLenExpandOp>();
+    vle->src_variable = "tc";
+    vle->dst_variable = "tag";
+    vle->edge_label_ids = {EdgeLabelId{2}};
+    vle->direction = cypher::RelationshipDirection::UNDIRECTED;
+    vle->min_hops = 1;
+    vle->max_hops = 2;
+    if (include_tag_index)
+        vle->dst_label_ids = {LabelId{2}};
+    vle->child = makeLabelScanWithLabel("tc", 0, LabelId{1});
+
+    auto left = makePropertyEq("tc", LabelId{1}, "name", "x");
+    auto right = makePropertyEq("tag", LabelId{2}, "name", "y");
+    auto or_op = std::make_unique<BoundBinaryOp>();
+    or_op->op = cypher::BinaryOperator::OR;
+    or_op->left = std::move(left);
+    or_op->right = std::move(right);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(or_op));
+    filter->child = BoundLogicalOperator(std::move(vle));
+    return BoundLogicalOperator(std::move(filter));
+}
+
+TEST(PruneVarlenOrFiltersTest, AttachesBothAllowSetsAndConsumesFilter) {
+    auto schema = makeVleOrCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+
+    auto root = makeVleOrFilterPlan(/*include_tag_index=*/true);
+    Memo memo;
+    memo.setCatalog(&catalog);
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+
+    PruneVarlenOrFiltersRule rule;
+    auto produced = rule.substitute(filter_expr, memo);
+    ASSERT_EQ(produced.size(), 1u);
+    auto* vle = std::get_if<std::unique_ptr<BoundVarLenExpandOp>>(&produced[0]->op);
+    ASSERT_TRUE(vle && *vle);
+    EXPECT_EQ((*vle)->src_filter_index_id, 11u);
+    EXPECT_EQ((*vle)->dst_filter_index_id, 12u);
+    EXPECT_EQ((*vle)->src_filter_value, PropertyValue{std::string("x")});
+    EXPECT_EQ((*vle)->dst_filter_value, PropertyValue{std::string("y")});
+    EXPECT_EQ(produced[0]->group_id, gid);
+    ASSERT_EQ(produced[0]->child_groups.size(), 1u);
+}
+
+TEST(PruneVarlenOrFiltersTest, RequiresBothEndpointsResolvable) {
+    auto schema = makeVleOrCatalog();
+    catalog::Catalog catalog;
+    catalog.load(schema);
+    PruneVarlenOrFiltersRule rule;
+
+    {
+        auto root = makeVleOrFilterPlan(/*include_tag_index=*/false);
+        Memo memo;
+        memo.setCatalog(&catalog);
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
+    {
+        auto root = makeVleOrFilterPlan(/*include_tag_index=*/true);
+        Memo memo;
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.at(0));
+        EXPECT_TRUE(rule.substitute(filter_expr, memo).empty());
+    }
+}
+
+TEST(MemoContentHashTest, VarLenOrAllowSetsArePartOfIdentity) {
+    // Regression: the OR allow-set fields were missing from VLE hash/eq, so a
+    // pruned candidate deduped with the unpruned VLE, merged the Filter group
+    // into its own child group, and copyOut recursed forever.
+    auto make_vle = [](uint32_t src_index, uint32_t dst_index) {
+        auto vle = std::make_unique<BoundVarLenExpandOp>();
+        vle->src_variable = "a";
+        vle->dst_variable = "b";
+        vle->edge_label_ids = {EdgeLabelId{3}};
+        vle->min_hops = 0;
+        vle->max_hops = 2;
+        vle->src_filter_index_id = src_index;
+        vle->src_filter_value = PropertyValue{std::string("x")};
+        vle->dst_filter_index_id = dst_index;
+        vle->dst_filter_value = PropertyValue{std::string("y")};
+        vle->child = makeLabelScan("a", 0);
+        return BoundLogicalOperator(std::move(vle));
+    };
+
+    Memo memo;
+    auto plain = make_vle(0, 0);
+    auto pruned = make_vle(11, 12);
+    EXPECT_NE(memo.copyIn(plain), memo.copyIn(pruned)) << "allow-set fields must not dedup away";
+}
+
+// ==================== P2: correlated endpoint binding + probe annotation ====================
+//
+// The binder emits the correlated endpoint as a bound Expand destination
+// (dst = __exists_saved_N) directly; it no longer builds
+// Filter(id(__exists_dst_N) == id(__exists_saved_N)) for a normalization pass
+// to fold away. Normalization only annotates the batch-probe strategy on a
+// dst-bound Expand whose destination is provided by a CorrelatedSource.
+
+static BoundLogicalOperator
+makeBoundEndpointPlan(cypher::RelationshipDirection direction = cypher::RelationshipDirection::LEFT_TO_RIGHT,
+                      bool correlated_provider = true, bool extra_dst_consumer = false) {
+    BoundCorrelatedSourceOp source;
+    source.variables = {"__exists_saved_0"};
+    source.types = {BoundType::VertexRef()};
+
+    auto expand = std::make_unique<BoundExpandOp>();
+    expand->src_variable = "carried";
+    expand->dst_variable = "__exists_saved_0";
+    expand->dst_column_index = 7;
+    expand->dst_slot_id = SlotId{52};
+    expand->direction = direction;
+    if (correlated_provider)
+        expand->child = BoundLogicalOperator(source);
+    else
+        expand->child = makeLabelScan("carried", 0);
+    BoundLogicalOperator root = BoundLogicalOperator(std::move(expand));
+
+    if (extra_dst_consumer) {
+        // A second consumer of the endpoint reads the same column (the binder
+        // rewrites the chain variable to it), so it must not disable the shape
+        // or the annotation.
+        auto extra_filter = std::make_unique<BoundFilterOp>();
+        extra_filter->predicate =
+            BoundExpression(BoundColumnRef(7, BoundType::VertexRef(), "__exists_saved_0", SlotId{52}));
+        extra_filter->child = std::move(root);
+        root = BoundLogicalOperator(std::move(extra_filter));
+    }
+    return root;
+}
+
+TEST(PlanRefsAnalysisTest, CorrelatedEndpointFacts) {
+    auto plan = makeBoundEndpointPlan();
+    PlanRefIndex refs = collectPlanRefs(plan);
+    ASSERT_TRUE(refs.complete);
+    EXPECT_EQ(refs.expr_refs.count("__exists_saved_0"), 0u) << "no endpoint equality filter is built";
+    EXPECT_TRUE(subtreeProvidesCorrelatedVariable(plan, "__exists_saved_0"));
+    EXPECT_FALSE(planHasWriteOperator(plan));
+
+    auto create = std::make_unique<BoundCreateNodeOp>();
+    create->child = makeBoundEndpointPlan();
+    EXPECT_TRUE(planHasWriteOperator(BoundLogicalOperator(std::move(create))));
+}
+
+TEST(AnnotateCorrelatedEndpointProbeTest, MarksDirectedCorrelatedExpand) {
+    auto plan = makeBoundEndpointPlan();
+    NormalizationContext ctx;
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    pass.apply(plan, ctx);
+
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&plan);
+    ASSERT_TRUE(expand && *expand) << "the pass must not change the shape";
+    EXPECT_EQ((*expand)->dst_variable, "__exists_saved_0");
+    EXPECT_EQ((*expand)->dst_slot_id, SlotId{52});
+    EXPECT_TRUE((*expand)->probe_bound_dst);
+}
+
+TEST(AnnotateCorrelatedEndpointProbeTest, DstConsumerDoesNotDisableProbe) {
+    auto plan = makeBoundEndpointPlan(cypher::RelationshipDirection::LEFT_TO_RIGHT, true,
+                                      /*extra_dst_consumer=*/true);
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    NormalizationContext ctx;
+    pass.apply(plan, ctx);
+
+    // The binder binds every consumer to the same destination column, so a
+    // second reference no longer makes the shape unsafe (the former fold had to
+    // refuse it because it renamed the column).
+    auto* filter = std::get_if<std::unique_ptr<BoundFilterOp>>(&plan);
+    ASSERT_TRUE(filter && *filter);
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&(*filter)->child);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_TRUE((*expand)->probe_bound_dst);
+}
+
+TEST(AnnotateCorrelatedEndpointProbeTest, UndirectedKeepsExactSeek) {
+    auto plan = makeBoundEndpointPlan(cypher::RelationshipDirection::UNDIRECTED);
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    NormalizationContext ctx;
+    pass.apply(plan, ctx);
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&plan);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_FALSE((*expand)->probe_bound_dst);
+}
+
+TEST(AnnotateCorrelatedEndpointProbeTest, WritePlanKeepsShapeButProbeOff) {
+    // The binder emits the dst-bound shape for write plans too (it is a
+    // semantic binding, not a strategy); the probe is what assumes a read-only
+    // statement, so only the annotation changes.
+    auto create = std::make_unique<BoundCreateNodeOp>();
+    create->child = makeBoundEndpointPlan();
+    BoundLogicalOperator plan = BoundLogicalOperator(std::move(create));
+
+    EXPECT_TRUE(planHasWriteOperator(plan));
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    NormalizationContext ctx;
+    pass.apply(plan, ctx);
+
+    auto* create_ptr = std::get_if<std::unique_ptr<BoundCreateNodeOp>>(&plan);
+    ASSERT_TRUE(create_ptr && *create_ptr && (*create_ptr)->child.has_value());
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&*(*create_ptr)->child);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_EQ((*expand)->dst_variable, "__exists_saved_0");
+    EXPECT_FALSE((*expand)->probe_bound_dst) << "batch adjacency assumes a read-only statement";
+}
+
+TEST(AnnotateCorrelatedEndpointProbeTest, RequiresCorrelatedProvider) {
+    auto plan = makeBoundEndpointPlan(cypher::RelationshipDirection::LEFT_TO_RIGHT,
+                                      /*correlated_provider=*/false);
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    NormalizationContext ctx;
+    pass.apply(plan, ctx);
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&plan);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_FALSE((*expand)->probe_bound_dst);
+}
+
+TEST(AnnotateCorrelatedEndpointProbeTest, AnnotatedExpandSurvivesClone) {
+    auto plan = makeBoundEndpointPlan();
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    NormalizationContext ctx;
+    pass.apply(plan, ctx);
+
+    auto cloned = cloneBoundLogicalOperator(plan);
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&cloned);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_TRUE((*expand)->probe_bound_dst) << "clone must not drop the strategy flag";
+    EXPECT_EQ((*expand)->dst_variable, "__exists_saved_0");
+    EXPECT_EQ((*expand)->dst_slot_id, SlotId{52});
+}
+
+// ==================== B2: HashJoin build side / budget in the optimizer ====================
+
+TEST(ImplRuleTest, HashJoinProducesBothBuildSides) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Inner;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundExpression(BoundColumnRef(0, BoundType::Any(), "a", SlotId{1}));
+    eq->right = BoundExpression(BoundColumnRef(1, BoundType::Any(), "b", SlotId{2}));
+    join->join_conditions.push_back(BoundExpression(std::move(eq)));
+
+    Memo memo;
+    auto root = BoundLogicalOperator(std::move(join));
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+
+    ImplHashJoinRule rule;
+    auto subs = rule.substitute(expr, memo);
+    ASSERT_EQ(subs.size(), 2u) << "build side is part of the candidate";
+    EXPECT_EQ(subs[0]->physOp().tag, PhysicalOpTag::HashJoin);
+    EXPECT_FALSE(subs[0]->physOp().build_left);
+    EXPECT_TRUE(subs[1]->physOp().build_left);
+    EXPECT_NE(hashPhysicalExpr(subs[0]->physOp()), hashPhysicalExpr(subs[1]->physOp()));
+}
+
+TEST(CostModelTest, HashJoinPricesBuildSideAndBudget) {
+    LogProp group_lp;
+    group_lp.cardinality = 40;
+    group_lp.valid = true;
+    LogProp small;
+    small.cardinality = 2;
+    small.valid = true;
+    LogProp large;
+    large.cardinality = 20;
+    large.valid = true;
+
+    PhysicalExpr build_left;
+    build_left.tag = PhysicalOpTag::HashJoin;
+    build_left.build_left = true;
+    PhysicalExpr build_right;
+    build_right.tag = PhysicalOpTag::HashJoin;
+    build_right.build_left = false;
+
+    const Cost left = findLocalCost(PhysicalOpTag::HashJoin, group_lp, {small, large}, &build_left);
+    const Cost right = findLocalCost(PhysicalOpTag::HashJoin, group_lp, {small, large}, &build_right);
+    EXPECT_LT(left.value(), right.value()) << "building the smaller side must be cheaper (memory premium)";
+    EXPECT_LT(left.value(), 2.0 * 20.0) << "HashJoin must beat the CrossProduct estimate";
+
+    // Budget feasibility: the candidate is priced out rather than re-chosen in
+    // lowering. Save/restore the env var because the test process is shared.
+    const char* old = std::getenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS");
+    std::string old_value = old ? old : "";
+    setenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS", "1", 1);
+    const Cost over_budget = findLocalCost(PhysicalOpTag::HashJoin, group_lp, {small, large}, &build_left);
+    if (old)
+        setenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS", old_value.c_str(), 1);
+    else
+        unsetenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS");
+    EXPECT_TRUE(over_budget.isInfinity()) << "build side above the configured budget must not be a candidate";
+
+    // Zero/unknown estimate: never pick HashJoin (CrossProduct is cheaper and
+    // the build size is unprovable).
+    LogProp zero;
+    zero.cardinality = 0;
+    EXPECT_TRUE(findLocalCost(PhysicalOpTag::HashJoin, group_lp, {zero, large}, &build_left).isInfinity());
 }

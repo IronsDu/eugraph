@@ -1,4 +1,6 @@
 #include "query/optimizer/analysis/requirement_collector.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_binary_op.hpp"
@@ -31,7 +33,6 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -234,9 +235,13 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
             if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                           std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
                           std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 // Leaf sources carry no expression to walk.
                 return;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (val)
+                    mergeVarRequirements(dst, collectOpRequirements(val->anchor, catalog));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!val)
                     return;
@@ -333,13 +338,6 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
                     return;
                 mergeVarRequirements(dst, collectOpRequirements(val->left, catalog));
                 mergeVarRequirements(dst, collectOpRequirements(val->right, catalog));
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (!val)
-                    return;
-                mergeVarRequirements(dst, collectOpRequirements(val->left, catalog));
-                mergeVarRequirements(dst, collectOpRequirements(val->anchor, catalog));
-                for (const auto& branch : val->branches)
-                    mergeVarRequirements(dst, collectOpRequirements(branch, catalog));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (!val)
                     return;

@@ -1,4 +1,6 @@
 #include "query/optimizer/framework/operator_hash.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_index_probe_op.hpp"
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -23,7 +25,6 @@
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_count_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -308,6 +309,36 @@ uint64_t hashBoundExpression(const binder::BoundExpression& expr) {
     return seed;
 }
 
+namespace {
+
+// IndexProbe descriptor content. Shared by BoundIndexProbeOp (logical leaf) and
+// BoundIndexProbeJoinOp (its inline probe mirror) so the two hash branches
+// cannot drift apart; a stale mirror would let two different access paths
+// dedup into one memo group.
+uint64_t hashIndexProbe(uint64_t seed, const binder::BoundIndexProbeOp& p) {
+    seed = hashBytes(seed, p.source_variable);
+    seed = hashBytes(seed, p.target_variable);
+    seed = hashBytes(seed, p.edge_variable);
+    seed = hashBytes(seed, p.index_property_name);
+    for (auto l : p.edge_label_ids)
+        seed = combine(seed, static_cast<uint64_t>(l));
+    for (auto l : p.target_label_ids)
+        seed = combine(seed, static_cast<uint64_t>(l));
+    seed = combine(seed, static_cast<uint64_t>(p.direction));
+    seed = combine(seed, p.index_id);
+    seed = combine(seed, p.index_prop);
+    if (p.equality)
+        seed = hashPropertyValue(seed, *p.equality);
+    if (p.lower)
+        seed = hashPropertyValue(seed, *p.lower);
+    if (p.upper)
+        seed = hashPropertyValue(seed, *p.upper);
+    seed = combine(seed, (p.lower_inclusive ? 1u : 0u) | (p.upper_inclusive ? 2u : 0u));
+    return seed;
+}
+
+} // namespace
+
 uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
     uint64_t seed = 14695981039346656037ULL;
     seed = combine(seed, op.index());
@@ -345,6 +376,27 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     for (auto p : pids)
                         seed = combine(seed, p);
                 }
+                seed = combine(seed, val.index_scan ? 1 : 0);
+                seed = combine(seed, val.index_id);
+                for (auto p : val.index_prop_ids)
+                    seed = combine(seed, p);
+                for (const auto& v : val.index_eq_values)
+                    seed = hashPropertyValue(seed, v);
+                if (val.index_lower)
+                    seed = hashPropertyValue(seed, *val.index_lower);
+                if (val.index_upper)
+                    seed = hashPropertyValue(seed, *val.index_upper);
+                seed = combine(seed, (val.index_lower_inclusive ? 1 : 0) | (val.index_upper_inclusive ? 2 : 0));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeJoinOp>>) {
+                if (!val)
+                    return;
+                // Child groups are hashed by Memo::computeHash; only the probe
+                // descriptor is operator content here.
+                seed = hashIndexProbe(seed, val->probe);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundIndexProbeOp>>) {
+                if (!val)
+                    return;
+                seed = hashIndexProbe(seed, *val);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!val)
                     return;
@@ -409,6 +461,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->dst_variable);
                 seed = combine(seed, val->dst_column_index);
                 seed = combine(seed, val->dst_slot_id);
+                seed = combine(seed, val->planner_dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
                 seed = combine(seed, val->all_edge_labels ? 1u : 0u);
@@ -430,6 +483,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->dst_variable);
                 seed = combine(seed, val->dst_column_index);
                 seed = combine(seed, val->dst_slot_id);
+                seed = combine(seed, val->planner_dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
                 seed = combine(seed, val->all_edge_labels ? 1u : 0u);
@@ -448,15 +502,19 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, val->path_handled_by_varlen ? 1u : 0u);
                 seed = combine(seed, val->shortest_path ? 1u : 0u);
                 seed = combine(seed, val->all_shortest_paths ? 1u : 0u);
-                seed = combine(seed, val->batch_shortest_path ? 1u : 0u);
                 seed = combine(seed, val->dst_label_missing ? 1u : 0u);
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);
                 seed = combine(seed, val->edge_slot_id);
+                seed = combine(seed, val->planner_edge_slot_id);
                 seed = combine(seed, val->bound_edge_list ? 1u : 0u);
                 seed = combine(seed, val->bound_edge_list_col_index);
                 seed = hashBytes(seed, val->prev_edge_var);
                 seed = combine(seed, val->prev_edge_col_index);
+                seed = combine(seed, val->src_filter_index_id);
+                seed = hashPropertyValue(seed, val->src_filter_value);
+                seed = combine(seed, val->dst_filter_index_id);
+                seed = hashPropertyValue(seed, val->dst_filter_value);
                 for (const auto& [lid, pids] : val->edge_prop_filters) {
                     seed = combine(seed, static_cast<uint64_t>(lid));
                     for (const auto& [pid, pv] : pids) {
@@ -583,6 +641,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 if (!val)
                     return;
                 seed = combine(seed, static_cast<uint64_t>(val->join_type));
+                seed = hashBytes(seed, val->endpoint_probe_edge_var);
                 for (const auto& cond : val->join_conditions)
                     seed = combine(seed, hashBoundExpression(cond));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
@@ -616,21 +675,6 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashBytes(seed, o.name);
                     seed = hashBoundType(seed, o.element_type);
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (!val)
-                    return;
-                for (const auto& c : val->correlation) {
-                    seed = combine(seed, c.left_slot);
-                    seed = combine(seed, c.left_column);
-                    seed = hashBytes(seed, c.left_var);
-                    seed = combine(seed, c.right_slot);
-                }
-                for (const auto& o : val->outputs) {
-                    seed = combine(seed, o.slot_id);
-                    seed = hashBytes(seed, o.name);
-                    seed = hashBoundType(seed, o.element_type);
-                }
-                seed = combine(seed, val->branches.size());
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (!val)
                     return;

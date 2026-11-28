@@ -1,13 +1,20 @@
 #include "query/optimizer/framework/cost_model.hpp"
 
-#include "query/optimizer/framework/log_prop.hpp"
+#include "common/config/env_vars.hpp"
 
+#include "query/optimizer/framework/log_prop.hpp"
+#include "query/optimizer/framework/physical_expr.hpp"
+#include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
+
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace eugraph {
 namespace optimizer {
 
-Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps) {
+Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps,
+                   const PhysicalExpr* phys) {
     auto input0Card = [&]() -> double { return input_lps.empty() ? 0.0 : input_lps[0].cardinality; };
     auto input1Card = [&]() -> double { return input_lps.size() < 2 ? 0.0 : input_lps[1].cardinality; };
 
@@ -15,9 +22,23 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     // Scans: cost proportional to rows scanned
     case PhysicalOpTag::NodeScan:
     case PhysicalOpTag::LabelScan:
-    case PhysicalOpTag::IndexScan:
     case PhysicalOpTag::EdgeIndexScan:
         return Cost(group_lp.cardinality);
+    case PhysicalOpTag::IndexScan: {
+        // Index access has a descriptor-driven selectivity. Until P3 stats are
+        // available, use the same conventions as LogProp's index estimates so a
+        // range access path costs the same on both sides of the comparison.
+        double selectivity = 1.0;
+        if (phys != nullptr) {
+            if (const auto* scan = std::get_if<binder::BoundLabelScanOp>(&phys->source); scan && scan->index_scan) {
+                if (!scan->index_eq_values.empty())
+                    selectivity = LogPropDeriver::kIndexedSelectivity;
+                else if (scan->index_lower || scan->index_upper)
+                    selectivity = LogPropDeriver::kIndexRangeSelectivity;
+            }
+        }
+        return Cost(group_lp.cardinality * selectivity);
+    }
 
     // Leaf sources
     case PhysicalOpTag::Singleton:
@@ -38,24 +59,68 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     case PhysicalOpTag::MultiExpand:
         return Cost(group_lp.cardinality);
 
-    // Nested loop join: left × right iterations
-    // Hash join: build + probe; build side selection is handled by the physical plan.
-    case PhysicalOpTag::HashJoin:
-        return Cost(input1Card() + input0Card());
+    // Nested loop join: left × right iterations.
+    // Hash join: build the chosen side once, stream the other. The build side
+    // carries a small memory premium so the optimizer prefers the smaller side
+    // (the physical operator no longer chooses). kBuildMemoryPremium is a
+    // placeholder until memory-aware cost (P3).
+    case PhysicalOpTag::HashJoin: {
+        constexpr double kBuildMemoryPremium = 1.1;
+        const bool build_left = phys != nullptr && phys->build_left;
+        const double build = build_left ? input0Card() : input1Card();
+        const double probe = build_left ? input1Card() : input0Card();
+        // Missing label statistics surface as a zero estimate; an empty side is
+        // also never worth a hash table (CrossProduct is cheaper). Treat both as
+        // infeasible so the optimizer never picks HashJoin on unknown estimates.
+        if (build <= 0.0 || probe <= 0.0)
+            return Cost::infinity();
+        if (build > static_cast<double>(joinBuildRowBudget()))
+            return Cost::infinity();
+        return Cost(kBuildMemoryPremium * build + probe);
+    }
 
     // IndexJoin replaces Filter(Expand(chain)) with index seek + reverse chain
     // + join. Local cost is deliberately lower than the forward filter so the
     // candidate is considered; the physical lowering still validates shape and
     // falls back when no usable index/chain exists.
-    case PhysicalOpTag::IndexJoin:
-        // Access-path replacement: its child is the source anchor, not the
-        // forward Expand chain. Keep the candidate below Filter(Expand) local
-        // cost so CBO can compare it; degree/selectivity refines this later.
-        return Cost(input0Card() * 0.001);
+    case PhysicalOpTag::PatternComprehensionApply:
+        return Cost(group_lp.cardinality);
+    case PhysicalOpTag::IndexJoin: {
+        // Only the dynamic-key reverse path remains a candidate (static reverse
+        // paths need index distribution statistics to be priced; see
+        // physical-planner-residue-audit J8). That path is driven by the source
+        // keys -- one IndexScanValues seek per key plus the reverse chain -- so
+        // its cost scales with the key count, not with the index size.
+        // kDynamicProbeSeekCost approximates a per-key seek against a forward
+        // expansion; it must be replaced by key-count/index-cost statistics (P3).
+        constexpr double kDynamicProbeSeekCost = 0.001;
+        return Cost(input0Card() * kDynamicProbeSeekCost);
+    }
+
+    case PhysicalOpTag::IndexProbe:
+        // Index range scan + one edge step: proportional to the probe's own
+        // estimated output (label rows x range selectivity x degree).
+        return Cost(group_lp.cardinality);
+    case PhysicalOpTag::IndexProbeJoin:
+        // Build the anchor side, probe with the index stream: build + probe.
+        return Cost(input0Card() + input1Card());
 
     case PhysicalOpTag::NestedLoopJoin:
     case PhysicalOpTag::CrossProduct:
         return Cost(input0Card() * input1Card());
+
+    case PhysicalOpTag::CorrelatedVertexProbe:
+        // The right side is correlation-invariant: one linear pass builds the
+        // vertex map, then each left row probes the edge's two endpoints — linear
+        // instead of left x right. The build pass is priced at half a
+        // nested-loop pair: a sequential hash insert is cheaper per row than
+        // pair generation, and `CorrelatedSource`'s LogProp is conservatively
+        // one row, so a literal linear formula would tie with CrossProduct and
+        // silently drop the probe for pattern-comprehension anchors whose left
+        // side really runs once per outer row. The operator caps the cache at
+        // runtime and falls back to per-left-row scans if the right side is
+        // larger than the budget.
+        return Cost(input1Card() * 0.5 + input0Card());
 
     // Semi/left join: dominated by probe
     case PhysicalOpTag::SemiJoin:
@@ -104,6 +169,17 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
         return Cost(input0Card() * 1.05);
     }
     return Cost(0.0);
+}
+
+size_t joinBuildRowBudget() {
+    const char* env = std::getenv(config::kEnvHashJoinMaxBuildRows);
+    if (env == nullptr || *env == '\0')
+        return 1'000'000;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0')
+        return 1'000'000;
+    return static_cast<size_t>(parsed);
 }
 
 } // namespace optimizer

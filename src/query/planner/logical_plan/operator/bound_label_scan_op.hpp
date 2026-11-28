@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -20,6 +21,15 @@ struct BoundLabelScanOp {
     // runtime-provided values instead of a full label scan.
     bool index_scan_values = false;
     uint32_t index_id = 0;
+    // Optimizer-selected ordinary index access path. Set by the access-path
+    // pass on a direct Filter(LabelScan); physical lowering only instantiates it.
+    bool index_scan = false;
+    std::vector<uint16_t> index_prop_ids;
+    std::vector<PropertyValue> index_eq_values;
+    std::optional<PropertyValue> index_lower;
+    std::optional<PropertyValue> index_upper;
+    bool index_lower_inclusive = false;
+    bool index_upper_inclusive = false;
 };
 
 } // namespace binder

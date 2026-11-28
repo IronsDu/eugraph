@@ -9,7 +9,6 @@
 #include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_set_op.hpp"
 
@@ -31,8 +30,7 @@ bool unsafeForCommute(const binder::BoundLogicalOperator& op) {
                           std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 unsafe = true;
             }
         },

@@ -1,11 +1,16 @@
 #include "query/optimizer/normalization/plan_normalizations.hpp"
 
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
+#include "query/optimizer/analysis/plan_refs.hpp"
 #include "query/optimizer/framework/memo.hpp"
 #include "query/planner/bound_expression/bound_column_ref.hpp"
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_expression_walk.hpp"
+#include "query/planner/bound_expression/bound_function_call.hpp"
+#include "query/planner/bound_expression/bound_property_ref.hpp"
 #include "query/planner/bound_expression/bound_variable_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_correlated_source_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_edge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
 #include "query/planner/logical_plan/operator/bound_delete_op.hpp"
@@ -14,12 +19,14 @@
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
-#include "query/planner/logical_plan/operator/bound_pattern_comprehension_fork_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_set_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
+#include <spdlog/spdlog.h>
+
+#include <cstdlib>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -129,19 +136,6 @@ void extractJoinConditions(binder::BoundLogicalOperator& op) {
     }
 }
 
-void markShortestPathBatch(binder::BoundLogicalOperator& op) {
-    std::visit(
-        [](auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v && v->shortest_path && !v->all_shortest_paths && v->max_hops >= 0 && v->max_hops <= 8)
-                    v->batch_shortest_path = true;
-            }
-        },
-        op);
-    forEachLogicalChild(op, [](binder::BoundLogicalOperator& child) { markShortestPathBatch(child); });
-}
-
 bool subtreeNeedsConservativeJoinOrder(const binder::BoundLogicalOperator& op) {
     bool unsafe = false;
     std::visit(
@@ -154,8 +148,7 @@ bool subtreeNeedsConservativeJoinOrder(const binder::BoundLogicalOperator& op) {
                           std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
                           std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
-                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 unsafe = true;
             }
         },
@@ -169,14 +162,181 @@ bool subtreeNeedsConservativeJoinOrder(const binder::BoundLogicalOperator& op) {
     return unsafe;
 }
 
+/// `a.id` (property "id" of the column `var`) or `id(a)`. The property may be
+/// resolved statically (BoundPropertyRef) or dynamically (BoundDynamicPropertyRef,
+/// e.g. on an ANY-typed function result).
+bool isVertexIdOf(const binder::BoundExpression& expr, const std::string& var) {
+    if (const auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
+        if (!*prop || (*prop)->property_name != "id")
+            return false;
+        const auto* ref = std::get_if<binder::BoundColumnRef>(&(*prop)->object);
+        return ref != nullptr && ref->name == var;
+    }
+    if (const auto* dyn = std::get_if<std::unique_ptr<binder::BoundDynamicPropertyRef>>(&expr)) {
+        if (!*dyn || (*dyn)->property != "id")
+            return false;
+        const auto* ref = std::get_if<binder::BoundColumnRef>(&(*dyn)->object);
+        return ref != nullptr && ref->name == var;
+    }
+    if (const auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&expr)) {
+        if (!*call || !(*call)->func_def || (*call)->func_def->name != "id" || (*call)->args.size() != 1)
+            return false;
+        const auto* ref = std::get_if<binder::BoundColumnRef>(&(*call)->args[0]);
+        return ref != nullptr && ref->name == var;
+    }
+    return false;
+}
+
+/// `startNode(r)` / `endNode(r)` → r.
+bool endpointEdgeVar(const binder::BoundExpression& expr, std::string& edge_var) {
+    const auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&expr);
+    if (call == nullptr || !*call || !(*call)->func_def || (*call)->args.size() != 1)
+        return false;
+    const auto& name = (*call)->func_def->name;
+    if (name != "startNode" && name != "endNode")
+        return false;
+    const auto* ref = std::get_if<binder::BoundColumnRef>(&(*call)->args[0]);
+    if (ref == nullptr)
+        return false;
+    edge_var = ref->name;
+    return true;
+}
+
+/// `startNode(r).id` / `endNode(r).id` / `id(startNode(r))`.
+bool isEndpointIdOf(const binder::BoundExpression& expr, std::string& edge_var) {
+    if (const auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
+        if (!*prop || (*prop)->property_name != "id")
+            return false;
+        return endpointEdgeVar((*prop)->object, edge_var);
+    }
+    if (const auto* dyn = std::get_if<std::unique_ptr<binder::BoundDynamicPropertyRef>>(&expr)) {
+        if (!*dyn || (*dyn)->property != "id")
+            return false;
+        return endpointEdgeVar((*dyn)->object, edge_var);
+    }
+    if (const auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&expr)) {
+        if (!*call || !(*call)->func_def || (*call)->func_def->name != "id" || (*call)->args.size() != 1)
+            return false;
+        return endpointEdgeVar((*call)->args[0], edge_var);
+    }
+    return false;
+}
+
+/// The predicate implies `vertex.id ∈ {startNode(edge).id, endNode(edge).id}`:
+/// every OR branch must imply it, one conjunct of an AND suffices.
+bool impliesEndpointRestriction(const binder::BoundExpression& pred, const std::string& vertex_var,
+                                std::string& edge_var) {
+    const auto* bin = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&pred);
+    if (bin == nullptr || !*bin)
+        return false;
+    if ((*bin)->op == cypher::BinaryOperator::OR) {
+        std::string left_edge;
+        std::string right_edge;
+        if (!impliesEndpointRestriction((*bin)->left, vertex_var, left_edge) ||
+            !impliesEndpointRestriction((*bin)->right, vertex_var, right_edge))
+            return false;
+        if (left_edge.empty() || left_edge != right_edge)
+            return false;
+        edge_var = left_edge;
+        return true;
+    }
+    if ((*bin)->op == cypher::BinaryOperator::AND)
+        return impliesEndpointRestriction((*bin)->left, vertex_var, edge_var) ||
+               impliesEndpointRestriction((*bin)->right, vertex_var, edge_var);
+    if ((*bin)->op != cypher::BinaryOperator::EQ)
+        return false;
+    std::string edge;
+    if (isVertexIdOf((*bin)->left, vertex_var) && isEndpointIdOf((*bin)->right, edge)) {
+        edge_var = std::move(edge);
+        return true;
+    }
+    if (isVertexIdOf((*bin)->right, vertex_var) && isEndpointIdOf((*bin)->left, edge)) {
+        edge_var = std::move(edge);
+        return true;
+    }
+    return false;
+}
+
+/// Mark `CrossProduct(CorrelatedSource(edge), LabelScan(v))` joins where a filter
+/// above them (possibly several levels up, e.g. above the enclosing correlated
+/// apply) restricts `v` to the edge's endpoints. Carrying ancestor predicates
+/// down is sound: those filters are evaluated on rows that contain the same
+/// edge/vertex values, so any pair the probe would drop is rejected above anyway.
+void annotateEndpointProbeJoins(binder::BoundLogicalOperator& op,
+                                std::vector<const binder::BoundExpression*>& ancestors) {
+    if (auto* filter = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&op)) {
+        if (*filter) {
+            ancestors.push_back(&(*filter)->predicate);
+            annotateEndpointProbeJoins((*filter)->child, ancestors);
+            ancestors.pop_back();
+            return;
+        }
+    }
+    if (auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&op)) {
+        if (join && *join && std::holds_alternative<binder::BoundCorrelatedSourceOp>((*join)->left) &&
+            std::holds_alternative<binder::BoundLabelScanOp>((*join)->right)) {
+            const auto& scan = std::get<binder::BoundLabelScanOp>((*join)->right);
+            for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+                std::string edge;
+                if (impliesEndpointRestriction(**it, scan.variable, edge)) {
+                    (*join)->endpoint_probe_edge_var = std::move(edge);
+                    break;
+                }
+            }
+        }
+    }
+    eugraph::optimizer::forEachLogicalChild(
+        op, [&ancestors](binder::BoundLogicalOperator& child) { annotateEndpointProbeJoins(child, ancestors); });
+}
+
+/// Annotate dst-bound Expands whose destination column is supplied by a
+/// CorrelatedSource below: the operator may materialise that destination's
+/// adjacency once per batch instead of seeking from every source row. This is
+/// an execution-strategy annotation only — the shape already comes from the
+/// binder (P2) and no cost comparison happens here (degree statistics are P3).
+void annotateCorrelatedEndpointProbe(BoundLogicalOperator& op, bool allow_probe) {
+    if (allow_probe) {
+        std::visit(
+            [&](auto& v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                    if (!v || v->dst_variable.empty())
+                        return;
+                    // Only a directed pattern can flip the traversal: the
+                    // probe reads the destination's adjacency in the opposite
+                    // direction. Undirected keeps the exact-seek path.
+                    if (v->direction == cypher::RelationshipDirection::UNDIRECTED)
+                        return;
+                    // The destination must be the correlated outer value
+                    // injected by the sub-plan source, not an ordinary column.
+                    if (!subtreeProvidesCorrelatedVariable(v->child, v->dst_variable))
+                        return;
+                    v->probe_bound_dst = true;
+                }
+            },
+            op);
+    }
+    forEachLogicalChild(
+        op, [&](binder::BoundLogicalOperator& child) { annotateCorrelatedEndpointProbe(child, allow_probe); });
+}
+
 } // namespace
+
+void AnnotateEndpointProbeNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext&) const {
+    std::vector<const binder::BoundExpression*> ancestors;
+    annotateEndpointProbeJoins(root, ancestors);
+}
+
+void AnnotateCorrelatedEndpointProbeNormalization::apply(binder::BoundLogicalOperator& root,
+                                                         NormalizationContext&) const {
+    // The probe keeps a destination's adjacency for the batch and assumes the
+    // statement's snapshot is stable, so write plans keep exact seeks. The
+    // shape (dst-bound) is produced by the binder either way.
+    annotateCorrelatedEndpointProbe(root, !planHasWriteOperator(root));
+}
 
 void JoinConditionNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext&) const {
     extractJoinConditions(root);
-}
-
-void ShortestPathBatchNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext&) const {
-    markShortestPathBatch(root);
 }
 
 void JoinSafetyNormalization::apply(binder::BoundLogicalOperator& root, NormalizationContext& ctx) const {

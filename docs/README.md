@@ -67,13 +67,13 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 添加查询算子 | [query/engine/query-engine-design.md] | `src/query/physical_plan/`, `executor/` |
 | 实现 PROFILE / 查询诊断 | [query/engine/profile-design.md] | `src/query/physical_plan/`, `src/query/executor/`, `src/service/bolt/` |
 | 添加优化规则 | [query/optimizer/cascades-optimizer.md] | `src/query/optimizer/` |
+| 清理 physical planner 遗留 access-path/PE 决策、规划 access-path 规则拆分 | [query/engine/physical-planner-residue-audit.md](query/engine/physical-planner-residue-audit.md), [query/engine/module-responsibilities.md](query/engine/module-responsibilities.md), [query/engine/index-probe-operator.md](query/engine/index-probe-operator.md) | `src/query/physical_plan/physical_planner.cpp`, `src/query/optimizer/rules/` |
 | 添加/修改函数（标量/聚合） | [query/engine/query-engine-design.md], [query/engine/aggregate-typed-execution-design.md](query/engine/aggregate-typed-execution-design.md) | `src/query/function/`, `binder/` |
 | 修改 KV 存储编码 | [storage/kv-encoding.md] | `src/storage/kv/` |
 | 强/弱混合模式（属性归属、多标签差异、弱空间、`::`、索引、`properties`/`keys`） | [features/strong-weak-hybrid.md](features/strong-weak-hybrid.md) | `src/query/physical_plan/operator/create_node_physical_op.cpp`, `set_physical_op.cpp`, `merge_physical_op.cpp`, `remove_physical_op.cpp` |
 | 顶点标签/属性/邻接存储（vertex_data） | [storage/kv-encoding.md](storage/kv-encoding.md) | `src/storage/kv/key_codec.*`, `src/storage/data/sync_graph_data_store.*` |
 | Expand 目标标签过滤优化 | [query/expand-label-filter-optimization.md](query/expand-label-filter-optimization.md) | `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | PatternComprehension 锚点标签扫描 | [query/pattern-comprehension-anchor-label-scan.md](query/pattern-comprehension-anchor-label-scan.md) | `src/query/planner/binder/bind_match.cpp` |
-| PatternComprehension 公共 anchor 共享（计划层 fork） | [query/engine/pattern-comprehension-anchor-sharing.md](query/engine/pattern-comprehension-anchor-sharing.md) | `src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp`, `src/query/physical_plan/operator/pattern_comprehension_fork_physical_op.cpp` |
 | 表达式求值不应发起 IO（属性读取收敛到算子） | [query/engine/expression-io-boundary.md](query/engine/expression-io-boundary.md) | `src/query/evaluator/`, `src/query/optimizer/extraction/projection_extraction.cpp` |
 | LDBC c5/c9 计划分析 | [query/ldbc-c5-c9-plan-analysis.md](query/ldbc-c5-c9-plan-analysis.md) | `src/query/physical_plan/` |
 | EXPLAIN 计划树 | [query/engine/explain-design.md](query/engine/explain-design.md) | `src/query/physical_plan/explain/` |

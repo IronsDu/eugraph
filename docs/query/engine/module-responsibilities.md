@@ -74,6 +74,29 @@ physical: DynamicIndexJoinPhysicalOp 实例化
 反例：`ReexecutePhysicalOp` 让 physical 层隐式决定“source 可以再执行一次”，
 既不是 optimizer 候选，也不是显式执行契约。
 
+### Correlated 端点（EXISTS / pattern predicate / comprehension）
+
+```text
+binder: 外层已绑定的链端点直接绑成 Expand 的目的列（dst=bound），不造后置等式 Filter
+optimizer: AnnotateCorrelatedEndpointProbe 只标注 probe 策略（不改形状、不比成本）
+physical: 只实例化 bound-dst Expand / 已标注的 probe
+```
+
+反例：先造 `Filter(id(dst)=id(saved))` 再让某层折叠（形状与策略耦合），
+或让 physical 按“是否相关”决定 probe。策略的成本化（Impl 候选）等 P3 统计。
+
+### 策略属性（HashJoin build 侧 / shortestPath batch）
+
+```text
+optimizer/rules/physical: Impl 规则产候选并携带策略属性（build_left / batch_shortest_path）
+physical: lowering 只转发 ChosenPlan 属性，不按形状推断策略
+binder/normalization: 只产语义形状与不变量，不写策略字段
+```
+
+反例：把 batch 放回 logical operator 由 normalization 设置（策略进入 hash/eq、与形状耦合），
+或让算子按形状猜。与形状绑定但尚未成本化的策略（correlated 端点 probe）先以只读标注存在，
+成本化随统计一起做。
+
 ## 5. 评审清单
 
 - 新 helper 是否在最低层、且没有反向依赖？
@@ -87,5 +110,6 @@ physical: DynamicIndexJoinPhysicalOp 实例化
 
 - [Optimizer 架构与 Columbia 迁移](optimizer-architecture.md)
 - [Optimizer / Access Path 后续规划](optimizer-next-steps.md)
+- [Physical planner 遗留决策清单](physical-planner-residue-audit.md)
 - [EXPLAIN 语义元信息](explain-semantic-metadata.md)
 - [Dynamic IndexJoin 单次 Source 消费](dynamic-index-join-shared-source.md)

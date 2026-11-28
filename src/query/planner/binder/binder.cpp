@@ -479,6 +479,12 @@ std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {
             ctx_.var_slots.emplace(binding.name, binding.slot);
     }
     optimizer::allocateAllSlots(bound_result->plan.root, ctx_.var_slots, ctx_.slot_allocator);
+    // The final symbol table reflects the latest scope. Re-assert it over the
+    // name map after allocation, which may have retained an earlier alias slot.
+    for (const auto& [name, info] : ctx_.symbols) {
+        if (info.slot_id != INVALID_SLOT_ID)
+            ctx_.var_slots[name] = info.slot_id;
+    }
     return bound_result;
 }
 

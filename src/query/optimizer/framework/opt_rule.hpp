@@ -40,8 +40,9 @@ enum class OptNodeType {
     Call,                      // 26
     Foreach,                   // 27
     PathCount,                 // 28
-    PatternComprehensionFork,  // 29
-    IndexJoin,                 // 30
+    IndexJoin,                 // 29
+    IndexProbe,                // 30
+    IndexProbeJoin,            // 31
     Unknown                    // out-of-range / future operator
 };
 
