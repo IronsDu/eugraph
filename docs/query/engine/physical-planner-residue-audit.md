@@ -54,15 +54,15 @@
 
 | # | 函数 / 位置 | 行为 | 目标归属 |
 |---|---|---|---|
-| D1 | `rewriteDstBoundExpandFilters` | 把 `id(dst)=id(saved)` 折进 Expand / 索引过滤；`planBound` 与 `planChosen` 都调用 | optimizer normalization（CBO 前） |
+| D1 | ~~`rewriteDstBoundExpandFilters`~~ | 把 `id(dst)=id(saved)` 折进 Expand / 索引过滤。**已迁出**：CBO 前的 normalization pass `FoldExpandEndpointFilter`（`optimizer/normalization`），CBO 看到最终形状；因 CBO 的 FilterPushdown 可能在端点等式与 Expand 之间插入 edge-uniqueness 过滤，pass 会穿透"不引用 dst"的 Filter 链。physical 只 lowering 已折叠的 Expand | 已完成（normalization） |
 | D2 | `planChosen` 里调用 `optimizer::rewritePatternComprehensionAnchorShare` | post-CBO 计划重写由 physical 路径触发 | optimizer（提取 ChosenPlan 前） |
 
 ### E. 语义反解重复（P1.3 遗留）
 
 | # | 函数 | 行为 | 目标归属 |
 |---|---|---|---|
-| E1 | `resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition` | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop（optimizer/analysis 已有实现） | optimizer/analysis（P1.3 收尾） |
-| E2 | `collectPlanRefsInto` / `countPlanFieldRefs` / `subtreeProvidesCorrelatedVariable` | 全树引用计数等规划分析放在 physical | optimizer analysis |
+| E1 | `resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition` | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop（optimizer/analysis 已有实现）。当前唯一调用方是 B1 的 `joinKeyColumn`/`tryPlanGenericHashJoin`；随 B1 删除而消失 | 等 B1（J1 第二步） |
+| E2 | ~~`collectPlanRefsInto` / `countPlanFieldRefs` / `subtreeProvidesCorrelatedVariable`~~ | 全树引用计数等规划分析。**已迁出**：`optimizer/analysis/plan_refs`（PlanRefIndex / countPlanFieldRefs / subtreeProvidesCorrelatedVariable / vertexRefIdArgument / expressionReferences / forEachPlanNode）；physical 的 topology-only 判断改为消费该 analysis（C2 本身仍待迁） | 已完成（analysis） |
 
 ### F. 正常 lowering（不算越界）
 
@@ -93,6 +93,19 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
+- **D1 端点过滤折叠归位（完成）**：删除 physical 的 `rewriteDstBoundExpandFilters` 与
+  `collectPlanRefsInto`/`countPlanFieldRefs`/`subtreeProvidesCorrelatedVariable`/
+  `vertexRefIdArgument`/`bareRefName`；改为 CBO 前 normalization pass
+  `FoldExpandEndpointFilter`（`optimizer/normalization`）+ 复用 `optimizer/analysis/plan_refs`。
+  CBO 的 FilterPushdown 会在端点等式与 Expand 之间插入 edge-uniqueness 过滤，pass 会
+  穿透"不引用 dst"的 Filter 链（等价性：中间 Filter 保持原样，仍作用在折叠后的 Expand 上）。
+  EXPLAIN 对照：折叠前 `Filter(id(exists_dst)=id(exists_saved)) → Expand(dst=exists_dst)`，
+  折叠后无该 Filter、`Expand(dst=exists_saved, probe=set)`；EXISTS 与 pattern-predicate
+  两类形状都命中。LDBC 21 条行数不变。
+- **E2 规划分析迁出（完成）**：`PlanRefIndex`/`countPlanFieldRefs`/
+  `subtreeProvidesCorrelatedVariable`/`vertexRefIdArgument`/`expressionReferences`/
+  `forEachPlanNode` 进 `optimizer/analysis/plan_refs`；physical 只消费。
+  E1（`resolveColumnProperty` 等语义反解）仍被 B1 的 join key 解析使用，等 B1 删除。
 - **A2 / A3 access path 删除（完成）**：physical planner 不再识别
   `Filter(CrossProduct(Unwind, LabelScan))` 等值探针（A2）与 `x.prop IN list` 的
   ListIndexJoin / Q12 硬编码重写（A3）；同步删除 `expand_allowed_filter` /

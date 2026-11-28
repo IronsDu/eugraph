@@ -3,6 +3,10 @@
 > 状态：2026-11-26。
 > - P0 / P1 已完成并合入；
 > - P1.3 / P1.4 已完成；IndexProbe（R1/R2/R3 + lowering）已落地；
+> - A1–A5 访问路径物理决策已删除/迁移；**D1**（correlated 端点过滤折叠）与 **E2**（规划分析）
+>   已归位到 optimizer（2026-11-28）；
+> - 剩余：D2（PC anchor share 仍 post-CBO）、B1/B2（join 形状/预算）、C1/C2（PE 物化边界）、
+>   E1（随 B1 删除）——见 `physical-planner-residue-audit.md`。
 > - 无标签目标变量的索引覆盖判定仍缺元数据（见 P4）。
 > - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
 

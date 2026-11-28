@@ -4,6 +4,7 @@
 #include "query/optimizer/analysis/index_condition.hpp"
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/plan_analysis.hpp"
+#include "query/optimizer/analysis/plan_refs.hpp"
 #include "query/optimizer/analysis/property_demand.hpp"
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
@@ -1925,217 +1926,6 @@ void dumpPhysicalPlan(const PhysicalOperator* op, int depth) {
         dumpPhysicalPlan(child, depth + 1);
 }
 
-/// True when the correlated source below `op` injects `name` as a column. The
-/// binder's saved chain-endpoint value (__exists_saved_N) has this provenance;
-/// an arbitrary Filter(id(a) == id(b)) written by the user does not.
-bool subtreeProvidesCorrelatedVariable(binder::BoundLogicalOperator& op, const std::string& name) {
-    bool found = false;
-    std::visit(
-        [&](auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
-                found = std::find(value.variables.begin(), value.variables.end(), name) != value.variables.end();
-            }
-        },
-        op);
-    if (found)
-        return true;
-    optimizer::forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) {
-        if (!found)
-            found = subtreeProvidesCorrelatedVariable(child, name);
-    });
-    return found;
-}
-
-/// `id(<ref>)` argument matcher for the binder-generated endpoint equality.
-/// Generated predicates use VERTEX_REF columns on purpose (see
-/// bindExistsSubPlan's SavedCorr); a user-written id() comparison compares
-/// VERTEX columns and must not be rewritten here.
-const binder::BoundColumnRef* vertexRefIdArgument(const binder::BoundExpression& expr) {
-    auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&expr);
-    if (!call || !*call || !(*call)->func_def || (*call)->func_def->name != "id" || (*call)->args.size() != 1)
-        return nullptr;
-    auto* ref = std::get_if<binder::BoundColumnRef>(&(*call)->args[0]);
-    if (!ref || ref->type.kind != binder::BoundTypeKind::VERTEX_REF)
-        return nullptr;
-    return ref;
-}
-
-/// Rewrite the binder's post-Expand correlated-endpoint filter
-///
-///   Filter(id(__exists_dst_N) == id(__exists_saved_N))
-///     Expand(dst=__exists_dst_N, ...)
-///
-/// into `Expand(dst=__exists_saved_N)` and drop the filter. The Expand then has
-/// a bound destination and can use one exact `{src}{dir}{label}{neighbor}` seek
-/// per row instead of scanning the source's whole adjacency. This must run
-/// before collectPlanRequirements: the dst binding changes which columns the
-/// requirements/PE analysis has to materialise.
-
-/// Count every variable reference inside a bound expression, keyed by name.
-/// `forEachSubExpr` deliberately does not descend into the property-reference
-/// family, so those objects are walked explicitly -- a property read must count
-/// as an expression consumer for the topology-only guard.
-void countExprRefs(const binder::BoundExpression& expr, std::unordered_map<std::string, int>& refs) {
-    std::visit(
-        [&](const auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, binder::BoundVariableRef> || std::is_same_v<T, binder::BoundColumnRef>) {
-                ++refs[value.name];
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
-                if (value)
-                    countExprRefs(value->object, refs);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                if (value)
-                    countExprRefs(value->object, refs);
-            }
-        },
-        expr);
-    binder::forEachSubExpr(expr, [&](const binder::BoundExpression& child) { countExprRefs(child, refs); });
-}
-
-const binder::BoundColumnRef* exprRef(const binder::BoundExpression& expr) {
-    return std::get_if<binder::BoundColumnRef>(&expr);
-}
-
-const binder::BoundVariableRef* exprVarRef(const binder::BoundExpression& expr) {
-    return std::get_if<binder::BoundVariableRef>(&expr);
-}
-
-/// Reference index over a whole bound plan. `complete` is false when the walk
-/// met an operator whose expression fields it does not enumerate (write ops,
-/// CALL, ...); the topology-only guard then refuses to rewrite.
-struct PlanRefIndex {
-    std::unordered_map<std::string, int> expr_refs;
-    /// References that are a direct `size(<ref>)` argument: they observe only
-    /// the list length, never an element.
-    std::unordered_map<std::string, int> size_arg_refs;
-    std::unordered_set<std::string> path_elements;
-    bool complete = true;
-};
-
-void collectPlanRefsInto(const binder::BoundLogicalOperator& op, PlanRefIndex& index) {
-    auto visit_expr = [&](const binder::BoundExpression& e) {
-        if (const auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&e)) {
-            if (*call && (*call)->func_def && (*call)->func_def->name == "size") {
-                for (const auto& arg : (*call)->args)
-                    if (const auto* ref = exprVarRef(arg))
-                        ++index.size_arg_refs[ref->name];
-                    else if (const auto* ref = exprRef(arg))
-                        ++index.size_arg_refs[ref->name];
-            }
-        }
-        countExprRefs(e, index.expr_refs);
-    };
-    auto recurse = [&](const binder::BoundLogicalOperator& child) { collectPlanRefsInto(child, index); };
-    std::visit(
-        [&](const auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                if (!v)
-                    return;
-                visit_expr(v->predicate);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                if (!v)
-                    return;
-                for (const auto& item : v->items)
-                    visit_expr(item.expr);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                if (!v)
-                    return;
-                for (const auto& item : v->items)
-                    visit_expr(item.expr);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
-                if (!v)
-                    return;
-                for (const auto& key : v->group_keys)
-                    visit_expr(key);
-                for (const auto& agg : v->aggregates)
-                    for (const auto& arg : agg.arguments)
-                        visit_expr(arg);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
-                if (!v)
-                    return;
-                visit_expr(v->list_expr);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathCountOp>>) {
-                if (v)
-                    recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (!v)
-                    return;
-                for (const auto& name : v->element_variables)
-                    index.path_elements.insert(name);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                if (v)
-                    recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (!v)
-                    return;
-                if (!v->path_variable.empty())
-                    index.path_elements.insert(v->path_variable);
-                recurse(v->child);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
-                if (!v)
-                    return;
-                recurse(v->left);
-                recurse(v->right);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (!v)
-                    return;
-                recurse(v->left);
-                recurse(v->anchor);
-                for (const auto& branch : v->branches)
-                    recurse(branch);
-            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
-                                 std::is_same_v<T, binder::BoundScanOp> ||
-                                 std::is_same_v<T, binder::BoundLabelScanOp> ||
-                                 std::is_same_v<T, binder::BoundSingletonOp>) {
-                // leaves: no expressions
-            } else {
-                // Write operators / CALL / anything with expression fields this
-                // walker does not enumerate. Refuse the rewrite rather than risk
-                // an unobserved object consumer.
-                index.complete = false;
-            }
-        },
-        op);
-}
-
-/// Name of a bare variable reference (BoundVariableRef or an already-lowered
-/// BoundColumnRef), or empty when the expression is not a single reference.
-std::string bareRefName(const binder::BoundExpression& expr) {
-    if (const auto* ref = exprRef(expr))
-        return ref->name;
-    if (const auto* ref = exprVarRef(expr))
-        return ref->name;
-    return {};
-}
-
-template <typename Visit> void forEachPlanNode(const binder::BoundLogicalOperator& op, Visit&& visit) {
-    visit(op);
-    optimizer::forEachLogicalChild(const_cast<binder::BoundLogicalOperator&>(op),
-                                   [&](binder::BoundLogicalOperator& child) { forEachPlanNode(child, visit); });
-}
-
-/// A collected entity whose list is only counted: the collected variable has no
-/// expression consumer except the `collect(x)` argument, the list variable has
-/// no expression consumer except the `UNWIND` that iterates it, and the loop
-/// variable has no expression consumer except the comprehension's own
-/// `collect(loop var)`. Under those conditions the list never exposes an
-/// element, so keeping it at the topology stage is semantically equivalent.
 struct TopologyOnlyCollect {
     binder::SlotId slot = binder::INVALID_SLOT_ID;
     std::string name;
@@ -2143,14 +1933,13 @@ struct TopologyOnlyCollect {
 
 std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder::BoundLogicalOperator& root,
                                                                    const optimizer::SlotResolver& resolver) {
-    PlanRefIndex index;
-    collectPlanRefsInto(root, index);
+    optimizer::PlanRefIndex index = optimizer::collectPlanRefs(root);
     if (!index.complete)
         return {};
 
     const bool dbg = std::getenv(config::kEnvPlanDebug) != nullptr;
     std::vector<TopologyOnlyCollect> result;
-    forEachPlanNode(root, [&](const binder::BoundLogicalOperator& node) {
+    optimizer::forEachPlanNode(root, [&](const binder::BoundLogicalOperator& node) {
         const auto* pc_holder = std::get_if<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(&node);
         if (!pc_holder || !*pc_holder || !(*pc_holder)->size_only_output)
             return;
@@ -2161,11 +1950,11 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
         // must be iterated by exactly one UNWIND inside the right sub-plan.
         const binder::BoundUnwindOp* unwind = nullptr;
         std::string list_name;
-        forEachPlanNode(apply.right, [&](const binder::BoundLogicalOperator& inner) {
+        optimizer::forEachPlanNode(apply.right, [&](const binder::BoundLogicalOperator& inner) {
             const auto* unwind_holder = std::get_if<std::unique_ptr<binder::BoundUnwindOp>>(&inner);
             if (!unwind_holder || !*unwind_holder || unwind)
                 return;
-            const std::string name = bareRefName((*unwind_holder)->list_expr);
+            const std::string name = optimizer::bareRefName((*unwind_holder)->list_expr);
             if (name.empty())
                 return;
             bool correlated = false;
@@ -2183,7 +1972,7 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
         // Find the aggregate in the left sub-plan that produces the list.
         const binder::BoundAggregateOp* producer = nullptr;
         size_t agg_index = 0;
-        forEachPlanNode(apply.left, [&](const binder::BoundLogicalOperator& inner) {
+        optimizer::forEachPlanNode(apply.left, [&](const binder::BoundLogicalOperator& inner) {
             const auto* agg_holder = std::get_if<std::unique_ptr<binder::BoundAggregateOp>>(&inner);
             if (!agg_holder || !*agg_holder || producer)
                 return;
@@ -2201,13 +1990,13 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
         const auto& collect = producer->aggregates[agg_index];
         if (collect.function_name != "collect" || collect.distinct || collect.arguments.size() != 1)
             return;
-        const std::string collected_name = bareRefName(collect.arguments[0]);
+        const std::string collected_name = optimizer::bareRefName(collect.arguments[0]);
         if (collected_name.empty())
             return;
         const binder::BoundType* collected_type = nullptr;
-        if (const auto* ref = exprRef(collect.arguments[0]))
+        if (const auto* ref = optimizer::exprRef(collect.arguments[0]))
             collected_type = &ref->type;
-        else if (const auto* ref = exprVarRef(collect.arguments[0]))
+        else if (const auto* ref = optimizer::exprVarRef(collect.arguments[0]))
             collected_type = &ref->type;
         if (!collected_type || (collected_type->kind != binder::BoundTypeKind::VERTEX &&
                                 collected_type->kind != binder::BoundTypeKind::EDGE))
@@ -2246,115 +2035,6 @@ std::vector<TopologyOnlyCollect> findTopologyOnlyCollectedEntities(const binder:
 /// VarLen endpoints, Unwind variable, path elements, correlated columns). These
 /// are not expressions, so countExprRefs cannot see them. The endpoint rewrite
 /// must not rename a destination that a later operator still reads by name.
-void countPlanFieldRefs(const binder::BoundLogicalOperator& op, std::unordered_map<std::string, int>& refs) {
-    auto add = [&](const std::string& name) {
-        if (!name.empty())
-            ++refs[name];
-    };
-    std::visit(
-        [&](const auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                if (v) {
-                    add(v->src_variable);
-                    add(v->dst_variable);
-                    add(v->edge_variable);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v) {
-                    add(v->src_variable);
-                    add(v->dst_variable);
-                    add(v->edge_variable);
-                    add(v->path_variable);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
-                if (v)
-                    add(v->variable);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (v) {
-                    add(v->path_variable);
-                    for (const auto& element : v->element_variables)
-                        add(element);
-                }
-            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
-                for (const auto& name : v.variables)
-                    add(name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
-                if (v)
-                    for (const auto& corr : v->correlation)
-                        add(corr.left_var);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (v)
-                    for (const auto& corr : v->correlation)
-                        add(corr.left_var);
-            }
-        },
-        op);
-    optimizer::forEachLogicalChild(op,
-                                   [&](const binder::BoundLogicalOperator& child) { countPlanFieldRefs(child, refs); });
-}
-
-bool rewriteDstBoundExpandFilters(binder::BoundLogicalOperator& op, bool allow_probe,
-                                  const std::unordered_map<std::string, int>* expr_refs,
-                                  const std::unordered_map<std::string, int>* field_refs) {
-    if (!expr_refs || !field_refs)
-        return false;
-    if (auto* filter_holder = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(&op)) {
-        if (!*filter_holder)
-            return false;
-        auto& filter = **filter_holder;
-        auto* bin_holder = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
-        auto* expand_holder = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&filter.child);
-        if (bin_holder && *bin_holder && (*bin_holder)->op == cypher::BinaryOperator::EQ && expand_holder &&
-            *expand_holder) {
-            auto& expand = **expand_holder;
-            const auto* left = vertexRefIdArgument((*bin_holder)->left);
-            const auto* right = vertexRefIdArgument((*bin_holder)->right);
-            const binder::BoundColumnRef* saved = nullptr;
-            if (left && right && !expand.dst_variable.empty() && left->name != right->name) {
-                if (left->name == expand.dst_variable)
-                    saved = right;
-                else if (right->name == expand.dst_variable)
-                    saved = left;
-            }
-            // The destination may be read by another operator by name (the
-            // common case is the next hop of a chained pattern:
-            // Expand(dst=__exists_dst_0) then Expand(src=__exists_dst_0)).
-            // Renaming it to the saved column would leave that reference
-            // dangling. Require the id filter to be the only expression
-            // reference and the Expand itself the only field reference.
-            bool safe_to_fold = true;
-            if (saved) {
-                const std::string& dst_name = expand.dst_variable;
-                auto eit = expr_refs->find(dst_name);
-                auto fit = field_refs->find(dst_name);
-                const int expr_count = eit == expr_refs->end() ? 0 : eit->second;
-                const int field_count = fit == field_refs->end() ? 0 : fit->second;
-                if (expr_count != 1 || field_count != 1)
-                    safe_to_fold = false;
-            }
-            if (saved && safe_to_fold && subtreeProvidesCorrelatedVariable(expand.child, saved->name)) {
-                expand.dst_variable = saved->name;
-                expand.dst_column_index = saved->column_index;
-                expand.dst_slot_id = saved->slot_id;
-                expand.planner_dst_slot_id = saved->slot_id;
-                // A directed correlation can be flipped: the bound destination's
-                // adjacency is materialised once per batch and the source rows
-                // are probed against it. Undirected keeps the exact-seek path.
-                expand.probe_bound_dst = allow_probe && expand.direction != cypher::RelationshipDirection::UNDIRECTED;
-                binder::BoundLogicalOperator rewritten = std::move(filter.child);
-                op = std::move(rewritten);
-                rewriteDstBoundExpandFilters(op, allow_probe, expr_refs, field_refs);
-                return true;
-            }
-        }
-    }
-    bool changed = false;
-    optimizer::forEachLogicalChild(op, [&](binder::BoundLogicalOperator& child) {
-        changed = rewriteDstBoundExpandFilters(child, allow_probe, expr_refs, field_refs) || changed;
-    });
-    return changed;
-}
 } // namespace
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
@@ -2384,17 +2064,6 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     optimizer::allocateAllSlots(bound_plan.root, ctx.var_slots, ctx.slot_allocator);
     optimizer::lowerEdgeUniquenessRefs(bound_plan.root, ctx.var_slots);
     optimizer::lowerPredicateRefs(bound_plan.root, ctx.var_slots);
-    // Correlated chain endpoints: fold the binder's post-Expand
-    // `id(dst) == id(saved)` filter into a bound Expand destination, so the
-    // Expand can do one exact seek per row instead of scanning every edge of
-    // its source. Must precede requirements collection (see the helper).
-    PlanRefIndex endpoint_expr_refs;
-    collectPlanRefsInto(bound_plan.root, endpoint_expr_refs);
-    std::unordered_map<std::string, int> endpoint_field_refs;
-    countPlanFieldRefs(bound_plan.root, endpoint_field_refs);
-    rewriteDstBoundExpandFilters(bound_plan.root, ctx.read_only,
-                                 endpoint_expr_refs.complete ? &endpoint_expr_refs.expr_refs : nullptr,
-                                 &endpoint_field_refs);
     ctx.alias_map = optimizer::collectAliasSlotMap(bound_plan.root, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(bound_plan.root, SubtreeTrait::PatternComprehension);
 
@@ -2766,13 +2435,6 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
     optimizer::lowerEdgeUniquenessRefs(materialized, ctx.var_slots);
     optimizer::lowerPredicateRefs(materialized, ctx.var_slots);
-    PlanRefIndex endpoint_expr_refs;
-    collectPlanRefsInto(materialized, endpoint_expr_refs);
-    std::unordered_map<std::string, int> endpoint_field_refs;
-    countPlanFieldRefs(materialized, endpoint_field_refs);
-    rewriteDstBoundExpandFilters(materialized, ctx.read_only,
-                                 endpoint_expr_refs.complete ? &endpoint_expr_refs.expr_refs : nullptr,
-                                 &endpoint_field_refs);
     ctx.alias_map = optimizer::collectAliasSlotMap(materialized, ctx.var_slots);
     ctx.defer_disabled_by_pc = subtreeHasTrait(materialized, SubtreeTrait::PatternComprehension);
     ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver(), nullptr, &ctx.label_defs);

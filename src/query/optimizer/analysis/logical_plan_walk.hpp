@@ -77,5 +77,12 @@ template <typename OpRef, typename Visit> void forEachLogicalChild(OpRef&& op, V
         op);
 }
 
+/// Visit every node of a bound logical plan (pre-order), including the root.
+template <typename Visit> void forEachPlanNode(const binder::BoundLogicalOperator& op, Visit&& visit) {
+    visit(op);
+    forEachLogicalChild(const_cast<binder::BoundLogicalOperator&>(op),
+                        [&](binder::BoundLogicalOperator& child) { forEachPlanNode(child, visit); });
+}
+
 } // namespace optimizer
 } // namespace eugraph

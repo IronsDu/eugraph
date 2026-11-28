@@ -370,6 +370,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/analysis/requirement_collector.cpp
     src/query/optimizer/analysis/property_demand.cpp
     src/query/optimizer/analysis/plan_analysis.cpp
+    src/query/optimizer/analysis/plan_refs.cpp
     src/query/optimizer/rules/logical/filter_pushdown.cpp
     src/query/optimizer/rules/logical/generate_index_scan.cpp
     src/query/optimizer/rules/logical/generate_index_join.cpp
