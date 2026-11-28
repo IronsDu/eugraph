@@ -96,5 +96,9 @@ struct PhysicalExpr;
 Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector<LogProp>& input_lps,
                    const PhysicalExpr* phys = nullptr);
 
+/// Runtime hash-table row budget (same env as the HashJoin operator). Candidate
+/// feasibility is decided here so lowering never has to reject a chosen join.
+size_t joinBuildRowBudget();
+
 } // namespace optimizer
 } // namespace eugraph

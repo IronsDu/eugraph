@@ -1559,17 +1559,6 @@ static void ensureSlotLayout(PlanOperatorResult& result, PlanContext& ctx) {
 
 namespace {
 
-size_t hashJoinMaxBuildRows() {
-    const char* env = std::getenv(config::kEnvHashJoinMaxBuildRows);
-    if (env == nullptr || *env == '\0')
-        return 1'000'000;
-    char* end = nullptr;
-    const unsigned long parsed = std::strtoul(env, &end, 10);
-    if (end == env || end == nullptr || *end != '\0')
-        return 1'000'000;
-    return static_cast<size_t>(parsed);
-}
-
 /// 把 join key 表达式解析成某一侧输出列。只支持能直接落到已有列的单列表达式：
 /// ColumnRef、VariableRef、已解析的 PropertyRef/coalesced property。其它表达式
 /// 保持 CrossProduct+Filter（语义正确，避免错误地“猜”key）。
@@ -1632,51 +1621,6 @@ std::optional<uint32_t> joinKeyColumn(const binder::BoundExpression& expr, const
     return std::nullopt;
 }
 
-/// 只用无统计信息也安全的子树做上界估计；无法证明有界就放弃 HashJoin。
-std::optional<uint64_t> estimateRowsUpperBound(const binder::BoundLogicalOperator& op, const PlanContext& ctx,
-                                               uint32_t depth = 0) {
-    if (depth > 32)
-        return std::nullopt;
-    return std::visit(
-        [&](const auto& v) -> std::optional<uint64_t> {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
-                uint64_t sum = 0;
-                for (LabelId lid : v.label_ids) {
-                    auto it = ctx.label_vertex_counts.find(lid);
-                    if (it == ctx.label_vertex_counts.end())
-                        return std::nullopt;
-                    sum += it->second;
-                }
-                return sum;
-            } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
-                uint64_t sum = 0;
-                for (const auto& [lid, count] : ctx.label_vertex_counts) {
-                    (void)lid;
-                    sum += count;
-                }
-                return sum;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
-                auto child = v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-                if (!child || !v)
-                    return child;
-                if (v->constant.has_value() && *v->constant >= 0)
-                    return std::min<uint64_t>(*child, static_cast<uint64_t>(*v->constant));
-                return child;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
-                return v ? estimateRowsUpperBound(v->child, ctx, depth + 1) : std::nullopt;
-            }
-            return std::nullopt;
-        },
-        op);
-}
-
 } // namespace
 
 static bool containsCorrelatedSource(const binder::BoundLogicalOperator& op) {
@@ -1708,7 +1652,7 @@ namespace {
 /// return nullopt so the caller falls back to the CrossProduct lowering.
 static std::optional<PlanOperatorResult> planHonoredHashJoin(const binder::BoundBinaryJoinOp& join,
                                                              PlanOperatorResult& lr, PlanOperatorResult& rr,
-                                                             PlanContext& ctx) {
+                                                             PlanContext& ctx, bool build_left) {
     ensureSlotLayout(lr, ctx);
     ensureSlotLayout(rr, ctx);
 
@@ -1735,22 +1679,9 @@ static std::optional<PlanOperatorResult> planHonoredHashJoin(const binder::Bound
     if (left_keys.empty())
         return std::nullopt;
 
-    // Build-side placement is an instantiation detail (memory), not an
-    // algorithm decision: prefer the smaller estimated side, default to right.
-    bool build_left = false;
-    auto left_est = estimateRowsUpperBound(join.left, ctx);
-    auto right_est = estimateRowsUpperBound(join.right, ctx);
-    if (left_est && right_est)
-        build_left = *left_est < *right_est;
-
-    // Resource-feasibility fallback, not an algorithm choice: the cost model
-    // does not model the join memory budget yet, so a HashJoin whose estimated
-    // build side cannot fit the configured budget degrades to the CrossProduct
-    // lowering (the operator still enforces the budget at runtime). Moving this
-    // bound into the optimizer is tracked in physical-planner-residue-audit J6.
-    const size_t max_build_rows = hashJoinMaxBuildRows();
-    if ((build_left ? left_est : right_est).has_value() && *(build_left ? left_est : right_est) > max_build_rows)
-        return std::nullopt;
+    // Build side and budget feasibility came with the CBO descriptor; lowering
+    // only forwards them (the operator still enforces the row budget at runtime).
+    const size_t max_build_rows = optimizer::joinBuildRowBudget();
 
     Schema output_schema = lr.output_schema;
     output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
@@ -2145,7 +2076,7 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
     }
     if (auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&result)) {
         if (join && *join)
-            ctx.chosen_join_tags[join->get()] = chosen.tag;
+            ctx.chosen_join_attrs[join->get()] = PlanContext::ChosenJoinAttr{chosen.tag, chosen.build_left};
     }
     return result;
 }
@@ -2488,7 +2419,7 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
         auto op = std::make_unique<DynamicIndexJoinPhysicalOp>(
             std::move(lr.op), std::move(rev), dynamic_scan, static_cast<uint32_t>(lk), dynamic_key_col,
             static_cast<uint32_t>(rk), lr.output_schema, rs, std::vector<binder::BoundType>(jt), js,
-            hashJoinMaxBuildRows());
+            optimizer::joinBuildRowBudget());
         op->setEvalContext(ctx.eval_ctx);
         op->setSlotLayout(lay);
         auto result = PlanOperatorResult{std::move(op), std::move(js), std::move(jt), std::move(lay)};
@@ -2498,7 +2429,7 @@ PhysicalPlanner::planIndexJoin(binder::BoundIndexJoinOp& ij, IAsyncGraphDataStor
     auto join = std::make_unique<HashJoinPhysicalOp>(
         std::move(lr.op), std::move(rev), std::vector<uint32_t>{static_cast<uint32_t>(lk)},
         std::vector<uint32_t>{static_cast<uint32_t>(rk)}, std::vector<binder::BoundType>(jt), js, ij.build_left,
-        hashJoinMaxBuildRows());
+        optimizer::joinBuildRowBudget());
     join->setEvalContext(ctx.eval_ctx);
     auto result = PlanOperatorResult{std::move(join), std::move(js), std::move(jt), std::move(lay)};
     return dispatchProjectionExtract(std::move(result), store, ctx);
@@ -2602,7 +2533,7 @@ PhysicalPlanner::planIndexProbeJoin(binder::BoundIndexProbeJoinOp& probe_join, I
     auto join = std::make_unique<HashJoinPhysicalOp>(
         std::move(anchor.op), std::move(probe_plan.op), std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
         std::vector<uint32_t>{static_cast<uint32_t>(right_key)}, output_types, output_schema, /*build_left=*/true,
-        hashJoinMaxBuildRows());
+        optimizer::joinBuildRowBudget());
     join->setEvalContext(ctx.eval_ctx);
     PlanOperatorResult result{std::move(join), std::move(output_schema), std::move(output_types), std::move(layout)};
     return dispatchProjectionExtract(std::move(result), store, ctx);
@@ -3718,10 +3649,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // correlation operator (semantic join shape, not a keyed
                     // equi-join).
                     if (!pc_anchor) {
-                        auto tag_it = ctx.chosen_join_tags.find(&v);
-                        if (tag_it != ctx.chosen_join_tags.end() &&
-                            tag_it->second == optimizer::PhysicalOpTag::HashJoin) {
-                            if (auto hash_join = planHonoredHashJoin(v, lr, rr, ctx))
+                        auto attr_it = ctx.chosen_join_attrs.find(&v);
+                        if (attr_it != ctx.chosen_join_attrs.end() &&
+                            attr_it->second.tag == optimizer::PhysicalOpTag::HashJoin) {
+                            if (auto hash_join = planHonoredHashJoin(v, lr, rr, ctx, attr_it->second.build_left))
                                 return std::move(*hash_join);
                         }
                     }

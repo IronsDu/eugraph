@@ -12069,6 +12069,9 @@ TEST_F(QueryExecutorTest, GenericHashJoinCanBuildSmallerLeftSide) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 40);
     auto plan = getExplainPlanText(*executor_, query);
     EXPECT_NE(plan.find("HashJoin"), std::string::npos) << plan;
+    // Person (2) is smaller than City (20): the optimizer must pick it as the
+    // build side; lowering only forwards that choice.
+    EXPECT_NE(plan.find("build=left"), std::string::npos) << plan;
 
     // build_left 时输出仍必须是 left columns + right columns。
     auto projected = execSync(*executor_, "MATCH (a:Person), (b:City) WHERE a.name = b.name "

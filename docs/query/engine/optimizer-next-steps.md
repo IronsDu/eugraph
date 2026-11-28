@@ -6,8 +6,9 @@
 > - A1–A5 访问路径物理决策已删除/迁移；**D1**（correlated 端点过滤折叠）与 **E2**（规划分析）
 >   已归位到 optimizer（2026-11-28）；
 > - **B1**（join 形状兜底）已删除：CBO 的 join_conditions + tag 决定算法；
-> - 剩余：D2（PC anchor share 仍 post-CBO）、B2（build 侧/预算）、C1/C2（PE 物化边界）、
->   E1（随 B2）——见 `physical-planner-residue-audit.md`。
+> - **B2**（HashJoin build 侧/预算）已归位：build 侧是候选属性，预算由成本模型排除；
+> - 剩余：D2（PC anchor share 仍 post-CBO）、C1/C2（PE 物化边界）、E1（join-key descriptor）
+>   ——见 `physical-planner-residue-audit.md`。
 > - 无标签目标变量的索引覆盖判定仍缺元数据（见 P4）。
 > - 本文把 optimizer 债务与既有执行层性能待办放在同一优先级队列里。
 

@@ -519,6 +519,7 @@ std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp
 
     auto plan = std::make_unique<ChosenPlan>();
     plan->tag = expr.physOp().tag;
+    plan->build_left = expr.physOp().build_left;
     plan->op = cloneBoundLogicalOperator(expr.physOp().source);
     plan->enrich_variable = expr.physOp().enrich_variable;
     plan->enrich_output = expr.physOp().output_mat;

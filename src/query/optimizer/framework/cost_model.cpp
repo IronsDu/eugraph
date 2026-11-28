@@ -1,11 +1,14 @@
 #include "query/optimizer/framework/cost_model.hpp"
 
+#include "common/config/env_vars.hpp"
+
 #include "query/optimizer/framework/log_prop.hpp"
 #include "query/optimizer/framework/physical_expr.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace eugraph {
 namespace optimizer {
@@ -56,10 +59,25 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     case PhysicalOpTag::MultiExpand:
         return Cost(group_lp.cardinality);
 
-    // Nested loop join: left × right iterations
-    // Hash join: build + probe; build side selection is handled by the physical plan.
-    case PhysicalOpTag::HashJoin:
-        return Cost(input1Card() + input0Card());
+    // Nested loop join: left × right iterations.
+    // Hash join: build the chosen side once, stream the other. The build side
+    // carries a small memory premium so the optimizer prefers the smaller side
+    // (the physical operator no longer chooses). kBuildMemoryPremium is a
+    // placeholder until memory-aware cost (P3).
+    case PhysicalOpTag::HashJoin: {
+        constexpr double kBuildMemoryPremium = 1.1;
+        const bool build_left = phys != nullptr && phys->build_left;
+        const double build = build_left ? input0Card() : input1Card();
+        const double probe = build_left ? input1Card() : input0Card();
+        // Missing label statistics surface as a zero estimate; an empty side is
+        // also never worth a hash table (CrossProduct is cheaper). Treat both as
+        // infeasible so the optimizer never picks HashJoin on unknown estimates.
+        if (build <= 0.0 || probe <= 0.0)
+            return Cost::infinity();
+        if (build > static_cast<double>(joinBuildRowBudget()))
+            return Cost::infinity();
+        return Cost(kBuildMemoryPremium * build + probe);
+    }
 
     // IndexJoin replaces Filter(Expand(chain)) with index seek + reverse chain
     // + join. Local cost is deliberately lower than the forward filter so the
@@ -138,6 +156,17 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
         return Cost(input0Card() * 1.05);
     }
     return Cost(0.0);
+}
+
+size_t joinBuildRowBudget() {
+    const char* env = std::getenv(config::kEnvHashJoinMaxBuildRows);
+    if (env == nullptr || *env == '\0')
+        return 1'000'000;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || end == nullptr || *end != '\0')
+        return 1'000'000;
+    return static_cast<size_t>(parsed);
 }
 
 } // namespace optimizer

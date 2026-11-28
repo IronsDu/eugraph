@@ -40,8 +40,12 @@ struct PlanContext {
     const std::unordered_map<LabelId, uint64_t>& label_vertex_counts;
     /// 不可变 schema 版本：算子/计划持有它，避免逐语句复制 label 定义。
     std::shared_ptr<const GraphSchema> schema;
-    /// CBO 选出的物理 Join 算法（按 materialized logical node 地址索引）。
-    std::unordered_map<const binder::BoundBinaryJoinOp*, optimizer::PhysicalOpTag> chosen_join_tags;
+    /// CBO 选出的物理 Join 算法 + HashJoin build 侧（按 materialized logical node 地址索引）。
+    struct ChosenJoinAttr {
+        optimizer::PhysicalOpTag tag = optimizer::PhysicalOpTag::CrossProduct;
+        bool build_left = false;
+    };
+    std::unordered_map<const binder::BoundBinaryJoinOp*, ChosenJoinAttr> chosen_join_attrs;
     /// 写语句的本地可变 schema 副本（DML 隐式更新用）；只读语句为 null。
     std::unordered_map<LabelId, LabelDef>* mutable_label_defs = nullptr;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>* mutable_edge_label_defs = nullptr;

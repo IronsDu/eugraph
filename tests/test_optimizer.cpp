@@ -30,6 +30,7 @@
 #include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <set>
 
@@ -4081,4 +4082,73 @@ TEST(FoldExpandEndpointFilterTest, RequiresCorrelatedProvider) {
     // Without a CorrelatedSource providing the saved variable, renaming would
     // dangle: keep the Filter.
     EXPECT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(plan));
+}
+
+// ==================== B2: HashJoin build side / budget in the optimizer ====================
+
+TEST(ImplRuleTest, HashJoinProducesBothBuildSides) {
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = binder::JoinType::Inner;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+    auto eq = std::make_unique<BoundBinaryOp>();
+    eq->op = cypher::BinaryOperator::EQ;
+    eq->left = BoundExpression(BoundColumnRef(0, BoundType::Any(), "a", SlotId{1}));
+    eq->right = BoundExpression(BoundColumnRef(1, BoundType::Any(), "b", SlotId{2}));
+    join->join_conditions.push_back(BoundExpression(std::move(eq)));
+
+    Memo memo;
+    auto root = BoundLogicalOperator(std::move(join));
+    GroupId gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+
+    ImplHashJoinRule rule;
+    auto subs = rule.substitute(expr, memo);
+    ASSERT_EQ(subs.size(), 2u) << "build side is part of the candidate";
+    EXPECT_EQ(subs[0]->physOp().tag, PhysicalOpTag::HashJoin);
+    EXPECT_FALSE(subs[0]->physOp().build_left);
+    EXPECT_TRUE(subs[1]->physOp().build_left);
+    EXPECT_NE(hashPhysicalExpr(subs[0]->physOp()), hashPhysicalExpr(subs[1]->physOp()));
+}
+
+TEST(CostModelTest, HashJoinPricesBuildSideAndBudget) {
+    LogProp group_lp;
+    group_lp.cardinality = 40;
+    group_lp.valid = true;
+    LogProp small;
+    small.cardinality = 2;
+    small.valid = true;
+    LogProp large;
+    large.cardinality = 20;
+    large.valid = true;
+
+    PhysicalExpr build_left;
+    build_left.tag = PhysicalOpTag::HashJoin;
+    build_left.build_left = true;
+    PhysicalExpr build_right;
+    build_right.tag = PhysicalOpTag::HashJoin;
+    build_right.build_left = false;
+
+    const Cost left = findLocalCost(PhysicalOpTag::HashJoin, group_lp, {small, large}, &build_left);
+    const Cost right = findLocalCost(PhysicalOpTag::HashJoin, group_lp, {small, large}, &build_right);
+    EXPECT_LT(left.value(), right.value()) << "building the smaller side must be cheaper (memory premium)";
+    EXPECT_LT(left.value(), 2.0 * 20.0) << "HashJoin must beat the CrossProduct estimate";
+
+    // Budget feasibility: the candidate is priced out rather than re-chosen in
+    // lowering. Save/restore the env var because the test process is shared.
+    const char* old = std::getenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS");
+    std::string old_value = old ? old : "";
+    setenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS", "1", 1);
+    const Cost over_budget = findLocalCost(PhysicalOpTag::HashJoin, group_lp, {small, large}, &build_left);
+    if (old)
+        setenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS", old_value.c_str(), 1);
+    else
+        unsetenv("EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS");
+    EXPECT_TRUE(over_budget.isInfinity()) << "build side above the configured budget must not be a candidate";
+
+    // Zero/unknown estimate: never pick HashJoin (CrossProduct is cheaper and
+    // the build size is unprovable).
+    LogProp zero;
+    zero.cardinality = 0;
+    EXPECT_TRUE(findLocalCost(PhysicalOpTag::HashJoin, group_lp, {zero, large}, &build_left).isInfinity());
 }

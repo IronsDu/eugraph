@@ -38,7 +38,7 @@
 | # | 函数 / 位置 | 行为 | 目标归属 |
 |---|---|---|---|
 | B1 | ~~`tryPlanGenericHashJoin`~~ | 物理层比较 `hash_cost < cross_cost`、选 build 侧、超预算回退，直接推翻 CBO 选择。**已删除**：CBO 通过 `JoinConditionNormalization` 的 `join_conditions` + chosen tag 决定 join 算法；RBO/无 tag 时回退 CrossProduct+Filter（正确、可能慢）。`collectAndConjuncts`/`estimateRowsUpperBound` 的代价门禁随之删除（`estimateRowsUpperBound` 保留给 B2 的 build 侧实例化） | 已完成（删除） |
-| B2 | `planHonoredHashJoin` | 执行 tag，但 build 侧按估算选、超预算回退 | build 侧可保留（实例化细节）；预算应由 optimizer 成本模型提前排除（J6） |
+| B2 | ~~`planHonoredHashJoin` 的 build 侧/预算选择~~ | 执行 tag，但 build 侧按估算选、超预算回退。**已完成**：build 侧进入 `PhysicalExpr`/`ChosenPlan` 候选（`ImplHashJoinRule` 产出 build-left/right 两个候选），`findLocalCost(HashJoin)` 用 build 侧定价（build 行数带内存溢价）并做预算可行性（超 `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS` 或估计为 0 → `Cost::infinity()`）；physical 只转发 build 侧，运行时预算仍由算子强约束 | 已完成（optimizer 候选 + 成本） |
 | B3 | BinaryJoin 分支的 `pc_anchor` 特判 | 形状匹配 `CrossProduct(CorrelatedSource, LabelScan)` → 替换为 `CorrelatedVertexProbePhysicalOp` | post-CBO rewrite 或专用 descriptor（optimizer） |
 | B4 | `planIndexJoin` | 消费 descriptor，但内部仍有 dynamic-key 分支与 fallback | 保持 descriptor 化；bug 修复见 Issue #335 |
 
@@ -61,7 +61,7 @@
 
 | # | 函数 | 行为 | 目标归属 |
 |---|---|---|---|
-| E1 | `resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition` | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop（optimizer/analysis 已有实现）。B1 删除后唯一调用方是 `planHonoredHashJoin` 的 `joinKeyColumn`（读 CBO 的 join_conditions 落列）；随 B2 的 descriptor 化（join key 由 optimizer 给出）删除 | 等 B2 |
+| E1 | `resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition` | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop。B2 后唯一用途是 `joinKeyColumn` 把 `join_conditions` 表达式映射成 lowering 时的列（列布局在 CBO 后才有）；需要 join-key descriptor（key 表达式 + 期望语义，列索引由 lowering 解析）才能删 | 待 join-key descriptor |
 | E2 | ~~`collectPlanRefsInto` / `countPlanFieldRefs` / `subtreeProvidesCorrelatedVariable`~~ | 全树引用计数等规划分析。**已迁出**：`optimizer/analysis/plan_refs`（PlanRefIndex / countPlanFieldRefs / subtreeProvidesCorrelatedVariable / vertexRefIdArgument / expressionReferences / forEachPlanNode）；physical 的 topology-only 判断改为消费该 analysis（C2 本身仍待迁） | 已完成（analysis） |
 
 ### F. 正常 lowering（不算越界）
@@ -93,6 +93,14 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
+- **B2 HashJoin build 侧/预算归位（完成）**：`PhysicalExpr`/`ChosenPlan` 增加 `build_left`；
+  `ImplHashJoinRule` 产出 build-left/right 两个候选；`findLocalCost(HashJoin)` 按 build 侧
+  定价（build 行数 × 1.1 内存溢价 + probe 行数），并把预算作为候选可行性（build 超过
+  `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS` 或估计为 0 → `Cost::infinity()`，由 CrossProduct 兜底）。
+  `planHonoredHashJoin` 只转发 CBO 的 build 侧；physical 的 `estimateRowsUpperBound` /
+  `hashJoinMaxBuildRows` 删除（预算统一为 `optimizer::joinBuildRowBudget()`，算子仍做运行时
+  强约束）。测试：build-left/right 候选、build 侧成本、预算不可行、未知估计不可行；
+  `GenericHashJoinCanBuildSmallerLeftSide` 断言 EXPLAIN `build=left`。
 - **B1 join 形状兜底删除（完成）**：删除 physical 的 `tryPlanGenericHashJoin`（物理层
   hash/cross 成本比较、build 侧选择、预算回退）与 `collectAndConjuncts`/`estimateRowsUpperBound`
   代价门禁；join 算法完全由 CBO 的 join_conditions + chosen tag 决定，RBO/无 tag 时

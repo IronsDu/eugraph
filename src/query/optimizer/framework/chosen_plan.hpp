@@ -32,6 +32,8 @@ namespace optimizer {
 // ============================================================
 struct ChosenPlan {
     PhysicalOpTag tag = PhysicalOpTag::NodeScan;
+    /// HashJoin only: build side chosen by the optimizer (cost/memory model).
+    bool build_left = false;
     binder::BoundLogicalOperator op;
     std::vector<std::unique_ptr<ChosenPlan>> children;
 

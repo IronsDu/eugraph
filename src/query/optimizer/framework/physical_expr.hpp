@@ -39,6 +39,10 @@ namespace optimizer {
 // ============================================================
 struct PhysicalExpr {
     PhysicalOpTag tag = PhysicalOpTag::NodeScan;
+    /// HashJoin only: which child feeds the hash table (build side). The
+    /// optimizer picks it as part of the candidate (cost/memory), so lowering
+    /// must not choose again.
+    bool build_left = false;
     binder::BoundLogicalOperator source;
 
     // Enricher-only: target variable name.

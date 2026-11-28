@@ -19,9 +19,11 @@ namespace optimizer {
 // demands materialization that a child's topology-form winner cannot
 // provide, O_INPUTS inserts an Enricher to bridge the gap.
 // ============================================================
-static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr, Memo& memo, PhysicalOpTag tag) {
+static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr, Memo& memo, PhysicalOpTag tag,
+                                                                bool build_left = false) {
     auto phys = std::make_unique<PhysicalExpr>();
     phys->tag = tag;
+    phys->build_left = build_left;
     phys->source = cloneBoundLogicalOperator(expr.op);
 
     // Each input must provide what this operator's own expressions need.
@@ -246,7 +248,12 @@ std::vector<std::unique_ptr<GroupExpr>> ImplHashJoinRule::substitute(GroupExpr& 
     auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
     if (!join || !*join || (*join)->join_conditions.empty())
         return {};
-    return makePhysicalExpr(expr, memo, PhysicalOpTag::HashJoin);
+    // Two candidates: build the left or the right side. Cost/memory decides;
+    // the chosen side is part of the descriptor and lowering must not re-pick.
+    auto out = makePhysicalExpr(expr, memo, PhysicalOpTag::HashJoin, /*build_left=*/false);
+    auto left_build = makePhysicalExpr(expr, memo, PhysicalOpTag::HashJoin, /*build_left=*/true);
+    out.insert(out.end(), std::make_move_iterator(left_build.begin()), std::make_move_iterator(left_build.end()));
+    return out;
 }
 
 PatternNode ImplLeftJoinRule::pattern() const {
