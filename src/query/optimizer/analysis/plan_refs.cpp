@@ -72,16 +72,6 @@ std::string bareRefName(const binder::BoundExpression& expr) {
     return {};
 }
 
-const binder::BoundColumnRef* vertexRefIdArgument(const binder::BoundExpression& expr) {
-    auto* call = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&expr);
-    if (!call || !*call || !(*call)->func_def || (*call)->func_def->name != "id" || (*call)->args.size() != 1)
-        return nullptr;
-    auto* ref = std::get_if<binder::BoundColumnRef>(&(*call)->args[0]);
-    if (!ref || ref->type.kind != binder::BoundTypeKind::VERTEX_REF)
-        return nullptr;
-    return ref;
-}
-
 bool subtreeProvidesCorrelatedVariable(const binder::BoundLogicalOperator& root, const std::string& name) {
     bool found = false;
     std::visit(
@@ -97,33 +87,6 @@ bool subtreeProvidesCorrelatedVariable(const binder::BoundLogicalOperator& root,
     forEachLogicalChild(root, [&](const binder::BoundLogicalOperator& child) {
         if (!found)
             found = subtreeProvidesCorrelatedVariable(child, name);
-    });
-    return found;
-}
-
-bool expressionReferences(const binder::BoundExpression& expr, const std::string& name) {
-    if (const auto* ref = exprRef(expr); ref && ref->name == name)
-        return true;
-    if (const auto* ref = exprVarRef(expr); ref && ref->name == name)
-        return true;
-    bool found = false;
-    std::visit(
-        [&](const auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
-                if (value)
-                    found = expressionReferences(value->object, name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                if (value)
-                    found = expressionReferences(value->object, name);
-            }
-        },
-        expr);
-    if (found)
-        return true;
-    binder::forEachSubExpr(expr, [&](const binder::BoundExpression& child) {
-        if (!found)
-            found = expressionReferences(child, name);
     });
     return found;
 }
@@ -240,53 +203,6 @@ PlanRefIndex collectPlanRefs(const binder::BoundLogicalOperator& root) {
         },
         root);
     return index;
-}
-
-void countPlanFieldRefs(const binder::BoundLogicalOperator& root, std::unordered_map<std::string, int>& refs) {
-    auto add = [&](const std::string& name) {
-        if (!name.empty())
-            ++refs[name];
-    };
-    std::visit(
-        [&](const auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                if (v) {
-                    add(v->src_variable);
-                    add(v->dst_variable);
-                    add(v->edge_variable);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v) {
-                    add(v->src_variable);
-                    add(v->dst_variable);
-                    add(v->edge_variable);
-                    add(v->path_variable);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
-                if (v)
-                    add(v->variable);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (v) {
-                    add(v->path_variable);
-                    for (const auto& element : v->element_variables)
-                        add(element);
-                }
-            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
-                for (const auto& name : v.variables)
-                    add(name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
-                if (v)
-                    for (const auto& corr : v->correlation)
-                        add(corr.left_var);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionForkOp>>) {
-                if (v)
-                    for (const auto& corr : v->correlation)
-                        add(corr.left_var);
-            }
-        },
-        root);
-    forEachLogicalChild(root, [&](const binder::BoundLogicalOperator& child) { countPlanFieldRefs(child, refs); });
 }
 
 bool planHasWriteOperator(const binder::BoundLogicalOperator& root) {

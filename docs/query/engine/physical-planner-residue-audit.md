@@ -54,7 +54,7 @@
 
 | # | 函数 / 位置 | 行为 | 目标归属 |
 |---|---|---|---|
-| D1 | ~~`rewriteDstBoundExpandFilters`~~ | 把 `id(dst)=id(saved)` 折进 Expand / 索引过滤。**已迁出**：CBO 前的 normalization pass `FoldExpandEndpointFilter`（`optimizer/normalization`），CBO 看到最终形状；因 CBO 的 FilterPushdown 可能在端点等式与 Expand 之间插入 edge-uniqueness 过滤，pass 会穿透"不引用 dst"的 Filter 链。physical 只 lowering 已折叠的 Expand | 已完成（normalization） |
+| D1 | ~~`rewriteDstBoundExpandFilters`~~ | 把 `id(dst)=id(saved)` 折进 Expand / 索引过滤。**已完成两阶段归位**：先迁到 CBO 前 normalization pass；**P2 把形状生成移进 binder**（`bindExistsSubPlan` 直接把相关链端点绑到目标列，Expand `dst=bound`），normalization 只剩 `AnnotateCorrelatedEndpointProbe` 策略标注；physical 只 lowering bound-dst Expand | 已完成（binder + optimizer 标注） |
 | D2 | `planChosen`/`planBound` 调用 `optimizer::rewritePatternComprehensionAnchorShare` | post-CBO 计划重写由 physical 路径触发。**部分完成**：重写策略收口到 `optimizer::applyPostCboRewrites`（`optimizer/post_cbo/finalize`），physical 只调用这一个固定入口、不再选择/排列重写；完整前移到 CBO 前需要 `PatternComprehensionApply` 成为 memo/CBO 算子，或把 chosen plan 物化 + slot 分配迁入 optimizer（与 P2/C1 耦合） | optimizer（materialization 边界之后继续前移） |
 
 ### E. 语义反解重复（P1.3 遗留）
@@ -119,19 +119,30 @@
   `GenericHashJoinKeepsResidualPredicate`（结果 + 残差 Filter，不再断言物理层回退）。
   `estimateRowsUpperBound` 保留给 B2 的 build 侧实例化；B2（build 侧/预算仍由
   `planHonoredHashJoin` 决定）与 E1（`resolveColumnProperty` 仍被 `joinKeyColumn` 使用）留待下一步。
-- **D1 端点过滤折叠归位（完成）**：删除 physical 的 `rewriteDstBoundExpandFilters` 与
+- **D1 端点过滤折叠归位（完成，P2 收尾）**：删除 physical 的 `rewriteDstBoundExpandFilters` 与
   `collectPlanRefsInto`/`countPlanFieldRefs`/`subtreeProvidesCorrelatedVariable`/
-  `vertexRefIdArgument`/`bareRefName`；改为 CBO 前 normalization pass
-  `FoldExpandEndpointFilter`（`optimizer/normalization`）+ 复用 `optimizer/analysis/plan_refs`。
-  CBO 的 FilterPushdown 会在端点等式与 Expand 之间插入 edge-uniqueness 过滤，pass 会
-  穿透"不引用 dst"的 Filter 链（等价性：中间 Filter 保持原样，仍作用在折叠后的 Expand 上）。
-  EXPLAIN 对照：折叠前 `Filter(id(exists_dst)=id(exists_saved)) → Expand(dst=exists_dst)`，
-  折叠后无该 Filter、`Expand(dst=exists_saved, probe=set)`；EXISTS 与 pattern-predicate
-  两类形状都命中。LDBC 21 条行数不变。
-- **E2 规划分析迁出（完成）**：`PlanRefIndex`/`countPlanFieldRefs`/
-  `subtreeProvidesCorrelatedVariable`/`vertexRefIdArgument`/`expressionReferences`/
+  `vertexRefIdArgument`/`bareRefName`。**P2 把形状生成移进 binder**：
+  `bindExistsSubPlan` 对相关链端点只分配目标列（`__exists_saved_N`）并把链变量绑定到它，
+  Expand 直接 `dst=bound`；不再产生 `Filter(id(__exists_dst_N)=id(__exists_saved_N))`，
+  也不再需要 CBO 前折叠 pass。normalization 只剩
+  `AnnotateCorrelatedEndpointProbe`：有向 + 只读 + dst 由子树 `CorrelatedSource` 提供时
+  标注 `probe_bound_dst`（形状、成本都不碰；physical 只读）。
+  行为边界（有意变化）：
+  - 写计划也得到 bound-dst 形状（binder 不知道 read-only，且形状本身语义等价）；
+    probe 仍关闭（批量邻接缓存假设语句内快照稳定）；
+  - 去掉"dst 只能被引用一次"守卫：binder 把所有消费者绑到同一列，不再有重命名悬挂，
+    子查询 WHERE 引用链端点、以及第二条 pattern 腿都能命中。
+  随 fold 变成死代码的 `countPlanFieldRefs`/`vertexRefIdArgument`/`expressionReferences`
+  一并删除；`PlanRefIndex`/`collectPlanRefs`/`subtreeProvidesCorrelatedVariable` 保留
+  （physical 的 topology-only 判断与新标注 pass 仍在用）。
+  EXPLAIN 对照：折叠前 `Filter(id(exists_dst)=id(exists_saved)) → Expand(dst=exists_dst)`；
+  P2 后无该 Filter、`Expand(dst=exists_saved, probe=set)`（读语句）/ `dst=bound` 无 probe
+  （写语句）。EXISTS、pattern-predicate、pattern comprehension 三类形状都命中。
+  LDBC 21 条行数不变。
+- **E2 规划分析迁出（完成）**：`PlanRefIndex`/`subtreeProvidesCorrelatedVariable`/
   `forEachPlanNode` 进 `optimizer/analysis/plan_refs`；physical 只消费。
-  E1（`resolveColumnProperty` 等语义反解）仍被 B1 的 join key 解析使用，等 B1 删除。
+  P2 后 fold 专用的 `countPlanFieldRefs`/`vertexRefIdArgument`/`expressionReferences`
+  随 fold 删除。E1（`resolveColumnProperty` 等语义反解）仍被 `joinKeyColumn` 使用。
 - **A2 / A3 access path 删除（完成）**：physical planner 不再识别
   `Filter(CrossProduct(Unwind, LabelScan))` 等值探针（A2）与 `x.prop IN list` 的
   ListIndexJoin / Q12 硬编码重写（A3）；同步删除 `expand_allowed_filter` /

@@ -5420,6 +5420,75 @@ TEST_F(QueryExecutorTest, ExistsCorrelatedMultiHop) {
     ASSERT_EQ(result.rows.size(), 1u);
 }
 
+// ── Correlated endpoint binding (P2) ──
+//
+// When the EXISTS chain endpoint is already bound in the outer scope, the binder
+// binds the Expand destination to that correlated column directly (dst=bound):
+// no `Filter(id(__exists_dst_N) == id(__exists_saved_N))` is built and nothing
+// has to fold it afterwards.
+
+TEST_F(QueryExecutorTest, CorrelatedExistsBindsDestination) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    const std::string query = "MATCH (a:Person {name: \"name1\"}), (b:Person) "
+                              "WHERE EXISTS { (a)-[:KNOWS]->(b) } "
+                              "RETURN b.name AS name ORDER BY name";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("probe=set"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("exists_dst"), std::string::npos) << "no fresh destination variable: " << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name2");
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "name3");
+}
+
+TEST_F(QueryExecutorTest, CorrelatedExistsInWriteQueryKeepsBoundDestination) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    const std::string query = "MATCH (a:Person {name: \"name1\"}), (b:Person) "
+                              "WHERE EXISTS { (a)-[:KNOWS]->(b) } "
+                              "SET b.name = \"renamed\"";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    // The shape (dst=bound) is a semantic binding and also holds for writes; the
+    // batch probe assumes a statement-stable snapshot, so the annotation stays off.
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("probe=set"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("exists_dst"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto check = execSync(*executor_, "MATCH (b:Person) WHERE b.name = \"renamed\" RETURN count(b) AS n");
+    ASSERT_TRUE(check.error.empty()) << check.error;
+    ASSERT_EQ(check.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(check.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(check.rows[0][0]), 2);
+}
+
+TEST_F(QueryExecutorTest, CorrelatedExistsIntermediateEndpointIsOneColumn) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    // `m` is both the destination of the first hop and the source of the second.
+    // Binding it to a single column keeps those two roles consistent; the former
+    // fold refused this shape (the destination had two field references, so
+    // renaming it would have left the second hop reading a stale column).
+    const std::string query = "MATCH (a:Person {name: \"name1\"}), (m:Person), (d:Person) "
+                              "WHERE EXISTS { (a)-[:KNOWS]->(m)-[:KNOWS]->(d) } "
+                              "RETURN DISTINCT d.name AS name";
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_NE(plan.find("dst=bound"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("probe=set"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("exists_dst"), std::string::npos) << plan;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
+}
+
 // ── EXISTS with AND/OR ──
 
 TEST_F(QueryExecutorTest, ExistsAndPropertyFilter) {

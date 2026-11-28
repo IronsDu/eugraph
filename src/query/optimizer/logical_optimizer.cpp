@@ -46,9 +46,10 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
     // 顺序固定、与 RuleSet 分离；结果只通过 NormalizationContext 传回 optimizer。
     NormalizationPipeline normalization;
     normalization.add(std::make_unique<JoinSafetyNormalization>());
-    // Fold the binder's correlated endpoint filter into the Expand before CBO
-    // costs the plan. The physical planner only lowers the folded shape.
-    normalization.add(std::make_unique<FoldExpandEndpointFilterNormalization>());
+    // The binder already emits the correlated endpoint as a bound Expand
+    // destination (P2); this pass only marks the batch-probe strategy on it.
+    // Physical lowering reads the flag and never decides it.
+    normalization.add(std::make_unique<AnnotateCorrelatedEndpointProbeNormalization>());
     normalization.add(std::make_unique<JoinConditionNormalization>());
     normalization.add(std::make_unique<ShortestPathBatchNormalization>());
     NormalizationContext normalization_ctx;

@@ -74,6 +74,17 @@ physical: DynamicIndexJoinPhysicalOp 实例化
 反例：`ReexecutePhysicalOp` 让 physical 层隐式决定“source 可以再执行一次”，
 既不是 optimizer 候选，也不是显式执行契约。
 
+### Correlated 端点（EXISTS / pattern predicate / comprehension）
+
+```text
+binder: 外层已绑定的链端点直接绑成 Expand 的目的列（dst=bound），不造后置等式 Filter
+optimizer: AnnotateCorrelatedEndpointProbe 只标注 probe 策略（不改形状、不比成本）
+physical: 只实例化 bound-dst Expand / 已标注的 probe
+```
+
+反例：先造 `Filter(id(dst)=id(saved))` 再让某层折叠（形状与策略耦合），
+或让 physical 按“是否相关”决定 probe。策略的成本化（Impl 候选）等 P3 统计。
+
 ## 5. 评审清单
 
 - 新 helper 是否在最低层、且没有反向依赖？

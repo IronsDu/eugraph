@@ -3940,148 +3940,143 @@ TEST(MemoContentHashTest, VarLenOrAllowSetsArePartOfIdentity) {
     EXPECT_NE(memo.copyIn(plain), memo.copyIn(pruned)) << "allow-set fields must not dedup away";
 }
 
-// ==================== D1: correlated endpoint filter folding ====================
+// ==================== P2: correlated endpoint binding + probe annotation ====================
 //
-// The binder emits Filter(id(__exists_dst_N) == id(__exists_saved_N)) above the
-// Expand that produced the destination. Folding it into the Expand (dst =
-// __exists_saved_N) is an equivalence and used to happen inside the physical
-// planner after CBO; it now runs as a pre-CBO normalization so the optimizer
-// costs the final shape.
-
-static const function::FunctionDef& idFunction() {
-    static const function::FunctionDef def = [] {
-        function::FunctionDef d;
-        d.name = "id";
-        return d;
-    }();
-    return def;
-}
-
-static BoundExpression makeIdOfVertexRef(const std::string& variable, SlotId slot) {
-    auto call = std::make_unique<BoundFunctionCall>();
-    call->func_def = &idFunction();
-    call->args.push_back(BoundColumnRef(0, BoundType::VertexRef(), variable, slot));
-    call->return_type = BoundType::Any();
-    return BoundExpression(std::move(call));
-}
+// The binder emits the correlated endpoint as a bound Expand destination
+// (dst = __exists_saved_N) directly; it no longer builds
+// Filter(id(__exists_dst_N) == id(__exists_saved_N)) for a normalization pass
+// to fold away. Normalization only annotates the batch-probe strategy on a
+// dst-bound Expand whose destination is provided by a CorrelatedSource.
 
 static BoundLogicalOperator
-makeExistsEndpointPlan(cypher::RelationshipDirection direction = cypher::RelationshipDirection::LEFT_TO_RIGHT,
-                       bool extra_dst_consumer = false, bool correlated_provider = true) {
+makeBoundEndpointPlan(cypher::RelationshipDirection direction = cypher::RelationshipDirection::LEFT_TO_RIGHT,
+                      bool correlated_provider = true, bool extra_dst_consumer = false) {
     BoundCorrelatedSourceOp source;
     source.variables = {"__exists_saved_0"};
     source.types = {BoundType::VertexRef()};
 
     auto expand = std::make_unique<BoundExpandOp>();
     expand->src_variable = "carried";
-    expand->dst_variable = "__exists_dst_0";
-    expand->dst_slot_id = SlotId{51};
-    expand->planner_dst_slot_id = SlotId{51};
+    expand->dst_variable = "__exists_saved_0";
+    expand->dst_column_index = 7;
+    expand->dst_slot_id = SlotId{52};
     expand->direction = direction;
     if (correlated_provider)
         expand->child = BoundLogicalOperator(source);
     else
         expand->child = makeLabelScan("carried", 0);
-
-    auto eq = std::make_unique<BoundBinaryOp>();
-    eq->op = cypher::BinaryOperator::EQ;
-    eq->left = makeIdOfVertexRef("__exists_dst_0", SlotId{51});
-    eq->right = makeIdOfVertexRef("__exists_saved_0", SlotId{52});
-
-    auto filter = std::make_unique<BoundFilterOp>();
-    filter->predicate = BoundExpression(std::move(eq));
-    filter->child = BoundLogicalOperator(std::move(expand));
-    BoundLogicalOperator root = BoundLogicalOperator(std::move(filter));
+    BoundLogicalOperator root = BoundLogicalOperator(std::move(expand));
 
     if (extra_dst_consumer) {
+        // A second consumer of the endpoint reads the same column (the binder
+        // rewrites the chain variable to it), so it must not disable the shape
+        // or the annotation.
         auto extra_filter = std::make_unique<BoundFilterOp>();
-        extra_filter->predicate = makeIdOfVertexRef("__exists_dst_0", SlotId{51});
+        extra_filter->predicate =
+            BoundExpression(BoundColumnRef(7, BoundType::VertexRef(), "__exists_saved_0", SlotId{52}));
         extra_filter->child = std::move(root);
         root = BoundLogicalOperator(std::move(extra_filter));
     }
     return root;
 }
 
-TEST(PlanRefsAnalysisTest, CountsExpressionAndFieldReferences) {
-    auto plan = makeExistsEndpointPlan(cypher::RelationshipDirection::LEFT_TO_RIGHT, /*extra_dst_consumer=*/false);
+TEST(PlanRefsAnalysisTest, CorrelatedEndpointFacts) {
+    auto plan = makeBoundEndpointPlan();
     PlanRefIndex refs = collectPlanRefs(plan);
     ASSERT_TRUE(refs.complete);
-    EXPECT_EQ(refs.expr_refs.at("__exists_dst_0"), 1);
-    EXPECT_EQ(refs.expr_refs.at("__exists_saved_0"), 1);
-
-    std::unordered_map<std::string, int> field_refs;
-    countPlanFieldRefs(plan, field_refs);
-    EXPECT_EQ(field_refs.at("__exists_dst_0"), 1);
-    EXPECT_EQ(field_refs.at("carried"), 1);
+    EXPECT_EQ(refs.expr_refs.count("__exists_saved_0"), 0u) << "no endpoint equality filter is built";
     EXPECT_TRUE(subtreeProvidesCorrelatedVariable(plan, "__exists_saved_0"));
     EXPECT_FALSE(planHasWriteOperator(plan));
+
+    auto create = std::make_unique<BoundCreateNodeOp>();
+    create->child = makeBoundEndpointPlan();
+    EXPECT_TRUE(planHasWriteOperator(BoundLogicalOperator(std::move(create))));
 }
 
-TEST(FoldExpandEndpointFilterTest, FoldsFilterIntoExpand) {
-    auto plan = makeExistsEndpointPlan();
-    NormalizationPipeline pipeline;
-    pipeline.add(std::make_unique<FoldExpandEndpointFilterNormalization>());
+TEST(AnnotateCorrelatedEndpointProbeTest, MarksDirectedCorrelatedExpand) {
+    auto plan = makeBoundEndpointPlan();
     NormalizationContext ctx;
-    pipeline.run(plan, ctx);
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    pass.apply(plan, ctx);
 
     auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&plan);
-    ASSERT_TRUE(expand && *expand) << "the Filter must be consumed by the Expand";
+    ASSERT_TRUE(expand && *expand) << "the pass must not change the shape";
     EXPECT_EQ((*expand)->dst_variable, "__exists_saved_0");
     EXPECT_EQ((*expand)->dst_slot_id, SlotId{52});
-    EXPECT_EQ((*expand)->planner_dst_slot_id, SlotId{52});
     EXPECT_TRUE((*expand)->probe_bound_dst);
 }
 
-TEST(FoldExpandEndpointFilterTest, KeepsFilterWhenDstHasAnotherConsumer) {
-    auto plan = makeExistsEndpointPlan(cypher::RelationshipDirection::LEFT_TO_RIGHT, /*extra_dst_consumer=*/true);
-    FoldExpandEndpointFilterNormalization pass;
+TEST(AnnotateCorrelatedEndpointProbeTest, DstConsumerDoesNotDisableProbe) {
+    auto plan = makeBoundEndpointPlan(cypher::RelationshipDirection::LEFT_TO_RIGHT, true,
+                                      /*extra_dst_consumer=*/true);
+    AnnotateCorrelatedEndpointProbeNormalization pass;
     NormalizationContext ctx;
     pass.apply(plan, ctx);
-    // Root stays a Filter; the inner structure may be folded only when safe, and
-    // a second dst consumer makes it unsafe.
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(plan));
+
+    // The binder binds every consumer to the same destination column, so a
+    // second reference no longer makes the shape unsafe (the former fold had to
+    // refuse it because it renamed the column).
+    auto* filter = std::get_if<std::unique_ptr<BoundFilterOp>>(&plan);
+    ASSERT_TRUE(filter && *filter);
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&(*filter)->child);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_TRUE((*expand)->probe_bound_dst);
 }
 
-TEST(FoldExpandEndpointFilterTest, UndirectedKeepsExactSeekButProbeOff) {
-    auto plan = makeExistsEndpointPlan(cypher::RelationshipDirection::UNDIRECTED);
-    FoldExpandEndpointFilterNormalization pass;
+TEST(AnnotateCorrelatedEndpointProbeTest, UndirectedKeepsExactSeek) {
+    auto plan = makeBoundEndpointPlan(cypher::RelationshipDirection::UNDIRECTED);
+    AnnotateCorrelatedEndpointProbeNormalization pass;
     NormalizationContext ctx;
     pass.apply(plan, ctx);
     auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&plan);
     ASSERT_TRUE(expand && *expand);
-    EXPECT_EQ((*expand)->dst_variable, "__exists_saved_0");
     EXPECT_FALSE((*expand)->probe_bound_dst);
 }
 
-TEST(FoldExpandEndpointFilterTest, WritePlanKeepsFilter) {
-    // The reference walk marks write operators as incomplete (their expression
-    // fields are not enumerated), so the fold is refused entirely -- the same
-    // safety rule as the former physical rewrite. The probe flag would be off
-    // for write plans anyway (correlated memoisation is read-only).
-    auto inner = makeExistsEndpointPlan();
+TEST(AnnotateCorrelatedEndpointProbeTest, WritePlanKeepsShapeButProbeOff) {
+    // The binder emits the dst-bound shape for write plans too (it is a
+    // semantic binding, not a strategy); the probe is what assumes a read-only
+    // statement, so only the annotation changes.
     auto create = std::make_unique<BoundCreateNodeOp>();
-    create->child = std::move(inner);
+    create->child = makeBoundEndpointPlan();
     BoundLogicalOperator plan = BoundLogicalOperator(std::move(create));
 
     EXPECT_TRUE(planHasWriteOperator(plan));
-    FoldExpandEndpointFilterNormalization pass;
+    AnnotateCorrelatedEndpointProbeNormalization pass;
     NormalizationContext ctx;
     pass.apply(plan, ctx);
 
     auto* create_ptr = std::get_if<std::unique_ptr<BoundCreateNodeOp>>(&plan);
     ASSERT_TRUE(create_ptr && *create_ptr && (*create_ptr)->child.has_value());
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(*(*create_ptr)->child));
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&*(*create_ptr)->child);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_EQ((*expand)->dst_variable, "__exists_saved_0");
+    EXPECT_FALSE((*expand)->probe_bound_dst) << "batch adjacency assumes a read-only statement";
 }
 
-TEST(FoldExpandEndpointFilterTest, RequiresCorrelatedProvider) {
-    auto plan = makeExistsEndpointPlan(cypher::RelationshipDirection::LEFT_TO_RIGHT, false,
-                                       /*correlated_provider=*/false);
-    FoldExpandEndpointFilterNormalization pass;
+TEST(AnnotateCorrelatedEndpointProbeTest, RequiresCorrelatedProvider) {
+    auto plan = makeBoundEndpointPlan(cypher::RelationshipDirection::LEFT_TO_RIGHT,
+                                      /*correlated_provider=*/false);
+    AnnotateCorrelatedEndpointProbeNormalization pass;
     NormalizationContext ctx;
     pass.apply(plan, ctx);
-    // Without a CorrelatedSource providing the saved variable, renaming would
-    // dangle: keep the Filter.
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(plan));
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&plan);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_FALSE((*expand)->probe_bound_dst);
+}
+
+TEST(AnnotateCorrelatedEndpointProbeTest, AnnotatedExpandSurvivesClone) {
+    auto plan = makeBoundEndpointPlan();
+    AnnotateCorrelatedEndpointProbeNormalization pass;
+    NormalizationContext ctx;
+    pass.apply(plan, ctx);
+
+    auto cloned = cloneBoundLogicalOperator(plan);
+    auto* expand = std::get_if<std::unique_ptr<BoundExpandOp>>(&cloned);
+    ASSERT_TRUE(expand && *expand);
+    EXPECT_TRUE((*expand)->probe_bound_dst) << "clone must not drop the strategy flag";
+    EXPECT_EQ((*expand)->dst_variable, "__exists_saved_0");
+    EXPECT_EQ((*expand)->dst_slot_id, SlotId{52});
 }
 
 // ==================== B2: HashJoin build side / budget in the optimizer ====================

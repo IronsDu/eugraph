@@ -1502,26 +1502,27 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         ctx_.symbols[start_var_name] = makeColumnInfo(start_var_name, BoundType::Vertex());
     }
 
-    // Track saved (reference) columns for correlated chain nodes.
-    // These hold the original correlated value so we can filter after
-    // the Expand overwrites the destination column.
+    // Correlated chain endpoints: `(n)-[]->(m)` where `m` is already bound in
+    // the outer scope. The endpoint is bound straight to its destination column
+    // (no fresh `__exists_dst_N` + post-Expand `id(dst) == id(saved)` filter,
+    // which the optimizer then had to fold away). Because the column is
+    // correlated, the SemiJoin injects the outer value into the sub-plan and the
+    // Expand seeks that destination directly (dst=bound). Consumers of the chain
+    // variable (the sub-plan WHERE, a second pattern leg) bind to the same
+    // column, so no reference-count guard is needed either.
     struct SavedCorr {
-        std::string orig_var;    // user-facing chain var (e.g. "m")
-        std::string sub_dst_var; // fresh name in sub-plan (e.g. "__exists_dst_1")
-        std::string saved_var;   // fresh name for saved outer value (e.g. "__exists_saved_1")
-        uint32_t saved_col;
-        SlotId saved_slot;
-        SlotId sub_dst_slot;
+        std::string orig_var;  // user-facing chain var (e.g. "m")
+        std::string saved_var; // bound destination column (e.g. "__exists_saved_1")
     };
     std::vector<SavedCorr> saved_chain_corrs;
 
-    // For chain nodes that reference outer-scope variables (e.g. `(n)-[]->(m)`
-    // where both `n` and `m` are from the outer scope), allocate fresh names
-    // and slots inside the sub-plan. Reusing the outer var's name would make
-    // Expand's output schema contain the name twice (passthrough + dst) and
-    // makeSlotLayout would collapse them onto the same slot, breaking the
-    // post-Expand equality filter.
-    // Names for the saved endpoint value must be unique across the whole statement,
+    // The destination column needs a fresh name: the outer variable's name is
+    // already bound in this sub-scope (to the correlated start/extra column),
+    // so reusing it would resolve the Expand's destination to a different
+    // column than the injected value — two columns under one name, which
+    // makeSlotLayout collapses onto a single slot.
+    //
+    // Names for the bound endpoint must be unique across the whole statement,
     // not just within this call. Two sub-plans bound in the same statement (say a
     // `NOT <pattern predicate>` in the WHERE and a pattern comprehension beside it)
     // used to both produce `__exists_saved_1`, and because both were registered in
@@ -1530,7 +1531,6 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     // constraint, and counted every element (0 instead of 1 on the fixture above, and
     // complex-10's inflated commonPostCount on sf0.1). Deriving the suffix from the
     // binder-wide counter keeps each sub-plan's bindings its own.
-    uint32_t chain_counter = 0;
     for (const auto& pp : exp_patterns) {
         for (auto& [rel_pat, node_pat] : pp.element.chain) {
             if (!node_pat.variable.has_value())
@@ -1543,30 +1543,8 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 continue;
 
             const auto& chain_outer = it->second;
-            ++chain_counter;
 
-            // Fresh name for the destination that Expand writes to. This name
-            // is registered in ctx_.symbols (so bindNodePattern reuses the
-            // column/slot and the post-Expand filter can reference it) but is
-            // NOT added to correlation or to the source's output_schema —
-            // otherwise Expand's output_schema would contain the name twice
-            // (passthrough + dst) and makeSlotLayout would collapse them onto
-            // the same slot, breaking the filter.
             const uint32_t unique = nextAnonId();
-            std::string sub_dst_var = "__exists_dst_" + std::to_string(unique);
-            uint32_t sub_dst_col = nextColumnIndex();
-            SlotId sub_dst_slot = allocateNamedSlot(sub_dst_var);
-            ColumnInfo sub_dst_info;
-            sub_dst_info.name = sub_dst_var;
-            sub_dst_info.type = chain_outer.type;
-            sub_dst_info.column_index = sub_dst_col;
-            sub_dst_info.slot_id = sub_dst_slot;
-            sub_dst_info.source_labels = chain_outer.source_labels;
-            ctx_.symbols[sub_dst_var] = sub_dst_info;
-
-            // Fresh name + slot for the saved outer value (preserved across
-            // Expand). This IS correlated so the SemiJoin injects the outer
-            // value into the source's output.
             std::string saved_var = "__exists_saved_" + std::to_string(unique);
             uint32_t saved_col = nextColumnIndex();
             SlotId saved_slot = allocateNamedSlot(saved_var);
@@ -1577,9 +1555,10 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             saved_info.slot_id = saved_slot;
             saved_info.source_labels = chain_outer.source_labels;
             ctx_.symbols[saved_var] = saved_info;
+            // Correlated: the SemiJoin injects the outer endpoint value here.
             correlation.emplace_back(chain_outer.slot_id, saved_slot);
 
-            saved_chain_corrs.push_back({chain_var, sub_dst_var, saved_var, saved_col, saved_slot, sub_dst_slot});
+            saved_chain_corrs.push_back({chain_var, saved_var});
         }
     }
 
@@ -1705,11 +1684,13 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         // Construct synthetic MatchClause from patterns.
         // Deep-clone the EXISTS patterns into a synthetic MatchClause.
         // (Expression contains unique_ptr and cannot be trivially copied.)
-        // For correlated chain nodes, the dst variable is rewritten to the fresh
-        // sub-plan name (sub_dst_var) so Expand writes to a dedicated slot.
+        // For correlated chain nodes, the dst variable is rewritten to the bound
+        // destination (saved_var) so Expand's dst reuses that column: the Expand
+        // seeks the correlated endpoint instead of expanding the whole
+        // neighbourhood and filtering it afterwards.
         std::unordered_map<std::string, std::string> chain_var_rewrite;
         for (const auto& sc : saved_chain_corrs)
-            chain_var_rewrite[sc.orig_var] = sc.sub_dst_var;
+            chain_var_rewrite[sc.orig_var] = sc.saved_var;
 
         cypher::MatchClause synthetic_match;
         synthetic_match.patterns.reserve(exp_patterns.size());
@@ -1758,9 +1739,9 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             }
             synthetic_match.patterns.push_back(std::move(cloned_pp));
         }
-        // Clone an expression, rewriting chain variable names to their
-        // sub-dst equivalents so the WHERE clause can reference chain
-        // nodes by their in-scope names (e.g. m → __exists_dst_1).
+        // Clone an expression, rewriting chain variable names to their bound
+        // destination column names (e.g. m → __exists_saved_1) so the WHERE
+        // clause reads the same column the Expand seeks.
         std::function<cypher::Expression(const cypher::Expression&)> cloneAndRewriteExpr;
         cloneAndRewriteExpr = [&](const cypher::Expression& expr) -> cypher::Expression {
             return std::visit(
@@ -1830,34 +1811,11 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         sub_plan = std::move(*with_op);
     }
 
-    // For correlated chain nodes: filter the expanded dst against the saved
-    // outer value (Pattern1 [12]-[18]). The dst was rewritten to sub_dst_var,
-    // which has its own slot; the saved outer value lives in saved_var.
-    //
-    // The reference type is VERTEX_REF (not VERTEX) on purpose: the source
-    // emits topology-stage VertexRef values and Expand writes a topology-stage
-    // VertexRef into the dst column. Declaring VERTEX would make PE allocate
-    // Construct slots for both columns and lowerColumnIndices would retarget
-    // the slot_id to those Construct columns, but the runtime EQ on the
-    // resulting VertexValues misbehaves (likely because the evaluator's
-    // genericEqBatch path has subtle issues with VERTEX columns). Comparing
-    // the VertexRef ids directly avoids the Construct altogether and matches
-    // the topology-stage semantics of the data.
-    for (const auto& sc : saved_chain_corrs) {
-        auto dst_it = ctx_.symbols.find(sc.sub_dst_var);
-        if (dst_it == ctx_.symbols.end())
-            continue;
-        uint32_t dst_col = dst_it->second.column_index;
-        SlotId dst_slot = dst_it->second.slot_id;
-
-        BoundColumnRef left_ref(dst_col, BoundType::VertexRef(), sc.sub_dst_var, dst_slot);
-        BoundColumnRef right_ref(sc.saved_col, BoundType::VertexRef(), sc.saved_var, sc.saved_slot);
-
-        BoundFilterOp filter;
-        filter.predicate = makeEqualityExpr(left_ref, right_ref);
-        filter.child = std::move(*sub_plan);
-        sub_plan = std::make_unique<BoundFilterOp>(std::move(filter));
-    }
+    // No endpoint equality filter: the correlated endpoint was bound directly
+    // above (chain variable -> saved_var), so the Expand below already carries
+    // dst=saved_var and only emits rows whose neighbour is that value. The
+    // optimizer annotates the resulting dst-bound Expand with the probe
+    // strategy (see AnnotateCorrelatedEndpointProbe); it does not fold a filter.
 
     if (!is_correlated && where_pred) {
         auto ap = anchorPred(*where_pred, start_var_name);
