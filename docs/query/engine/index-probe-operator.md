@@ -69,7 +69,7 @@ chosen plan 取回。
 - ProbeJoin anchor 来自 existing Group，规则不重新推导扫描；
 - ProbeJoin 是 **CBO-only 候选**：RBO 提取（`Memo::copyOut` 单参）跳过
   ProbeJoin 逻辑表达式，写查询/无 CBO winner 的计划不会落到未解析的 probe；
-- R1 与 join commute 共用保守边界（`commuteSafe`）：写计划/共享 anchor PC 不注入
+- R1 与 join commute 共用保守边界（`commuteSafe`）：写计划/PatternComprehensionApply 不注入
   access-path 候选；
 - rules 不算 total cost、不选 winner；
 - physical planner 只 lowering 已选的 ProbeJoin/IndexProbe，不做 access-path 选择；

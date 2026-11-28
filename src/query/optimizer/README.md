@@ -31,8 +31,6 @@ rules/
   logical/     transformation rules (FilterPushdown, EdgeUniquenessPushdown,
   physical/    logical -> physical implementation rules
 
-post_cbo/      One-way logical rewrites after CBO/lowering, no alternatives
-  pattern_comprehension_anchor_share.*
 
 logical_optimizer.*  pipeline entry: copy-in, task queue, CBO extract, RBO fallback
 ```
@@ -47,9 +45,11 @@ logical_optimizer.*  pipeline entry: copy-in, task queue, CBO extract, RBO fallb
   must be idempotent and must not produce alternatives or read CBO cost.
 - `rules/` receive a `GroupExpr` and return equivalent alternatives. A rule
   must not assume it is the only plan: CBO may keep the original expression.
-- `post_cbo/` rewrites plans that cannot have a CBO winner (e.g. Pattern
-  Comprehension applies) after slot/PE lowering; it must not be registered as
-  an OptRule.
+- Post-CBO plan rewriting is gone (2026-11-28, P4). The shared-anchor fork
+  rewrite it contained measured 0 ms on its only production shape (LDBC c14)
+  once `CorrelatedVertexProbe` made the per-comprehension anchor cheap, so the
+  rewrite and its `post_cbo/` directory were deleted. Optimizer-owned rewrites
+  belong in `normalization/` (semantics) or `rules/` (alternatives).
 - `extraction/` consumes the chosen/RBO logical plan and produces PE plans plus
   lowered slot references. It is not a rule layer.
 - `requirement_collector` and `projection_extraction` are intentionally

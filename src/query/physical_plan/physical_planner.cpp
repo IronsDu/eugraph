@@ -9,7 +9,6 @@
 #include "query/optimizer/extraction/projection_extraction.hpp"
 #include "query/optimizer/framework/chosen_plan.hpp"
 #include "query/optimizer/framework/memo.hpp"
-#include "query/optimizer/post_cbo/post_cbo_finalize.hpp"
 #include "query/physical_plan/operator/apply_physical_op.hpp"
 #include "query/physical_plan/operator/call_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
@@ -1938,17 +1937,6 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // slot_ids are stable across schema-changing operators.
     optimizer::lowerColumnIndices(bound_plan.root, ctx.extraction_info, ctx.resolver());
 
-    // Post-CBO logical rewrite (not a Cascades OptRule): PatternComprehensionApply
-    // has no implementation rule and cannot own a CBO winner, so this one-way
-    // rewrite runs after slot/PE/lowering and before physical planning.
-    // Shared-anchor rewrite. It runs after the analysis/lowering phases above
-    // (slot allocation, PE plans, column-index lowering) so those passes see the
-    // same plan they always have; the fork only re-parents already-lowered
-    // subtrees, and the physical planner lowers it directly. A plan containing a
-    // PatternComprehensionApply can never have a CBO winner (there is no
-    // implementation rule for it), so this is the plan that executes.
-    optimizer::applyPostCboRewrites(bound_plan.root, ctx.slot_allocator, ctx.var_slots);
-
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(bound_plan.root, store, meta, ctx, empty_schema, empty_types);
@@ -2263,7 +2251,6 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     optimizer::lowerAliasPassthrough(materialized, ctx.extraction_info, ctx.var_slots, ctx.alias_map,
                                      ctx.slot_allocator);
     optimizer::lowerColumnIndices(materialized, ctx.extraction_info, ctx.resolver());
-    optimizer::applyPostCboRewrites(materialized, ctx.slot_allocator, ctx.var_slots);
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);

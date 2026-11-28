@@ -74,7 +74,6 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 顶点标签/属性/邻接存储（vertex_data） | [storage/kv-encoding.md](storage/kv-encoding.md) | `src/storage/kv/key_codec.*`, `src/storage/data/sync_graph_data_store.*` |
 | Expand 目标标签过滤优化 | [query/expand-label-filter-optimization.md](query/expand-label-filter-optimization.md) | `src/query/physical_plan/operator/expand_physical_op.cpp` |
 | PatternComprehension 锚点标签扫描 | [query/pattern-comprehension-anchor-label-scan.md](query/pattern-comprehension-anchor-label-scan.md) | `src/query/planner/binder/bind_match.cpp` |
-| PatternComprehension 公共 anchor 共享（计划层 fork） | [query/engine/pattern-comprehension-anchor-sharing.md](query/engine/pattern-comprehension-anchor-sharing.md) | `src/query/optimizer/post_cbo/pattern_comprehension_anchor_share.cpp`, `src/query/physical_plan/operator/pattern_comprehension_fork_physical_op.cpp` |
 | 表达式求值不应发起 IO（属性读取收敛到算子） | [query/engine/expression-io-boundary.md](query/engine/expression-io-boundary.md) | `src/query/evaluator/`, `src/query/optimizer/extraction/projection_extraction.cpp` |
 | LDBC c5/c9 计划分析 | [query/ldbc-c5-c9-plan-analysis.md](query/ldbc-c5-c9-plan-analysis.md) | `src/query/physical_plan/` |
 | EXPLAIN 计划树 | [query/engine/explain-design.md](query/engine/explain-design.md) | `src/query/physical_plan/explain/` |

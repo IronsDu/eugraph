@@ -55,7 +55,7 @@
 | # | 函数 / 位置 | 行为 | 目标归属 |
 |---|---|---|---|
 | D1 | ~~`rewriteDstBoundExpandFilters`~~ | 把 `id(dst)=id(saved)` 折进 Expand / 索引过滤。**已完成两阶段归位**：先迁到 CBO 前 normalization pass；**P2 把形状生成移进 binder**（`bindExistsSubPlan` 直接把相关链端点绑到目标列，Expand `dst=bound`），normalization 只剩 `AnnotateCorrelatedEndpointProbe` 策略标注；physical 只 lowering bound-dst Expand | 已完成（binder + optimizer 标注） |
-| D2 | `planChosen`/`planBound` 调用 `optimizer::rewritePatternComprehensionAnchorShare` | post-CBO 计划重写由 physical 路径触发。**部分完成**：重写策略收口到 `optimizer::applyPostCboRewrites`（`optimizer/post_cbo/finalize`），physical 只调用这一个固定入口、不再选择/排列重写；完整前移到 CBO 前需要 `PatternComprehensionApply` 成为 memo/CBO 算子，或把 chosen plan 物化 + slot 分配迁入 optimizer（与 P2/C1 耦合） | optimizer（materialization 边界之后继续前移） |
+| D2 | ~~`rewritePatternComprehensionAnchorShare` / `applyPostCboRewrites`~~ | post-CBO 计划重写。**已删除（P4）**：唯一的重写 shared-anchor fork 在其唯一生产形状（LDBC c14）上实测 **0 ms**（同二进制 A/B：fork on 781.1 ms vs off 784.4 ms；`CorrelatedVertexProbe` 让每个 comprehension 的 anchor 展开都变成按行探针，共享不再省工作），因此把重写与 `post_cbo/` 整个目录删除，`planBound`/`planChosen` 不再有 post-CBO 改写阶段 | 已删除 |
 
 ### E. 语义反解重复（P1.3 遗留）
 
@@ -93,17 +93,19 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
-- **B3 迁移尝试（已回退，阻塞证据）**：给 `CorrelatedVertexProbe` 加了 tag + Impl 候选 +
+- **B3 迁移尝试（已回退；P4 后阻塞解除）**：给 `CorrelatedVertexProbe` 加了 tag + Impl 候选 +
   cost（left+right）并让 lowering 按 tag 实例化。单测通过，但真实 c14 计划里 probe 消失：
-  trace 显示规则只见到 `CrossProduct`（无 correlated edge），因为 `CrossProduct(CorrelatedSource,
-  LabelScan)` 是 **anchor-share（D2）在 post-CBO 生成**的 fork 形状，CBO memo 看不到它。
-  回退到 lowering 特判后 c14 EXPLAIN 恢复 `CorrelatedVertexProbe`。结论：B3 必须等 D2 完整
-  前移（或 post-CBO finalization 产出 descriptor 标注）后再做。
-- **D2 post-CBO 重写策略收口（部分完成）**：新增
-  `optimizer/post_cbo/post_cbo_finalize`（`applyPostCboRewrites`），physical 的
-  `planBound`/`planChosen` 只调用这个固定入口，不再直接决定 anchor-share 重写；
-  `PatternComprehensionApply` 目前没有 CBO impl 规则，重写仍发生在 materialization
-  边界（slot 分配在 physical）——完整前移与 P2/C1 绑定，已记录。
+  trace 显示规则只见到 `CrossProduct`（无 correlated edge）。
+  **P4 复测更正了当年的结论**：`EUGRAPH_ANCHOR_SHARE_OFF=1` 的计划（无 fork、两个独立
+  `PatternComprehensionApply`）里每个分支仍然出现 `CorrelatedVertexProbe`，说明 probe 的
+  lowering 形状并不依赖 anchor-share/fork；当年 CBO 尝试失败的原因是 memo 里该 group 的
+  形状（CBO 选择/重排之后）与 lowering 匹配的形状不同，而不是 fork 依赖。B3 现在可以独立
+  重做（CBO 候选 + Impl tag），当前 lowering 特判保留、行为不受影响。
+- **D2 post-CBO 重写删除（完成，P4）**：删除 `optimizer/post_cbo/`（`applyPostCboRewrites` +
+  `rewritePatternComprehensionAnchorShare`）与 physical 的两处调用。删除依据是同二进制 A/B：
+  该重写在其唯一生产形状 c14 上 **0 ms**（781.1 vs 784.4 ms，行数 12 不变），因为
+  `CorrelatedVertexProbe` 已把每个 comprehension 的 anchor 展开变成按行探针，共享 anchor
+  不再节省扫描；同时 `PatternComprehensionFork` 不再被任何生产者创建。
 - **B2 HashJoin build 侧/预算归位（完成）**：`PhysicalExpr`/`ChosenPlan` 增加 `build_left`；
   `ImplHashJoinRule` 产出 build-left/right 两个候选；`findLocalCost(HashJoin)` 按 build 侧
   定价（build 行数 × 1.1 内存溢价 + probe 行数），并把预算作为候选可行性（build 超过
@@ -182,8 +184,8 @@
 2. **A1–A5 逐个 descriptor 化**，每个都按 R1/R2/R3 拆分并配规则单测（下一步）。
 3. **B1 第二步**（join_conditions 语义化、删除物理层 Filter-join 融合）—— Cypher
    语义面（T2），需单独评审。
-4. **D1/D2 前移**到 optimizer（normalization / post-CBO 提取前）。
-5. **C1/C2**（P2 PE enforcer 化）与 **E1/E2**（P1.3 收尾）。
+4. ~~D1/D2 前移~~（D1 完成：binder 形状 + optimizer 标注；D2 完成：post_cbo 删除）。
+5. **C1/C2**（P2 PE enforcer 化）与 **E1**（join-key descriptor）；B3 重做（阻塞已解除）。
 
 ## 4. 实测与教训（SF1，warm 3–4 轮 min）
 
