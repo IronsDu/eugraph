@@ -39,7 +39,7 @@
 |---|---|---|---|
 | B1 | ~~`tryPlanGenericHashJoin`~~ | 物理层比较 `hash_cost < cross_cost`、选 build 侧、超预算回退，直接推翻 CBO 选择。**已删除**：CBO 通过 `JoinConditionNormalization` 的 `join_conditions` + chosen tag 决定 join 算法；RBO/无 tag 时回退 CrossProduct+Filter（正确、可能慢）。`collectAndConjuncts`/`estimateRowsUpperBound` 的代价门禁随之删除（`estimateRowsUpperBound` 保留给 B2 的 build 侧实例化） | 已完成（删除） |
 | B2 | ~~`planHonoredHashJoin` 的 build 侧/预算选择~~ | 执行 tag，但 build 侧按估算选、超预算回退。**已完成**：build 侧进入 `PhysicalExpr`/`ChosenPlan` 候选（`ImplHashJoinRule` 产出 build-left/right 两个候选），`findLocalCost(HashJoin)` 用 build 侧定价（build 行数带内存溢价）并做预算可行性（超 `EUGRAPH_HASH_JOIN_MAX_BUILD_ROWS` 或估计为 0 → `Cost::infinity()`）；physical 只转发 build 侧，运行时预算仍由算子强约束 | 已完成（optimizer 候选 + 成本） |
-| B3 | BinaryJoin 分支的 `pc_anchor` 特判 | 形状匹配 `CrossProduct(CorrelatedSource, LabelScan)` → 替换为 `CorrelatedVertexProbePhysicalOp` | post-CBO rewrite 或专用 descriptor（optimizer） |
+| B3 | BinaryJoin 分支的 `pc_anchor` 特判 | 形状匹配 `CrossProduct(CorrelatedSource, LabelScan)` → 替换为 `CorrelatedVertexProbePhysicalOp`。**尝试迁入 CBO（tag + Impl 规则）后回退**：该形状只在 post-CBO 的 anchor-share（D2）之后才出现（c14 fork 分支），CBO 的 memo 里匹配不到；c14 会丢失 probe（EXPLAIN 对照：CBO 版本 probe=False，回退后 probe=True）。与 D2 的完整前移绑定；在 D2 前，保留此 lowering 特判并记录 | 待 D2 前移后做 CBO 候选（或 post-CBO descriptor 标注） |
 | B4 | `planIndexJoin` | 消费 descriptor，但内部仍有 dynamic-key 分支与 fallback | 保持 descriptor 化；bug 修复见 Issue #335 |
 
 ### C. 物化 / PE 边界（J7）
@@ -93,6 +93,12 @@
   没有保留 Expand 的源端点约束。已删除该函数与调用点，并加回归测试
   `EdgePropertyFilterKeepsBoundSource`（bound 源 1 条 / 无约束源 2 条）。边属性过滤回到
   通用 Expand+Filter 计划，结果正确。
+- **B3 迁移尝试（已回退，阻塞证据）**：给 `CorrelatedVertexProbe` 加了 tag + Impl 候选 +
+  cost（left+right）并让 lowering 按 tag 实例化。单测通过，但真实 c14 计划里 probe 消失：
+  trace 显示规则只见到 `CrossProduct`（无 correlated edge），因为 `CrossProduct(CorrelatedSource,
+  LabelScan)` 是 **anchor-share（D2）在 post-CBO 生成**的 fork 形状，CBO memo 看不到它。
+  回退到 lowering 特判后 c14 EXPLAIN 恢复 `CorrelatedVertexProbe`。结论：B3 必须等 D2 完整
+  前移（或 post-CBO finalization 产出 descriptor 标注）后再做。
 - **D2 post-CBO 重写策略收口（部分完成）**：新增
   `optimizer/post_cbo/post_cbo_finalize`（`applyPostCboRewrites`），physical 的
   `planBound`/`planChosen` 只调用这个固定入口，不再直接决定 anchor-share 重写；
