@@ -299,6 +299,22 @@ std::vector<std::unique_ptr<GroupExpr>> ImplCorrelatedVertexProbeRule::substitut
     return makePhysicalExpr(expr, memo, PhysicalOpTag::CorrelatedVertexProbe);
 }
 
+bool ImplHashJoinRule::condition(GroupExpr& expr, Memo& memo) const {
+    (void)memo;
+    const auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
+    if (join == nullptr || !*join || (*join)->join_conditions.empty())
+        return false;
+    // The descriptor is a list of equality semantics. Refusing non-EQ conditions
+    // here keeps the decision in CBO: lowering never has to fall back to
+    // CrossProduct to avoid mis-keying a condition it cannot express.
+    for (const auto& cond : (*join)->join_conditions) {
+        const auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&cond);
+        if (binop == nullptr || !*binop || (*binop)->op != cypher::BinaryOperator::EQ)
+            return false;
+    }
+    return true;
+}
+
 std::vector<std::unique_ptr<GroupExpr>> ImplHashJoinRule::substitute(GroupExpr& expr, Memo& memo) const {
     auto* join = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&expr.op);
     if (!join || !*join || (*join)->join_conditions.empty())

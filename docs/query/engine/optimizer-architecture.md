@@ -50,6 +50,8 @@ See [src/query/optimizer/README.md](../../../src/query/optimizer/README.md).
   **策略属性**：会改变执行策略但依赖运行期数据的标志（`build_left`、`batch_shortest_path`）
   是 `PhysicalExpr`/`ChosenPlan` 属性，由 Impl 规则产出、lowering 只转发；logical operator
   不再携带策略字段（P3 把 `batch_shortest_path` 从 `BoundVarLenExpandOp` 移出）。
+  **join key**：`join_conditions` 就是 key descriptor（EQ 语义 + 两侧表达式）；Impl 规则先校验
+  形状，lowering 只按 child layout 解析列，不做“列 → label/property”反解（E1）。
 - `rules/logical/` — `FilterPushdown`, `EdgeUniquenessPushdown`,
   `PathCountFusion`, `PatternComprehensionAnchorShare`；不包含按 LDBC
   label/关系名特判的规则。

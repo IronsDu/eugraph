@@ -61,7 +61,7 @@
 
 | # | 函数 | 行为 | 目标归属 |
 |---|---|---|---|
-| E1 | `resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition` | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop。B2 后唯一用途是 `joinKeyColumn` 把 `join_conditions` 表达式映射成 lowering 时的列（列布局在 CBO 后才有）；需要 join-key descriptor（key 表达式 + 期望语义，列索引由 lowering 解析）才能删 | 待 join-key descriptor |
+| E1 | ~~`resolveColumnProperty` / `tryExtractBoundCondition` / `tryExtractNormalizedBoundCondition`~~ | 依赖 `PlanContext.extraction_info` 把 BoundColumnRef 反解成 label/prop。**已完成**：三者已无调用者（B2 后 `joinKeyColumn` 直接按 slot/列布局与 `(variable, property)` 查 PE 列，不做列→属性反解），整段连同 `anonLabelId`/`columnPropertyResolver` 删除。join-key descriptor 就是 `join_conditions`（EQ 语义）：`ImplHashJoinRule` 先做形状检查（含非 EQ 条件不产候选），lowering 只解析列并转发 build 侧；解析失败是防御分支（`EUGRAPH_PLAN_DEBUG` 告警后回退 CrossProduct），CBO 选 HashJoin 的正常路径不再在 lowering 里改计划 | 已完成（descriptor 契约） |
 | E2 | ~~`collectPlanRefsInto` / `countPlanFieldRefs` / `subtreeProvidesCorrelatedVariable`~~ | 全树引用计数等规划分析。**已迁出**：`optimizer/analysis/plan_refs`（PlanRefIndex / countPlanFieldRefs / subtreeProvidesCorrelatedVariable / vertexRefIdArgument / expressionReferences / forEachPlanNode）；physical 的 topology-only 判断改为消费该 analysis（C2 本身仍待迁） | 已完成（analysis） |
 
 ### F. 正常 lowering（不算越界）
@@ -156,7 +156,13 @@
 - **E2 规划分析迁出（完成）**：`PlanRefIndex`/`subtreeProvidesCorrelatedVariable`/
   `forEachPlanNode` 进 `optimizer/analysis/plan_refs`；physical 只消费。
   P2 后 fold 专用的 `countPlanFieldRefs`/`vertexRefIdArgument`/`expressionReferences`
-  随 fold 删除。E1（`resolveColumnProperty` 等语义反解）仍被 `joinKeyColumn` 使用。
+  随 fold 删除。
+- **E1 语义反解删除（完成）**：`resolveColumnProperty`/`tryExtractBoundCondition`/
+  `tryExtractNormalizedBoundCondition`（连 `anonLabelId`/`columnPropertyResolver`）已无调用者，
+  整段删除。join key 的 descriptor 是 optimizer 产出的 `join_conditions`：`ImplHashJoinRule`
+  只对全 EQ 条件产候选（非 EQ 从一开始就不进 CBO 候选，lowering 不再需要回退），lowering 只
+  从 child layout 解析列并转发 build 侧；无法落到输出列时按防御分支在 `EUGRAPH_PLAN_DEBUG`
+  下告警并回退 CrossProduct。
 - **A2 / A3 access path 删除（完成）**：physical planner 不再识别
   `Filter(CrossProduct(Unwind, LabelScan))` 等值探针（A2）与 `x.prop IN list` 的
   ListIndexJoin / Q12 硬编码重写（A3）；同步删除 `expand_allowed_filter` /
@@ -193,7 +199,7 @@
 1. ~~J8 第一步：PlanProp（按候选基数）+ IndexJoin 规则范围/成本~~（已完成，见 §2）。
    剩余 J8：索引分布统计（P3）后重新启用静态反向路径、去掉 `kDynamicProbeSeekCost`
    占位；join 选择性/NDV 统计。
-2. **A1–A5 逐个 descriptor 化**，每个都按 R1/R2/R3 拆分并配规则单测（下一步）。
+2. ~~A1–A5 逐个 descriptor 化~~（已完成）；~~E1~~（已完成）。
 3. **B1 第二步**（join_conditions 语义化、删除物理层 Filter-join 融合）—— Cypher
    语义面（T2），需单独评审。
 4. ~~D1/D2 前移~~（D1 完成：binder 形状 + optimizer 标注；D2 完成：post_cbo 删除）。

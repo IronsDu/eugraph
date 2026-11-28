@@ -1,7 +1,6 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/config/env_vars.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/optimizer/analysis/index_condition.hpp"
 #include "query/optimizer/analysis/logical_plan_walk.hpp"
 #include "query/optimizer/analysis/plan_analysis.hpp"
 #include "query/optimizer/analysis/plan_refs.hpp"
@@ -1365,75 +1364,6 @@ static PropertyType boundExprToPropertyType(const binder::BoundExpression& expr)
     }
 }
 
-// ==================== Read-Only Property Label Pruning ====================
-
-// ==================== Bound Plan Index Scan Optimization ====================
-
-using BoundIndexableCondition = optimizer::IndexableCondition;
-using ResolvedColumnProperty = optimizer::ResolvedProperty;
-
-/// Resolve a BoundColumnRef produced by ProjectionExtract lowering back to
-/// the property name / (label_id, prop_id) and the original access mode.
-static std::optional<ResolvedColumnProperty> resolveColumnProperty(const PlanContext& ctx,
-                                                                   const binder::BoundColumnRef& ref) {
-    for (const auto& [canonical_slot, pe] : ctx.extraction_info) {
-        (void)canonical_slot;
-        for (size_t i = 0; i < pe.prop_slot_ids.size(); ++i) {
-            if (pe.prop_slot_ids[i] != ref.slot_id)
-                continue;
-            const auto& [lid, pid] = pe.prop_order[i];
-            auto lit = ctx.label_defs.find(lid);
-            if (lit == ctx.label_defs.end())
-                return std::nullopt;
-            for (const auto& pd : lit->second.properties) {
-                if (pd.id != pid)
-                    continue;
-                ResolvedColumnProperty out;
-                out.name = pd.name;
-                out.label_id = lid;
-                out.prop_id = pid;
-                out.is_strong = i < pe.prop_strong.size() && pe.prop_strong[i];
-                out.declared_label_count = i < pe.prop_declared_count.size() ? pe.prop_declared_count[i] : 0;
-                return out;
-            }
-            return std::nullopt;
-        }
-        for (const auto& [prop_name, co] : pe.coalesce_vertices) {
-            if (co.slot_id != ref.slot_id)
-                continue;
-            ResolvedColumnProperty out;
-            out.name = prop_name;
-            out.label_id = co.candidates.empty() ? INVALID_LABEL_ID : co.candidates[0].first;
-            out.prop_id = co.candidates.empty() ? 0 : co.candidates[0].second;
-            out.is_strong = false;
-            out.declared_label_count = static_cast<int>(co.candidates.size());
-            return out;
-        }
-    }
-    return std::nullopt;
-}
-
-static LabelId anonLabelId(const PlanContext& ctx) {
-    for (const auto& [lid, ldef] : ctx.label_defs)
-        if (ldef.name == kAnonLabelName)
-            return lid;
-    return INVALID_LABEL_ID;
-}
-
-static optimizer::ColumnPropertyResolver columnPropertyResolver(const PlanContext& ctx) {
-    return [&ctx](const binder::BoundColumnRef& ref) { return resolveColumnProperty(ctx, ref); };
-}
-
-static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const binder::BoundBinaryOp& binop,
-                                                                       const PlanContext& ctx) {
-    return optimizer::extractIndexableCondition(binop, anonLabelId(ctx), columnPropertyResolver(ctx));
-}
-
-static std::optional<BoundIndexableCondition> tryExtractNormalizedBoundCondition(const binder::BoundBinaryOp& binop,
-                                                                                 const PlanContext& ctx) {
-    return optimizer::extractNormalizedIndexableCondition(binop, anonLabelId(ctx), columnPropertyResolver(ctx));
-}
-
 /// Extract the variable name from a property object expression (`n.prop`).
 static std::string expressionVariableName(const binder::BoundExpression& expr) {
     if (auto* ref = std::get_if<binder::BoundColumnRef>(&expr))
@@ -1582,23 +1512,33 @@ namespace {
 /// binder clone intentionally drops children and cannot be replanned safely).
 } // namespace
 
-/// Instantiates the CBO's chosen HashJoin tag for a bare BinaryJoin. The
-/// optimizer decided the algorithm and exposed equi-join conditions; lowering
-/// only extracts the key columns and places the build side. Shapes it cannot
-/// express (non-equi conditions, keys that do not resolve to output columns)
-/// return nullopt so the caller falls back to the CrossProduct lowering.
+/// Instantiates the CBO's chosen HashJoin tag for a bare BinaryJoin.
+///
+/// The descriptor is the optimizer's `join_conditions` (a list of equality
+/// semantics; ImplHashJoinRule refuses any non-EQ condition, so the shape is
+/// guaranteed before lowering). Lowering only resolves the key *columns* from the
+/// child layouts — a column lookup, never label/property re-inference from a
+/// column — and places the build side. Keys that still do not resolve to an
+/// output column (layout-dependent) are a defensive fallback: they are logged
+/// under EUGRAPH_PLAN_DEBUG and fall back to CrossProduct rather than mis-key.
 static std::optional<PlanOperatorResult> planHonoredHashJoin(const binder::BoundBinaryJoinOp& join,
                                                              PlanOperatorResult& lr, PlanOperatorResult& rr,
                                                              PlanContext& ctx, bool build_left) {
     ensureSlotLayout(lr, ctx);
     ensureSlotLayout(rr, ctx);
 
+    auto bail = [](const char* why) -> std::optional<PlanOperatorResult> {
+        if (std::getenv(config::kEnvPlanDebug) != nullptr)
+            spdlog::warn("[planner] chosen HashJoin not instantiated ({}); falling back to CrossProduct", why);
+        return std::nullopt;
+    };
+
     std::vector<uint32_t> left_keys;
     std::vector<uint32_t> right_keys;
     for (const auto& cond : join.join_conditions) {
         const auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&cond);
         if (!binop || !*binop || (*binop)->op != cypher::BinaryOperator::EQ)
-            return std::nullopt;
+            return bail("non-equality condition");
         auto ll = joinKeyColumn((*binop)->left, lr.output_schema, lr.slot_layout, ctx);
         auto lr_col = joinKeyColumn((*binop)->right, lr.output_schema, lr.slot_layout, ctx);
         auto rl = joinKeyColumn((*binop)->left, rr.output_schema, rr.slot_layout, ctx);
@@ -1610,11 +1550,11 @@ static std::optional<PlanOperatorResult> planHonoredHashJoin(const binder::Bound
             left_keys.push_back(*lr_col);
             right_keys.push_back(*rl);
         } else {
-            return std::nullopt;
+            return bail("join key does not resolve to one column per side");
         }
     }
     if (left_keys.empty())
-        return std::nullopt;
+        return bail("empty key list");
 
     // Build side and budget feasibility came with the CBO descriptor; lowering
     // only forwards them (the operator still enforces the row budget at runtime).

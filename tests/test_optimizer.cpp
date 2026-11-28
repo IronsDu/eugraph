@@ -3305,6 +3305,33 @@ TEST(NormalizationTest, ExtractsEqualityJoinConditionAndKeepsFilter) {
     EXPECT_FALSE(out_filter->predicate.valueless_by_exception());
 }
 
+TEST(ImplRuleTest, HashJoinCandidateRequiresEqualityConditions) {
+    auto make_join = [](cypher::BinaryOperator op) {
+        auto join = std::make_unique<BoundBinaryJoinOp>();
+        join->join_type = binder::JoinType::Inner;
+        join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+        join->right = makeLabelScanWithLabel("b", 1, LabelId{2});
+        auto cond = std::make_unique<BoundBinaryOp>();
+        cond->op = op;
+        cond->left = BoundExpression(BoundColumnRef(0, BoundType::Int64(), "a", SlotId{1}));
+        cond->right = BoundExpression(BoundColumnRef(1, BoundType::Int64(), "b", SlotId{2}));
+        join->join_conditions.push_back(BoundExpression(std::move(cond)));
+        return BoundLogicalOperator(std::move(join));
+    };
+
+    auto condition_of = [](BoundLogicalOperator root, ImplHashJoinRule& rule, Memo& memo) {
+        GroupId gid = memo.copyIn(root);
+        GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+        return rule.condition(expr, memo);
+    };
+
+    Memo memo;
+    ImplHashJoinRule rule;
+    EXPECT_FALSE(condition_of(make_join(cypher::BinaryOperator::GT), rule, memo))
+        << "a non-equality condition must not produce a HashJoin candidate (CBO decides, lowering does not fall back)";
+    EXPECT_TRUE(condition_of(make_join(cypher::BinaryOperator::EQ), rule, memo));
+}
+
 // P3: the bounded shortestPath batch strategy is a ChosenPlan attribute emitted
 // by ImplVarLenExpandRule, not a logical flag set by a normalization pass.
 TEST(ImplRuleTest, VarLenExpandMarksOnlyBoundedShortestPathBatch) {

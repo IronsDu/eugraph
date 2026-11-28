@@ -320,6 +320,7 @@ public:
         return true;
     }
     PatternNode pattern() const override;
+    bool condition(GroupExpr& expr, Memo& memo) const override;
     std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const override;
 };
 
